@@ -1,0 +1,64 @@
+// constants/theme.ts
+// Update these values once design direction is confirmed
+// Share Pinterest/reference images with Claude in Antigravity and say
+// "update the theme file based on these"
+
+export const Colors = {
+  // Main backgrounds
+  background: '#000000',        // Main screen background — update me
+  backgroundSecondary: '#111111', // Cards, panels behind glass — update me
+  surface: '#1A1A1A',           // Elevated surfaces — update me
+
+  // Brand colours
+  primary: '#FFFFFF',           // Primary action colour — update me
+  primaryMuted: '#CCCCCC',      // Softer version of primary — update me
+  accent: '#FFFFFF',            // Accent / highlight colour — update me
+
+  // Text
+  textPrimary: '#FFFFFF',       // Main text — update me
+  textSecondary: '#999999',     // Subtext, labels — update me
+  textMuted: '#555555',         // Placeholder, disabled — update me
+
+  // Feedback
+  success: '#34C759',           // iOS green — fine to keep
+  error: '#FF3B30',             // iOS red — fine to keep
+  warning: '#FF9500',           // iOS orange — fine to keep
+
+  // Glass fallback (used on Android / iOS < 26)
+  glassFallback: 'rgba(255,255,255,0.12)',
+  glassFallbackDark: 'rgba(0,0,0,0.4)',
+};
+
+export const Spacing = {
+  xs: 4,
+  sm: 8,
+  md: 16,
+  lg: 24,
+  xl: 32,
+  xxl: 48,
+};
+
+export const BorderRadius = {
+  sm: 8,
+  md: 16,
+  lg: 20,      // Cards
+  xl: 24,      // Modals
+  full: 9999,  // Pills / buttons
+};
+
+export const FontSize = {
+  xs: 12,
+  sm: 14,
+  md: 16,
+  lg: 18,
+  xl: 24,
+  xxl: 32,
+  xxxl: 40,
+};
+
+export const FontWeight = {
+  regular: '400' as const,
+  medium: '500' as const,
+  semibold: '600' as const,
+  bold: '700' as const,
+};
