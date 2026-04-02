@@ -56,9 +56,8 @@ export const FontSize = {
   xxxl: 40,
 };
 
-export const FontWeight = {
-  regular: '400' as const,
-  medium: '500' as const,
-  semibold: '600' as const,
-  bold: '700' as const,
+export const FontFamily = {
+  regular: 'Nunito_400Regular',
+  semibold: 'Nunito_600SemiBold',
+  bold: 'Nunito_700Bold',
 };
