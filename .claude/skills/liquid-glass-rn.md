@@ -283,3 +283,82 @@ const styles = StyleSheet.create({
 | `"regular"` | Standard frosted glass — default for all components |
 | `"clear"` | More transparent — subtle overlays only |
 | `"none"` | No effect — transparent view |
+
+---
+
+## @callstack/liquid-glass — Merging Glass Elements
+
+Use this package when you need **multiple glass elements that merge together** (e.g. sliding pill nav bar, morphing buttons). This is the library Apple uses for the liquid glass tab bar pill effect.
+
+```bash
+npm install @callstack/liquid-glass
+```
+
+Requires React Native 0.80+, Xcode 26, iOS 26. Not supported in Expo Go.
+
+```tsx
+import {
+  LiquidGlassView,
+  LiquidGlassContainerView,
+  isLiquidGlassSupported,
+} from "@callstack/liquid-glass";
+```
+
+### Key props
+
+| Prop | Values | Notes |
+|------|--------|-------|
+| `effect` | `"regular"` \| `"clear"` \| `"none"` | `clear` for pill, `regular` for background |
+| `interactive` | `boolean` | Enables press ripple/touch effect — set on pill elements |
+| `colorScheme` | `"light"` \| `"dark"` \| `"system"` | Match app theme |
+| `tintColor` | any color | Overlay tint on glass |
+
+### LiquidGlassContainerView
+
+Wrap multiple `LiquidGlassView` siblings so their glass effects **merge** when they are within `spacing` points of each other.
+
+```tsx
+<LiquidGlassContainerView spacing={12}>
+  <LiquidGlassView effect="regular" style={styles.bar} />
+  <Animated.View style={{ transform: [{ translateX }] }}>
+    <LiquidGlassView effect="clear" interactive style={styles.pill} />
+  </Animated.View>
+</LiquidGlassContainerView>
+```
+
+- `spacing` — distance threshold at which children begin to merge. ~8–16 works well for nav bars.
+- Child `LiquidGlassView` elements can be wrapped in `Animated.View` for animation — merging still works.
+- Tab items / labels should be in a **separate absolute-positioned View** on top, not inside the glass layers.
+
+### Sliding Glass Pill Nav Bar Pattern
+
+```tsx
+// iOS 26: liquid glass with merging pill
+if (isLiquidGlassSupported) {
+  return (
+    <View style={{ width: barWidth, height: BAR_HEIGHT }}>
+      <LiquidGlassContainerView style={{ width: barWidth, height: BAR_HEIGHT }} spacing={12}>
+        {/* Bar background */}
+        <LiquidGlassView effect="regular" colorScheme="dark"
+          style={{ position: "absolute", width: barWidth, height: BAR_HEIGHT, borderRadius: BAR_HEIGHT / 2 }} />
+        {/* Animated pill — merges with bar as it slides */}
+        <Animated.View style={{ position: "absolute", top: INSET, left: 0,
+          width: pillWidth, height: pillHeight, transform: [{ translateX }, { scale: pillScale }] }}>
+          <LiquidGlassView effect="clear" interactive colorScheme="dark"
+            style={{ width: pillWidth, height: pillHeight, borderRadius: pillHeight / 2 }} />
+        </Animated.View>
+      </LiquidGlassContainerView>
+      {/* Tab items on top */}
+      <View style={{ position: "absolute", flexDirection: "row", width: barWidth, height: BAR_HEIGHT }}>
+        {tabs}
+      </View>
+    </View>
+  );
+}
+// Fallback: custom dark pill for Expo Go / iOS < 26
+```
+
+### Notes
+- Text auto-adapts color if glass view height < 65px — use `PlatformColor('labelColor')` for text
+- `isLiquidGlassSupported` is a boolean constant (not a function)
+- On unsupported iOS, renders a plain transparent View — always provide your own fallback background
