@@ -1,18 +1,11 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, Image } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRef } from "react";
 import Svg, { Path } from "react-native-svg";
 import NeuCard, { NEU_BG } from "../../components/NeuCard";
+import BounceButton from "../../components/BounceButton";
 import { FontFamily } from "../../constants/theme";
 
-const DumbbellIcon = ({ size }: { size: number; color?: string }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke="#000000" strokeWidth="1.5" />
-    <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke="#000000" strokeWidth="1.5" />
-    <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke="#000000" strokeWidth="1.5" />
-  </Svg>
-);
 
 const TP   = "#2D3748";
 const TS   = "#8896A7";
@@ -39,26 +32,20 @@ const RECENT_ACTIVITY = [
 ];
 
 function StartButton() {
-  const scale = useRef(new Animated.Value(1)).current;
-  const onIn  = () => Animated.spring(scale, { toValue: 0.97, useNativeDriver: true, speed: 50, bounciness: 2 }).start();
-  const onOut = () => Animated.spring(scale, { toValue: 1,    useNativeDriver: true, speed: 20, bounciness: 8 }).start();
-
   return (
-    <TouchableOpacity activeOpacity={1} onPressIn={onIn} onPressOut={onOut}>
-      <Animated.View style={{ transform: [{ scale }] }}>
-        <View style={styles.startBtnDark}>
-          <View style={styles.startBtn}>
-            <View style={styles.startBtnContent}>
-              <Text style={styles.startBtnText}>Start Workout</Text>
-              <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-                <Path d="M14.4302 5.92969L20.5002 11.9997L14.4302 18.0697" stroke="#fff" strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
-                <Path d="M3.5 12H20.33" stroke="#fff" strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
-              </Svg>
-            </View>
+    <BounceButton>
+      <View style={styles.startBtnDark}>
+        <View style={styles.startBtn}>
+          <View style={styles.startBtnContent}>
+            <Text style={styles.startBtnText}>Start Workout</Text>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <Path d="M14.4302 5.92969L20.5002 11.9997L14.4302 18.0697" stroke="#fff" strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d="M3.5 12H20.33" stroke="#fff" strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+            </Svg>
           </View>
         </View>
-      </Animated.View>
-    </TouchableOpacity>
+      </View>
+    </BounceButton>
   );
 }
 
@@ -69,11 +56,13 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.root}>
-      <NeuCard radius={24} style={[styles.avatar, { top: insets.top, right: 20 }]}>
-        <View style={styles.avatarInner}>
-          <Text style={styles.avatarText}>MM</Text>
-        </View>
-      </NeuCard>
+      <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]}>
+        <NeuCard radius={24} style={{ width: 48, height: 48, borderRadius: 24 }}>
+          <View style={styles.avatarInner}>
+            <Text style={styles.avatarText}>MM</Text>
+          </View>
+        </NeuCard>
+      </BounceButton>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -128,7 +117,7 @@ export default function HomeScreen() {
 
         <View style={styles.quickRow}>
           {QUICK_ACTIONS.map((a) => (
-            <TouchableOpacity key={a.id} style={{ flex: 1 }} activeOpacity={0.85}>
+            <BounceButton key={a.id} style={{ flex: 1 }}>
               <NeuCard style={styles.quickCard}>
                 <View style={styles.quickInner}>
                   <NeuCard radius={24} style={styles.quickIcon}>
@@ -139,7 +128,7 @@ export default function HomeScreen() {
                   <Text style={styles.quickLabel}>{a.label}</Text>
                 </View>
               </NeuCard>
-            </TouchableOpacity>
+            </BounceButton>
           ))}
         </View>
 
@@ -164,17 +153,18 @@ export default function HomeScreen() {
 
         <View style={styles.recentHeader}>
           <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Recent Activity</Text>
-          <TouchableOpacity activeOpacity={0.7} style={styles.seeAllRow}>
+          <BounceButton style={styles.seeAllRow}>
             <Text style={styles.seeAll}>See All</Text>
             <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
               <Path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke={ICON} strokeWidth="2.5" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
               <Path d="M10.7402 15.5297L14.2602 11.9997L10.7402 8.46973" stroke={ICON} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
             </Svg>
-          </TouchableOpacity>
+          </BounceButton>
         </View>
 
         {RECENT_ACTIVITY.map((item) => (
-          <NeuCard key={item.id} style={styles.activityCard}>
+          <BounceButton key={item.id} style={{ marginBottom: 12 }}>
+            <NeuCard style={[styles.activityCard, { marginBottom: 0 }]}>
             <View style={styles.activityInner}>
               <NeuCard radius={24} style={styles.activityIcon}>
                 <View style={styles.activityIconInner}>
@@ -191,7 +181,8 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.activityDur}>{item.dur}</Text>
             </View>
-          </NeuCard>
+            </NeuCard>
+          </BounceButton>
         ))}
       </ScrollView>
     </View>
