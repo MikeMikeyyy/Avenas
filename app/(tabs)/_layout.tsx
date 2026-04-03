@@ -7,10 +7,21 @@ import {
   Animated,
   useWindowDimensions,
 } from "react-native";
-import Svg, { Defs, LinearGradient as SvgGradient, Stop, Rect, Path } from "react-native-svg";
+import Svg, { Path } from "react-native-svg";
 import { useRef, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
 import { FontFamily } from "../../constants/theme";
+let LiquidGlassView: any = View;
+let LiquidGlassContainerView: any = View;
+let isLiquidGlassSupported = false;
+try {
+  const lg = require("@callstack/liquid-glass");
+  LiquidGlassView = lg.LiquidGlassView;
+  LiquidGlassContainerView = lg.LiquidGlassContainerView;
+  isLiquidGlassSupported = lg.isLiquidGlassSupported ?? false;
+} catch {
+  // Native module not available — Expo Go or iOS < 26
+}
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -54,31 +65,6 @@ const renderIcon = (name: string, size: number, color: string) => {
   }
 };
 
-// ─── SVG perimeter border ─────────────────────────────────────────────────────
-
-function PillBorder({ width, height }: { width: number; height: number }) {
-  if (width === 0) return null;
-  const r = height / 2;
-  const sw = 1;
-  return (
-    <Svg width={width} height={height} style={StyleSheet.absoluteFillObject} pointerEvents="none">
-      <Defs>
-        <SvgGradient id="perim" x1="0" y1="0" x2={width} y2={height} gradientUnits="userSpaceOnUse">
-          <Stop offset="0"    stopColor="#fff" stopOpacity="0.95" />
-          <Stop offset="0.18" stopColor="#fff" stopOpacity="0.28" />
-          <Stop offset="0.38" stopColor="#fff" stopOpacity="0.85" />
-          <Stop offset="0.55" stopColor="#fff" stopOpacity="0.22" />
-          <Stop offset="0.72" stopColor="#fff" stopOpacity="0.7"  />
-          <Stop offset="0.88" stopColor="#fff" stopOpacity="0.2"  />
-          <Stop offset="1"    stopColor="#fff" stopOpacity="0.9"  />
-        </SvgGradient>
-      </Defs>
-      <Rect x={sw / 2} y={sw / 2} width={width - sw} height={height - sw}
-        rx={r - sw / 2} ry={r - sw / 2}
-        fill="none" stroke="url(#perim)" strokeWidth={sw} />
-    </Svg>
-  );
-}
 
 // ─── Tab Item ─────────────────────────────────────────────────────────────────
 
@@ -92,10 +78,9 @@ const TAB_LABELS: Record<string, string> = {
 const BAR_HEIGHT = 72;
 const PILL_INSET = 4;
 
-function TabItem({ route, focused, onPress }: { route: any; focused: boolean; onPress: () => void }) {
+function TabItem({ route, focused, onPress, color }: { route: any; focused: boolean; onPress: () => void; color: string }) {
   const scale = useRef(new Animated.Value(1)).current;
   const label = TAB_LABELS[route.name] || route.name;
-  const color = focused ? "#FFFFFF" : "rgba(255,255,255,0.45)";
 
   const handlePressIn = () =>
     Animated.spring(scale, { toValue: 0.88, useNativeDriver: true, speed: 50, bounciness: 4 }).start();
@@ -141,47 +126,70 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
   useEffect(() => {
     if (tabWidth === 0) return;
     const toValue = state.index * tabWidth + PILL_INSET;
-
     if (isFirstRender.current) {
       translateX.setValue(toValue);
       isFirstRender.current = false;
       return;
     }
-
     Animated.sequence([
       Animated.timing(pillScale, { toValue: 0.88, duration: 80, useNativeDriver: true }),
       Animated.spring(pillScale, { toValue: 1, useNativeDriver: true, speed: 14, bounciness: 16 }),
     ]).start();
-
     Animated.spring(translateX, { toValue, useNativeDriver: true, tension: 68, friction: 12 }).start();
   }, [state.index, tabWidth]);
 
   const pillWidth  = tabWidth - PILL_INSET * 2;
   const pillHeight = BAR_HEIGHT - PILL_INSET * 2;
 
+  const tabColor = (focused: boolean) =>
+    isLiquidGlassSupported
+      ? (focused ? "#000000" : "rgba(0,0,0,0.45)")
+      : (focused ? "#FFFFFF" : "rgba(255,255,255,0.45)");
+
+  const tabItems = state.routes.map((route: any, index: number) => (
+    <TabItem
+      key={route.key}
+      route={route}
+      focused={state.index === index}
+      color={tabColor(state.index === index)}
+      onPress={() => navigation.navigate(route.name)}
+    />
+  ));
+
+  if (isLiquidGlassSupported) {
+    return (
+      <View style={styles.tabBarWrapper}>
+        <LiquidGlassContainerView style={{ width: barWidth, height: BAR_HEIGHT }} spacing={12}>
+          {/* Glass bar background */}
+          <LiquidGlassView
+            effect="regular"
+            colorScheme="light"
+            style={{ position: "absolute", width: barWidth, height: BAR_HEIGHT, borderRadius: BAR_HEIGHT / 2, overflow: "hidden" }}
+          />
+          {/* Glass sliding pill */}
+          <Animated.View style={{ position: "absolute", top: PILL_INSET, left: 0, width: pillWidth, height: pillHeight, transform: [{ translateX }, { scale: pillScale }] }}>
+            <LiquidGlassView
+              effect="clear"
+              interactive
+              colorScheme="light"
+              style={{ width: pillWidth, height: pillHeight, borderRadius: pillHeight / 2, overflow: "hidden" }}
+            />
+          </Animated.View>
+        </LiquidGlassContainerView>
+        {/* Tab items sit on top */}
+        <View style={{ position: "absolute", flexDirection: "row", width: barWidth, height: BAR_HEIGHT }}>
+          {tabItems}
+        </View>
+      </View>
+    );
+  }
+
+  // Fallback for Expo Go / iOS < 26
   return (
     <View style={styles.tabBarWrapper}>
-      {/* Bar */}
       <View style={[styles.bar, { width: barWidth, height: BAR_HEIGHT }]}>
-        <PillBorder width={barWidth} height={BAR_HEIGHT} />
-
-        {/* Sliding pill */}
-        <Animated.View
-          style={[
-            styles.pill,
-            { width: pillWidth, height: pillHeight, transform: [{ translateX }, { scale: pillScale }] },
-          ]}
-        />
-
-        {/* Tab items */}
-        {state.routes.map((route: any, index: number) => (
-          <TabItem
-            key={route.key}
-            route={route}
-            focused={state.index === index}
-            onPress={() => navigation.navigate(route.name)}
-          />
-        ))}
+<Animated.View style={[styles.pill, { width: pillWidth, height: pillHeight, transform: [{ translateX }, { scale: pillScale }] }]} />
+        {tabItems}
       </View>
     </View>
   );
