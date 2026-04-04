@@ -3,6 +3,32 @@
 // Share Pinterest/reference images with Claude in Antigravity and say
 // "update the theme file based on these"
 
+// ─── Neumorphic base backgrounds ──────────────────────────────────────────────
+// These drive NeuCard shadows — every screen bg must match these exactly.
+export const NEU_BG      = "#e8ecf3";
+export const NEU_BG_DARK = "#272930";
+
+// ─── App-wide light / dark palette ────────────────────────────────────────────
+// Import these in every screen instead of redefining LIGHT/DARK locally.
+export const APP_LIGHT = {
+  bg:   NEU_BG,
+  tp:   "#2D3748",  // text primary
+  ts:   "#8896A7",  // text secondary
+  icon: "#3a3f47",
+  div:  "#D8DCE0",  // divider
+} as const;
+
+export const APP_DARK = {
+  bg:   NEU_BG_DARK,
+  tp:   "#E8ECF3",
+  ts:   "#8896A7",
+  icon: "#c5cdd8",
+  div:  "#2e3448",
+} as const;
+
+export type AppTheme = typeof APP_LIGHT;
+
+// ─── Legacy colours (pre-design-token era) ────────────────────────────────────
 export const Colors = {
   // Main backgrounds
   background: '#000000',        // Main screen background — update me

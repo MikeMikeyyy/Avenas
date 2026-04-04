@@ -1,18 +1,34 @@
-import { View, Text, StyleSheet, ScrollView, Image } from "react-native";
+import { useState, useCallback, useRef } from "react";
+import { View, Text, StyleSheet, Image, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter, useFocusEffect } from "expo-router";
+import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
-import NeuCard, { NEU_BG } from "../../components/NeuCard";
+import { LinearGradient } from "expo-linear-gradient";
+import LottieView from "lottie-react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import NeuCard from "../../components/NeuCard";
+import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
-import { FontFamily } from "../../constants/theme";
+import { useTheme } from "../../contexts/ThemeContext";
+import { useStreak } from "../../contexts/StreakContext";
+import {
+  STREAK_TIERS,
+  FLAME_PREF_KEY,
+  MAX_TIER_DAYS,
+  getStreakLottie,
+} from "../../constants/streakTiers";
+
+const ACCT      = "#1deca0";
+const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
 
 
-const TP   = "#2D3748";
-const TS   = "#8896A7";
-const ACCT = "#1deca0";
-const ICON = "#3a3f47";
-const STRK = "#FF6B4A";
-const DIV  = "#D8DCE0";
+// Static colours for StyleSheet (must be literals, not dynamic theme values)
+const TP   = APP_LIGHT.tp;
+const TS   = APP_LIGHT.ts;
+const ICON = APP_LIGHT.icon;
+const DIV  = APP_LIGHT.div;
 
 const QUICK_ACTIONS = [
   { id: "log",      label: "New\nProgram",  renderIcon: (c: string) => <Ionicons name="add-outline" size={26} color={c} /> },
@@ -49,65 +65,128 @@ function StartButton() {
   );
 }
 
+
+function CalendarIcon() {
+  const now = new Date();
+  const day = now.toLocaleDateString("en-GB", { weekday: "short" }).toUpperCase();
+  const date = now.getDate().toString();
+  const W = 42;
+  const RING_OVERHANG = 5;
+  const BODY_H = 50;
+  const TOTAL_H = BODY_H + RING_OVERHANG;
+  const R = 9;
+  const GRADIENT_H = Math.round(BODY_H * 0.53);
+  const GLASS_OFFSET = Math.round(BODY_H * 0.23);
+  return (
+    <View style={{ width: W, height: TOTAL_H }}>
+      <View style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: BODY_H, borderRadius: R, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 6 }} />
+      <LinearGradient colors={["#00E5FF", "#009DFF"]} start={{ x: 0.09, y: 0.08 }} end={{ x: 1, y: 0.75 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: GRADIENT_H, borderRadius: R }} />
+      <LinearGradient colors={["#00E5FF", "#0095FF"]} start={{ x: 0.09, y: 0.08 }} end={{ x: 1, y: 0.75 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: GRADIENT_H, borderRadius: R, opacity: 0.8 }} />
+      <LinearGradient colors={["rgba(255,255,255,0.35)", "rgba(255,255,255,0)"]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: 4, borderTopLeftRadius: R, borderTopRightRadius: R, overflow: "hidden" }} pointerEvents="none" />
+      <View style={{ position: "absolute", top: RING_OVERHANG + GLASS_OFFSET, left: 0, right: 0, bottom: 0, borderRadius: R, overflow: "hidden" }}>
+        <BlurView intensity={25} tint="light" style={{ flex: 1 }}>
+          <View style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.4)" }}>
+            <Text style={{ color: "#00949E", fontSize: 9, fontWeight: "700", textAlign: "center", paddingTop: 6, letterSpacing: 0.5 }}>{day}</Text>
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+              <Text style={{ color: "#000", fontSize: 17, fontWeight: "700" }}>{date}</Text>
+            </View>
+            <LinearGradient colors={["rgba(255,255,255,0.55)", "rgba(255,255,255,0)"]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={{ position: "absolute", top: 0, left: 0, right: 0, height: 8 }} pointerEvents="none" />
+          </View>
+        </BlurView>
+      </View>
+      {[11, 27].map((left, i) => (
+        <View key={i} style={{ position: "absolute", top: 0, left, width: 5, height: RING_OVERHANG + 6, backgroundColor: "#fff", borderRadius: 2.5, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 }} />
+      ))}
+    </View>
+  );
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { isDark } = useTheme();
+  const t = isDark ? APP_DARK : APP_LIGHT;
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good Morning" : hour < 18 ? "Good Afternoon" : "Good Evening";
 
+  const { streakDays } = useStreak();
+  const isMax = streakDays >= MAX_TIER_DAYS;
+  const [flameName, setFlameName] = useState<string | null>(null);
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const streakOpacity = scrollY.interpolate({ inputRange: [80, 140], outputRange: [1, 0], extrapolate: "clamp" });
+
+  // Re-read the preference every time this screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (isMax) {
+        AsyncStorage.getItem(FLAME_PREF_KEY).then((saved: string | null) => {
+          if (saved) setFlameName(saved);
+        });
+      }
+    }, [isMax])
+  );
+
+  const activeLottie = isMax && flameName
+    ? (STREAK_TIERS.find(t2 => t2.name === flameName)?.lottie ?? getStreakLottie(streakDays))
+    : getStreakLottie(streakDays);
+
   return (
-    <View style={styles.root}>
-      <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]}>
-        <NeuCard radius={24} style={{ width: 48, height: 48, borderRadius: 24 }}>
-          <View style={styles.avatarInner}>
-            <Text style={styles.avatarText}>MM</Text>
+    <View style={[styles.root, { backgroundColor: t.bg }]}>
+      {/* Streak badge — fades out on scroll */}
+      <Animated.View style={[styles.streakFloat, { top: insets.top, opacity: streakOpacity }]}>
+        <BounceButton onPress={() => router.push("/streak")}>
+          <View style={styles.streakBadge}>
+            <LottieView source={activeLottie} autoPlay loop style={{ width: 44, height: 44 }} />
+            <Text style={[styles.streakBadgeText, { color: t.ts }]}>{streakDays}</Text>
           </View>
-        </NeuCard>
+        </BounceButton>
+      </Animated.View>
+
+      <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]} onPress={() => router.push("/settings")}>
+        <View style={[styles.avatarHighlight, { shadowColor: isDark ? "#4d5363" : "#FFFFFF" }]}>
+          <View style={[styles.avatarShadow, { shadowColor: isDark ? "#4d5363" : "#a3afc0" }]}>
+            <BlurView intensity={90} tint="extraLight" style={styles.avatarBorder}>
+              <View style={styles.avatarInner}>
+                <Text style={styles.avatarText}>MM</Text>
+              </View>
+            </BlurView>
+          </View>
+        </View>
       </BounceButton>
 
-      <ScrollView
+      <Animated.ScrollView
         showsVerticalScrollIndicator={false}
         automaticallyAdjustContentInsets={false}
         contentInsetAdjustmentBehavior="never"
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top - 4, paddingBottom: insets.bottom + 120 }]}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+        scrollEventThrottle={16}
       >
         <Image source={require("../../assets/images/logo.png")} style={styles.logo} resizeMode="contain" />
 
         <View style={styles.header}>
           <View>
-            <Text style={styles.greeting}>{greeting}</Text>
-            <Text style={styles.name}>Michael</Text>
+            <Text style={[styles.greeting, { color: t.ts }]}>{greeting}</Text>
+            <Text style={[styles.name, { color: t.tp }]}>Michael</Text>
           </View>
         </View>
 
-        <NeuCard style={styles.streak}>
-          <View style={styles.streakInner}>
-            <Text style={styles.streakText}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }).replace(/^(\w+)/, "$1,")}</Text>
-            <View style={{ flex: 1 }} />
-            <Ionicons name="flame" size={20} color={STRK} />
-            <Text style={styles.streakText}>7 Day Streak</Text>
+        <NeuCard dark={isDark} style={styles.workoutCard}>
+          <View style={{ position: "absolute", top: 16, right: 24, zIndex: 1 }}>
+            <CalendarIcon />
           </View>
-        </NeuCard>
-
-        <NeuCard style={styles.workoutCard}>
           <View style={styles.workoutCardInner}>
-            <View style={{ position: "absolute", top: 20, right: 20, alignItems: "flex-end", gap: 6, maxWidth: "50%" }}>
-              <Text style={styles.sectionLabel}>ACTIVE PROGRAM</Text>
-              <NeuCard radius={10} style={styles.badge}>
-                <Text style={[styles.badgeText, { flexShrink: 1 }]}>2026 MESOCYCLE A</Text>
-              </NeuCard>
-            </View>
+            <Text style={[styles.sectionLabel, { color: t.ts }]}>TODAY'S WORKOUT</Text>
+            <Text style={[styles.workoutName, { color: t.tp }]}>FULLBODY A</Text>
 
-            <Text style={styles.sectionLabel}>TODAY'S WORKOUT</Text>
-            <Text style={[styles.workoutName, { marginTop: 10, paddingRight: 155 }]}>FULLBODY A</Text>
-
-            <View style={[styles.metaRow, { marginTop: -8 }]}>
+            <View style={[styles.metaRow, { marginTop: -10 }]}>
               <View style={styles.metaItem}>
                 <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                  <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={TS} strokeWidth="1.5" />
-                  <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={TS} strokeWidth="1.5" />
-                  <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={TS} strokeWidth="1.5" />
+                  <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                  <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                  <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.ts} strokeWidth="1.5" />
                 </Svg>
-                <Text style={styles.metaText}>6 exercises</Text>
+                <Text style={[styles.metaText, { color: t.ts }]}>6 exercises</Text>
               </View>
             </View>
 
@@ -115,25 +194,50 @@ export default function HomeScreen() {
           </View>
         </NeuCard>
 
+        <NeuCard dark={isDark} style={styles.programCard}>
+          <View style={styles.programCardInner}>
+            <View style={styles.programHeader}>
+              <View>
+                <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
+                <Text style={[styles.programName, { color: t.tp }]}>2026 MESOCYCLE A</Text>
+              </View>
+              <Text style={[styles.programWeek, { color: t.ts }]}>Week 3 of 8</Text>
+            </View>
+            <View style={styles.progressRow}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.progressSegment,
+                    { backgroundColor: i < 3 ? ACCT : (isDark ? "#2e3448" : "#D8DCE0") },
+                  ]}
+                />
+              ))}
+            </View>
+          </View>
+        </NeuCard>
+
         <View style={styles.quickRow}>
           {QUICK_ACTIONS.map((a) => (
-            <BounceButton key={a.id} style={{ flex: 1 }}>
-              <NeuCard style={styles.quickCard}>
+            <View key={a.id} style={{ flex: 1 }}>
+              <NeuCard dark={isDark} style={styles.quickCard}>
                 <View style={styles.quickInner}>
-                  <NeuCard radius={24} style={styles.quickIcon}>
-                    <View style={styles.quickIconInner}>
-                      {a.renderIcon(ICON)}
-                    </View>
-                  </NeuCard>
-                  <Text style={styles.quickLabel}>{a.label}</Text>
+                  <BounceButton>
+                    <NeuCard dark={isDark} radius={24} style={styles.quickIcon}>
+                      <View style={styles.quickIconInner}>
+                        {a.renderIcon(t.icon)}
+                      </View>
+                    </NeuCard>
+                  </BounceButton>
+                  <Text style={[styles.quickLabel, { color: t.ts }]}>{a.label}</Text>
                 </View>
               </NeuCard>
-            </BounceButton>
+            </View>
           ))}
         </View>
 
-        <Text style={styles.sectionTitle}>This Week</Text>
-        <NeuCard style={styles.statsCard}>
+        <Text style={[styles.sectionTitle, { color: t.tp }]}>This Week</Text>
+        <NeuCard dark={isDark} style={styles.statsCard}>
           <View style={styles.statsRow}>
             {[
               { value: "4",      label: "Workouts"  },
@@ -141,50 +245,41 @@ export default function HomeScreen() {
               { value: "44 min", label: "Avg Time"  },
             ].map((s, i) => (
               <View key={s.label} style={styles.statCell}>
-                {i > 0 && <View style={styles.divider} />}
+                {i > 0 && <View style={[styles.divider, { backgroundColor: t.div }]} />}
                 <View style={styles.statContent}>
-                  <Text style={styles.statValue}>{s.value}</Text>
-                  <Text style={styles.statLabel}>{s.label}</Text>
+                  <Text style={[styles.statValue, { color: t.tp }]}>{s.value}</Text>
+                  <Text style={[styles.statLabel, { color: t.ts }]}>{s.label}</Text>
                 </View>
               </View>
             ))}
           </View>
         </NeuCard>
 
-        <View style={styles.recentHeader}>
-          <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Recent Activity</Text>
-          <BounceButton style={styles.seeAllRow}>
-            <Text style={styles.seeAll}>See All</Text>
-            <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-              <Path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke={ICON} strokeWidth="2.5" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
-              <Path d="M10.7402 15.5297L14.2602 11.9997L10.7402 8.46973" stroke={ICON} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-            </Svg>
-          </BounceButton>
-        </View>
+        <Text style={[styles.sectionTitle, { color: t.tp }]}>Recent Activity</Text>
 
         {RECENT_ACTIVITY.map((item) => (
           <BounceButton key={item.id} style={{ marginBottom: 12 }}>
-            <NeuCard style={[styles.activityCard, { marginBottom: 0 }]}>
+            <NeuCard dark={isDark} style={[styles.activityCard, { marginBottom: 0 }]}>
             <View style={styles.activityInner}>
-              <NeuCard radius={24} style={styles.activityIcon}>
+              <NeuCard dark={isDark} radius={24} style={styles.activityIcon}>
                 <View style={styles.activityIconInner}>
                   <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-                    <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke="#000000" strokeWidth="1.5" />
-                    <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke="#000000" strokeWidth="1.5" />
-                    <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke="#000000" strokeWidth="1.5" />
+                    <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.icon} strokeWidth="1.5" />
+                    <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.icon} strokeWidth="1.5" />
+                    <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.icon} strokeWidth="1.5" />
                   </Svg>
                 </View>
               </NeuCard>
               <View style={{ flex: 1 }}>
-                <Text style={styles.activityName}>{item.name}</Text>
-                <Text style={styles.activitySub}>{item.sub}</Text>
+                <Text style={[styles.activityName, { color: t.tp }]}>{item.name}</Text>
+                <Text style={[styles.activitySub, { color: t.ts }]}>{item.sub}</Text>
               </View>
-              <Text style={styles.activityDur}>{item.dur}</Text>
+              <Text style={[styles.activityDur, { color: t.tp }]}>{item.dur}</Text>
             </View>
             </NeuCard>
           </BounceButton>
         ))}
-      </ScrollView>
+      </Animated.ScrollView>
     </View>
   );
 }
@@ -193,15 +288,19 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: NEU_BG },
   scroll: { paddingHorizontal: 20 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
-  greeting: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
+  greeting: { fontFamily: FontFamily.regular, fontSize: 16, color: TS },
   name: { fontFamily: FontFamily.bold, fontSize: 28, color: TP, marginTop: 2 },
   logo: { width: 56, height: 56, marginBottom: 20 },
-  avatar: { position: "absolute", width: 48, height: 48, borderRadius: 24, zIndex: 10 },
-  avatarInner: { width: 48, height: 48, alignItems: "center", justifyContent: "center" },
+  avatar: { position: "absolute", zIndex: 10 },
+  avatarHighlight: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: "#FFFFFF", shadowOffset: { width: -3, height: -3 }, shadowOpacity: 0.9, shadowRadius: 6 },
+  avatarShadow: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: "#a3afc0", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.7, shadowRadius: 7 },
+  avatarBorder: { width: 48, height: 48, borderRadius: 24, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  avatarInner: { width: 44, height: 44, borderRadius: 22, backgroundColor: AVATAR_BG, alignItems: "center", justifyContent: "center" },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 16, color: ICON },
-  streak: { marginBottom: 16, borderRadius: 16 },
-  streakInner: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, gap: 5 },
-  streakText: { fontFamily: FontFamily.semibold, fontSize: 14, color: TP },
+  streakFloat:     { position: "absolute", right: 80, zIndex: 10 },
+  streakBadge:     { flexDirection: "row", alignItems: "flex-start", gap: 0 },
+  streakBadgeText: { fontFamily: FontFamily.semibold, fontSize: 18, color: TS, marginLeft: -4, marginTop: 13 },
+  streakDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: TS, opacity: 0.4 },
   workoutCard: { marginBottom: 20, borderRadius: 24 },
   workoutCardInner: { padding: 20, gap: 18 },
   workoutRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
@@ -240,4 +339,11 @@ const styles = StyleSheet.create({
   activityName: { fontFamily: FontFamily.semibold, fontSize: 14, color: TP, marginBottom: 3 },
   activitySub: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
   activityDur: { fontFamily: FontFamily.semibold, fontSize: 14, color: TP },
+  programCard: { marginBottom: 20, borderRadius: 20 },
+  programCardInner: { padding: 20, gap: 14 },
+  programHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },
+  programName: { fontFamily: FontFamily.bold, fontSize: 16, color: TP, marginTop: 4 },
+  programWeek: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
+  progressRow: { flexDirection: "row", gap: 5 },
+  progressSegment: { flex: 1, height: 6, borderRadius: 3 },
 });

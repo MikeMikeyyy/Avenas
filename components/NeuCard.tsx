@@ -1,12 +1,17 @@
 import { View } from "react-native";
 import { StyleProp, ViewStyle } from "react-native";
+import { NEU_BG, NEU_BG_DARK } from "../constants/theme";
 
-// Must match the page background exactly — neumorphism breaks if they differ
-export const NEU_BG = "#e8ecf3ff";
+// Re-exported for files that import NEU_BG from NeuCard directly
+export { NEU_BG, NEU_BG_DARK };
 
-// Shadows are tinted to the background hue for a natural raised-material look
+// Light mode shadows
 const SHADOW_LIGHT = "#FFFFFF";
-const SHADOW_DARK  = "#a3afc0"; // darker blue-tint of #e0e5ec
+const SHADOW_DARK  = "#a3afc0";
+
+// Dark mode shadows
+const SHADOW_DARK_DM  = "#13151c";
+const SHADOW_LIGHT_DM = "#4d5363";
 
 interface NeuCardProps {
   children?: React.ReactNode;
@@ -14,6 +19,9 @@ interface NeuCardProps {
   innerStyle?: StyleProp<ViewStyle>;
   radius?: number;
   variant?: "raised" | "inset";
+  bg?: string;
+  shadowSize?: "sm" | "md";
+  dark?: boolean;
 }
 
 export default function NeuCard({
@@ -22,8 +30,15 @@ export default function NeuCard({
   innerStyle,
   radius = 20,
   variant = "raised",
+  bg,
+  shadowSize = "md",
+  dark = false,
 }: NeuCardProps) {
+  const resolvedBg = bg ?? (dark ? NEU_BG_DARK : NEU_BG);
   const isInset = variant === "inset";
+  const sm = shadowSize === "sm";
+  const shadowA = dark ? SHADOW_DARK_DM  : (isInset ? SHADOW_LIGHT : SHADOW_DARK);
+  const shadowB = dark ? SHADOW_LIGHT_DM : (isInset ? SHADOW_DARK  : SHADOW_LIGHT);
 
   return (
     // Dark shadow wrapper (bottom-right depth)
@@ -31,24 +46,24 @@ export default function NeuCard({
       style={[
         {
           borderRadius: radius,
-          backgroundColor: NEU_BG,
-          shadowColor: isInset ? SHADOW_LIGHT : SHADOW_DARK,
-          shadowOffset: { width: 6, height: 6 },
+          backgroundColor: resolvedBg,
+          shadowColor: shadowA,
+          shadowOffset: { width: sm ? 4 : 6, height: sm ? 4 : 6 },
           shadowOpacity: isInset ? 1 : 0.7,
-          shadowRadius: isInset ? 5 : 12,
+          shadowRadius: isInset ? 5 : sm ? 7 : 12,
         },
         style,
       ]}
     >
-      {/* White shadow wrapper (top-left highlight) */}
+      {/* White/light shadow wrapper (top-left highlight) */}
       <View
         style={{
           borderRadius: radius,
-          backgroundColor: NEU_BG,
-          shadowColor: isInset ? SHADOW_DARK : SHADOW_LIGHT,
-          shadowOffset: { width: -3, height: -3 },
+          backgroundColor: resolvedBg,
+          shadowColor: shadowB,
+          shadowOffset: { width: sm ? -2 : -3, height: sm ? -2 : -3 },
           shadowOpacity: 1,
-          shadowRadius: isInset ? 5 : 4,
+          shadowRadius: isInset ? 5 : sm ? 3 : 4,
         }}
       >
         {/* Clip layer — prevents any shadow bleed at corners */}
@@ -56,7 +71,7 @@ export default function NeuCard({
           style={[
             {
               borderRadius: radius,
-              backgroundColor: NEU_BG,
+              backgroundColor: resolvedBg,
               overflow: "hidden",
             },
             innerStyle,
