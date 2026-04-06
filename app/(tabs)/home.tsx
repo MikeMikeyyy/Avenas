@@ -30,10 +30,17 @@ const TS   = APP_LIGHT.ts;
 const ICON = APP_LIGHT.icon;
 const DIV  = APP_LIGHT.div;
 
-const QUICK_ACTIONS = [
+type QuickAction = {
+  id: string;
+  label: string;
+  route?: string;
+  renderIcon: (c: string) => React.ReactElement;
+};
+
+const QUICK_ACTIONS: QuickAction[] = [
   { id: "log",      label: "New\nProgram",  renderIcon: (c: string) => <Ionicons name="add-outline" size={26} color={c} /> },
-  { id: "programs", label: "My\nPrograms",  renderIcon: (c: string) => <Ionicons name="list-outline" size={22} color={c} /> },
-  { id: "journal",  label: "View\nJournal", renderIcon: (c: string) => (
+  { id: "programs", label: "My\nPrograms",  route: "/programs", renderIcon: (c: string) => <Ionicons name="list-outline" size={22} color={c} /> },
+  { id: "journal",  label: "View\nJournal", route: "/journal",  renderIcon: (c: string) => (
     <Svg width={22} height={22} viewBox="0 0 16 16" fill="none">
       <Path d="M5 0h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2 2 2 0 0 1-2 2H3a2 2 0 0 1-2-2h1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1H1a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v9a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1H3a2 2 0 0 1 2-2" fill={c} />
       <Path d="M1 6v-.5a.5.5 0 0 1 1 0V6h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 3v-.5a.5.5 0 0 1 1 0V9h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 2.5v.5H.5a.5.5 0 0 0 0 1h2a.5.5 0 0 0 0-1H2v-.5a.5.5 0 0 0-1 0" fill={c} />
@@ -222,7 +229,11 @@ export default function HomeScreen() {
             <View key={a.id} style={{ flex: 1 }}>
               <NeuCard dark={isDark} style={styles.quickCard}>
                 <View style={styles.quickInner}>
-                  <BounceButton>
+                  <BounceButton
+                    onPress={a.route !== undefined ? () => router.push(a.route as Parameters<typeof router.push>[0]) : undefined}
+                    accessibilityLabel={a.label.replace("\n", " ")}
+                    accessibilityRole="button"
+                  >
                     <NeuCard dark={isDark} radius={24} style={styles.quickIcon}>
                       <View style={styles.quickIconInner}>
                         {a.renderIcon(t.icon)}
