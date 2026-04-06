@@ -186,13 +186,13 @@ export default function ProgramsScreen() {
         {/* Active program */}
         {activeProgram !== null && (
           <>
-            <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE</Text>
+            <Text style={[styles.sectionLabel, { color: t.tp }]}>ACTIVE</Text>
             <ActiveProgramCard program={activeProgram} isDark={isDark} />
           </>
         )}
 
         {/* All programs */}
-        <Text style={[styles.sectionLabel, { color: t.ts }]}>ALL PROGRAMS</Text>
+        <Text style={[styles.sectionLabel, { color: t.tp }]}>ALL PROGRAMS</Text>
         {PROGRAMS.map((p) => (
           <ProgramCard key={p.id} program={p} isDark={isDark} />
         ))}
