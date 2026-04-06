@@ -155,9 +155,13 @@ export default function ProgramsScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 72, paddingBottom: insets.bottom + 40 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }}
       >
-        <Text style={[styles.screenTitle, { color: t.tp }]}>MY PROGRAMS</Text>
+        <View style={styles.header}>
+          <View style={{ width: 66 }} />
+          <Text style={[styles.screenTitle, { color: t.tp }]}>MY PROGRAMS</Text>
+          <View style={{ width: 66 }} />
+        </View>
 
         {/* Stats */}
         <NeuCard dark={isDark} style={styles.statsCard}>
@@ -199,7 +203,8 @@ export default function ProgramsScreen() {
 const styles = StyleSheet.create({
   root:               { flex: 1 },
   backBtn:            { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  screenTitle:        { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", marginBottom: 24 },
+  header:             { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
+  screenTitle:        { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1 },
 
   statsCard:          { marginBottom: 24, borderRadius: 20 },
   statsRow:           { flexDirection: "row" },
