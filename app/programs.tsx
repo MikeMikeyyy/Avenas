@@ -130,7 +130,8 @@ export default function ProgramsScreen() {
 
   const activeProgram = PROGRAMS.find((p) => p.status === "active") ?? null;
   const totalCount = PROGRAMS.length;
-  const activeCount = PROGRAMS.filter((p) => p.status === "active").length;
+  const weeksTrained = PROGRAMS.reduce((sum, p) =>
+    sum + (p.status === "completed" ? p.totalWeeks : p.currentWeek), 0);
   const completedCount = PROGRAMS.filter((p) => p.status === "completed").length;
 
   return (
@@ -167,8 +168,8 @@ export default function ProgramsScreen() {
         <NeuCard dark={isDark} style={styles.statsCard}>
           <View style={styles.statsRow}>
             {([
-              { value: String(totalCount),     label: "Total"     },
-              { value: String(activeCount),    label: "Active"    },
+              { value: String(totalCount),    label: "Total"     },
+              { value: String(weeksTrained),  label: "Weeks"     },
               { value: String(completedCount), label: "Completed" },
             ] as const).map((s, i) => (
               <View key={s.label} style={styles.statCell}>
