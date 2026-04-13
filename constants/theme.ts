@@ -5,13 +5,13 @@
 
 // ─── Neumorphic base backgrounds ──────────────────────────────────────────────
 // These drive NeuCard shadows — every screen bg must match these exactly.
-export const NEU_BG      = "#e8ecf3";
-export const NEU_BG_DARK = "#1B1E2C";  // dark navy — updated from gray
+export const NEU_BG      = "#f2f4f8";
+export const NEU_BG_DARK = "#252840";  // dark navy card — lighter than page bg
 
 // ─── App-wide light / dark palette ────────────────────────────────────────────
 // Import these in every screen instead of redefining LIGHT/DARK locally.
 export const APP_LIGHT = {
-  bg:   NEU_BG,
+  bg:   "#e8ecf3",
   tp:   "#2D3748",  // text primary
   ts:   "#8896A7",  // text secondary
   icon: "#3a3f47",
@@ -19,7 +19,7 @@ export const APP_LIGHT = {
 } as const;
 
 export const APP_DARK = {
-  bg:   NEU_BG_DARK,
+  bg:   "#1B1E2C",
   tp:   "#E4E6F0",  // slightly blue-tinted white
   ts:   "#6B7396",  // muted blue-gray
   icon: "#8B93AE",  // navy-tinted icon

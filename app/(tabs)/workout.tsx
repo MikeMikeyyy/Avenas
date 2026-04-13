@@ -809,7 +809,14 @@ export default function WorkoutScreen() {
       <Modal visible={showTimerModal} transparent animationType="fade" onRequestClose={() => setShowTimerModal(false)}>
         <TouchableOpacity style={styles.timerBackdrop} activeOpacity={1} onPress={() => { Keyboard.dismiss(); setShowTimerModal(false); }}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ width: "100%" }}>
-            <NeuCard dark={isDark} style={styles.timerCard}>
+            <View style={[styles.timerCard, {
+              backgroundColor: isDark ? "#1B1E2C" : "#e8ecf3",
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: isDark ? 0.35 : 0.1,
+              shadowRadius: 8,
+              elevation: 4,
+            }]}>
 
               {/* Header */}
               <View style={[styles.timerCardHeader, { justifyContent: "flex-end" }]}>
@@ -997,7 +1004,7 @@ export default function WorkoutScreen() {
                 )
               )}
 
-            </NeuCard>
+            </View>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
