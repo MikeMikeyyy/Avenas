@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useMemo } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const STORAGE_KEY = "avenas_streak_data";
@@ -132,15 +132,15 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  const value = useMemo(() => ({
+    streakDays: data?.count ?? 0,
+    startDate: data?.startDate ?? "",
+    highestStreak: data?.highestStreak ?? 0,
+    isLoaded: data !== null,
+  }), [data]);
+
   return (
-    <StreakContext.Provider
-      value={{
-        streakDays: data?.count ?? 0,
-        startDate: data?.startDate ?? "",
-        highestStreak: data?.highestStreak ?? 0,
-        isLoaded: data !== null,
-      }}
-    >
+    <StreakContext.Provider value={value}>
       {children}
     </StreakContext.Provider>
   );

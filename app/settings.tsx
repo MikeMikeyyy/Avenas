@@ -7,16 +7,22 @@ import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import NeuCard from "../components/NeuCard";
-import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT } from "../constants/theme";
 
-// Static values for StyleSheet (dark overrides applied inline)
+// ─── Settings item types ──────────────────────────────────────────────────────
+type BaseItem     = { icon: string; label: string; renderIcon?: (c: string) => React.ReactNode };
+type NavigateItem = BaseItem;
+type ToggleItem   = BaseItem & { toggle: true };
+type UnitItem     = BaseItem & { unitToggle: true };
+type SettingsItem = NavigateItem | ToggleItem | UnitItem;
+
+// ─── Static values for StyleSheet (dark overrides applied inline) ─────────────
 const TP   = APP_LIGHT.tp;
 const TS   = APP_LIGHT.ts;
 const ICON = APP_LIGHT.icon;
 const DIV  = APP_LIGHT.div;
-const ACCT = "#1deca0";
 
-const SECTIONS = [
+const SECTIONS: { title: string; items: SettingsItem[] }[] = [
   {
     title: "Account",
     items: [
@@ -74,11 +80,11 @@ export default function SettingsScreen() {
       >
         {isGlassEffectAPIAvailable() ? (
           <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.icon} />
+            <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? "#2a2f3e" : "#ffffff" }]}>
-            <Ionicons name="chevron-back" size={22} color={t.icon} />
+          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+            <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
       </TouchableOpacity>
@@ -96,9 +102,9 @@ export default function SettingsScreen() {
 
         {/* Avatar */}
         <View style={styles.avatarSection}>
-          <NeuCard dark={isDark} radius={40} style={styles.avatar}>
+          <NeuCard dark={false} highlightOpacity={isDark ? 0.3 : 1} depthOpacity={isDark ? 0.2 : 0.7} radius={40} style={styles.avatar}>
             <View style={styles.avatarInner}>
-              <Text style={[styles.avatarText, { color: t.icon }]}>MM</Text>
+              <Text style={[styles.avatarText, { color: APP_LIGHT.icon }]}>MM</Text>
             </View>
           </NeuCard>
           <Text style={[styles.userName, { color: t.tp }]}>Michael</Text>
@@ -113,10 +119,10 @@ export default function SettingsScreen() {
               {section.items.map((item, i) => (
                 <View key={item.label}>
                   {i > 0 && <View style={[styles.divider, { backgroundColor: t.div }]} />}
-                  {(item as any).unitToggle ? (
+                  {"unitToggle" in item ? (
                     <View style={styles.row}>
                       <View style={styles.rowLeft}>
-                        {(item as any).renderIcon(t.icon)}
+                        {item.renderIcon?.(t.icon)}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
                       <View style={[styles.unitToggle, { backgroundColor: t.div }]}>
@@ -138,11 +144,11 @@ export default function SettingsScreen() {
                         </TouchableOpacity>
                       </View>
                     </View>
-                  ) : (item as any).toggle ? (
+                  ) : "toggle" in item ? (
                     <View style={styles.row}>
                       <View style={styles.rowLeft}>
-                        {(item as any).renderIcon
-                          ? (item as any).renderIcon(t.icon)
+                        {item.renderIcon
+                          ? item.renderIcon(t.icon)
                           : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
@@ -156,8 +162,8 @@ export default function SettingsScreen() {
                   ) : (
                     <TouchableOpacity activeOpacity={0.7} style={styles.row}>
                       <View style={styles.rowLeft}>
-                        {(item as any).renderIcon
-                          ? (item as any).renderIcon(t.icon)
+                        {item.renderIcon
+                          ? item.renderIcon(t.icon)
                           : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
@@ -174,8 +180,8 @@ export default function SettingsScreen() {
         <NeuCard dark={isDark} style={styles.signOutCard}>
           <TouchableOpacity activeOpacity={0.7} style={styles.row}>
             <View style={styles.rowLeft}>
-              <Ionicons name="log-out-outline" size={20} color="#FF6B4A" />
-              <Text style={[styles.rowLabel, { color: "#FF6B4A" }]}>Sign Out</Text>
+              <Ionicons name="log-out-outline" size={20} color={Colors.error} />
+              <Text style={[styles.rowLabel, { color: Colors.error }]}>Sign Out</Text>
             </View>
           </TouchableOpacity>
         </NeuCard>

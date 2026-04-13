@@ -6,7 +6,7 @@
 // ─── Neumorphic base backgrounds ──────────────────────────────────────────────
 // These drive NeuCard shadows — every screen bg must match these exactly.
 export const NEU_BG      = "#e8ecf3";
-export const NEU_BG_DARK = "#272930";
+export const NEU_BG_DARK = "#1B1E2C";  // dark navy — updated from gray
 
 // ─── App-wide light / dark palette ────────────────────────────────────────────
 // Import these in every screen instead of redefining LIGHT/DARK locally.
@@ -20,13 +20,17 @@ export const APP_LIGHT = {
 
 export const APP_DARK = {
   bg:   NEU_BG_DARK,
-  tp:   "#E8ECF3",
-  ts:   "#8896A7",
-  icon: "#c5cdd8",
-  div:  "#2e3448",
+  tp:   "#E4E6F0",  // slightly blue-tinted white
+  ts:   "#6B7396",  // muted blue-gray
+  icon: "#8B93AE",  // navy-tinted icon
+  div:  "#252840",  // dark navy divider
 } as const;
 
 export type AppTheme = typeof APP_LIGHT;
+
+// ─── Brand accent ─────────────────────────────────────────────────────────────
+// The single source for the app's green accent — import this, never hardcode.
+export const ACCT = "#1deca0";
 
 // ─── Legacy colours (pre-design-token era) ────────────────────────────────────
 export const Colors = {

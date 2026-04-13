@@ -10,7 +10,8 @@ import {
 import Svg, { Path } from "react-native-svg";
 import { useRef, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
-import { FontFamily } from "../../constants/theme";
+import { FontFamily, NEU_BG_DARK } from "../../constants/theme";
+import { useTheme } from "../../contexts/ThemeContext";
 let LiquidGlassView: any = View;
 let LiquidGlassContainerView: any = View;
 let isLiquidGlassSupported = false;
@@ -97,6 +98,9 @@ function TabItem({ route, focused, onPress, color }: { route: any; focused: bool
         onPress();
       }}
       style={styles.tabItem}
+      accessibilityRole="tab"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: focused }}
     >
       <Animated.View style={[styles.iconContent, { transform: [{ scale }] }]}>
         {renderIcon(route.name, 24, color)}
@@ -115,6 +119,7 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
   const pillScale  = useRef(new Animated.Value(1)).current;
   const [tabWidth, setTabWidth] = useState(0);
   const { width: screenWidth } = useWindowDimensions();
+  const { isDark } = useTheme();
   const barWidth = screenWidth - 40;
   const computedTabWidth = barWidth / state.routes.length;
   const isFirstRender = useRef(true);
@@ -141,17 +146,14 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
   const pillWidth  = tabWidth - PILL_INSET * 2;
   const pillHeight = BAR_HEIGHT - PILL_INSET * 2;
 
-  const tabColor = (focused: boolean) =>
-    isLiquidGlassSupported
-      ? (focused ? "#000000" : "rgba(0,0,0,0.45)")
-      : (focused ? "#FFFFFF" : "rgba(255,255,255,0.45)");
+  const tabColor = () => isDark ? "#FFFFFF" : "#000000";
 
   const tabItems = state.routes.map((route: any, index: number) => (
     <TabItem
       key={route.key}
       route={route}
       focused={state.index === index}
-      color={tabColor(state.index === index)}
+      color={tabColor()}
       onPress={() => navigation.navigate(route.name)}
     />
   ));
@@ -163,7 +165,7 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
           {/* Glass bar background */}
           <LiquidGlassView
             effect="regular"
-            colorScheme="light"
+            colorScheme={isDark ? "dark" : "light"}
             style={{ position: "absolute", width: barWidth, height: BAR_HEIGHT, borderRadius: BAR_HEIGHT / 2, overflow: "hidden" }}
           />
           {/* Glass sliding pill */}
@@ -171,7 +173,7 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
             <LiquidGlassView
               effect="clear"
               interactive
-              colorScheme="light"
+              colorScheme={isDark ? "dark" : "light"}
               style={{ width: pillWidth, height: pillHeight, borderRadius: pillHeight / 2, overflow: "hidden" }}
             />
           </Animated.View>
@@ -185,10 +187,12 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
   }
 
   // Fallback for Expo Go / iOS < 26
+  const barBg   = isDark ? NEU_BG_DARK : "#FFFFFF";
+  const pillBg  = isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.07)";
   return (
     <View style={styles.tabBarWrapper}>
-      <View style={[styles.bar, { width: barWidth, height: BAR_HEIGHT }]}>
-<Animated.View style={[styles.pill, { width: pillWidth, height: pillHeight, transform: [{ translateX }, { scale: pillScale }] }]} />
+      <View style={[styles.bar, { width: barWidth, height: BAR_HEIGHT, backgroundColor: barBg }]}>
+        <Animated.View style={[styles.pill, { width: pillWidth, height: pillHeight, backgroundColor: pillBg, transform: [{ translateX }, { scale: pillScale }] }]} />
         {tabItems}
       </View>
     </View>
@@ -223,7 +227,6 @@ const styles = StyleSheet.create({
     right: 20,
   },
   bar: {
-    backgroundColor: "#1e1e1e",
     borderRadius: BAR_HEIGHT / 2,
     flexDirection: "row",
     alignItems: "center",
@@ -234,7 +237,6 @@ const styles = StyleSheet.create({
     top: PILL_INSET,
     left: 0,
     borderRadius: (BAR_HEIGHT - PILL_INSET * 2) / 2,
-    backgroundColor: "rgba(255,255,255,0.12)",
   },
   tabItem: {
     flex: 1,

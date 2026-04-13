@@ -6,8 +6,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import LottieView from "lottie-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import NeuCard, { NEU_BG, NEU_BG_DARK } from "../components/NeuCard";
-import { FontFamily } from "../constants/theme";
+import NeuCard from "../components/NeuCard";
+import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { useStreak } from "../contexts/StreakContext";
 import {
@@ -17,17 +17,13 @@ import {
   getTier,
 } from "../constants/streakTiers";
 
-const LIGHT = { bg: NEU_BG, tp: "#2D3748", ts: "#8896A7", div: "#D8DCE0" };
-const DARK = { bg: NEU_BG_DARK, tp: "#E8ECF3", ts: "#8896A7", div: "#2e3448" };
-const ICON = "#3a3f47";
-
 const WEEK_LABELS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
 export default function StreakScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isDark } = useTheme();
-  const t = isDark ? DARK : LIGHT;
+  const t = isDark ? APP_DARK : APP_LIGHT;
 
   const { streakDays, startDate, highestStreak } = useStreak();
 
@@ -72,11 +68,11 @@ export default function StreakScreen() {
       >
         {isGlassEffectAPIAvailable() ? (
           <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={ICON} />
+            <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? "#2a2f3e" : "#ffffff" }]}>
-            <Ionicons name="chevron-back" size={22} color={isDark ? "#c5cdd8" : ICON} />
+          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+            <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
       </TouchableOpacity>

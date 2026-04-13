@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { View, Text, StyleSheet, Image, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -9,7 +9,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import LottieView from "lottie-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
-import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily, ACCT } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
@@ -19,9 +19,49 @@ import {
   MAX_TIER_DAYS,
   getStreakLottie,
 } from "../../constants/streakTiers";
+import { PROGRAMS_KEY, SavedProgram } from "../../constants/programs";
 
-const ACCT      = "#1deca0";
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
+
+const REST_DAY_QUOTES = [
+  "Recovery is where the gains are actually made.",
+  "Your muscles grow while you rest, not while you lift.",
+  "Champions are built on rest days too.",
+  "Rest is not weakness, it's part of the work.",
+  "Sleep, eat, recover. Tomorrow you come back stronger.",
+  "Even the best athletes in the world take rest days.",
+  "Today your body is quietly doing its best work.",
+  "Consistency over time beats intensity without recovery.",
+  "A rested body lifts heavier than a tired one.",
+  "Growth happens in the quiet moments between the grind.",
+  "You earned this. Recover well.",
+  "Progress doesn't pause on rest days, it accelerates.",
+];
+
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function parseStoredDate(dateStr: string): Date {
+  // Format: "09 Apr 2026"
+  const parts = dateStr.split(" ");
+  const day = parseInt(parts[0], 10);
+  const month = MONTH_NAMES.indexOf(parts[1]);
+  const year = parseInt(parts[2], 10);
+  return new Date(year, month < 0 ? 0 : month, day);
+}
+
+function getTodaysWorkout(program: SavedProgram): { name: string; exerciseCount: number } | null {
+  const start = parseStoredDate(program.startDate);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  start.setHours(0, 0, 0, 0);
+  const daysPassed = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  const dayIndex = ((daysPassed % program.cycleDays) + program.cycleDays) % program.cycleDays;
+  const dayName = program.cyclePattern[dayIndex];
+  if (!dayName || dayName === "Rest") return null;
+  const workoutKey = `${dayIndex}:${dayName}`;
+  const exercises = program.workouts[workoutKey] ?? [];
+  return { name: dayName, exerciseCount: exercises.length };
+}
 
 
 // Static colours for StyleSheet (must be literals, not dynamic theme values)
@@ -38,7 +78,7 @@ type QuickAction = {
 };
 
 const QUICK_ACTIONS: QuickAction[] = [
-  { id: "log",      label: "New\nProgram",  renderIcon: (c: string) => <Ionicons name="add-outline" size={26} color={c} /> },
+  { id: "log",      label: "New\nProgram",  route: "/new-program", renderIcon: (c: string) => <Ionicons name="add-outline" size={26} color={c} /> },
   { id: "programs", label: "My\nPrograms",  route: "/programs", renderIcon: (c: string) => <Ionicons name="list-outline" size={22} color={c} /> },
   { id: "journal",  label: "View\nJournal", route: "/journal",  renderIcon: (c: string) => (
     <Svg width={22} height={22} viewBox="0 0 16 16" fill="none">
@@ -74,6 +114,7 @@ function StartButton() {
 
 
 function CalendarIcon() {
+  const { isDark } = useTheme();
   const now = new Date();
   const day = now.toLocaleDateString("en-GB", { weekday: "short" }).toUpperCase();
   const date = now.getDate().toString();
@@ -89,7 +130,7 @@ function CalendarIcon() {
       <View style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: BODY_H, borderRadius: R, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 6 }} />
       <LinearGradient colors={["#00E5FF", "#009DFF"]} start={{ x: 0.09, y: 0.08 }} end={{ x: 1, y: 0.75 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: GRADIENT_H, borderRadius: R }} />
       <LinearGradient colors={["#00E5FF", "#0095FF"]} start={{ x: 0.09, y: 0.08 }} end={{ x: 1, y: 0.75 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: GRADIENT_H, borderRadius: R, opacity: 0.8 }} />
-      <LinearGradient colors={["rgba(255,255,255,0.35)", "rgba(255,255,255,0)"]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: 4, borderTopLeftRadius: R, borderTopRightRadius: R, overflow: "hidden" }} pointerEvents="none" />
+      {!isDark && <LinearGradient colors={["rgba(255,255,255,0.35)", "rgba(255,255,255,0)"]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: 4, borderTopLeftRadius: R, borderTopRightRadius: R, overflow: "hidden" }} pointerEvents="none" />}
       <View style={{ position: "absolute", top: RING_OVERHANG + GLASS_OFFSET, left: 0, right: 0, bottom: 0, borderRadius: R, overflow: "hidden" }}>
         <BlurView intensity={25} tint="light" style={{ flex: 1 }}>
           <View style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.4)" }}>
@@ -119,19 +160,34 @@ export default function HomeScreen() {
   const { streakDays } = useStreak();
   const isMax = streakDays >= MAX_TIER_DAYS;
   const [flameName, setFlameName] = useState<string | null>(null);
+  const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
   const streakOpacity = scrollY.interpolate({ inputRange: [80, 140], outputRange: [1, 0], extrapolate: "clamp" });
 
-  // Re-read the preference every time this screen comes into focus
+  // Re-read the preference and active program every time this screen comes into focus
   useFocusEffect(
     useCallback(() => {
       if (isMax) {
-        AsyncStorage.getItem(FLAME_PREF_KEY).then((saved: string | null) => {
-          if (saved) setFlameName(saved);
-        });
+        AsyncStorage.getItem(FLAME_PREF_KEY)
+          .then((saved: string | null) => { if (saved) setFlameName(saved); })
+          .catch(() => {});
       }
+      AsyncStorage.getItem(PROGRAMS_KEY)
+        .then((raw) => {
+          if (!raw) return;
+          const programs: SavedProgram[] = JSON.parse(raw);
+          const found = programs.find((p) => p.status === "active") ?? null;
+          setActiveProgram(found);
+        })
+        .catch(() => {});
     }, [isMax])
   );
+
+  const restDayQuote = useMemo(() => {
+    const today = new Date();
+    const seed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
+    return REST_DAY_QUOTES[seed % REST_DAY_QUOTES.length];
+  }, []);
 
   const activeLottie = isMax && flameName
     ? (STREAK_TIERS.find(t2 => t2.name === flameName)?.lottie ?? getStreakLottie(streakDays))
@@ -178,51 +234,67 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <NeuCard dark={isDark} style={styles.workoutCard}>
-          <View style={{ position: "absolute", top: 16, right: 24, zIndex: 1 }}>
-            <CalendarIcon />
-          </View>
-          <View style={styles.workoutCardInner}>
-            <Text style={[styles.sectionLabel, { color: t.ts }]}>TODAY'S WORKOUT</Text>
-            <Text style={[styles.workoutName, { color: t.tp }]}>FULLBODY A</Text>
+        {(() => {
+          const todaysWorkout = activeProgram ? getTodaysWorkout(activeProgram) : null;
+          return (
+            <NeuCard dark={isDark} style={styles.workoutCard}>
+              <View style={{ position: "absolute", top: 16, right: 24, zIndex: 1 }}>
+                <CalendarIcon />
+              </View>
+              <View style={styles.workoutCardInner}>
+                <Text style={[styles.sectionLabel, { color: t.ts }]}>TODAY'S WORKOUT</Text>
+                {todaysWorkout ? (
+                  <>
+                    <Text style={[styles.workoutName, { color: t.tp }]}>{todaysWorkout.name.toUpperCase()}</Text>
+                    <View style={[styles.metaRow, { marginTop: -10 }]}>
+                      <View style={styles.metaItem}>
+                        <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                          <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                          <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                          <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.ts} strokeWidth="1.5" />
+                        </Svg>
+                        <Text style={[styles.metaText, { color: t.ts }]}>{todaysWorkout.exerciseCount} exercise{todaysWorkout.exerciseCount !== 1 ? "s" : ""}</Text>
+                      </View>
+                    </View>
+                    <StartButton />
+                  </>
+                ) : activeProgram ? (
+                  <>
+                    <Text style={[styles.workoutName, { color: t.tp }]}>REST DAY</Text>
+                    <Text style={[styles.metaText, { color: t.ts, fontStyle: "italic", marginTop: -8 }]}>{restDayQuote}</Text>
+                  </>
+                ) : (
+                  <Text style={[styles.metaText, { color: t.ts }]}>No active program. Set one in My Programs.</Text>
+                )}
+              </View>
+            </NeuCard>
+          );
+        })()}
 
-            <View style={[styles.metaRow, { marginTop: -10 }]}>
-              <View style={styles.metaItem}>
-                <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                  <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.ts} strokeWidth="1.5" />
-                  <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.ts} strokeWidth="1.5" />
-                  <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.ts} strokeWidth="1.5" />
-                </Svg>
-                <Text style={[styles.metaText, { color: t.ts }]}>6 exercises</Text>
+        {activeProgram && (
+          <NeuCard dark={isDark} style={styles.programCard}>
+            <View style={styles.programCardInner}>
+              <View style={styles.programHeader}>
+                <View>
+                  <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
+                  <Text style={[styles.programName, { color: t.tp }]}>{activeProgram.name.toUpperCase()}</Text>
+                </View>
+                <Text style={[styles.programWeek, { color: t.ts }]}>Week {activeProgram.currentWeek} of {activeProgram.totalWeeks}</Text>
+              </View>
+              <View style={styles.progressRow}>
+                {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.progressSegment,
+                      { backgroundColor: i < activeProgram.currentWeek ? ACCT : t.div },
+                    ]}
+                  />
+                ))}
               </View>
             </View>
-
-            <StartButton />
-          </View>
-        </NeuCard>
-
-        <NeuCard dark={isDark} style={styles.programCard}>
-          <View style={styles.programCardInner}>
-            <View style={styles.programHeader}>
-              <View>
-                <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
-                <Text style={[styles.programName, { color: t.tp }]}>2026 MESOCYCLE A</Text>
-              </View>
-              <Text style={[styles.programWeek, { color: t.ts }]}>Week 3 of 8</Text>
-            </View>
-            <View style={styles.progressRow}>
-              {Array.from({ length: 8 }).map((_, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.progressSegment,
-                    { backgroundColor: i < 3 ? ACCT : (isDark ? "#2e3448" : "#D8DCE0") },
-                  ]}
-                />
-              ))}
-            </View>
-          </View>
-        </NeuCard>
+          </NeuCard>
+        )}
 
         <View style={styles.quickRow}>
           {QUICK_ACTIONS.map((a) => (

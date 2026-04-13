@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Avenas uses your photo library to add an image or video to your custom exercises.",
+        "NSCameraUsageDescription": "Avenas uses your camera to take a photo for your custom exercise."
+      }
     },
     "android": {
       "adaptiveIcon": {
