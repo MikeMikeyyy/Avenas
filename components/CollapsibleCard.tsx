@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useSharedValue, useAnimatedStyle, withTiming, withSpring, runOnJS } from "react-native-reanimated";
+import { useSharedValue, useAnimatedStyle, withTiming, runOnJS } from "react-native-reanimated";
 import Reanimated from "react-native-reanimated";
 
 interface CollapsibleCardProps {
@@ -26,8 +26,8 @@ export default function CollapsibleCard({ isCollapsing, onCollapsed, expanding =
   // Expand on mount when expanding=true and naturalHeight is known
   useEffect(() => {
     if (expanding && naturalHeight && naturalHeight > 0) {
-      height.value = withSpring(naturalHeight, { damping: 18, stiffness: 160 });
-      opacity.value = withTiming(1, { duration: 180 });
+      height.value = withTiming(naturalHeight, { duration: 260 });
+      opacity.value = withTiming(1, { duration: 200 });
     }
   }, []);
 
