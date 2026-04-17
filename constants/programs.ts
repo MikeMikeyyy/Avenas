@@ -6,6 +6,9 @@ export type Exercise = {
   warmupSets: number;
   workingSets: number;
   reps: string;
+  isIsometric?: boolean;
+  restSeconds?: number; // 0 / undefined = off
+  programNotes?: string; // PT coaching notes shown on workout day
 };
 
 export type WorkoutMap = Record<string, Exercise[]>;
@@ -17,6 +20,7 @@ export type SavedProgram = {
   currentWeek: number;
   status: "active" | "completed" | "paused" | "created";
   startDate: string;
+  cycleOffset?: number;
   trainingDays: number;
   cycleDays: number;
   cyclePattern: string[];

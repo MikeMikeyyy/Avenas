@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   Modal, View, Text, StyleSheet, ScrollView, FlatList,
   TextInput, TouchableOpacity, Animated, Easing, PanResponder,
-  Keyboard, Alert,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -44,8 +44,9 @@ export interface ExercisePickerProps {
   /** Short string shown below the title, e.g. "PUSH DAY" or "CHANGE EXERCISE" */
   subtitle: string;
   customExercises: CustomExercise[];
-  onSelect: (name: string) => void;
+  onSelectMultiple: (names: string[]) => void;
   onDeleteCustom: (name: string) => void;
+  onEditCustom: (name: string) => void;
   onCreateCustom: () => void;
   onClose: () => void;
   isDark: boolean;
@@ -54,16 +55,15 @@ export interface ExercisePickerProps {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ExercisePicker({
-  visible, subtitle, customExercises, onSelect, onDeleteCustom, onCreateCustom, onClose, isDark,
+  visible, subtitle, customExercises, onSelectMultiple, onDeleteCustom, onEditCustom, onCreateCustom, onClose, isDark,
 }: ExercisePickerProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
   const [search, setSearch] = useState("");
-  const [selectedMuscle, setSelectedMuscle] = useState<MuscleGroup>("All");
+  const [selectedMuscles, setSelectedMuscles] = useState<Set<SelectableMuscle>>(new Set());
+  const [pickedOrder, setPickedOrder] = useState<string[]>([]);
   const slideY = useRef(new Animated.Value(600)).current;
-  const kbTranslate = useRef(new Animated.Value(0)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
-  const combinedY = useRef(Animated.add(slideY, kbTranslate)).current;
 
   const panResponder = useRef(
     PanResponder.create({
@@ -80,7 +80,7 @@ export default function ExercisePicker({
           Animated.parallel([
             Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
             Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]).start(() => { slideY.setValue(0); backdropOpacity.setValue(1); onClose(); });
+          ]).start(() => { onClose(); });
         } else {
           Animated.parallel([
             Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
@@ -95,38 +95,25 @@ export default function ExercisePicker({
     Animated.parallel([
       Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); });
+    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setPickedOrder([]); onClose(); });
   };
 
   useEffect(() => {
+    setPickedOrder([]);
+    setSearch("");
     Animated.parallel([
       Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
     ]).start();
   }, []);
 
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", e => {
-      Animated.timing(kbTranslate, {
-        toValue: -(e.endCoordinates.height - insets.bottom),
-        duration: e.duration, easing: Easing.out(Easing.ease), useNativeDriver: true,
-      }).start();
-    });
-    const hide = Keyboard.addListener("keyboardWillHide", e => {
-      Animated.timing(kbTranslate, {
-        toValue: 0, duration: e.duration, easing: Easing.in(Easing.ease), useNativeDriver: true,
-      }).start();
-    });
-    return () => { show.remove(); hide.remove(); };
-  }, [insets.bottom]);
-
   const filteredPresets = PRESET_EXERCISES.filter(e =>
     e.toLowerCase().includes(search.toLowerCase()) &&
-    (selectedMuscle === "All" || EXERCISE_MUSCLE[e] === selectedMuscle)
+    (selectedMuscles.size === 0 || selectedMuscles.has(EXERCISE_MUSCLE[e] as SelectableMuscle))
   );
   const filteredCustom = customExercises.filter(e =>
     e.name.toLowerCase().includes(search.toLowerCase()) &&
-    (selectedMuscle === "All" || e.muscles.includes(selectedMuscle as SelectableMuscle))
+    (selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m)))
   );
 
   const canAddCustom = customExercises.length < MAX_CUSTOM;
@@ -135,8 +122,16 @@ export default function ExercisePicker({
     ...filteredPresets.map(e => ({ name: e, isCustom: false })),
   ];
 
-  const handleSelect = (name: string) => {
-    onSelect(name);
+  const togglePick = (name: string) => {
+    setPickedOrder(prev =>
+      prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+    );
+  };
+
+  const confirmPicks = () => {
+    if (pickedOrder.length === 0) return;
+    onSelectMultiple(pickedOrder);
+    setPickedOrder([]);
     setSearch("");
   };
 
@@ -144,7 +139,7 @@ export default function ExercisePicker({
     <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
       <View style={styles.pickerBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.pickerOverlay, { opacity: backdropOpacity }]} />
-        <Animated.View style={[styles.pickerRoot, { backgroundColor: t.bg, transform: [{ translateY: combinedY }] }]}>
+        <Animated.View style={[styles.pickerRoot, { backgroundColor: t.bg, transform: [{ translateY: slideY }] }]}>
           {/* Drag handle */}
           <View {...panResponder.panHandlers} style={styles.pickerHandleArea}>
             <View style={styles.pickerHandle} />
@@ -152,9 +147,11 @@ export default function ExercisePicker({
 
           {/* Header */}
           <View style={[styles.pickerHeader, { borderBottomColor: t.div }]}>
-            <Text style={[styles.pickerTitle, { color: t.tp }]}>Add Exercise</Text>
-            <Text style={[styles.pickerSubtitle, { color: t.ts }]}>{subtitle}</Text>
-            <TouchableOpacity onPress={dismiss} style={styles.pickerClose} activeOpacity={0.7}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.pickerTitle, { color: t.tp }]}>Add Exercise</Text>
+              <Text style={[styles.pickerSubtitle, { color: t.ts }]}>{subtitle}</Text>
+            </View>
+            <TouchableOpacity onPress={dismiss} activeOpacity={0.7}>
               <Ionicons name="close" size={22} color={t.tp} />
             </TouchableOpacity>
           </View>
@@ -167,13 +164,30 @@ export default function ExercisePicker({
             contentContainerStyle={styles.muscleChipContent}
           >
             {MUSCLE_GROUPS.map(group => {
-              const active = selectedMuscle === group;
+              const isAll = group === "All";
+              const active = isAll ? selectedMuscles.size === 0 : selectedMuscles.has(group as SelectableMuscle);
               return (
                 <TouchableOpacity
                   key={group}
-                  onPress={() => setSelectedMuscle(group)}
+                  onPress={() => {
+                    if (isAll) {
+                      setSelectedMuscles(new Set());
+                    } else {
+                      setSelectedMuscles(prev => {
+                        const next = new Set(prev);
+                        next.has(group as SelectableMuscle) ? next.delete(group as SelectableMuscle) : next.add(group as SelectableMuscle);
+                        return next;
+                      });
+                    }
+                  }}
                   activeOpacity={0.7}
-                  style={[styles.muscleChip, active ? { backgroundColor: ACCT } : { backgroundColor: t.div }]}
+                  style={[styles.muscleChip, active ? {
+                    backgroundColor: ACCT,
+                    shadowColor: ACCT,
+                    shadowOffset: { width: 0, height: 3 },
+                    shadowOpacity: 0.5,
+                    shadowRadius: 8,
+                  } : { backgroundColor: t.div }]}
                 >
                   <Text style={[styles.muscleChipText, { color: active ? "#fff" : t.ts }]}>{group}</Text>
                 </TouchableOpacity>
@@ -215,13 +229,15 @@ export default function ExercisePicker({
             renderItem={({ item, index }) => {
               const isLastCustom = item.isCustom && index === filteredCustom.length - 1;
               const isFirstPreset = !item.isCustom && filteredCustom.length > 0 && index === filteredCustom.length;
+              const pickIndex = pickedOrder.indexOf(item.name);
+              const isPicked = pickIndex !== -1;
               return (
                 <>
                   {isFirstPreset && (
                     <Text style={[styles.pickerSectionLabel, { color: t.ts }]}>EXERCISES</Text>
                   )}
                   <TouchableOpacity
-                    onPress={() => handleSelect(item.name)}
+                    onPress={() => togglePick(item.name)}
                     activeOpacity={0.6}
                     style={[
                       styles.pickerRow,
@@ -231,26 +247,42 @@ export default function ExercisePicker({
                   >
                     <Text style={[styles.pickerExName, { color: t.tp }]}>{item.name}</Text>
                     {item.isCustom && (
-                      <TouchableOpacity
-                        onPress={e => {
-                          e.stopPropagation();
-                          Alert.alert(
-                            "Delete Exercise",
-                            `Are you sure you want to delete "${item.name}"? This will free up a slot.`,
-                            [
-                              { text: "Cancel", style: "cancel" },
-                              { text: "Delete", style: "destructive", onPress: () => onDeleteCustom(item.name) },
-                            ]
-                          );
-                        }}
-                        style={styles.pickerDeleteBtn}
-                        activeOpacity={0.7}
-                      >
-                        <TrashIcon size={16} color={t.ts} />
-                      </TouchableOpacity>
+                      <>
+                        <TouchableOpacity
+                          onPress={e => { e.stopPropagation(); onEditCustom(item.name); }}
+                          style={styles.pickerDeleteBtn}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="create-outline" size={16} color={t.ts} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={e => {
+                            e.stopPropagation();
+                            Alert.alert(
+                              "Delete Exercise",
+                              `Are you sure you want to delete "${item.name}"? This will free up a slot.`,
+                              [
+                                { text: "Cancel", style: "cancel" },
+                                { text: "Delete", style: "destructive", onPress: () => onDeleteCustom(item.name) },
+                              ]
+                            );
+                          }}
+                          style={styles.pickerDeleteBtn}
+                          activeOpacity={0.7}
+                        >
+                          <TrashIcon size={16} color="#FF4D4F" />
+                        </TouchableOpacity>
+                      </>
                     )}
-                    <View style={[styles.pickerAddBtn, { backgroundColor: ACCT + "22", borderColor: ACCT }]}>
-                      <Ionicons name="add" size={18} color={ACCT} />
+                    <View style={[styles.pickerAddBtn, isPicked
+                      ? { backgroundColor: ACCT, borderColor: ACCT }
+                      : { backgroundColor: ACCT + "22", borderColor: ACCT }
+                    ]}>
+                      {isPicked ? (
+                        <Text style={styles.pickerAddNum}>{pickIndex + 1}</Text>
+                      ) : (
+                        <Ionicons name="add" size={18} color={ACCT} />
+                      )}
                     </View>
                   </TouchableOpacity>
                 </>
@@ -262,9 +294,20 @@ export default function ExercisePicker({
             contentContainerStyle={{ paddingBottom: 8 }}
           />
 
-          {/* Create custom — pinned at bottom */}
+          {/* Bottom bar — confirm picks OR create custom */}
           <View style={[styles.customSection, { borderTopColor: t.div, paddingBottom: insets.bottom + 16 }]}>
-            {canAddCustom ? (
+            {pickedOrder.length > 0 ? (
+              <BounceButton onPress={confirmPicks} accessibilityLabel={`Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`} accessibilityRole="button">
+                <View style={styles.createCustomBtnWrap}>
+                  <View style={styles.createCustomBtn}>
+                    <Ionicons name="checkmark" size={18} color="#fff" />
+                    <Text style={styles.createCustomBtnText}>
+                      Add {pickedOrder.length} Exercise{pickedOrder.length > 1 ? "s" : ""}
+                    </Text>
+                  </View>
+                </View>
+              </BounceButton>
+            ) : canAddCustom ? (
               <BounceButton onPress={onCreateCustom} accessibilityLabel="Create custom exercise" accessibilityRole="button">
                 <View style={styles.createCustomBtnWrap}>
                   <View style={styles.createCustomBtn}>
@@ -293,10 +336,9 @@ const styles = StyleSheet.create({
   pickerRoot:          { height: "88%", borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
   pickerHandleArea:    { paddingVertical: 12, alignItems: "center" },
   pickerHandle:        { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
-  pickerHeader:        { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 1 },
+  pickerHeader:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 1 },
   pickerTitle:         { fontFamily: FontFamily.bold, fontSize: 20, marginBottom: 2 },
   pickerSubtitle:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1 },
-  pickerClose:         { position: "absolute", right: 20, bottom: 16 },
   muscleChipScroll:    { flexGrow: 0, flexShrink: 0, borderBottomWidth: 1 },
   muscleChipContent:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10 },
   muscleChip:          { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, alignItems: "center", justifyContent: "center" },
@@ -308,6 +350,7 @@ const styles = StyleSheet.create({
   pickerExName:        { flex: 1, fontFamily: FontFamily.regular, fontSize: 15 },
   pickerDeleteBtn:     { padding: 4 },
   pickerAddBtn:        { width: 32, height: 32, borderRadius: 16, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  pickerAddNum:        { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
   pickerEmpty:         { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 40 },
   customSection:       { paddingHorizontal: 16, paddingTop: 14, borderTopWidth: 1, gap: 10 },
   customSlots:         { fontFamily: FontFamily.regular, fontSize: 12 },

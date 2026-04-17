@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, FadeOutDown } from "react-native-reanimated";
+import * as Haptics from "expo-haptics";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  FlatList,
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
@@ -15,9 +16,13 @@ import {
   Animated,
   Easing,
   PanResponder,
+  LayoutAnimation,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useNavigation, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { BlurView } from "expo-blur";
+import MaskedView from "@react-native-masked-view/masked-view";
+import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import Svg, { Path } from "react-native-svg";
@@ -29,6 +34,7 @@ import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
 import ExercisePicker from "../components/ExercisePicker";
+import CollapsibleCard from "../components/CollapsibleCard";
 import { useTheme } from "../contexts/ThemeContext";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -47,6 +53,16 @@ function DumbbellIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
+function KeyboardDismissIcon({ color }: { color: string }) {
+  return (
+    <Svg width={34} height={29} viewBox="0 0 26 22" fill="none">
+      <Path d="M2 2.5C2 1.67 2.67 1 3.5 1h19c.83 0 1.5.67 1.5 1.5v10c0 .83-.67 1.5-1.5 1.5h-19C2.67 14 2 13.33 2 12.5v-10z" stroke={color} strokeWidth="1.4"/>
+      <Path d="M6 5.5h1.2M10 5.5h1.2M14 5.5h1.2M18 5.5h1.2M6 8.5h1.2M10 8.5h1.2M14 8.5h1.2M18 8.5h1.2M8 11.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
+      <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+    </Svg>
+  );
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ProgramDraft = {
@@ -57,6 +73,7 @@ type ProgramDraft = {
   cyclePattern: string[];
   isTrainingDay: boolean[];
   workouts: WorkoutMap;
+  editId?: string;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -81,6 +98,19 @@ function dayLabel(key: string): string {
   return key.split(":").slice(1).join(":");
 }
 
+// ─── Rest picker helpers ───────────────────────────────────────────────────────
+
+const REST_ITEM_H = 38;
+const REST_OPTIONS = [0, ...Array.from({ length: 60 }, (_, i) => (i + 1) * 5)];
+
+function formatRest(secs: number): string {
+  if (!secs) return "Off";
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+}
+
 // ─── Exercise Row ─────────────────────────────────────────────────────────────
 
 
@@ -89,18 +119,90 @@ interface ExerciseRowProps {
   isFirst: boolean;
   isLast: boolean;
   isDark: boolean;
-  onUpdate: (field: keyof Exercise, value: string | number) => void;
+  onUpdate: (field: keyof Exercise, value: string | number | boolean) => void;
+  onUpdateNotes: (notes: string) => void;
   onRemove: () => void;
   onMove: (dir: "up" | "down") => void;
   onEdit: () => void;
 }
 
-function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onRemove, onMove, onEdit }: ExerciseRowProps) {
+function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNotes, onRemove, onMove, onEdit }: ExerciseRowProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+  const restSecs = exercise.restSeconds ?? 0;
+  const [showRestPicker, setShowRestPicker] = useState(false);
+  const restScrollOffset = useRef(0);
+  const scrollAnim = useRef(new Animated.Value(0)).current;
+  const slideY = useRef(new Animated.Value(500)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  const restPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) {
+          slideY.setValue(g.dy);
+          backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300));
+        }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.8) {
+          Animated.parallel([
+            Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+          ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); setShowRestPicker(false); });
+        } else {
+          Animated.parallel([
+            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+    })
+  ).current;
+
+  const openRestPicker = useCallback(() => {
+    const initialOffset = Math.max(0, REST_OPTIONS.indexOf(restSecs)) * REST_ITEM_H;
+    scrollAnim.setValue(initialOffset);
+    restScrollOffset.current = initialOffset;
+    slideY.setValue(500);
+    backdropOpacity.setValue(0);
+    setShowRestPicker(true);
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+    ]).start();
+  }, [slideY, backdropOpacity, scrollAnim, restSecs]);
+
+  const closeRestPicker = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); setShowRestPicker(false); });
+  }, [slideY, backdropOpacity]);
+
+  const modeOffset     = useSharedValue(exercise.isIsometric ? 1 : 0);
+  const modeTrackWidth = useSharedValue(0);
+  const modePillStyle  = useAnimatedStyle(() => ({
+    width: modeTrackWidth.value / 2,
+    transform: [{ translateX: modeOffset.value * (modeTrackWidth.value / 2) }],
+  }));
+  const repsLabelColor = useAnimatedStyle(() => ({
+    color: interpolateColor(modeOffset.value, [0, 1], ["#ffffff", isDark ? "#8896A7" : "#8896A7"]),
+  }));
+  const holdLabelColor = useAnimatedStyle(() => ({
+    color: interpolateColor(modeOffset.value, [0, 1], [isDark ? "#8896A7" : "#8896A7", "#ffffff"]),
+  }));
   return (
     <View style={styles.exRowWrap}>
-      {/* Sub-row 1: name + reorder + delete */}
+      {/* Sub-row 1: thumbnail + name + reorder + delete */}
       <View style={styles.exTopRow}>
+        <NeuCard dark={isDark} radius={12} shadowSize="sm" style={styles.exThumb}>
+          <View style={styles.exThumbInner}>
+            <DumbbellIcon size={20} color={t.ts} />
+          </View>
+        </NeuCard>
         <TouchableOpacity onPress={onEdit} activeOpacity={0.7} style={styles.exNameBtn}>
           <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1} ellipsizeMode="tail">{exercise.name}</Text>
         </TouchableOpacity>
@@ -136,12 +238,45 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onRemove, on
           }
           activeOpacity={0.7}
         >
-          <TrashIcon size={16} color={t.ts} />
+          <TrashIcon size={16} color="#FF4D4F" />
         </TouchableOpacity>
       </View>
 
-      {/* Sub-row 2: warmup sets, working sets, reps */}
-      <View style={[styles.exBottomRow, { borderTopColor: t.div }]}>
+      {/* Sub-row 1b: Reps / Hold toggle */}
+      <View style={[styles.exToggleRow, { borderTopColor: divider }]}>
+        <Text style={[styles.exSetLabel, { color: t.ts }]}>Exercise Type</Text>
+        <View
+          style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
+          onLayout={e => { modeTrackWidth.value = e.nativeEvent.layout.width - 6; }}
+        >
+          <Reanimated.View style={[styles.exTogglePillPill, modePillStyle]} />
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onUpdate("isIsometric", false);
+              modeOffset.value = withSpring(0, { damping: 22, stiffness: 300, mass: 0.9 });
+            }}
+            style={styles.exTogglePill}
+            activeOpacity={0.8}
+          >
+            <Reanimated.Text style={[styles.exTogglePillText, repsLabelColor]}>Reps</Reanimated.Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onUpdate("isIsometric", true);
+              modeOffset.value = withSpring(1, { damping: 22, stiffness: 300, mass: 0.9 });
+            }}
+            style={styles.exTogglePill}
+            activeOpacity={0.8}
+          >
+            <Reanimated.Text style={[styles.exTogglePillText, holdLabelColor]}>Hold</Reanimated.Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Sub-row 2: warmup sets, working sets, reps/hold */}
+      <View style={[styles.exBottomRow, { borderTopColor: divider }]}>
         {/* Warmup sets */}
         <View style={styles.exSetGroup}>
           <Text style={[styles.exSetLabel, { color: t.ts }]}>Warmup Sets</Text>
@@ -156,7 +291,7 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onRemove, on
           </View>
         </View>
 
-        <View style={[styles.exSetDivider, { backgroundColor: t.div }]} />
+        <View style={[styles.exSetDivider, { backgroundColor: divider }]} />
 
         {/* Working sets */}
         <View style={styles.exSetGroup}>
@@ -172,21 +307,178 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onRemove, on
           </View>
         </View>
 
-        <View style={[styles.exSetDivider, { backgroundColor: t.div }]} />
+        <View style={[styles.exSetDivider, { backgroundColor: divider }]} />
 
-        {/* Reps */}
+        {/* Reps / Hold */}
         <View style={styles.exSetGroup}>
-          <Text style={[styles.exSetLabel, { color: t.ts }]}>Rep Range</Text>
+          <Text style={[styles.exSetLabel, { color: t.ts }]}>{exercise.isIsometric ? "Duration (s)" : "Rep Range"}</Text>
           <TextInput
             style={[styles.exRepsInput, { color: t.tp }]}
             value={exercise.reps}
             onChangeText={v => onUpdate("reps", v)}
-            placeholder="8-12"
+            placeholder={exercise.isIsometric ? "30" : "8-12"}
             placeholderTextColor={t.ts}
             returnKeyType="done"
+            keyboardType={exercise.isIsometric ? "number-pad" : "default"}
             selectTextOnFocus
           />
         </View>
+      </View>
+
+      {/* Rest Timer row */}
+      <TouchableOpacity
+        style={[styles.exRestRow, { borderTopColor: divider }]}
+        onPress={openRestPicker}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.exSetLabel, { color: t.ts }]}>Rest Timer</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <Text style={[styles.exRestValue, { color: restSecs > 0 ? ACCT : t.ts }]}>{formatRest(restSecs)}</Text>
+          <Ionicons name="chevron-forward" size={14} color={t.ts} />
+        </View>
+      </TouchableOpacity>
+
+      {/* Rest picker slide-up */}
+      <Modal visible={showRestPicker} transparent animationType="none" onRequestClose={closeRestPicker}>
+        <View style={styles.restBackdrop}>
+          <Animated.View style={[StyleSheet.absoluteFill, styles.restOverlay, { opacity: backdropOpacity }]} />
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeRestPicker} />
+          <Animated.View style={[styles.restSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+            <View {...restPanResponder.panHandlers} style={styles.restHandleArea}>
+              <View style={[styles.restHandle, { backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
+            </View>
+            <View style={[styles.restHeader, { borderBottomColor: divider }]}>
+              <Text style={[styles.restTitle, { color: t.tp, textAlign: 'center' }]}>Rest Timer</Text>
+              <Text style={[styles.restSubtitle, { color: t.ts, textAlign: 'center' }]} numberOfLines={1}>{exercise.name}</Text>
+            </View>
+            <View style={styles.restPickerWrap}>
+              <View pointerEvents="none" style={[styles.restSelTop, { borderColor: divider }]} />
+              <View pointerEvents="none" style={[styles.restSelBottom, { borderColor: divider }]} />
+              <Animated.ScrollView
+                showsVerticalScrollIndicator={false}
+                snapToInterval={REST_ITEM_H}
+                decelerationRate="fast"
+                contentContainerStyle={{ paddingVertical: REST_ITEM_H * 2 }}
+                contentOffset={{ x: 0, y: Math.max(0, REST_OPTIONS.indexOf(restSecs)) * REST_ITEM_H }}
+                scrollEventThrottle={16}
+                onScroll={Animated.event(
+                  [{ nativeEvent: { contentOffset: { y: scrollAnim } } }],
+                  {
+                    useNativeDriver: true,
+                    listener: (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+                      restScrollOffset.current = e.nativeEvent.contentOffset.y;
+                    },
+                  }
+                )}
+                onMomentumScrollEnd={(e) => {
+                  const index = Math.round(e.nativeEvent.contentOffset.y / REST_ITEM_H);
+                  const val = REST_OPTIONS[Math.max(0, Math.min(index, REST_OPTIONS.length - 1))];
+                  onUpdate("restSeconds", val ?? 0);
+                }}
+              >
+                {REST_OPTIONS.map((item, i) => {
+                  const rotateX = scrollAnim.interpolate({
+                    inputRange: [
+                      (i - 2.5) * REST_ITEM_H,
+                      (i - 2) * REST_ITEM_H,
+                      (i - 1) * REST_ITEM_H,
+                      i * REST_ITEM_H,
+                      (i + 1) * REST_ITEM_H,
+                      (i + 2) * REST_ITEM_H,
+                      (i + 2.5) * REST_ITEM_H,
+                    ],
+                    outputRange: ['-85deg', '-55deg', '-28deg', '0deg', '28deg', '55deg', '85deg'],
+                    extrapolate: 'clamp',
+                  });
+                  const opacity = scrollAnim.interpolate({
+                    inputRange: [
+                      (i - 2.5) * REST_ITEM_H,
+                      (i - 2) * REST_ITEM_H,
+                      (i - 1) * REST_ITEM_H,
+                      i * REST_ITEM_H,
+                      (i + 1) * REST_ITEM_H,
+                      (i + 2) * REST_ITEM_H,
+                      (i + 2.5) * REST_ITEM_H,
+                    ],
+                    outputRange: [0, 0.5, 0.75, 1, 0.75, 0.5, 0],
+                    extrapolate: 'clamp',
+                  });
+                  return (
+                    <Animated.View
+                      key={item}
+                      style={[styles.restItem, { opacity, transform: [{ perspective: 280 }, { rotateX }] }]}
+                    >
+                      <Text style={[styles.restItemText, { color: t.ts }]}>
+                        {formatRest(item)}
+                      </Text>
+                    </Animated.View>
+                  );
+                })}
+              </Animated.ScrollView>
+              {/* Bold clip overlay — only items physically inside the selection zone show bold */}
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: REST_ITEM_H * 2,
+                  left: 0,
+                  right: 0,
+                  height: REST_ITEM_H,
+                  overflow: 'hidden',
+                  backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg,
+                }}
+              >
+                <Animated.View
+                  style={{
+                    transform: [{
+                      translateY: Animated.multiply(scrollAnim, -1),
+                    }],
+                  }}
+                >
+                  {REST_OPTIONS.map((item) => (
+                    <View key={item} style={styles.restItem}>
+                      <Text style={[styles.restItemText, { color: t.tp, fontFamily: FontFamily.bold }]}>
+                        {formatRest(item)}
+                      </Text>
+                    </View>
+                  ))}
+                </Animated.View>
+              </View>
+            </View>
+            <View style={styles.restDoneRow}>
+              <BounceButton
+                onPress={() => {
+                  const index = Math.round(restScrollOffset.current / REST_ITEM_H);
+                  const val = REST_OPTIONS[Math.max(0, Math.min(index, REST_OPTIONS.length - 1))] ?? 0;
+                  onUpdate("restSeconds", val);
+                  closeRestPicker();
+                }}
+                accessibilityLabel="Confirm rest timer"
+                accessibilityRole="button"
+              >
+                <View style={styles.restDoneWrap}>
+                  <View style={styles.restDoneBtn}>
+                    <Text style={styles.restDone}>Done</Text>
+                  </View>
+                </View>
+              </BounceButton>
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Coaching notes */}
+      <View style={[styles.exNotesRow, { borderTopColor: divider }]}>
+        <TextInput
+          style={[styles.exNotesInput, { color: t.tp }]}
+          value={exercise.programNotes ?? ""}
+          onChangeText={onUpdateNotes}
+          placeholder="Notes..."
+          placeholderTextColor={t.ts}
+          multiline
+          returnKeyType="done"
+          blurOnSubmit
+        />
       </View>
     </View>
   );
@@ -221,24 +513,47 @@ function Stepper({
 
 // ─── Step Indicator ───────────────────────────────────────────────────────────
 
-function StepIndicator({ step, isDark }: { step: 1 | 2; isDark: boolean }) {
+function StepIndicator({ step, isDark, canStep2, onStepPress }: {
+  step: 1 | 2;
+  isDark: boolean;
+  canStep2: boolean;
+  onStepPress: (s: 1 | 2) => void;
+}) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   return (
     <View style={styles.stepIndicatorWrap}>
-      <View style={[styles.stepLine, { backgroundColor: step === 2 ? ACCT : t.div }]} />
+      <View style={[styles.stepLine, { backgroundColor: step === 2 ? ACCT : divider }]} />
       <View style={styles.stepIndicatorRow}>
-        <View style={styles.stepItem}>
-          <View style={[styles.stepDot, { backgroundColor: ACCT }]}>
+        <BounceButton style={styles.stepItem} onPress={() => onStepPress(1)} accessibilityLabel="Go to setup" accessibilityRole="button">
+          <View style={[styles.stepDot, {
+            backgroundColor: ACCT,
+            shadowColor: ACCT,
+            shadowOffset: { width: 0, height: 3 },
+            shadowOpacity: 0.55,
+            shadowRadius: 8,
+          }]}>
             <Text style={styles.stepDotText}>1</Text>
           </View>
           <Text style={[styles.stepDotLabel, { color: ACCT }]}>Setup</Text>
-        </View>
-        <View style={styles.stepItem}>
-          <View style={[styles.stepDot, { backgroundColor: step === 2 ? ACCT : t.div }]}>
+        </BounceButton>
+        <BounceButton
+          style={[styles.stepItem, !canStep2 && { opacity: 0.4 }]}
+          onPress={() => canStep2 && onStepPress(2)}
+          accessibilityLabel="Go to workouts"
+          accessibilityRole="button"
+        >
+          <View style={[styles.stepDot, step === 2 ? {
+            backgroundColor: ACCT,
+            shadowColor: ACCT,
+            shadowOffset: { width: 0, height: 3 },
+            shadowOpacity: 0.55,
+            shadowRadius: 8,
+          } : { backgroundColor: divider }]}>
             <Text style={[styles.stepDotText, { color: step === 2 ? "#fff" : t.ts }]}>2</Text>
           </View>
           <Text style={[styles.stepDotLabel, { color: step === 2 ? ACCT : t.ts }]}>Workouts</Text>
-        </View>
+        </BounceButton>
       </View>
     </View>
   );
@@ -261,7 +576,10 @@ function Step1({
   isDark: boolean; onNext: () => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const dayInputRefs = useRef<Array<TextInput | null>>([]);
+  const hasRendered = useRef(false);
+  useEffect(() => { hasRendered.current = true; }, []);
   const trainingIndices = cyclePattern.map((_, i) => i).filter(i => isTrainingDay[i]);
   const canProceed =
     name.trim().length > 0 &&
@@ -310,11 +628,15 @@ function Step1({
           {cyclePattern.map((day, i) => {
             const isTraining = isTrainingDay[i];
             return (
-              <View
+              <Reanimated.View
                 key={i}
+                entering={hasRendered.current ? FadeInDown.springify().damping(18).stiffness(160) : undefined}
+                exiting={FadeOutDown.duration(220)}
+              >
+              <View
                 style={[
                   styles.dayRow,
-                  i < cyclePattern.length - 1 && { borderBottomWidth: 1, borderBottomColor: t.div },
+                  i < cyclePattern.length - 1 && { borderBottomWidth: 1, borderBottomColor: divider },
                 ]}
               >
                 <Text style={[styles.dayLabel, { color: t.ts }]}>Day {i + 1}</Text>
@@ -345,18 +667,25 @@ function Step1({
                 </View>
                 <TouchableOpacity
                   onPress={() => onToggleDay(i)}
-                  style={[styles.togglePill, { backgroundColor: isTraining ? ACCT + "22" : t.div }, isTraining && { borderWidth: 1, borderColor: ACCT }]}
+                  style={[styles.togglePill, isTraining ? {
+                    backgroundColor: ACCT,
+                    shadowColor: ACCT,
+                    shadowOffset: { width: 0, height: 3 },
+                    shadowOpacity: 0.5,
+                    shadowRadius: 8,
+                  } : { backgroundColor: divider }]}
                   activeOpacity={0.7}
                 >
                   {isTraining
-                    ? <DumbbellIcon size={13} color={t.tp} />
+                    ? <DumbbellIcon size={13} color="#fff" />
                     : <Ionicons name="moon-outline" size={13} color={t.ts} />
                   }
-                  <Text style={[styles.togglePillText, { color: isTraining ? t.tp : t.ts }]}>
+                  <Text style={[styles.togglePillText, { color: isTraining ? "#fff" : t.ts }]}>
                     {isTraining ? "Training" : "Rest"}
                   </Text>
                 </TouchableOpacity>
               </View>
+              </Reanimated.View>
             );
           })}
         </View>
@@ -382,17 +711,19 @@ function Step1({
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onRemoveExercise, onMoveExercise, isDark, onFinish, isEditMode,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onRemoveExercise, onMoveExercise, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
   onEditExercise: (day: string, id: string) => void;
-  onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number) => void;
+  onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number | boolean) => void;
   onRemoveExercise: (day: string, id: string) => void;
   onMoveExercise: (day: string, id: string, dir: "up" | "down") => void;
   isDark: boolean;
   onFinish: () => void;
   isEditMode: boolean;
+  collapsingIds: Set<string>;
+  onStartCollapse: (day: string, id: string) => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const days = Object.keys(workouts);
@@ -402,36 +733,40 @@ function Step2({
       {days.map((day) => (
         <View key={day} style={{ marginBottom: 20 }}>
           <Text style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(day).toUpperCase()}</Text>
-          <NeuCard dark={isDark} style={styles.workoutDayCard}>
-            {workouts[day].length === 0 && (
+          {workouts[day].length === 0 && (
+            <NeuCard dark={isDark} style={styles.emptyCard}>
               <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet. Tap below to add.</Text>
-            )}
+            </NeuCard>
+          )}
             {workouts[day].map((ex, i) => (
-              <View
+              <CollapsibleCard
                 key={ex.id}
-                style={i < workouts[day].length - 1 ? { borderBottomWidth: 1, borderBottomColor: t.div } : undefined}
+                isCollapsing={collapsingIds.has(ex.id)}
+                onCollapsed={() => onRemoveExercise(day, ex.id)}
               >
-                <ExerciseRow
-                  exercise={ex}
-                  isFirst={i === 0}
-                  isLast={i === workouts[day].length - 1}
-                  isDark={isDark}
-                  onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
-                  onRemove={() => onRemoveExercise(day, ex.id)}
-                  onMove={(dir) => onMoveExercise(day, ex.id, dir)}
-                  onEdit={() => onEditExercise(day, ex.id)}
-                />
-              </View>
+                <NeuCard dark={isDark} style={styles.exerciseCard}>
+                  <ExerciseRow
+                    exercise={ex}
+                    isFirst={i === 0}
+                    isLast={i === workouts[day].length - 1}
+                    isDark={isDark}
+                    onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
+                    onUpdateNotes={notes => onUpdateExercise(day, ex.id, "programNotes", notes)}
+                    onRemove={() => onStartCollapse(day, ex.id)}
+                    onMove={(dir) => onMoveExercise(day, ex.id, dir)}
+                    onEdit={() => onEditExercise(day, ex.id)}
+                  />
+                </NeuCard>
+              </CollapsibleCard>
             ))}
-            <TouchableOpacity
-              onPress={() => onOpenPicker(day)}
-              style={[styles.addExBtn, workouts[day].length > 0 && { borderTopWidth: 1, borderTopColor: t.div }]}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="add" size={18} color={ACCT} />
-              <Text style={[styles.addExText, { color: ACCT }]}>Add Exercise</Text>
-            </TouchableOpacity>
-          </NeuCard>
+            <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
+              <View style={styles.addExBtnWrap}>
+                <View style={styles.addExBtn}>
+                  <Ionicons name="add" size={18} color="#fff" />
+                  <Text style={styles.addExText}>Add Exercise</Text>
+                </View>
+              </View>
+            </BounceButton>
         </View>
       ))}
 
@@ -465,6 +800,7 @@ export default function NewProgramScreen() {
   const [isTrainingDay, setIsTrainingDay] = useState<boolean[]>([true, true, true, false, false, false, false]);
   const [workouts, setWorkouts] = useState<WorkoutMap>({});
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
+  const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
   const [pickerState, setPickerState] = useState<{ day: string; replaceId?: string } | null>(null);
 
   // Tracks whether the draft has been loaded — prevents auto-save overwriting it before load completes
@@ -475,6 +811,13 @@ export default function NewProgramScreen() {
   const originalEdit = useRef<{ name: string; totalWeeks: number; cycleDays: number; isTrainingDay: boolean[]; cyclePattern: string[]; workouts: WorkoutMap } | null>(null);
   // Remembers which day's picker was open before navigating to create-custom-exercise
   const pendingPickerDay = useRef<string | null>(null);
+
+  const [kbHeight, setKbHeight] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener("keyboardWillHide", () => setKbHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   // Reload custom exercises and re-open picker when returning from create-custom-exercise
   useFocusEffect(useCallback(() => {
@@ -511,19 +854,37 @@ export default function NewProgramScreen() {
     (async () => {
       try {
         if (editId) {
-          // Edit mode — load the existing program
+          // Edit mode — check for an in-progress draft first, then fall back to saved program
+          const draftRaw = await AsyncStorage.getItem(DRAFT_KEY);
+          let loadedFromDraft = false;
+          if (draftRaw) {
+            const draft = JSON.parse(draftRaw) as ProgramDraft;
+            if (draft.editId === editId) {
+              if (draft.step) setStep(draft.step);
+              if (draft.name !== undefined) setName(draft.name);
+              if (draft.totalWeeks) setTotalWeeks(draft.totalWeeks);
+              if (draft.cycleDays) setCycleDays(draft.cycleDays);
+              if (draft.cyclePattern) setCyclePattern(draft.cyclePattern);
+              if (draft.isTrainingDay) setIsTrainingDay(draft.isTrainingDay);
+              if (draft.workouts) setWorkouts(draft.workouts);
+              loadedFromDraft = true;
+            }
+          }
+          // Always load originalEdit from the saved program (for change-detection)
           const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
           const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
           const program = programs.find(p => p.id === editId);
           if (program) {
             const isTraining = program.cyclePattern.map(d => d !== "Rest");
             const names = program.cyclePattern.map(d => d === "Rest" ? "" : d);
-            setName(program.name);
-            setTotalWeeks(program.totalWeeks);
-            setCycleDays(program.cycleDays);
-            setIsTrainingDay(isTraining);
-            setCyclePattern(names);
-            setWorkouts(program.workouts ?? {});
+            if (!loadedFromDraft) {
+              setName(program.name);
+              setTotalWeeks(program.totalWeeks);
+              setCycleDays(program.cycleDays);
+              setIsTrainingDay(isTraining);
+              setCyclePattern(names);
+              setWorkouts(program.workouts ?? {});
+            }
             originalEdit.current = {
               name: program.name,
               totalWeeks: program.totalWeeks,
@@ -552,12 +913,12 @@ export default function NewProgramScreen() {
     })();
   }, []);
 
-  // Auto-save draft on every state change (create mode only)
+  // Auto-save draft on every state change
   useEffect(() => {
-    if (!isDraftLoaded.current || isEditMode) return;
-    const draft: ProgramDraft = { step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts };
+    if (!isDraftLoaded.current) return;
+    const draft: ProgramDraft = { step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, ...(editId ? { editId } : {}) };
     AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft)).catch(() => {});
-  }, [step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, isEditMode]);
+  }, [step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, editId]);
 
   // Intercept back navigation — prompt save or discard
   useEffect(() => {
@@ -613,6 +974,7 @@ export default function NewProgramScreen() {
 
   const handleCycleDaysChange = useCallback((next: number) => {
     const clamped = clamp(next, 2, 14);
+    LayoutAnimation.configureNext({ duration: 300, update: { type: LayoutAnimation.Types.easeInEaseOut } });
     setCycleDays(clamped);
     setCyclePattern(prev =>
       clamped > prev.length ? [...prev, ...Array(clamped - prev.length).fill("")] : prev.slice(0, clamped)
@@ -640,14 +1002,14 @@ export default function NewProgramScreen() {
     setStep(2);
   }, [cyclePattern, isTrainingDay]);
 
-  const addExercise = useCallback((day: string, exName: string) => {
+  const addExercise = useCallback((day: string, exName: string, idOffset = 0) => {
     setWorkouts(prev => ({
       ...prev,
-      [day]: [...(prev[day] ?? []), { id: Date.now().toString(), name: exName, warmupSets: 0, workingSets: 3, reps: "8-12" }],
+      [day]: [...(prev[day] ?? []), { id: (Date.now() + idOffset).toString(), name: exName, warmupSets: 0, workingSets: 3, reps: "8-12" }],
     }));
   }, []);
 
-  const updateExercise = useCallback((day: string, id: string, field: keyof Exercise, value: string | number) => {
+  const updateExercise = useCallback((day: string, id: string, field: keyof Exercise, value: string | number | boolean) => {
     setWorkouts(prev => ({
       ...prev,
       [day]: prev[day].map(e => e.id === id ? { ...e, [field]: value } : e),
@@ -656,9 +1018,15 @@ export default function NewProgramScreen() {
 
   const removeExercise = useCallback((day: string, id: string) => {
     setWorkouts(prev => ({ ...prev, [day]: prev[day].filter(e => e.id !== id) }));
+    setCollapsingIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+  }, []);
+
+  const startCollapse = useCallback((day: string, id: string) => {
+    setCollapsingIds(prev => new Set(prev).add(id));
   }, []);
 
   const moveExercise = useCallback((day: string, id: string, dir: "up" | "down") => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setWorkouts(prev => {
       const arr = [...prev[day]];
       const idx = arr.findIndex(e => e.id === id);
@@ -707,6 +1075,7 @@ export default function NewProgramScreen() {
             workouts,
           } : p);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+          await AsyncStorage.removeItem(DRAFT_KEY);
         } catch (e) {
           Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
           return;
@@ -767,6 +1136,11 @@ export default function NewProgramScreen() {
 
   const handleBack = () => { if (step === 2) setStep(1); else router.back(); };
 
+  const canProceed =
+    name.trim().length > 0 &&
+    isTrainingDay.some(Boolean) &&
+    isTrainingDay.every((isTraining, i) => !isTraining || cyclePattern[i].trim().length > 0);
+
   return (
     <KeyboardAvoidingView
       style={[styles.root, { backgroundColor: t.bg }]}
@@ -791,6 +1165,18 @@ export default function NewProgramScreen() {
         )}
       </TouchableOpacity>
 
+      <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
+        <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
+          <LinearGradient
+            colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
+            locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
+            style={StyleSheet.absoluteFillObject}
+          />
+        }>
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+        </MaskedView>
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -802,7 +1188,12 @@ export default function NewProgramScreen() {
           <View style={{ width: 66 }} />
         </View>
 
-        <StepIndicator step={step} isDark={isDark} />
+        <StepIndicator
+          step={step}
+          isDark={isDark}
+          canStep2={canProceed}
+          onStepPress={(s) => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); if (s === 2) handleNext(); else setStep(1); }}
+        />
 
         {step === 1 ? (
           <Step1
@@ -824,9 +1215,35 @@ export default function NewProgramScreen() {
             isDark={isDark}
             onFinish={handleFinish}
             isEditMode={isEditMode}
+            collapsingIds={collapsingIds}
+            onStartCollapse={startCollapse}
           />
         )}
       </ScrollView>
+
+      {/* Floating keyboard dismiss button */}
+      {kbHeight > 0 && Platform.OS === "ios" && (
+        <TouchableOpacity
+          onPress={() => Keyboard.dismiss()}
+          activeOpacity={0.75}
+          style={{
+            position: "absolute",
+            right: 10,
+            bottom: kbHeight + 8,
+            borderRadius: 12,
+            paddingHorizontal: 14,
+            paddingVertical: 9,
+            backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.15,
+            shadowRadius: 4,
+            zIndex: 999,
+          }}
+        >
+          <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
+        </TouchableOpacity>
+      )}
 
       {/* Exercise picker — rendered above ScrollView so it's never clipped */}
       {pickerState !== null && (
@@ -834,11 +1251,11 @@ export default function NewProgramScreen() {
           visible
           subtitle={dayLabel(pickerState.day).toUpperCase()}
           customExercises={customExercises}
-          onSelect={exName => {
+          onSelectMultiple={exNames => {
             if (pickerState.replaceId) {
-              updateExercise(pickerState.day, pickerState.replaceId, "name", exName);
+              updateExercise(pickerState.day, pickerState.replaceId, "name", exNames[0]);
             } else {
-              addExercise(pickerState.day, exName);
+              exNames.forEach((name, i) => addExercise(pickerState.day, name, i));
             }
             setPickerState(null);
           }}
@@ -846,6 +1263,11 @@ export default function NewProgramScreen() {
             pendingPickerDay.current = pickerState?.day ?? null;
             setPickerState(null);
             router.push("/create-custom-exercise");
+          }}
+          onEditCustom={name => {
+            pendingPickerDay.current = pickerState?.day ?? null;
+            setPickerState(null);
+            router.push({ pathname: "/create-custom-exercise", params: { edit: name } });
           }}
           onDeleteCustom={deleteCustomExercise}
           onClose={() => setPickerState(null)}
@@ -860,6 +1282,7 @@ export default function NewProgramScreen() {
 
 const styles = StyleSheet.create({
   root:             { flex: 1 },
+  topGradient:      { position: "absolute", left: 0, right: 0, zIndex: 5 },
   backBtn:          { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   header:           { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 20 },
   screenTitle:      { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textAlign: "center", flex: 1 },
@@ -900,23 +1323,33 @@ const styles = StyleSheet.create({
 
   // Primary button
   primaryBtnWrap:   { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 18, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
+  primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   primaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
 
   // Step 2 — workout days
-  dayHeading:       { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 1.2, marginBottom: 8 },
+  dayHeading:       { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 1.2, marginBottom: 8 },
   workoutDayCard:   { borderRadius: 16 },
-  emptyHint:        { fontFamily: FontFamily.regular, fontSize: 14, paddingHorizontal: 16, paddingVertical: 16 },
-  addExBtn:         { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 14 },
-  addExText:        { fontFamily: FontFamily.semibold, fontSize: 14 },
+  exerciseCard:     { borderRadius: 16, marginBottom: 14 },
+  emptyCard:        { borderRadius: 16, marginBottom: 14 },
+  emptyHint:        { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 16 },
+  addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12, marginTop: 6, marginBottom: 8 },
+  addExBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 10, paddingHorizontal: 22, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 },
+  addExText:        { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
 
   // Exercise row
   exRowWrap:        { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 0 },
-  exTopRow:           { flexDirection: "row", alignItems: "center", gap: 16, marginBottom: 10 },
+  exThumb:          { width: 44, height: 44 },
+  exThumbInner:     { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  exTopRow:           { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
   exArrows:           { flexDirection: "row", alignItems: "center", gap: 14 },
   exArrowPlaceholder: { width: 18, height: 18 },
   exNameBtn:        { flex: 1, flexDirection: "row", alignItems: "center", gap: 5 },
   exName:           { fontFamily: FontFamily.semibold, fontSize: 14, flexShrink: 1 },
+  exToggleRow:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 18, paddingVertical: 10, borderTopWidth: 1, gap: 12 },
+  exTogglePills:    { flexDirection: "row", borderRadius: 20, padding: 3 },
+  exTogglePillPill: { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  exTogglePill:     { paddingHorizontal: 14, paddingVertical: 6, alignItems: "center" },
+  exTogglePillText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   exBottomRow:      { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderTopWidth: 1, marginBottom: 2 },
   exSetGroup:       { flex: 1, alignItems: "center", gap: 4 },
   exSetLabel:       { fontFamily: FontFamily.regular, fontSize: 11, letterSpacing: 0.5, textTransform: "uppercase" },
@@ -924,5 +1357,28 @@ const styles = StyleSheet.create({
   exSetCount:       { fontFamily: FontFamily.bold, fontSize: 16, minWidth: 20, textAlign: "center" },
   exSetDivider:     { width: 1, height: 36, marginHorizontal: 4 },
   exRepsInput:      { fontFamily: FontFamily.bold, fontSize: 16, minWidth: 44, textAlign: "center" },
+  exRestRow:        { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 18, paddingVertical: 12, borderTopWidth: 1 },
+  exRestValue:      { fontFamily: FontFamily.semibold, fontSize: 13 },
+  exNotesRow:       { borderTopWidth: 1, paddingHorizontal: 14, paddingVertical: 10 },
+  exNotesInput:     { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
+
+  // Rest picker modal
+  restBackdrop:     { flex: 1, justifyContent: "flex-end" },
+  restOverlay:      { backgroundColor: "rgba(0,0,0,0.45)" },
+  restSheet:        { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36 },
+  restHandleArea:   { paddingVertical: 12, alignItems: "center" },
+  restHandle:       { width: 40, height: 4, borderRadius: 2 },
+  restHeader:       { alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1 },
+  restDoneRow:      { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
+  restTitle:        { fontFamily: FontFamily.bold, fontSize: 16 },
+  restSubtitle:     { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
+  restDoneWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  restDoneBtn:      { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
+  restDone:         { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
+  restPickerWrap:   { height: REST_ITEM_H * 5, overflow: "hidden" },
+  restSelTop:       { position: "absolute", top: REST_ITEM_H * 2, left: 24, right: 24, borderTopWidth: 1, zIndex: 1 },
+  restSelBottom:    { position: "absolute", top: REST_ITEM_H * 3, left: 24, right: 24, borderTopWidth: 1, zIndex: 1 },
+  restItem:         { height: REST_ITEM_H, alignItems: "center", justifyContent: "center" },
+  restItemText:     { fontSize: 20 },
 
 });
