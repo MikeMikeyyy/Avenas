@@ -1185,6 +1185,19 @@ export default function NewProgramScreen() {
         )}
       </TouchableOpacity>
 
+      {step === 2 && isEditMode && (
+        <BounceButton
+          onPress={handleFinish}
+          accessibilityLabel="Save changes"
+          accessibilityRole="button"
+          style={{ position: "absolute", top: insets.top + 16, right: 26, zIndex: 10 }}
+        >
+          <View style={styles.updateBtn}>
+            <Text style={styles.updateBtnText}>Update</Text>
+          </View>
+        </BounceButton>
+      )}
+
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
           <LinearGradient
@@ -1345,6 +1358,8 @@ const styles = StyleSheet.create({
   primaryBtnWrap:   { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   primaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
+  updateBtn:        { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 8, paddingHorizontal: 16, shadowColor: "#1a9e68", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 14, color: "#FFFFFF", letterSpacing: 0.3 },
 
   // Step 2 — workout days
   dayHeading:       { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 1.2, marginBottom: 8 },
