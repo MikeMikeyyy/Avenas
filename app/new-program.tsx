@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
@@ -580,6 +580,9 @@ function Step1({
   const dayInputRefs = useRef<Array<TextInput | null>>([]);
   const hasRendered = useRef(false);
   useEffect(() => { hasRendered.current = true; }, []);
+  const prevCycleDays = useRef(cycleDays);
+  const expandingIdx = cycleDays > prevCycleDays.current ? cycleDays - 1 : null;
+  useEffect(() => { prevCycleDays.current = cycleDays; }, [cycleDays]);
   const [cycleCollapsingIdx, setCycleCollapsingIdx] = useState<number | null>(null);
   const pendingCycleDays = useRef<number | null>(null);
 
@@ -645,13 +648,12 @@ function Step1({
           {cyclePattern.map((day, i) => {
             const isTraining = isTrainingDay[i];
             return (
-              <Reanimated.View
-                key={i}
-                entering={hasRendered.current ? FadeInDown.springify().damping(18).stiffness(160) : undefined}
-              >
+              <Reanimated.View key={i}>
               <CollapsibleCard
                 isCollapsing={cycleCollapsingIdx === i}
                 onCollapsed={handleCycleCollapsed}
+                expanding={expandingIdx === i}
+                naturalHeight={54}
               >
               <View
                 style={[

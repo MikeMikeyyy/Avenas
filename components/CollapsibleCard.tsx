@@ -1,27 +1,35 @@
 import { useEffect, useRef } from "react";
-import { useSharedValue, useAnimatedStyle, withTiming, runOnJS } from "react-native-reanimated";
+import { useSharedValue, useAnimatedStyle, withTiming, withSpring, runOnJS } from "react-native-reanimated";
 import Reanimated from "react-native-reanimated";
 
 interface CollapsibleCardProps {
   isCollapsing: boolean;
   onCollapsed: () => void;
+  expanding?: boolean;
+  naturalHeight?: number;
   children: React.ReactNode;
 }
 
-export default function CollapsibleCard({ isCollapsing, onCollapsed, children }: CollapsibleCardProps) {
-  const height = useSharedValue(-1);
-  const opacity = useSharedValue(1);
+export default function CollapsibleCard({ isCollapsing, onCollapsed, expanding = false, naturalHeight, children }: CollapsibleCardProps) {
+  const height = useSharedValue(expanding ? 0 : -1);
+  const opacity = useSharedValue(expanding ? 0 : 1);
   const started = useRef(false);
-  // Shared value so useAnimatedStyle can react to it on the UI thread
-  const collapseStarted = useSharedValue(false);
+  const collapseStarted = useSharedValue(expanding);
   const onCollapsedRef = useRef(onCollapsed);
   onCollapsedRef.current = onCollapsed;
 
-  // No height/overflow constraint until collapse begins — preserves shadows
   const animatedStyle = useAnimatedStyle(() => {
     if (!collapseStarted.value) return {};
-    return { height: height.value, opacity: opacity.value, overflow: "hidden" };
+    return { height: height.value < 0 ? undefined : height.value, opacity: opacity.value, overflow: "hidden" };
   });
+
+  // Expand on mount when expanding=true and naturalHeight is known
+  useEffect(() => {
+    if (expanding && naturalHeight && naturalHeight > 0) {
+      height.value = withSpring(naturalHeight, { damping: 18, stiffness: 160 });
+      opacity.value = withTiming(1, { duration: 180 });
+    }
+  }, []);
 
   useEffect(() => {
     if (isCollapsing && !started.current && height.value > 0) {
@@ -39,7 +47,7 @@ export default function CollapsibleCard({ isCollapsing, onCollapsed, children }:
       style={animatedStyle}
       onLayout={e => {
         const h = e.nativeEvent.layout.height;
-        if (height.value < 0 && h > 0) height.value = h;
+        if (!expanding && height.value < 0 && h > 0) height.value = h;
       }}
     >
       {children}
