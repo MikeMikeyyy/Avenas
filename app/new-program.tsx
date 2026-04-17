@@ -1380,7 +1380,7 @@ const styles = StyleSheet.create({
   exArrowPlaceholder: { width: 18, height: 18 },
   exNameBtn:        { flex: 1, flexDirection: "row", alignItems: "center", gap: 5 },
   exName:           { fontFamily: FontFamily.semibold, fontSize: 14, flexShrink: 1 },
-  exToggleRow:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 18, paddingVertical: 10, borderTopWidth: 1, gap: 12 },
+  exToggleRow:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderTopWidth: 1, gap: 12 },
   exTogglePills:    { flexDirection: "row", borderRadius: 20, padding: 3 },
   exTogglePillPill: { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
   exTogglePill:     { paddingHorizontal: 14, paddingVertical: 6, alignItems: "center" },
@@ -1392,9 +1392,9 @@ const styles = StyleSheet.create({
   exSetCount:       { fontFamily: FontFamily.bold, fontSize: 16, minWidth: 20, textAlign: "center" },
   exSetDivider:     { width: 1, height: 36, marginHorizontal: 4 },
   exRepsInput:      { fontFamily: FontFamily.bold, fontSize: 16, minWidth: 44, textAlign: "center" },
-  exRestRow:        { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 18, paddingVertical: 12, borderTopWidth: 1 },
+  exRestRow:        { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 12, borderTopWidth: 1 },
   exRestValue:      { fontFamily: FontFamily.semibold, fontSize: 13 },
-  exNotesRow:       { borderTopWidth: 1, paddingHorizontal: 14, paddingVertical: 10 },
+  exNotesRow:       { borderTopWidth: 1, paddingVertical: 10 },
   exNotesInput:     { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
 
   // Rest picker modal
