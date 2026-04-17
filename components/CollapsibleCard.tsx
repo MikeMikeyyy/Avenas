@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useSharedValue, useAnimatedStyle, withTiming, runOnJS } from "react-native-reanimated";
+import { useSharedValue, useAnimatedStyle, withTiming, runOnJS, LinearTransition } from "react-native-reanimated";
 import Reanimated from "react-native-reanimated";
 
 interface CollapsibleCardProps {
@@ -44,6 +44,7 @@ export default function CollapsibleCard({ isCollapsing, onCollapsed, expanding =
 
   return (
     <Reanimated.View
+      layout={LinearTransition.duration(280)}
       style={animatedStyle}
       onLayout={e => {
         const h = e.nativeEvent.layout.height;

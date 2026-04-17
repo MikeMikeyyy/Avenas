@@ -16,7 +16,6 @@ import {
   Animated,
   Easing,
   PanResponder,
-  LayoutAnimation,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useNavigation, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -1048,7 +1047,6 @@ export default function NewProgramScreen() {
   }, []);
 
   const moveExercise = useCallback((day: string, id: string, dir: "up" | "down") => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setWorkouts(prev => {
       const arr = [...prev[day]];
       const idx = arr.findIndex(e => e.id === id);

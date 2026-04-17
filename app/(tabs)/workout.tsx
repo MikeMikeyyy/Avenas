@@ -731,7 +731,6 @@ export default function WorkoutScreen() {
   };
 
   const moveExercise = (exId: string, dir: "up" | "down") => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setWorkoutInfo(prev => {
       if (!prev) return prev;
       const arr = [...prev.exercises];
