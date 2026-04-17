@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, FadeOutDown } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, FadeOutDown, LinearTransition } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
@@ -630,8 +630,9 @@ function Step1({
             return (
               <Reanimated.View
                 key={i}
+                layout={LinearTransition.springify().damping(18).stiffness(160)}
                 entering={hasRendered.current ? FadeInDown.springify().damping(18).stiffness(160) : undefined}
-                exiting={FadeOutDown.duration(220)}
+                exiting={FadeOutDown.springify().damping(18).stiffness(160)}
               >
               <View
                 style={[
@@ -974,7 +975,6 @@ export default function NewProgramScreen() {
 
   const handleCycleDaysChange = useCallback((next: number) => {
     const clamped = clamp(next, 2, 14);
-    LayoutAnimation.configureNext({ duration: 300, update: { type: LayoutAnimation.Types.easeInEaseOut } });
     setCycleDays(clamped);
     setCyclePattern(prev =>
       clamped > prev.length ? [...prev, ...Array(clamped - prev.length).fill("")] : prev.slice(0, clamped)
