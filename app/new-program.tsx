@@ -656,7 +656,7 @@ function Step1({
               <View
                 style={[
                   styles.dayRow,
-                  i < cyclePattern.length - 1 && { borderBottomWidth: 1, borderBottomColor: divider },
+                  i > 0 && { borderTopWidth: 1, borderTopColor: divider },
                 ]}
               >
                 <Text style={[styles.dayLabel, { color: t.ts }]}>Day {i + 1}</Text>
