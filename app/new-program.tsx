@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, FadeOutDown, LinearTransition } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, FadeOut, LinearTransition } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
@@ -632,7 +632,7 @@ function Step1({
                 key={i}
                 layout={LinearTransition.springify().damping(18).stiffness(160)}
                 entering={hasRendered.current ? FadeInDown.springify().damping(18).stiffness(160) : undefined}
-                exiting={FadeOutDown.springify().damping(18).stiffness(160)}
+                exiting={FadeOut.duration(250)}
               >
               <View
                 style={[
