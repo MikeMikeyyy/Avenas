@@ -1358,7 +1358,7 @@ const styles = StyleSheet.create({
   primaryBtnWrap:   { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   primaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
-  updateBtn:        { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 8, paddingHorizontal: 16, shadowColor: "#1a9e68", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  updateBtn:        { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 8, paddingHorizontal: 16, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 12 },
   updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 14, color: "#FFFFFF", letterSpacing: 0.3 },
 
   // Step 2 — workout days
