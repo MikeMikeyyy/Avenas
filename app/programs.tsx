@@ -174,19 +174,19 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
 
 function ActiveBadge() {
   const scale    = useRef(new Animated.Value(1)).current;
-  const dotPulse = useRef(new Animated.Value(1)).current;
+  const dotPulse = useRef(new Animated.Value(0.25)).current;
 
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
-        Animated.timing(scale, { toValue: 1.08, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-        Animated.timing(scale, { toValue: 1,    duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-      ])
-    ).start();
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(dotPulse, { toValue: 1,    duration: 900, useNativeDriver: true }),
-        Animated.timing(dotPulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+        Animated.parallel([
+          Animated.timing(scale,    { toValue: 1.08, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+          Animated.timing(dotPulse, { toValue: 1,    duration: 900, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(scale,    { toValue: 1,    duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+          Animated.timing(dotPulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+        ]),
       ])
     ).start();
   }, []);
