@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, FadeOut, LinearTransition } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, LinearTransition } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
@@ -580,6 +580,23 @@ function Step1({
   const dayInputRefs = useRef<Array<TextInput | null>>([]);
   const hasRendered = useRef(false);
   useEffect(() => { hasRendered.current = true; }, []);
+  const [cycleCollapsingIdx, setCycleCollapsingIdx] = useState<number | null>(null);
+  const pendingCycleDays = useRef<number | null>(null);
+
+  const handleCycleDecrement = useCallback(() => {
+    if (cycleCollapsingIdx !== null) return;
+    const next = clamp(cycleDays - 1, 2, 14);
+    setCycleCollapsingIdx(cycleDays - 1);
+    pendingCycleDays.current = next;
+  }, [cycleDays, cycleCollapsingIdx]);
+
+  const handleCycleCollapsed = useCallback(() => {
+    const next = pendingCycleDays.current;
+    if (next === null) return;
+    pendingCycleDays.current = null;
+    setCycleCollapsingIdx(null);
+    onCycleDaysChange(next);
+  }, [onCycleDaysChange]);
   const trainingIndices = cyclePattern.map((_, i) => i).filter(i => isTrainingDay[i]);
   const canProceed =
     name.trim().length > 0 &&
@@ -615,7 +632,7 @@ function Step1({
           <Stepper
             label="CYCLE DAYS"
             value={cycleDays}
-            onDecrement={() => onCycleDaysChange(cycleDays - 1)}
+            onDecrement={handleCycleDecrement}
             onIncrement={() => onCycleDaysChange(cycleDays + 1)}
             isDark={isDark}
           />
@@ -632,7 +649,10 @@ function Step1({
                 key={i}
                 layout={LinearTransition.springify().damping(18).stiffness(160)}
                 entering={hasRendered.current ? FadeInDown.springify().damping(18).stiffness(160) : undefined}
-                exiting={FadeOut.duration(250)}
+              >
+              <CollapsibleCard
+                isCollapsing={cycleCollapsingIdx === i}
+                onCollapsed={handleCycleCollapsed}
               >
               <View
                 style={[
@@ -686,6 +706,7 @@ function Step1({
                   </Text>
                 </TouchableOpacity>
               </View>
+              </CollapsibleCard>
               </Reanimated.View>
             );
           })}
