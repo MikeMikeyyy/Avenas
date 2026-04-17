@@ -138,14 +138,18 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
               return (
                 <TouchableOpacity key={index} onPress={() => setSelected(index)} activeOpacity={0.7}>
                   <View style={[styles.swDayRow, { borderBottomColor: t.div }, isSelected && { backgroundColor: ACCT + "18" }]}>
-                    <View style={[styles.swDayBadge, { backgroundColor: isSelected ? ACCT : t.div }]}>
+                    <View style={[styles.swDayBadge, { backgroundColor: isSelected ? ACCT : t.div }, isSelected && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 }]}>
                       <Text style={[styles.swDayBadgeText, { color: isSelected ? "#fff" : t.ts }]}>{index + 1}</Text>
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.swDayName, { color: isTraining ? t.tp : t.ts }]}>{day}</Text>
                       {!isTraining && <Text style={[styles.swRestLabel, { color: t.ts }]}>Rest day</Text>}
                     </View>
-                    {isSelected && <Ionicons name="checkmark-circle" size={22} color={ACCT} />}
+                    {isSelected && (
+                      <View style={{ shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 }}>
+                        <Ionicons name="checkmark-circle" size={28} color={ACCT} />
+                      </View>
+                    )}
                   </View>
                 </TouchableOpacity>
               );
