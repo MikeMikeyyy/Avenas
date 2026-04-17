@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown, LinearTransition } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeInDown } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
@@ -647,7 +647,6 @@ function Step1({
             return (
               <Reanimated.View
                 key={i}
-                layout={LinearTransition.springify().damping(18).stiffness(160)}
                 entering={hasRendered.current ? FadeInDown.springify().damping(18).stiffness(160) : undefined}
               >
               <CollapsibleCard
