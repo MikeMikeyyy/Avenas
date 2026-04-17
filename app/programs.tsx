@@ -185,8 +185,8 @@ function ActiveBadge() {
     ).start();
     Animated.loop(
       Animated.sequence([
-        Animated.timing(dotPulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
         Animated.timing(dotPulse, { toValue: 1,    duration: 900, useNativeDriver: true }),
+        Animated.timing(dotPulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
       ])
     ).start();
   }, []);
