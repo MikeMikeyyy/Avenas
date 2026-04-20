@@ -1,14 +1,17 @@
 import { useState, useCallback, useRef, useMemo } from "react";
 import { View, Text, StyleSheet, Image, Animated } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { BlurView } from "expo-blur";
+import MaskedView from "@react-native-masked-view/masked-view";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
-import { LinearGradient } from "expo-linear-gradient";
 import LottieView from "lottie-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
+import FadeScreen from "../../components/FadeScreen";
 import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily, ACCT } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -39,6 +42,19 @@ const REST_DAY_QUOTES = [
 ];
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const FULL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAY_ABBR    = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+function getOrdinal(n: number): string {
+  const s = ["th","st","nd","rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] ?? s[v] ?? s[0]);
+}
+
+function formatTodayDate(): string {
+  const now = new Date();
+  return `${DAY_ABBR[now.getDay()]} ${getOrdinal(now.getDate())} ${FULL_MONTHS[now.getMonth()]}`;
+}
 
 function parseStoredDate(dateStr: string): Date {
   // Format: "09 Apr 2026"
@@ -55,7 +71,7 @@ function getTodaysWorkout(program: SavedProgram): { name: string; exerciseCount:
   today.setHours(0, 0, 0, 0);
   start.setHours(0, 0, 0, 0);
   const daysPassed = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  const dayIndex = ((daysPassed % program.cycleDays) + program.cycleDays) % program.cycleDays;
+  const dayIndex = (((daysPassed + (program.cycleOffset ?? 0)) % program.cycleDays) + program.cycleDays) % program.cycleDays;
   const dayName = program.cyclePattern[dayIndex];
   if (!dayName || dayName === "Rest") return null;
   const workoutKey = `${dayIndex}:${dayName}`;
@@ -81,9 +97,10 @@ const QUICK_ACTIONS: QuickAction[] = [
   { id: "log",      label: "New\nProgram",  route: "/new-program", renderIcon: (c: string) => <Ionicons name="add-outline" size={26} color={c} /> },
   { id: "programs", label: "My\nPrograms",  route: "/programs", renderIcon: (c: string) => <Ionicons name="list-outline" size={22} color={c} /> },
   { id: "journal",  label: "View\nJournal", route: "/journal",  renderIcon: (c: string) => (
-    <Svg width={22} height={22} viewBox="0 0 16 16" fill="none">
-      <Path d="M5 0h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2 2 2 0 0 1-2 2H3a2 2 0 0 1-2-2h1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1H1a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v9a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1H3a2 2 0 0 1 2-2" fill={c} />
-      <Path d="M1 6v-.5a.5.5 0 0 1 1 0V6h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 3v-.5a.5.5 0 0 1 1 0V9h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 2.5v.5H.5a.5.5 0 0 0 0 1h2a.5.5 0 0 0 0-1H2v-.5a.5.5 0 0 0-1 0" fill={c} />
+    <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+      <Path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M9 7h6M9 11h4" stroke={c} strokeWidth="1.5" strokeLinecap="round" />
     </Svg>
   ) },
 ];
@@ -113,41 +130,6 @@ function StartButton() {
 }
 
 
-function CalendarIcon() {
-  const { isDark } = useTheme();
-  const now = new Date();
-  const day = now.toLocaleDateString("en-GB", { weekday: "short" }).toUpperCase();
-  const date = now.getDate().toString();
-  const W = 42;
-  const RING_OVERHANG = 5;
-  const BODY_H = 50;
-  const TOTAL_H = BODY_H + RING_OVERHANG;
-  const R = 9;
-  const GRADIENT_H = Math.round(BODY_H * 0.53);
-  const GLASS_OFFSET = Math.round(BODY_H * 0.23);
-  return (
-    <View style={{ width: W, height: TOTAL_H }}>
-      <View style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: BODY_H, borderRadius: R, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 6 }} />
-      <LinearGradient colors={["#00E5FF", "#009DFF"]} start={{ x: 0.09, y: 0.08 }} end={{ x: 1, y: 0.75 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: GRADIENT_H, borderRadius: R }} />
-      <LinearGradient colors={["#00E5FF", "#0095FF"]} start={{ x: 0.09, y: 0.08 }} end={{ x: 1, y: 0.75 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: GRADIENT_H, borderRadius: R, opacity: 0.8 }} />
-      {!isDark && <LinearGradient colors={["rgba(255,255,255,0.35)", "rgba(255,255,255,0)"]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={{ position: "absolute", top: RING_OVERHANG, left: 0, right: 0, height: 4, borderTopLeftRadius: R, borderTopRightRadius: R, overflow: "hidden" }} pointerEvents="none" />}
-      <View style={{ position: "absolute", top: RING_OVERHANG + GLASS_OFFSET, left: 0, right: 0, bottom: 0, borderRadius: R, overflow: "hidden" }}>
-        <BlurView intensity={25} tint="light" style={{ flex: 1 }}>
-          <View style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.4)" }}>
-            <Text style={{ color: "#00949E", fontSize: 9, fontWeight: "700", textAlign: "center", paddingTop: 6, letterSpacing: 0.5 }}>{day}</Text>
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-              <Text style={{ color: "#000", fontSize: 17, fontWeight: "700" }}>{date}</Text>
-            </View>
-            <LinearGradient colors={["rgba(255,255,255,0.55)", "rgba(255,255,255,0)"]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={{ position: "absolute", top: 0, left: 0, right: 0, height: 8 }} pointerEvents="none" />
-          </View>
-        </BlurView>
-      </View>
-      {[11, 27].map((left, i) => (
-        <View key={i} style={{ position: "absolute", top: 0, left, width: 5, height: RING_OVERHANG + 6, backgroundColor: "#fff", borderRadius: 2.5, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 }} />
-      ))}
-    </View>
-  );
-}
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -162,7 +144,6 @@ export default function HomeScreen() {
   const [flameName, setFlameName] = useState<string | null>(null);
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
-  const streakOpacity = scrollY.interpolate({ inputRange: [80, 140], outputRange: [1, 0], extrapolate: "clamp" });
 
   // Re-read the preference and active program every time this screen comes into focus
   useFocusEffect(
@@ -194,54 +175,44 @@ export default function HomeScreen() {
     : getStreakLottie(streakDays);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]}>
-      {/* Streak badge — fades out on scroll */}
-      <Animated.View style={[styles.streakFloat, { top: insets.top, opacity: streakOpacity }]}>
-        <BounceButton onPress={() => router.push("/streak")}>
-          <View style={styles.streakBadge}>
-            <LottieView source={activeLottie} autoPlay loop style={{ width: 44, height: 44 }} />
-            <Text style={[styles.streakBadgeText, { color: t.ts }]}>{streakDays}</Text>
-          </View>
-        </BounceButton>
+    <FadeScreen style={{ backgroundColor: t.bg }}>
+      {/* Gradient blur — sits behind all header elements. Blur is strongest at the top (opaque mask) and fades to nothing at the bottom (transparent mask). Content scrolling into this zone blurs out naturally. */}
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}
+      >
+        <MaskedView
+          style={StyleSheet.absoluteFillObject}
+          maskElement={
+            <LinearGradient
+              colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
+              locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
+              style={StyleSheet.absoluteFillObject}
+            />
+          }
+        >
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+        </MaskedView>
       </Animated.View>
-
-      <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]} onPress={() => router.push("/settings")}>
-        <View style={[styles.avatarHighlight, { shadowColor: isDark ? "#4d5363" : "#FFFFFF" }]}>
-          <View style={[styles.avatarShadow, { shadowColor: isDark ? "#4d5363" : "#a3afc0" }]}>
-            <BlurView intensity={90} tint="extraLight" style={styles.avatarBorder}>
-              <View style={styles.avatarInner}>
-                <Text style={styles.avatarText}>MM</Text>
-              </View>
-            </BlurView>
-          </View>
-        </View>
-      </BounceButton>
 
       <Animated.ScrollView
         showsVerticalScrollIndicator={false}
         automaticallyAdjustContentInsets={false}
         contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top - 4, paddingBottom: insets.bottom + 120 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: insets.bottom + 120 }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
         scrollEventThrottle={16}
       >
-        <Image source={require("../../assets/images/logo.png")} style={styles.logo} resizeMode="contain" />
-
         <View style={styles.header}>
-          <View>
-            <Text style={[styles.greeting, { color: t.ts }]}>{greeting}</Text>
-            <Text style={[styles.name, { color: t.tp }]}>Michael</Text>
-          </View>
+          <Text style={[styles.name, { color: t.tp }]}>{greeting}</Text>
+          <Text style={[styles.todayDate, { color: t.ts, marginTop: 4 }]}>{formatTodayDate()}</Text>
         </View>
 
         {(() => {
           const todaysWorkout = activeProgram ? getTodaysWorkout(activeProgram) : null;
           return (
             <NeuCard dark={isDark} style={styles.workoutCard}>
-              <View style={{ position: "absolute", top: 16, right: 24, zIndex: 1 }}>
-                <CalendarIcon />
-              </View>
-              <View style={styles.workoutCardInner}>
+    <View style={styles.workoutCardInner}>
                 <Text style={[styles.sectionLabel, { color: t.ts }]}>TODAY'S WORKOUT</Text>
                 {todaysWorkout ? (
                   <>
@@ -287,7 +258,8 @@ export default function HomeScreen() {
                     key={i}
                     style={[
                       styles.progressSegment,
-                      { backgroundColor: i < activeProgram.currentWeek ? ACCT : t.div },
+                      { backgroundColor: i < activeProgram.currentWeek ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                      i < activeProgram.currentWeek && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
                     ]}
                   />
                 ))}
@@ -363,14 +335,39 @@ export default function HomeScreen() {
           </BounceButton>
         ))}
       </Animated.ScrollView>
-    </View>
+
+      {/* AV logo — fixed in top bar */}
+      <Image source={require("../../assets/images/logo.png")} style={[styles.logo, { position: "absolute", top: insets.top, left: 20, zIndex: 10 }]} resizeMode="contain" />
+
+      {/* Streak badge — fixed, always visible */}
+      <View style={[styles.streakFloat, { top: insets.top }]}>
+        <BounceButton onPress={() => router.push("/streak")}>
+          <View style={styles.streakBadge}>
+            <LottieView source={activeLottie} autoPlay loop style={{ width: 44, height: 44 }} />
+            <Text style={[styles.streakBadgeText, { color: t.ts }]}>{streakDays}</Text>
+          </View>
+        </BounceButton>
+      </View>
+
+      <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]} onPress={() => router.push("/settings")}>
+        <View style={[styles.avatarHighlight, { shadowColor: isDark ? "#4d5363" : "#FFFFFF" }]}>
+          <View style={[styles.avatarShadow, { shadowColor: isDark ? "#4d5363" : "#a3afc0" }]}>
+            <BlurView intensity={90} tint="extraLight" style={styles.avatarBorder}>
+              <View style={styles.avatarInner}>
+                <Text style={styles.avatarText}>MB</Text>
+              </View>
+            </BlurView>
+          </View>
+        </View>
+      </BounceButton>
+    </FadeScreen>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: NEU_BG },
   scroll: { paddingHorizontal: 20 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
+  header: { flexDirection: "column", marginBottom: 20 },
   greeting: { fontFamily: FontFamily.regular, fontSize: 16, color: TS },
   name: { fontFamily: FontFamily.bold, fontSize: 28, color: TP, marginTop: 2 },
   logo: { width: 56, height: 56, marginBottom: 20 },
@@ -380,6 +377,11 @@ const styles = StyleSheet.create({
   avatarBorder: { width: 48, height: 48, borderRadius: 24, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   avatarInner: { width: 44, height: 44, borderRadius: 22, backgroundColor: AVATAR_BG, alignItems: "center", justifyContent: "center" },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 16, color: ICON },
+  topSolid:    { position: "absolute", top: 0, left: 0, right: 0, zIndex: 5 },
+  topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
+  todayFloat:  { position: "absolute", left: 0, right: 0, zIndex: 9, alignItems: "center" },
+  todayLabel:  { fontFamily: FontFamily.bold, fontSize: 17, color: TP },
+  todayDate:   { fontFamily: FontFamily.regular, fontSize: 17, color: TS, marginTop: 1 },
   streakFloat:     { position: "absolute", right: 80, zIndex: 10 },
   streakBadge:     { flexDirection: "row", alignItems: "flex-start", gap: 0 },
   streakBadgeText: { fontFamily: FontFamily.semibold, fontSize: 18, color: TS, marginLeft: -4, marginTop: 13 },

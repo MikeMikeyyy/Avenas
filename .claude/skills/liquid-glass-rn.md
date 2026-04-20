@@ -1,364 +1,83 @@
 ---
 name: liquid-glass-rn
-description: >
-  Apply Apple's iOS 26 Liquid Glass effect to React Native / Expo apps.
-  Use this skill whenever building or modifying ANY UI component in the Avenas
-  app — nav bars, tab bars, cards, panels, buttons, modals, headers, floating
-  elements. This is mandatory for all UI work on this project. Read this before
-  writing any component code.
+description: Apple iOS 26 Liquid Glass patterns for React Native / Expo. Use when building or modifying any UI surface (nav, tabs, cards, buttons, modals).
 ---
 
-# Liquid Glass — React Native & Expo
+# Liquid Glass — Avenas
 
-## What It Is
-
-Liquid Glass is Apple's native design material for iOS 26+. It refracts and
-lenses the content behind it using GPU-accelerated shaders — it is NOT a blur
-or rgba trick. It only works on real iOS 26 builds, not in Expo Go. This is
-expected. Write the code correctly here and it works in the App Store build.
-
----
-
-## Install
+Only works on real iOS 26 builds, not Expo Go. Write it right here; ships correctly in App Store build.
 
 ```bash
 npx expo install expo-glass-effect
 ```
 
----
+## Golden Rule
 
-## The Golden Rule
-
-Always guard GlassView with `isGlassEffectAPIAvailable()` and always provide
-an rgba fallback. Never skip either step.
+Always guard with `isGlassEffectAPIAvailable()`, always provide rgba fallback, never set opacity on `GlassView`.
 
 ```tsx
 import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
 ```
 
----
-
-## Component Patterns
-
-### GlassCard — Cards & Panels
+## Canonical Card
 
 ```tsx
-// components/GlassCard.tsx
-import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
-import { StyleSheet, View } from 'react-native';
-
-interface GlassCardProps {
-  children: React.ReactNode;
-  style?: object;
-}
-
-export default function GlassCard({ children, style }: GlassCardProps) {
+export default function GlassCard({ children, style }: { children: React.ReactNode; style?: object }) {
   if (!isGlassEffectAPIAvailable()) {
     return <View style={[styles.fallback, style]}>{children}</View>;
   }
   return (
-    <GlassView glassEffectStyle="regular" style={[styles.card, style]}>
-      {children}
-    </GlassView>
+    <GlassView glassEffectStyle="regular" style={[styles.card, style]}>{children}</GlassView>
   );
 }
-
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: 20,
-    padding: 16,
-    overflow: 'hidden',
-  },
-  fallback: {
-    borderRadius: 20,
-    padding: 16,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-  },
+  card:     { borderRadius: 20, padding: 16, overflow: 'hidden' },
+  fallback: { borderRadius: 20, padding: 16, backgroundColor: 'rgba(255,255,255,0.15)' },
 });
 ```
 
----
+Same pattern for nav bar (add `paddingTop: insets.top + 8`), button (`borderRadius: 50`), modal (`borderRadius: 24`).
 
-### GlassNavBar — Header / Nav Bar
-
-```tsx
-// components/GlassNavBar.tsx
-import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
-import { StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-interface GlassNavBarProps {
-  title: string;
-}
-
-export default function GlassNavBar({ title }: GlassNavBarProps) {
-  const insets = useSafeAreaInsets();
-  const isGlass = isGlassEffectAPIAvailable();
-  const Container = isGlass ? GlassView : View;
-  const extraProps = isGlass
-    ? { glassEffectStyle: 'regular' as const }
-    : { style: { backgroundColor: 'rgba(255,255,255,0.12)' } };
-
-  return (
-    <Container
-      {...extraProps}
-      style={[styles.navbar, { paddingTop: insets.top + 8 }]}
-    >
-      <Text style={styles.title}>{title}</Text>
-    </Container>
-  );
-}
-
-const styles = StyleSheet.create({
-  navbar: {
-    width: '100%',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-    borderBottomLeftRadius: 16,
-    borderBottomRightRadius: 16,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-  },
-});
-```
-
----
-
-### NativeTabs — Tab Bar (automatic liquid glass)
+## Tab Bar — use NativeTabs, never `Tabs`
 
 ```tsx
-// app/(tabs)/_layout.tsx
 import { NativeTabs, NativeTab } from 'expo-router/native-tabs';
-
-export default function TabLayout() {
-  return (
-    <NativeTabs>
-      <NativeTab
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: { sfSymbol: 'house.fill' },
-        }}
-      />
-      <NativeTab
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: { sfSymbol: 'magnifyingglass' },
-        }}
-      />
-    </NativeTabs>
-  );
-}
+// iOS 26: automatic liquid glass. iOS 18-: classic. Android: Material 3.
 ```
-
-> iOS 26: automatic liquid glass tab bar
-> iOS 18 and below: classic iOS tab bar
-> Android: Material 3 automatically
-
----
-
-### GlassButton — Buttons
-
-```tsx
-// components/GlassButton.tsx
-import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
-import { Pressable, Text, StyleSheet, View } from 'react-native';
-
-interface GlassButtonProps {
-  label: string;
-  onPress: () => void;
-}
-
-export default function GlassButton({ label, onPress }: GlassButtonProps) {
-  const isGlass = isGlassEffectAPIAvailable();
-  return (
-    <Pressable onPress={onPress}>
-      {isGlass ? (
-        <GlassView glassEffectStyle="regular" style={styles.button}>
-          <Text style={styles.label}>{label}</Text>
-        </GlassView>
-      ) : (
-        <View style={[styles.button, styles.fallback]}>
-          <Text style={styles.label}>{label}</Text>
-        </View>
-      )}
-    </Pressable>
-  );
-}
-
-const styles = StyleSheet.create({
-  button: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fallback: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  label: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 16,
-  },
-});
-```
-
----
-
-### GlassModal — Modals & Bottom Sheets
-
-```tsx
-// components/GlassModal.tsx
-import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
-import { Modal, View, StyleSheet } from 'react-native';
-
-interface GlassModalProps {
-  visible: boolean;
-  onClose: () => void;
-  children: React.ReactNode;
-}
-
-export default function GlassModal({ visible, onClose, children }: GlassModalProps) {
-  const isGlass = isGlassEffectAPIAvailable();
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        {isGlass ? (
-          <GlassView glassEffectStyle="regular" style={styles.panel}>
-            {children}
-          </GlassView>
-        ) : (
-          <View style={[styles.panel, styles.fallback]}>
-            {children}
-          </View>
-        )}
-      </View>
-    </Modal>
-  );
-}
-
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  panel: {
-    width: '85%',
-    borderRadius: 24,
-    padding: 24,
-    overflow: 'hidden',
-  },
-  fallback: {
-    backgroundColor: 'rgba(30,30,30,0.85)',
-  },
-});
-```
-
----
 
 ## Rules
 
 | Rule | Detail |
-|------|--------|
-| Always guard | `isGlassEffectAPIAvailable()` before every GlassView |
-| Always fallback | rgba View for Android and iOS < 26 |
-| Never opacity | Don't set opacity on GlassView or parents — use `animate` + `animationDuration` props |
-| Always overflow hidden | Add `overflow: 'hidden'` to GlassView containers |
-| Use NativeTabs | Never use plain `Tabs` for tab bars — NativeTabs is automatic |
-| Rich backgrounds | Glass needs colourful/image content behind it — plain white makes it invisible |
-| Use sparingly | Only on functional surfaces: nav, tabs, cards, buttons, modals |
+|---|---|
+| Guard | `isGlassEffectAPIAvailable()` before every `GlassView` |
+| Fallback | rgba View for Android / iOS < 26 |
+| No opacity | Use `animate` + `animationDuration` props, never CSS opacity on glass or its parents |
+| Overflow | `overflow: 'hidden'` on glass containers |
+| Use sparingly | Functional surfaces only — overuse kills the effect |
+| Rich bg behind | Glass needs colourful content behind it to refract |
 
-## glassEffectStyle Values
+## `glassEffectStyle`
 
-| Value | Use |
-|-------|-----|
-| `"regular"` | Standard frosted glass — default for all components |
-| `"clear"` | More transparent — subtle overlays only |
-| `"none"` | No effect — transparent view |
+- `"regular"` — default frosted glass
+- `"clear"` — subtle overlays only
+- `"none"` — transparent
 
----
+## Merging Pills — `@callstack/liquid-glass`
 
-## @callstack/liquid-glass — Merging Glass Elements
-
-Use this package when you need **multiple glass elements that merge together** (e.g. sliding pill nav bar, morphing buttons). This is the library Apple uses for the liquid glass tab bar pill effect.
-
-```bash
-npm install @callstack/liquid-glass
-```
-
-Requires React Native 0.80+, Xcode 26, iOS 26. Not supported in Expo Go.
+Use when multiple glass shapes must **merge** as they move (sliding pill nav, morphing buttons). Requires RN 0.80+, iOS 26.
 
 ```tsx
-import {
-  LiquidGlassView,
-  LiquidGlassContainerView,
-  isLiquidGlassSupported,
-} from "@callstack/liquid-glass";
-```
+import { LiquidGlassView, LiquidGlassContainerView, isLiquidGlassSupported } from '@callstack/liquid-glass';
 
-### Key props
-
-| Prop | Values | Notes |
-|------|--------|-------|
-| `effect` | `"regular"` \| `"clear"` \| `"none"` | `clear` for pill, `regular` for background |
-| `interactive` | `boolean` | Enables press ripple/touch effect — set on pill elements |
-| `colorScheme` | `"light"` \| `"dark"` \| `"system"` | Match app theme |
-| `tintColor` | any color | Overlay tint on glass |
-
-### LiquidGlassContainerView
-
-Wrap multiple `LiquidGlassView` siblings so their glass effects **merge** when they are within `spacing` points of each other.
-
-```tsx
 <LiquidGlassContainerView spacing={12}>
-  <LiquidGlassView effect="regular" style={styles.bar} />
+  <LiquidGlassView effect="regular" style={bar} />
   <Animated.View style={{ transform: [{ translateX }] }}>
-    <LiquidGlassView effect="clear" interactive style={styles.pill} />
+    <LiquidGlassView effect="clear" interactive style={pill} />
   </Animated.View>
 </LiquidGlassContainerView>
 ```
 
-- `spacing` — distance threshold at which children begin to merge. ~8–16 works well for nav bars.
-- Child `LiquidGlassView` elements can be wrapped in `Animated.View` for animation — merging still works.
-- Tab items / labels should be in a **separate absolute-positioned View** on top, not inside the glass layers.
-
-### Sliding Glass Pill Nav Bar Pattern
-
-```tsx
-// iOS 26: liquid glass with merging pill
-if (isLiquidGlassSupported) {
-  return (
-    <View style={{ width: barWidth, height: BAR_HEIGHT }}>
-      <LiquidGlassContainerView style={{ width: barWidth, height: BAR_HEIGHT }} spacing={12}>
-        {/* Bar background */}
-        <LiquidGlassView effect="regular" colorScheme="dark"
-          style={{ position: "absolute", width: barWidth, height: BAR_HEIGHT, borderRadius: BAR_HEIGHT / 2 }} />
-        {/* Animated pill — merges with bar as it slides */}
-        <Animated.View style={{ position: "absolute", top: INSET, left: 0,
-          width: pillWidth, height: pillHeight, transform: [{ translateX }, { scale: pillScale }] }}>
-          <LiquidGlassView effect="clear" interactive colorScheme="dark"
-            style={{ width: pillWidth, height: pillHeight, borderRadius: pillHeight / 2 }} />
-        </Animated.View>
-      </LiquidGlassContainerView>
-      {/* Tab items on top */}
-      <View style={{ position: "absolute", flexDirection: "row", width: barWidth, height: BAR_HEIGHT }}>
-        {tabs}
-      </View>
-    </View>
-  );
-}
-// Fallback: custom dark pill for Expo Go / iOS < 26
-```
-
-### Notes
-- Text auto-adapts color if glass view height < 65px — use `PlatformColor('labelColor')` for text
+- `spacing` 8–16 works for nav bars
+- Tab items/labels go in a separate absolute-positioned View on top, not inside glass layers
 - `isLiquidGlassSupported` is a boolean constant (not a function)
-- On unsupported iOS, renders a plain transparent View — always provide your own fallback background
+- Always provide a fallback — on unsupported iOS it renders a plain transparent View

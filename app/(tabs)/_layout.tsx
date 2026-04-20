@@ -47,6 +47,7 @@ const ProgressIcon = ({ size, color }: { size: number; color: string }) => (
   </Svg>
 );
 
+
 const CommunityIcon = ({ size, color }: { size: number; color: string }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Path d="M9.15957 11.62C9.12957 11.62 9.10957 11.62 9.07957 11.62C9.02957 11.61 8.95957 11.61 8.89957 11.62C5.99957 11.53 3.80957 9.25 3.80957 6.44C3.80957 3.58 6.13957 1.25 8.99957 1.25C11.8596 1.25 14.1896 3.58 14.1896 6.44C14.1796 9.25 11.9796 11.53 9.18957 11.62C9.17957 11.62 9.16957 11.62 9.15957 11.62ZM8.99957 2.75C6.96957 2.75 5.30957 4.41 5.30957 6.44C5.30957 8.44 6.86957 10.05 8.85957 10.12C8.91957 10.11 9.04957 10.11 9.17957 10.12C11.1396 10.03 12.6796 8.42 12.6896 6.44C12.6896 4.41 11.0296 2.75 8.99957 2.75Z" fill={color} />
@@ -73,7 +74,7 @@ const TAB_LABELS: Record<string, string> = {
   home:          "Home",
   workout:       "Workout",
   progress:      "Progress",
-  "trainer-hub": "Trainer Hub",
+  "trainer-hub": "Trainer",
 };
 
 const BAR_HEIGHT = 72;
@@ -204,7 +205,7 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
 export default function TabLayout() {
   return (
     <Tabs
-      screenOptions={{ headerShown: false, animation: "fade" }}
+      screenOptions={{ headerShown: false, animation: "none", lazy: false }}
       tabBar={(props) => (
         <AnimatedTabBar state={props.state} navigation={props.navigation} />
       )}

@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Animated, PanResponder, Easing, Alert } from "react-native";
+import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, Easing as ReEasing } from "react-native-reanimated";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -15,6 +16,45 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import TrashIcon from "../components/TrashIcon";
 import { useTheme } from "../contexts/ThemeContext";
+
+// Accordion panel — animates height from 0 ↔ measured natural height.
+// Measures once via a hidden layout layer, then re-uses that height.
+function ExpandablePanel({ expanded, children }: { expanded: boolean; children: React.ReactNode }) {
+  const height = useSharedValue(0);
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (measuredHeight === null) return;
+    height.value = withTiming(expanded ? measuredHeight : 0, {
+      duration: 300,
+      easing: ReEasing.out(ReEasing.cubic),
+    });
+  }, [expanded, measuredHeight]);
+
+  const style = useAnimatedStyle(() => ({
+    height: height.value,
+    overflow: "hidden",
+  }));
+
+  return (
+    <View>
+      {measuredHeight === null && (
+        <View
+          style={{ position: "absolute", left: 0, right: 0, top: 0, opacity: 0 }}
+          pointerEvents="none"
+          onLayout={e => { const h = e.nativeEvent.layout.height; if (h > 0) setMeasuredHeight(h); }}
+        >
+          {children}
+        </View>
+      )}
+      <Reanimated.View style={style}>
+        <View style={{ position: "absolute", left: 0, right: 0, top: 0 }}>
+          {children}
+        </View>
+      </Reanimated.View>
+    </View>
+  );
+}
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const result: T[][] = [];
@@ -56,7 +96,12 @@ interface SetWorkoutPickerProps {
 function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetWorkoutPickerProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
   const [selected, setSelected] = useState<number | null>(null);
+
+  const ROW_H = 52;
+  const OVERHEAD = 28 + 90 + 16 + 54 + 12 + insets.bottom; // handle + header + footer padding + button + gap
+  const sheetHeight = Math.min(OVERHEAD + program.cyclePattern.length * ROW_H, screenHeight * 0.82);
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
 
@@ -112,14 +157,17 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
   return (
     <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
       <View style={styles.swBackdrop}>
-        <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
-        <Animated.View style={[styles.swSheet, { backgroundColor: t.bg, transform: [{ translateY: slideY }] }]}>
-          {/* Drag handle */}
-          <View {...panResponder.panHandlers} style={styles.swHandleArea}>
-            <View style={[styles.swHandle, { backgroundColor: t.div }]} />
-          </View>
-          {/* Header */}
-          <View style={[styles.swHeader, { borderBottomColor: t.div }]}>
+        <TouchableWithoutFeedback onPress={dismiss}>
+          <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
+        </TouchableWithoutFeedback>
+        <Animated.View style={[styles.swSheet, { backgroundColor: t.bg, height: sheetHeight, transform: [{ translateY: slideY }] }]}>
+          {/* Drag handle + header share the pan responder so both areas dismiss on swipe down */}
+          <View {...panResponder.panHandlers}>
+            <View style={styles.swHandleArea}>
+              <View style={styles.swHandle} />
+            </View>
+            {/* Header */}
+            <View style={[styles.swHeader, { borderBottomColor: t.div }]}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.swTitle, { color: t.tp }]}>Which day is it today?</Text>
               <Text style={[styles.swSubtitle, { color: t.ts }]} numberOfLines={2}>
@@ -129,6 +177,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
             <TouchableOpacity onPress={dismiss} style={styles.swClose} activeOpacity={0.7}>
               <Ionicons name="close" size={22} color={t.tp} />
             </TouchableOpacity>
+          </View>
           </View>
           {/* Day list */}
           <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
@@ -146,8 +195,10 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
                       {!isTraining && <Text style={[styles.swRestLabel, { color: t.ts }]}>Rest day</Text>}
                     </View>
                     {isSelected && (
-                      <View style={{ shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 }}>
-                        <Ionicons name="checkmark-circle" size={28} color={ACCT} />
+                      <View style={{ width: 36, alignItems: "center" }}>
+                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 }}>
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                        </View>
                       </View>
                     )}
                   </View>
@@ -274,7 +325,7 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
         </View>
       </TouchableOpacity>
 
-      {isExpanded && (
+      <ExpandablePanel expanded={isExpanded}>
         <View style={[styles.cardActions, { borderTopColor: t.div }]}>
           <View style={styles.activeBtnRow}>
             <BounceButton style={{ flex: 1 }} onPress={onSetWorkout} accessibilityLabel="Set workout day" accessibilityRole="button">
@@ -293,7 +344,7 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
             </BounceButton>
           </View>
         </View>
-      )}
+      </ExpandablePanel>
     </NeuCard>
   );
 });
@@ -383,7 +434,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
         </View>
       </TouchableOpacity>
 
-      {isExpanded && (
+      <ExpandablePanel expanded={isExpanded}>
         <View style={[styles.cardActions, { borderTopColor: t.div }]}>
           <BounceButton onPress={onMakeActive} style={{ marginBottom: 10 }}>
             <View style={styles.activePrimaryBtnWrap}>
@@ -408,7 +459,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
             </BounceButton>
           </View>
         </View>
-      )}
+      </ExpandablePanel>
     </NeuCard>
   );
 });
@@ -679,9 +730,9 @@ const styles = StyleSheet.create({
   // Set Workout Picker
   swBackdrop:         { flex: 1, justifyContent: "flex-end" },
   swOverlay:          { backgroundColor: "rgba(0,0,0,0.45)" },
-  swSheet:            { height: "80%", borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden" },
+  swSheet:            { borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden" },
   swHandleArea:       { paddingVertical: 12, alignItems: "center" },
-  swHandle:           { width: 40, height: 4, borderRadius: 2 },
+  swHandle:           { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
   swHeader:           { flexDirection: "row", alignItems: "flex-start", paddingHorizontal: 20, paddingBottom: 16, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   swTitle:            { fontFamily: FontFamily.bold, fontSize: 18, marginBottom: 4 },
   swSubtitle:         { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },

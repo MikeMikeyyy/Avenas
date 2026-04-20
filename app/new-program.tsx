@@ -1,14 +1,13 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, LinearTransition } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+
   TextInput,
   TouchableOpacity,
-  KeyboardAvoidingView,
   Modal,
   Alert,
   Platform,
@@ -28,7 +27,7 @@ import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
-import { PROGRAMS_KEY, type SavedProgram, type Exercise, type WorkoutMap } from "../constants/programs";
+import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
@@ -112,6 +111,7 @@ function formatRest(secs: number): string {
 
 // ─── Exercise Row ─────────────────────────────────────────────────────────────
 
+const WARMUP_ORANGE = "#ffbf0f";
 
 interface ExerciseRowProps {
   exercise: Exercise;
@@ -119,16 +119,19 @@ interface ExerciseRowProps {
   isLast: boolean;
   isDark: boolean;
   onUpdate: (field: keyof Exercise, value: string | number | boolean) => void;
-  onUpdateNotes: (notes: string) => void;
+  onUpdateSets: (sets: ProgramSet[]) => void;
+  onSetRemoved: (sets: ProgramSet[]) => void;
   onRemove: () => void;
   onMove: (dir: "up" | "down") => void;
   onEdit: () => void;
 }
 
-function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNotes, onRemove, onMove, onEdit }: ExerciseRowProps) {
+function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onMove, onEdit }: ExerciseRowProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const restSecs = exercise.restSeconds ?? 0;
+  const sets = normaliseSets(exercise);
+
   const [showRestPicker, setShowRestPicker] = useState(false);
   const restScrollOffset = useRef(0);
   const scrollAnim = useRef(new Animated.Value(0)).current;
@@ -193,9 +196,33 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNote
   const holdLabelColor = useAnimatedStyle(() => ({
     color: interpolateColor(modeOffset.value, [0, 1], [isDark ? "#8896A7" : "#8896A7", "#ffffff"]),
   }));
+
+  const [collapsingSetIdx, setCollapsingSetIdx] = useState<number | null>(null);
+  const prevSetCount = useRef(sets.length);
+  const newlyAddedIdx = sets.length > prevSetCount.current ? sets.length - 1 : null;
+  const setRowHeight = useRef(0);
+  useEffect(() => { prevSetCount.current = sets.length; }, [sets.length]);
+
+  // Pre-compute set labels (W for warmup, 1/2/3 for working)
+  let wc = 0;
+  const setLabels = sets.map(s => s.type === "warmup" ? "W" : String(++wc));
+
+  const patchSet = useCallback((idx: number, patch: Partial<ProgramSet>) => {
+    onUpdateSets(sets.map((s, i) => i === idx ? { ...s, ...patch } : s));
+  }, [sets, onUpdateSets]);
+
+  // Rep mode is a single per-exercise choice driven from the header toggle.
+  const currentRepMode: "target" | "range" = sets[0]?.repMode ?? "target";
+  const toggleAllRepMode = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const next = currentRepMode === "target" ? "range" : "target";
+    onUpdateSets(sets.map(s => ({ ...s, repMode: next })));
+  }, [currentRepMode, sets, onUpdateSets]);
+
+
   return (
-    <View style={styles.exRowWrap}>
-      {/* Sub-row 1: thumbnail + name + reorder + delete */}
+    <Reanimated.View layout={LinearTransition.duration(250)} style={styles.exRowWrap}>
+      {/* Row 1: thumbnail + name + reorder + delete */}
       <View style={styles.exTopRow}>
         <NeuCard dark={isDark} radius={12} shadowSize="sm" style={styles.exThumb}>
           <View style={styles.exThumbInner}>
@@ -207,7 +234,6 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNote
         </TouchableOpacity>
         <View style={styles.exArrows}>
           {isLast ? (
-            // Last exercise: show only up arrow in the down-arrow slot to avoid empty left space
             <>
               <View style={styles.exArrowPlaceholder} />
               <TouchableOpacity onPress={() => onMove("up")} activeOpacity={0.7}>
@@ -241,9 +267,30 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNote
         </TouchableOpacity>
       </View>
 
-      {/* Sub-row 1b: Reps / Hold toggle */}
-      <View style={[styles.exToggleRow, { borderTopColor: divider }]}>
-        <Text style={[styles.exSetLabel, { color: t.ts }]}>Exercise Type</Text>
+      {/* Coaching notes */}
+      <View style={[styles.exNotesRow, { borderTopColor: divider }]}>
+        <TextInput
+          style={[styles.exNotesInput, { color: t.tp }]}
+          value={exercise.programNotes ?? ""}
+          onChangeText={v => onUpdate("programNotes", v)}
+          placeholder="Add Exercise Notes..."
+          placeholderTextColor={t.ts}
+          multiline
+          returnKeyType="done"
+          submitBehavior="blurAndSubmit"
+        />
+      </View>
+
+      {/* Row 2: compact rest timer chip + Reps/Hold toggle */}
+      <View style={[styles.exCompactRow, { borderTopColor: divider }]}>
+        <View style={styles.exRestChipGroup}>
+          <Text style={[styles.exRestLabel, { color: t.ts }]}>Rest Timer</Text>
+          <TouchableOpacity onPress={openRestPicker} activeOpacity={0.7} style={styles.exRestChip}>
+            <Ionicons name="timer-outline" size={14} color={restSecs > 0 ? ACCT : t.ts} />
+            <Text style={[styles.exRestChipText, { color: restSecs > 0 ? ACCT : t.ts }]}>{formatRest(restSecs)}</Text>
+            <Ionicons name="chevron-down" size={12} color={restSecs > 0 ? ACCT : t.ts} />
+          </TouchableOpacity>
+        </View>
         <View
           style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
           onLayout={e => { modeTrackWidth.value = e.nativeEvent.layout.width - 6; }}
@@ -274,70 +321,156 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNote
         </View>
       </View>
 
-      {/* Sub-row 2: warmup sets, working sets, reps/hold */}
-      <View style={[styles.exBottomRow, { borderTopColor: divider }]}>
-        {/* Warmup sets */}
-        <View style={styles.exSetGroup}>
-          <Text style={[styles.exSetLabel, { color: t.ts }]}>Warmup Sets</Text>
-          <View style={styles.exMiniStepper}>
-            <TouchableOpacity onPress={() => onUpdate("warmupSets", clamp(exercise.warmupSets - 1, 0, 10))} activeOpacity={0.7}>
-              <Ionicons name="remove-circle-outline" size={20} color={t.ts} />
-            </TouchableOpacity>
-            <Text style={[styles.exSetCount, { color: t.tp }]}>{exercise.warmupSets}</Text>
-            <TouchableOpacity onPress={() => onUpdate("warmupSets", clamp(exercise.warmupSets + 1, 0, 10))} activeOpacity={0.7}>
-              <Ionicons name="add-circle-outline" size={20} color={t.ts} />
-            </TouchableOpacity>
-          </View>
+      {/* Column headers */}
+      <View style={[styles.exSetHeaderRow, { borderTopColor: divider }]}>
+        <View style={styles.exSetBadgeCol} />
+        <View style={styles.exSetValueCol}>
+          <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>Weight</Text>
         </View>
-
-        <View style={[styles.exSetDivider, { backgroundColor: divider }]} />
-
-        {/* Working sets */}
-        <View style={styles.exSetGroup}>
-          <Text style={[styles.exSetLabel, { color: t.ts }]}>Working Sets</Text>
-          <View style={styles.exMiniStepper}>
-            <TouchableOpacity onPress={() => onUpdate("workingSets", clamp(exercise.workingSets - 1, 1, 20))} activeOpacity={0.7}>
-              <Ionicons name="remove-circle-outline" size={20} color={t.ts} />
-            </TouchableOpacity>
-            <Text style={[styles.exSetCount, { color: t.tp }]}>{exercise.workingSets}</Text>
-            <TouchableOpacity onPress={() => onUpdate("workingSets", clamp(exercise.workingSets + 1, 1, 20))} activeOpacity={0.7}>
-              <Ionicons name="add-circle-outline" size={20} color={t.ts} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={[styles.exSetDivider, { backgroundColor: divider }]} />
-
-        {/* Reps / Hold */}
-        <View style={styles.exSetGroup}>
-          <Text style={[styles.exSetLabel, { color: t.ts }]}>{exercise.isIsometric ? "Duration (s)" : "Rep Range"}</Text>
-          <TextInput
-            style={[styles.exRepsInput, { color: t.tp }]}
-            value={exercise.reps}
-            onChangeText={v => onUpdate("reps", v)}
-            placeholder={exercise.isIsometric ? "30" : "8-12"}
-            placeholderTextColor={t.ts}
-            returnKeyType="done"
-            keyboardType={exercise.isIsometric ? "number-pad" : "default"}
-            selectTextOnFocus
-          />
-        </View>
+        <TouchableOpacity
+          style={[styles.exSetValueCol, styles.exSetHeaderToggle]}
+          onPress={toggleAllRepMode}
+          activeOpacity={0.7}
+        >
+          <View style={styles.exSetHeaderToggleSpacer} />
+          <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>
+            {exercise.isIsometric
+              ? (currentRepMode === "range" ? "Hold Range" : "Hold")
+              : (currentRepMode === "range" ? "Rep Range" : "Reps")}
+          </Text>
+          <Ionicons name="chevron-down" size={12} color={t.ts} style={{ marginLeft: 2 }} />
+        </TouchableOpacity>
       </View>
 
-      {/* Rest Timer row */}
-      <TouchableOpacity
-        style={[styles.exRestRow, { borderTopColor: divider }]}
-        onPress={openRestPicker}
-        activeOpacity={0.7}
-      >
-        <Text style={[styles.exSetLabel, { color: t.ts }]}>Rest Timer</Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          <Text style={[styles.exRestValue, { color: restSecs > 0 ? ACCT : t.ts }]}>{formatRest(restSecs)}</Text>
-          <Ionicons name="chevron-forward" size={14} color={t.ts} />
-        </View>
-      </TouchableOpacity>
+      {/* Set rows */}
+      {sets.map((set, idx) => {
+        const isWarmup = set.type === "warmup";
+        const label = setLabels[idx];
+        const repMode = set.repMode ?? currentRepMode;
+        return (
+          <CollapsibleCard
+            key={idx}
+            isCollapsing={idx === collapsingSetIdx}
+            onCollapsed={() => { setCollapsingSetIdx(null); onSetRemoved(sets.slice(0, -1)); }}
+            expanding={idx === newlyAddedIdx}
+            naturalHeight={idx === newlyAddedIdx ? setRowHeight.current : undefined}
+          >
+          <View
+            style={[styles.exSetRow, { borderTopColor: divider }]}
+            onLayout={(idx !== newlyAddedIdx && idx !== collapsingSetIdx) ? e => { const h = e.nativeEvent.layout.height; if (h > 0) setRowHeight.current = h; } : undefined}
+          >
+            {/* Set type badge */}
+            <View style={styles.exSetBadgeCol}>
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  patchSet(idx, { type: isWarmup ? "working" : "warmup" });
+                }}
+                style={[styles.exSetBadge, { borderColor: isWarmup ? WARMUP_ORANGE : divider }]}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.exSetBadgeText, { color: isWarmup ? WARMUP_ORANGE : t.tp }]}>{label}</Text>
+              </TouchableOpacity>
+            </View>
 
-      {/* Rest picker slide-up */}
+            {/* Weight column */}
+            <View style={styles.exSetValueCol}>
+              <View style={styles.exSetUnitSpacer} />
+              <View style={[styles.exSetInputBox, { borderColor: divider }]}>
+                <TextInput
+                  style={[styles.exSetInputText, { color: t.tp }]}
+                  value={set.weightKg ?? ""}
+                  onChangeText={v => patchSet(idx, { weightKg: v })}
+                  placeholder="—"
+                  placeholderTextColor={t.ts}
+                  keyboardType="decimal-pad"
+                  selectTextOnFocus
+                />
+              </View>
+              <Text style={[styles.exSetUnit, { color: t.ts }]}>kg</Text>
+            </View>
+
+            {/* Rep column */}
+            <View style={styles.exSetValueCol}>
+              {repMode === "target" ? (
+                <View style={[styles.exSetInputBox, { borderColor: divider }]}>
+                  <TextInput
+                    style={[styles.exSetInputText, { color: t.tp }]}
+                    value={set.reps ?? ""}
+                    onChangeText={v => patchSet(idx, { reps: v })}
+                    placeholder="—"
+                    placeholderTextColor={t.ts}
+                    keyboardType={exercise.isIsometric ? "number-pad" : "decimal-pad"}
+                    selectTextOnFocus
+                  />
+                </View>
+              ) : (
+                <>
+                  <View style={[styles.exSetInputBox, { borderColor: divider, width: 40 }]}>
+                    <TextInput
+                      style={[styles.exSetInputText, { color: t.tp }]}
+                      value={set.repsMin ?? ""}
+                      onChangeText={v => patchSet(idx, { repsMin: v })}
+                      placeholder="—"
+                      placeholderTextColor={t.ts}
+                      keyboardType="number-pad"
+                      selectTextOnFocus
+                    />
+                  </View>
+                  <Text style={{ color: t.ts, fontSize: 13, fontFamily: FontFamily.semibold, marginHorizontal: 4 }}>–</Text>
+                  <View style={[styles.exSetInputBox, { borderColor: divider, width: 40 }]}>
+                    <TextInput
+                      style={[styles.exSetInputText, { color: t.tp }]}
+                      value={set.repsMax ?? ""}
+                      onChangeText={v => patchSet(idx, { repsMax: v })}
+                      placeholder="—"
+                      placeholderTextColor={t.ts}
+                      keyboardType="number-pad"
+                      selectTextOnFocus
+                    />
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+          </CollapsibleCard>
+        );
+      })}
+
+      {/* Add / Remove row */}
+      <View style={[styles.exAddRemoveRow, { borderTopColor: divider }]}>
+        <BounceButton
+          onPress={() => {
+            if (sets.length <= 1 || collapsingSetIdx !== null) return;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setCollapsingSetIdx(sets.length - 1);
+          }}
+          style={{ opacity: (sets.length <= 1 || collapsingSetIdx !== null) ? 0.35 : 1, flex: 1, marginRight: 6 }}
+        >
+          <NeuCard dark={isDark} radius={10} shadowSize="sm" style={{ borderRadius: 10 }}>
+            <View style={styles.exAddRemoveBtn}>
+              <Ionicons name="remove" size={14} color={t.ts} />
+              <Text style={[styles.exAddRemoveText, { color: t.ts }]}>Remove Set</Text>
+            </View>
+          </NeuCard>
+        </BounceButton>
+        <BounceButton
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onUpdateSets([...sets, { type: "working" }]);
+          }}
+          style={{ flex: 1, marginLeft: 6 }}
+        >
+          <NeuCard dark={isDark} radius={10} shadowSize="sm" style={{ borderRadius: 10 }}>
+            <View style={styles.exAddRemoveBtn}>
+              <Ionicons name="add" size={14} color={ACCT} />
+              <Text style={[styles.exAddRemoveText, { color: ACCT }]}>Add Set</Text>
+            </View>
+          </NeuCard>
+        </BounceButton>
+      </View>
+
+      {/* Rest picker modal */}
       <Modal visible={showRestPicker} transparent animationType="none" onRequestClose={closeRestPicker}>
         <View style={styles.restBackdrop}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.restOverlay, { opacity: backdropOpacity }]} />
@@ -378,67 +511,32 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNote
                 {REST_OPTIONS.map((item, i) => {
                   const rotateX = scrollAnim.interpolate({
                     inputRange: [
-                      (i - 2.5) * REST_ITEM_H,
-                      (i - 2) * REST_ITEM_H,
-                      (i - 1) * REST_ITEM_H,
-                      i * REST_ITEM_H,
-                      (i + 1) * REST_ITEM_H,
-                      (i + 2) * REST_ITEM_H,
-                      (i + 2.5) * REST_ITEM_H,
+                      (i - 2.5) * REST_ITEM_H, (i - 2) * REST_ITEM_H, (i - 1) * REST_ITEM_H,
+                      i * REST_ITEM_H, (i + 1) * REST_ITEM_H, (i + 2) * REST_ITEM_H, (i + 2.5) * REST_ITEM_H,
                     ],
                     outputRange: ['-85deg', '-55deg', '-28deg', '0deg', '28deg', '55deg', '85deg'],
                     extrapolate: 'clamp',
                   });
                   const opacity = scrollAnim.interpolate({
                     inputRange: [
-                      (i - 2.5) * REST_ITEM_H,
-                      (i - 2) * REST_ITEM_H,
-                      (i - 1) * REST_ITEM_H,
-                      i * REST_ITEM_H,
-                      (i + 1) * REST_ITEM_H,
-                      (i + 2) * REST_ITEM_H,
-                      (i + 2.5) * REST_ITEM_H,
+                      (i - 2.5) * REST_ITEM_H, (i - 2) * REST_ITEM_H, (i - 1) * REST_ITEM_H,
+                      i * REST_ITEM_H, (i + 1) * REST_ITEM_H, (i + 2) * REST_ITEM_H, (i + 2.5) * REST_ITEM_H,
                     ],
                     outputRange: [0, 0.5, 0.75, 1, 0.75, 0.5, 0],
                     extrapolate: 'clamp',
                   });
                   return (
-                    <Animated.View
-                      key={item}
-                      style={[styles.restItem, { opacity, transform: [{ perspective: 280 }, { rotateX }] }]}
-                    >
-                      <Text style={[styles.restItemText, { color: t.ts }]}>
-                        {formatRest(item)}
-                      </Text>
+                    <Animated.View key={item} style={[styles.restItem, { opacity, transform: [{ perspective: 280 }, { rotateX }] }]}>
+                      <Text style={[styles.restItemText, { color: t.ts }]}>{formatRest(item)}</Text>
                     </Animated.View>
                   );
                 })}
               </Animated.ScrollView>
-              {/* Bold clip overlay — only items physically inside the selection zone show bold */}
-              <View
-                pointerEvents="none"
-                style={{
-                  position: 'absolute',
-                  top: REST_ITEM_H * 2,
-                  left: 0,
-                  right: 0,
-                  height: REST_ITEM_H,
-                  overflow: 'hidden',
-                  backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg,
-                }}
-              >
-                <Animated.View
-                  style={{
-                    transform: [{
-                      translateY: Animated.multiply(scrollAnim, -1),
-                    }],
-                  }}
-                >
+              <View pointerEvents="none" style={{ position: 'absolute', top: REST_ITEM_H * 2, left: 0, right: 0, height: REST_ITEM_H, overflow: 'hidden', backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg }}>
+                <Animated.View style={{ transform: [{ translateY: Animated.multiply(scrollAnim, -1) }] }}>
                   {REST_OPTIONS.map((item) => (
                     <View key={item} style={styles.restItem}>
-                      <Text style={[styles.restItemText, { color: t.tp, fontFamily: FontFamily.bold }]}>
-                        {formatRest(item)}
-                      </Text>
+                      <Text style={[styles.restItemText, { color: t.tp, fontFamily: FontFamily.bold }]}>{formatRest(item)}</Text>
                     </View>
                   ))}
                 </Animated.View>
@@ -466,20 +564,7 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateNote
         </View>
       </Modal>
 
-      {/* Coaching notes */}
-      <View style={[styles.exNotesRow, { borderTopColor: divider }]}>
-        <TextInput
-          style={[styles.exNotesInput, { color: t.tp }]}
-          value={exercise.programNotes ?? ""}
-          onChangeText={onUpdateNotes}
-          placeholder="Notes..."
-          placeholderTextColor={t.ts}
-          multiline
-          returnKeyType="done"
-          blurOnSubmit
-        />
-      </View>
-    </View>
+    </Reanimated.View>
   );
 }
 
@@ -584,6 +669,7 @@ function Step1({
   useEffect(() => { prevCycleDays.current = cycleDays; }, [cycleDays]);
   const [cycleCollapsingIdx, setCycleCollapsingIdx] = useState<number | null>(null);
   const pendingCycleDays = useRef<number | null>(null);
+  const dayRowHeight = useRef(0);
 
   const handleCycleDecrement = useCallback(() => {
     if (cycleCollapsingIdx !== null) return;
@@ -652,9 +738,13 @@ function Step1({
                 isCollapsing={cycleCollapsingIdx === i}
                 onCollapsed={handleCycleCollapsed}
                 expanding={expandingIdx === i}
-                naturalHeight={54}
+                naturalHeight={i === expandingIdx ? dayRowHeight.current : undefined}
               >
               <View
+                onLayout={e => {
+                  const h = e.nativeEvent.layout.height;
+                  if (h > 0 && i !== expandingIdx) dayRowHeight.current = h;
+                }}
                 style={[
                   styles.dayRow,
                   i > 0 && { borderTopWidth: 1, borderTopColor: divider },
@@ -733,12 +823,13 @@ function Step1({
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onRemoveExercise, onMoveExercise, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onMoveExercise, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
   onEditExercise: (day: string, id: string) => void;
   onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number | boolean) => void;
+  onUpdateExerciseSets: (day: string, id: string, sets: ProgramSet[]) => void;
   onRemoveExercise: (day: string, id: string) => void;
   onMoveExercise: (day: string, id: string, dir: "up" | "down") => void;
   isDark: boolean;
@@ -773,7 +864,8 @@ function Step2({
                     isLast={i === workouts[day].length - 1}
                     isDark={isDark}
                     onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
-                    onUpdateNotes={notes => onUpdateExercise(day, ex.id, "programNotes", notes)}
+                    onUpdateSets={sets => onUpdateExerciseSets(day, ex.id, sets)}
+                    onSetRemoved={sets => onUpdateExerciseSets(day, ex.id, sets)}
                     onRemove={() => onStartCollapse(day, ex.id)}
                     onMove={(dir) => onMoveExercise(day, ex.id, dir)}
                     onEdit={() => onEditExercise(day, ex.id)}
@@ -833,6 +925,28 @@ export default function NewProgramScreen() {
   const originalEdit = useRef<{ name: string; totalWeeks: number; cycleDays: number; isTrainingDay: boolean[]; cyclePattern: string[]; workouts: WorkoutMap } | null>(null);
   // Remembers which day's picker was open before navigating to create-custom-exercise
   const pendingPickerDay = useRef<string | null>(null);
+
+  const hasChanges = useMemo(() => {
+    if (!isEditMode) return false;
+    const orig = originalEdit.current;
+    if (!orig) return false;
+    return (
+      name !== orig.name ||
+      totalWeeks !== orig.totalWeeks ||
+      cycleDays !== orig.cycleDays ||
+      JSON.stringify(isTrainingDay) !== JSON.stringify(orig.isTrainingDay) ||
+      JSON.stringify(cyclePattern) !== JSON.stringify(orig.cyclePattern) ||
+      JSON.stringify(workouts) !== JSON.stringify(orig.workouts)
+    );
+  }, [isEditMode, name, totalWeeks, cycleDays, isTrainingDay, cyclePattern, workouts]);
+
+  const updateBtnScale = useSharedValue(0);
+  const updateBtnStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: updateBtnScale.value }],
+  }));
+  useEffect(() => {
+    updateBtnScale.value = withSpring(hasChanges ? 1 : 0, { damping: 18, stiffness: 280, mass: 0.8 });
+  }, [hasChanges, updateBtnScale]);
 
   const [kbHeight, setKbHeight] = useState(0);
   useEffect(() => {
@@ -1026,7 +1140,7 @@ export default function NewProgramScreen() {
   const addExercise = useCallback((day: string, exName: string, idOffset = 0) => {
     setWorkouts(prev => ({
       ...prev,
-      [day]: [...(prev[day] ?? []), { id: (Date.now() + idOffset).toString(), name: exName, warmupSets: 0, workingSets: 3, reps: "8-12" }],
+      [day]: [...(prev[day] ?? []), { id: (Date.now() + idOffset).toString(), name: exName, sets: [{ type: "working" as const }] }],
     }));
   }, []);
 
@@ -1034,6 +1148,13 @@ export default function NewProgramScreen() {
     setWorkouts(prev => ({
       ...prev,
       [day]: prev[day].map(e => e.id === id ? { ...e, [field]: value } : e),
+    }));
+  }, []);
+
+  const updateExerciseSets = useCallback((day: string, id: string, sets: ProgramSet[]) => {
+    setWorkouts(prev => ({
+      ...prev,
+      [day]: prev[day].map(e => e.id === id ? { ...e, sets } : e),
     }));
   }, []);
 
@@ -1162,10 +1283,7 @@ export default function NewProgramScreen() {
     isTrainingDay.every((isTraining, i) => !isTraining || cyclePattern[i].trim().length > 0);
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.root, { backgroundColor: t.bg }]}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
+    <View style={[styles.root, { backgroundColor: t.bg }]}>
       {/* Back button */}
       <TouchableOpacity
         onPress={handleBack}
@@ -1185,17 +1303,15 @@ export default function NewProgramScreen() {
         )}
       </TouchableOpacity>
 
-      {step === 2 && isEditMode && (
-        <BounceButton
-          onPress={handleFinish}
-          accessibilityLabel="Save changes"
-          accessibilityRole="button"
-          style={{ position: "absolute", top: insets.top + 16, right: 26, zIndex: 10 }}
-        >
-          <View style={styles.updateBtn}>
-            <Text style={styles.updateBtnText}>Update</Text>
-          </View>
-        </BounceButton>
+
+      {isEditMode && (
+        <Reanimated.View style={[{ position: "absolute", top: insets.top + 16, right: 26, zIndex: 10 }, updateBtnStyle]}>
+          <BounceButton onPress={handleFinish} accessibilityLabel="Save changes" accessibilityRole="button">
+            <View style={styles.updateBtn}>
+              <Text style={styles.updateBtnText}>Update</Text>
+            </View>
+          </BounceButton>
+        </Reanimated.View>
       )}
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
@@ -1210,9 +1326,10 @@ export default function NewProgramScreen() {
         </MaskedView>
       </View>
 
-      <ScrollView
+      <Reanimated.ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }}
       >
         <View style={styles.header}>
@@ -1243,6 +1360,7 @@ export default function NewProgramScreen() {
             onOpenPicker={day => setPickerState({ day })}
             onEditExercise={(day, id) => setPickerState({ day, replaceId: id })}
             onUpdateExercise={updateExercise}
+            onUpdateExerciseSets={updateExerciseSets}
             onRemoveExercise={removeExercise}
             onMoveExercise={moveExercise}
             isDark={isDark}
@@ -1252,7 +1370,7 @@ export default function NewProgramScreen() {
             onStartCollapse={startCollapse}
           />
         )}
-      </ScrollView>
+      </Reanimated.ScrollView>
 
       {/* Floating keyboard dismiss button */}
       {kbHeight > 0 && Platform.OS === "ios" && (
@@ -1307,7 +1425,7 @@ export default function NewProgramScreen() {
           isDark={isDark}
         />
       )}
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -1380,22 +1498,33 @@ const styles = StyleSheet.create({
   exArrowPlaceholder: { width: 18, height: 18 },
   exNameBtn:        { flex: 1, flexDirection: "row", alignItems: "center", gap: 5 },
   exName:           { fontFamily: FontFamily.semibold, fontSize: 14, flexShrink: 1 },
-  exToggleRow:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 14, paddingVertical: 10, borderTopWidth: 1, gap: 12 },
+  exCompactRow:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, paddingHorizontal: 9, borderTopWidth: 1 },
+  exRestChipGroup:  { flexDirection: "row", alignItems: "center", gap: 8 },
+  exRestLabel:      { fontFamily: FontFamily.semibold, fontSize: 13 },
+  exRestChip:       { flexDirection: "row", alignItems: "center", gap: 5 },
+  exRestChipText:   { fontFamily: FontFamily.semibold, fontSize: 13 },
   exTogglePills:    { flexDirection: "row", borderRadius: 20, padding: 3 },
   exTogglePillPill: { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
   exTogglePill:     { paddingHorizontal: 14, paddingVertical: 6, alignItems: "center" },
   exTogglePillText: { fontFamily: FontFamily.semibold, fontSize: 12 },
-  exBottomRow:      { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderTopWidth: 1, marginBottom: 2 },
-  exSetGroup:       { flex: 1, alignItems: "center", gap: 4 },
-  exSetLabel:       { fontFamily: FontFamily.regular, fontSize: 11, letterSpacing: 0.5, textTransform: "uppercase" },
-  exMiniStepper:    { flexDirection: "row", alignItems: "center", gap: 6 },
-  exSetCount:       { fontFamily: FontFamily.bold, fontSize: 16, minWidth: 20, textAlign: "center" },
-  exSetDivider:     { width: 1, height: 36, marginHorizontal: 4 },
-  exRepsInput:      { fontFamily: FontFamily.bold, fontSize: 16, minWidth: 44, textAlign: "center" },
-  exRestRow:        { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 14, paddingVertical: 12, borderTopWidth: 1 },
-  exRestValue:      { fontFamily: FontFamily.semibold, fontSize: 13 },
-  exNotesRow:       { borderTopWidth: 1, paddingLeft: 14, paddingVertical: 10 },
-  exNotesInput:     { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
+  exSetHeaderRow:   { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 6, borderTopWidth: 1, gap: 20 },
+  exSetHeaderLabel: { fontFamily: FontFamily.semibold, fontSize: 13 },
+  exSetHeaderToggle:{ flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  exSetHeaderToggleSpacer: { width: 14 },
+  exSetRow:         { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 8, borderTopWidth: 1, gap: 20 },
+  exSetBadgeCol:    { width: 36, alignItems: "center" },
+  exSetValueCol:    { width: 100, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  exSetUnitSpacer:  { width: 22 },
+  exSetBadge:       { width: 28, height: 28, borderRadius: 14, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
+  exSetBadgeText:   { fontFamily: FontFamily.bold, fontSize: 12 },
+  exSetInputBox:    { height: 32, width: 56, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  exSetInputText:   { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", width: "100%" },
+  exSetUnit:        { fontFamily: FontFamily.semibold, fontSize: 13, marginLeft: 4 },
+  exAddRemoveRow:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8, paddingHorizontal: 9, borderTopWidth: 1 },
+  exAddRemoveBtn:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10 },
+  exAddRemoveText:  { fontFamily: FontFamily.semibold, fontSize: 13 },
+  exNotesRow:       { borderTopWidth: 1, paddingVertical: 10, paddingLeft: 9 },
+  exNotesInput:     { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20, paddingLeft: 0 },
 
   // Rest picker modal
   restBackdrop:     { flex: 1, justifyContent: "flex-end" },

@@ -1,5 +1,10 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
+import { BlurView } from "expo-blur";
+import MaskedView from "@react-native-masked-view/masked-view";
+import { LinearGradient } from "expo-linear-gradient";
 import { useState } from "react";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
+import * as Haptics from "expo-haptics";
 import { useTheme } from "../contexts/ThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -68,6 +73,18 @@ export default function SettingsScreen() {
   const { isDark, toggleDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const [isKg, setIsKg] = useState(true);
+  const unitOffset     = useSharedValue(0); // 0 = kg, 1 = lbs
+  const unitTrackWidth = useSharedValue(0);
+  const unitPillStyle  = useAnimatedStyle(() => ({
+    width: unitTrackWidth.value / 2,
+    transform: [{ translateX: unitOffset.value * (unitTrackWidth.value / 2) }],
+  }));
+  const kgLabelColor  = useAnimatedStyle(() => ({
+    color: interpolateColor(unitOffset.value, [0, 1], ["#ffffff", isDark ? "#8896A7" : "#8896A7"]),
+  }));
+  const lbsLabelColor = useAnimatedStyle(() => ({
+    color: interpolateColor(unitOffset.value, [0, 1], [isDark ? "#8896A7" : "#8896A7", "#ffffff"]),
+  }));
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
@@ -89,6 +106,18 @@ export default function SettingsScreen() {
         )}
       </TouchableOpacity>
 
+      <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
+        <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
+          <LinearGradient
+            colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
+            locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
+            style={StyleSheet.absoluteFillObject}
+          />
+        }>
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+        </MaskedView>
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
@@ -102,9 +131,9 @@ export default function SettingsScreen() {
 
         {/* Avatar */}
         <View style={styles.avatarSection}>
-          <NeuCard dark={false} highlightOpacity={isDark ? 0.3 : 1} depthOpacity={isDark ? 0.2 : 0.7} radius={40} style={styles.avatar}>
+          <NeuCard dark={isDark} radius={40} style={styles.avatar}>
             <View style={styles.avatarInner}>
-              <Text style={[styles.avatarText, { color: APP_LIGHT.icon }]}>MM</Text>
+              <Text style={[styles.avatarText, { color: t.icon }]}>MM</Text>
             </View>
           </NeuCard>
           <Text style={[styles.userName, { color: t.tp }]}>Michael</Text>
@@ -125,22 +154,34 @@ export default function SettingsScreen() {
                         {item.renderIcon?.(t.icon)}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
-                      <View style={[styles.unitToggle, { backgroundColor: t.div }]}>
+                      <View
+                        style={[styles.unitToggle, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
+                        onLayout={e => { unitTrackWidth.value = e.nativeEvent.layout.width - 6; }}
+                      >
+                        <Reanimated.View style={[styles.unitPill, unitPillStyle]} />
                         <TouchableOpacity
-                          onPress={() => setIsKg(true)}
-                          style={[styles.unitBtn, isKg && styles.unitBtnActive]}
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setIsKg(true);
+                            unitOffset.value = withSpring(0, { damping: 22, stiffness: 300, mass: 0.9 });
+                          }}
+                          style={styles.unitBtn}
                           accessibilityLabel="Kilograms"
                           accessibilityRole="button"
                         >
-                          <Text style={[styles.unitBtnText, { color: t.ts }, isKg && styles.unitBtnTextActive]}>kg</Text>
+                          <Reanimated.Text style={[styles.unitBtnText, kgLabelColor]}>kg</Reanimated.Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          onPress={() => setIsKg(false)}
-                          style={[styles.unitBtn, !isKg && styles.unitBtnActive]}
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setIsKg(false);
+                            unitOffset.value = withSpring(1, { damping: 22, stiffness: 300, mass: 0.9 });
+                          }}
+                          style={styles.unitBtn}
                           accessibilityLabel="Pounds"
                           accessibilityRole="button"
                         >
-                          <Text style={[styles.unitBtnText, { color: t.ts }, !isKg && styles.unitBtnTextActive]}>lbs</Text>
+                          <Reanimated.Text style={[styles.unitBtnText, lbsLabelColor]}>lbs</Reanimated.Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -192,8 +233,9 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   root:              { flex: 1 },
+  topGradient:       { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll:            { paddingHorizontal: 20 },
-  header:            { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 32 },
+  header:            { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 32, height: 40 },
   backBtn:           { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   title:             { fontFamily: FontFamily.bold, fontSize: 18, color: TP },
   avatarSection:     { alignItems: "center", marginBottom: 36, gap: 8 },
@@ -210,9 +252,8 @@ const styles = StyleSheet.create({
   rowLeft:           { flexDirection: "row", alignItems: "center", gap: 12 },
   rowLabel:          { fontFamily: FontFamily.regular, fontSize: 16, color: TP },
   signOutCard:       { borderRadius: 18, marginBottom: 12 },
-  unitToggle:        { flexDirection: "row", backgroundColor: DIV, borderRadius: 20, padding: 3, gap: 2 },
-  unitBtn:           { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 16 },
-  unitBtnActive:     { backgroundColor: ACCT },
-  unitBtnText:       { fontFamily: FontFamily.semibold, fontSize: 13, color: TS },
-  unitBtnTextActive: { color: "#fff" },
+  unitToggle: { flexDirection: "row", borderRadius: 20, padding: 3 },
+  unitPill:   { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  unitBtn:    { paddingHorizontal: 12, paddingVertical: 5, alignItems: "center" },
+  unitBtnText:{ fontFamily: FontFamily.semibold, fontSize: 13 },
 });

@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
+import { BlurView } from "expo-blur";
+import MaskedView from "@react-native-masked-view/masked-view";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -76,6 +79,18 @@ export default function StreakScreen() {
           </View>
         )}
       </TouchableOpacity>
+
+      <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
+        <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
+          <LinearGradient
+            colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
+            locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
+            style={StyleSheet.absoluteFillObject}
+          />
+        }>
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+        </MaskedView>
+      </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -235,8 +250,9 @@ export default function StreakScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
-  scroll: { paddingHorizontal: 20 },
+  root:        { flex: 1 },
+  topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
+  scroll:      { paddingHorizontal: 20 },
 
   backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
 

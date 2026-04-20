@@ -1,14 +1,17 @@
 import { View, Text, StyleSheet } from "react-native";
 import { FontFamily, APP_LIGHT, APP_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
+import FadeScreen from "../../components/FadeScreen";
 
 export default function TrainerHubScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   return (
-    <View style={[styles.container, { backgroundColor: t.bg }]}>
-      <Text style={[styles.text, { color: t.tp }]}>Trainer Hub</Text>
-    </View>
+    <FadeScreen style={{ backgroundColor: t.bg }}>
+      <View style={styles.container}>
+        <Text style={[styles.text, { color: t.tp }]}>Trainer Hub</Text>
+      </View>
+    </FadeScreen>
   );
 }
 

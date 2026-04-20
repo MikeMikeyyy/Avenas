@@ -8,14 +8,17 @@ import {
   TouchableOpacity,
   Alert,
   KeyboardAvoidingView,
-  InputAccessoryView,
   Keyboard,
   Linking,
   Platform,
 } from "react-native";
+import { BlurView } from "expo-blur";
+import MaskedView from "@react-native-masked-view/masked-view";
+import { LinearGradient } from "expo-linear-gradient";
+import Svg, { Path } from "react-native-svg";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import * as ImagePicker from "expo-image-picker";
@@ -26,18 +29,30 @@ import {
   CUSTOM_KEY, MAX_CUSTOM, MUSCLE_GROUPS,
   type SelectableMuscle, type CustomExercise,
 } from "../constants/exercises";
+import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import { useTheme } from "../contexts/ThemeContext";
 
 const SELECTABLE = MUSCLE_GROUPS.filter(g => g !== "All") as SelectableMuscle[];
-const DESC_INPUT_ID = "create-exercise-description";
+
+function KeyboardDismissIcon({ color }: { color: string }) {
+  return (
+    <Svg width={34} height={29} viewBox="0 0 26 22" fill="none">
+      <Path d="M2 2.5C2 1.67 2.67 1 3.5 1h19c.83 0 1.5.67 1.5 1.5v10c0 .83-.67 1.5-1.5 1.5h-19C2.67 14 2 13.33 2 12.5v-10z" stroke={color} strokeWidth="1.4"/>
+      <Path d="M6 5.5h1.2M10 5.5h1.2M14 5.5h1.2M18 5.5h1.2M6 8.5h1.2M10 8.5h1.2M14 8.5h1.2M18 8.5h1.2M8 11.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
+      <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+    </Svg>
+  );
+}
 
 export default function CreateCustomExerciseScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const { edit: editName } = useLocalSearchParams<{ edit?: string }>();
+  const isEditMode = !!editName;
 
   const [exerciseName, setExerciseName] = useState("");
   const [selectedMuscles, setSelectedMuscles] = useState<SelectableMuscle[]>([]);
@@ -46,7 +61,14 @@ export default function CreateCustomExerciseScreen() {
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [slotCount, setSlotCount] = useState(0);
+  const [kbHeight, setKbHeight] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener("keyboardWillHide", () => setKbHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
@@ -55,6 +77,23 @@ export default function CreateCustomExerciseScreen() {
       if (Array.isArray(parsed)) setSlotCount(parsed.length);
     }).catch(() => {});
   }, []);
+
+  // Pre-populate fields when editing an existing exercise
+  useEffect(() => {
+    if (!editName) return;
+    AsyncStorage.getItem(CUSTOM_KEY).then(v => {
+      if (!v) return;
+      const parsed: unknown = JSON.parse(v);
+      if (!Array.isArray(parsed)) return;
+      const ex = (parsed as CustomExercise[]).find(e => e.name === editName);
+      if (!ex) return;
+      setExerciseName(ex.name);
+      setSelectedMuscles(ex.muscles);
+      setImageUri(ex.imageUri ?? null);
+      setVideoUri(ex.videoUri ?? null);
+      setDescription(ex.description ?? "");
+    }).catch(() => {});
+  }, [editName]);
 
   const toggleMuscle = useCallback((muscle: SelectableMuscle) => {
     setSelectedMuscles(prev =>
@@ -125,19 +164,42 @@ export default function CreateCustomExerciseScreen() {
     try {
       const raw = await AsyncStorage.getItem(CUSTOM_KEY);
       const current: CustomExercise[] = raw ? JSON.parse(raw) : [];
-      if (current.length >= MAX_CUSTOM) {
-        Alert.alert("Limit reached", "You have used all 5 custom exercise slots.");
-        setSaving(false);
-        return;
-      }
-      const newEx: CustomExercise = {
+      const updated: CustomExercise = {
         name,
         muscles: selectedMuscles,
         ...(imageUri ? { imageUri } : {}),
         ...(videoUri ? { videoUri } : {}),
         ...(description.trim() ? { description: description.trim() } : {}),
       };
-      await AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify([...current, newEx]));
+      if (isEditMode) {
+        const idx = current.findIndex(e => e.name === editName);
+        if (idx === -1) { Alert.alert("Error", "Original exercise not found."); setSaving(false); return; }
+        current[idx] = updated;
+        await AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(current));
+        // Cascade rename through saved programs if name changed
+        if (name !== editName) {
+          const progRaw = await AsyncStorage.getItem(PROGRAMS_KEY);
+          if (progRaw) {
+            const programs: SavedProgram[] = JSON.parse(progRaw);
+            let changed = false;
+            for (const prog of programs) {
+              for (const key of Object.keys(prog.workouts)) {
+                for (const ex of prog.workouts[key]) {
+                  if (ex.name === editName) { ex.name = name; changed = true; }
+                }
+              }
+            }
+            if (changed) await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(programs));
+          }
+        }
+      } else {
+        if (current.length >= MAX_CUSTOM) {
+          Alert.alert("Limit reached", "You have used all 5 custom exercise slots.");
+          setSaving(false);
+          return;
+        }
+        await AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify([...current, updated]));
+      }
       router.back();
     } catch (e) {
       Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
@@ -168,6 +230,18 @@ export default function CreateCustomExerciseScreen() {
         )}
       </TouchableOpacity>
 
+      <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
+        <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
+          <LinearGradient
+            colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
+            locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
+            style={StyleSheet.absoluteFillObject}
+          />
+        }>
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+        </MaskedView>
+      </View>
+
       <ScrollView
         ref={scrollRef}
         showsVerticalScrollIndicator={false}
@@ -182,7 +256,7 @@ export default function CreateCustomExerciseScreen() {
         <View style={styles.header}>
           <View style={{ width: 66 }} />
           <View style={{ flex: 1, alignItems: "center" }}>
-            <Text style={[styles.screenTitle, { color: t.tp }]}>CREATE EXERCISE</Text>
+            <Text style={[styles.screenTitle, { color: t.tp }]}>{isEditMode ? "EDIT EXERCISE" : "CREATE EXERCISE"}</Text>
             <Text style={[styles.slotBadge, { color: t.ts }]}>
               {slotCount} / {MAX_CUSTOM} slots used
             </Text>
@@ -221,6 +295,12 @@ export default function CreateCustomExerciseScreen() {
                   {
                     backgroundColor: active ? ACCT : "transparent",
                     borderColor: active ? "transparent" : t.div,
+                    ...(active && {
+                      shadowColor: ACCT,
+                      shadowOffset: { width: 0, height: 3 },
+                      shadowOpacity: 0.5,
+                      shadowRadius: 8,
+                    }),
                   },
                 ]}
               >
@@ -288,7 +368,6 @@ export default function CreateCustomExerciseScreen() {
             multiline
             numberOfLines={4}
             textAlignVertical="top"
-            inputAccessoryViewID={Platform.OS === "ios" ? DESC_INPUT_ID : undefined}
             onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
           />
         </NeuCard>
@@ -305,15 +384,27 @@ export default function CreateCustomExerciseScreen() {
         </BounceButton>
       </ScrollView>
 
-      {/* Done toolbar for description keyboard — iOS only */}
-      {Platform.OS === "ios" && (
-        <InputAccessoryView nativeID={DESC_INPUT_ID}>
-          <View style={[styles.kbToolbar, { backgroundColor: t.bg, borderTopColor: t.div }]}>
-            <TouchableOpacity onPress={() => Keyboard.dismiss()} activeOpacity={0.7} style={styles.kbDoneBtn}>
-              <Text style={[styles.kbDoneText, { color: ACCT }]}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </InputAccessoryView>
+      {kbHeight > 0 && Platform.OS === "ios" && (
+        <TouchableOpacity
+          onPress={() => Keyboard.dismiss()}
+          activeOpacity={0.75}
+          style={{
+            position: "absolute",
+            right: 10,
+            bottom: kbHeight + 8,
+            borderRadius: 12,
+            paddingHorizontal: 14,
+            paddingVertical: 9,
+            backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.15,
+            shadowRadius: 4,
+            zIndex: 999,
+          }}
+        >
+          <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
+        </TouchableOpacity>
       )}
     </KeyboardAvoidingView>
   );
@@ -321,6 +412,7 @@ export default function CreateCustomExerciseScreen() {
 
 const styles = StyleSheet.create({
   root:            { flex: 1 },
+  topGradient:     { position: "absolute", left: 0, right: 0, zIndex: 5 },
   backBtn:         { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   header:          { flexDirection: "row", alignItems: "center", marginBottom: 28, marginTop: 4 },
   screenTitle:     { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5 },
@@ -340,9 +432,6 @@ const styles = StyleSheet.create({
   videoIcon:       { width: 64, height: 64, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   mediaSetText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
   mediaRemoveText: { fontFamily: FontFamily.regular, fontSize: 13 },
-  saveBtn:         { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: ACCT, borderRadius: 16, paddingVertical: 18 },
+  saveBtn:         { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: ACCT, borderRadius: 16, paddingVertical: 16 },
   saveBtnText:     { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
-  kbToolbar:       { flexDirection: "row", justifyContent: "flex-end", borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 16, paddingVertical: 10 },
-  kbDoneBtn:       { paddingHorizontal: 8, paddingVertical: 4 },
-  kbDoneText:      { fontFamily: FontFamily.semibold, fontSize: 16 },
 });

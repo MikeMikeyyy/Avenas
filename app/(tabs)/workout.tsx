@@ -22,7 +22,7 @@ import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import { PROGRAMS_KEY, type SavedProgram, type Exercise } from "../../constants/programs";
+import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, normaliseSets } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -77,9 +77,10 @@ function makeSet(): SetLog {
 function initLog(exercises: Exercise[]): WorkoutLog {
   const log: WorkoutLog = {};
   for (const ex of exercises) {
+    const sets = normaliseSets(ex);
     log[ex.id] = {
-      warmup: Array.from({ length: ex.warmupSets }, makeSet),
-      working: Array.from({ length: ex.workingSets }, makeSet),
+      warmup: sets.filter(s => s.type === "warmup").map(makeSet),
+      working: sets.filter(s => s.type === "working").map(makeSet),
       notes: "",
     };
   }
@@ -207,9 +208,12 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
   const repsRefs = useRef<(TextInput | null)[]>([]);
 
   // Flatten all sets: warmup first, then working
+  const programSets = normaliseSets(exercise);
+  const programWarmup = programSets.filter(s => s.type === "warmup");
+  const programWorking = programSets.filter(s => s.type === "working");
   const allSets = [
-    ...exLog.warmup.map((s, i) => ({ ...s, type: "warmup" as const, localIdx: i, isWarmup: true })),
-    ...exLog.working.map((s, i) => ({ ...s, type: "working" as const, localIdx: i, isWarmup: false })),
+    ...exLog.warmup.map((s, i) => ({ ...s, type: "warmup" as const, localIdx: i, isWarmup: true, programSet: programWarmup[i] as ProgramSet | undefined })),
+    ...exLog.working.map((s, i) => ({ ...s, type: "working" as const, localIdx: i, isWarmup: false, programSet: programWorking[i] as ProgramSet | undefined })),
   ];
   const workingCounter = { count: 0 };
 
@@ -257,9 +261,17 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
             <Text style={[styles.colHeaderText, { color: t.ts }]}>WEIGHT (KG)</Text>
           </View>
           <View style={styles.inputHeaderCol}>
-            <Text style={[styles.repRangeHeader, { color: t.ts, opacity: !!exercise.reps ? 1 : 0 }]}>
-              {exercise.reps || " "}
-            </Text>
+            {(() => {
+              const fw = programSets.find(s => s.type === "working");
+              const repHeader = fw?.repMode === "range"
+                ? `${fw.repsMin || "?"}–${fw.repsMax || "?"}`
+                : (fw?.reps || "");
+              return (
+                <Text style={[styles.repRangeHeader, { color: t.ts, opacity: repHeader ? 1 : 0 }]}>
+                  {repHeader || " "}
+                </Text>
+              );
+            })()}
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 2 }}>
               <Text style={[styles.colHeaderText, { color: t.ts }]}>
                 {isIsometric ? "HOLD" : "REPS"}
@@ -330,8 +342,8 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
                     ref={r => { weightRefs.current[flatIdx] = r; }}
                     style={[styles.inputBoxText, { color: t.tp }]}
                     keyboardType="decimal-pad"
-                    placeholder="—"
-                    placeholderTextColor={t.ts}
+                    placeholder={set.programSet?.weightKg || "—"}
+                    placeholderTextColor={set.programSet?.weightKg ? `${t.tp}70` : t.ts}
                     value={set.weight}
                     onFocus={() => onInputFocus(() => repsRefs.current[flatIdx]?.focus())}
                     onChangeText={v => onUpdateSet(set.type, set.localIdx, "weight", v)}
@@ -349,8 +361,17 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
                     ref={r => { repsRefs.current[flatIdx] = r; }}
                     style={[styles.inputBoxText, { color: t.tp }]}
                     keyboardType="decimal-pad"
-                    placeholder="—"
-                    placeholderTextColor={t.ts}
+                    placeholder={(() => {
+                      const ps = set.programSet;
+                      if (!ps) return "—";
+                      if (ps.repMode === "range") return `${ps.repsMin || ""}–${ps.repsMax || ""}`;
+                      return ps.reps || "—";
+                    })()}
+                    placeholderTextColor={(() => {
+                      const ps = set.programSet;
+                      const hasTarget = ps?.reps || ps?.repsMin || ps?.repsMax;
+                      return hasTarget ? `${t.tp}70` : t.ts;
+                    })()}
                     value={set.reps}
                     onFocus={() => {
                       if (flatIdx < allSets.length - 1) {
@@ -753,9 +774,9 @@ export default function WorkoutScreen() {
 
   const addExercise = (name: string, idOffset = 0) => {
     const id = `session_${Date.now() + idOffset}`;
-    const ex: Exercise = { id, name, warmupSets: 1, workingSets: 3, reps: "8-12" };
+    const ex: Exercise = { id, name, sets: Array.from({ length: 3 }, () => ({ type: "working" as const })) };
     setWorkoutInfo(prev => prev ? { ...prev, exercises: [...prev.exercises, ex] } : prev);
-    setLog(prev => ({ ...prev, [id]: { warmup: [makeSet()], working: [makeSet(), makeSet(), makeSet()], notes: "" } }));
+    setLog(prev => ({ ...prev, [id]: { warmup: [], working: [makeSet(), makeSet(), makeSet()], notes: "" } }));
     setAddingExercise(false);
   };
 

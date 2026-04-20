@@ -57,6 +57,8 @@ export default function NeuCard({
               borderRadius: radius,
               backgroundColor: resolvedBg,
               overflow: "hidden",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.2)",
             },
             innerStyle,
           ]}
@@ -104,6 +106,8 @@ export default function NeuCard({
               borderRadius: radius,
               backgroundColor: resolvedBg,
               overflow: "hidden",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.85)",
             },
             innerStyle,
           ]}

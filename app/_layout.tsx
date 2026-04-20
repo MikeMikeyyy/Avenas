@@ -2,10 +2,24 @@ import { Stack } from "expo-router";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
+import { StatusBar } from "expo-status-bar";
 import { ThemeProvider } from "../contexts/ThemeContext";
 import { StreakProvider } from "../contexts/StreakContext";
+import { useTheme } from "../contexts/ThemeContext";
 
 SplashScreen.preventAutoHideAsync();
+
+function AppShell() {
+  const { isDark } = useTheme();
+  return (
+    <>
+      <StatusBar style={isDark ? "light" : "dark"} />
+      <StreakProvider>
+        <Stack screenOptions={{ headerShown: false }} />
+      </StreakProvider>
+    </>
+  );
+}
 
 export default function RootLayout() {
   const [loaded] = useFonts({
@@ -24,9 +38,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <StreakProvider>
-        <Stack screenOptions={{ headerShown: false }} />
-      </StreakProvider>
+      <AppShell />
     </ThemeProvider>
   );
 }
