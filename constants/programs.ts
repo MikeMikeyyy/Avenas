@@ -35,6 +35,28 @@ export function normaliseSets(ex: Exercise): ProgramSet[] {
 
 export type WorkoutMap = Record<string, Exercise[]>;
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function parseStoredDate(dateStr: string): Date {
+  const parts = dateStr.split(" ");
+  const day = parseInt(parts[0], 10);
+  const month = MONTH_NAMES.indexOf(parts[1]);
+  const year = parseInt(parts[2], 10);
+  return new Date(year, month < 0 ? 0 : month, day);
+}
+
+export function getCurrentWeek(program: SavedProgram): number {
+  if (program.status === "completed") return program.totalWeeks;
+  if (program.status === "paused" || program.status === "created") return program.currentWeek;
+  const start = parseStoredDate(program.startDate);
+  start.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const daysSince = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  const week = Math.floor(daysSince / 7) + 1;
+  return Math.min(Math.max(week, 1), program.totalWeeks);
+}
+
 export type SavedProgram = {
   id: string;
   name: string;

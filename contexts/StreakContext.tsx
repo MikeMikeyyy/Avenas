@@ -133,9 +133,9 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(() => ({
-    streakDays: data?.count ?? 0,
+    streakDays: __DEV__ ? 50 : (data?.count ?? 0),
     startDate: data?.startDate ?? "",
-    highestStreak: data?.highestStreak ?? 0,
+    highestStreak: __DEV__ ? 50 : (data?.highestStreak ?? 0),
     isLoaded: data !== null,
   }), [data]);
 

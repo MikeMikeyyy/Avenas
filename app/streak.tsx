@@ -7,9 +7,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
-import LottieView from "lottie-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../components/NeuCard";
+import FlameIcon from "../components/FlameIcon";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { useStreak } from "../contexts/StreakContext";
@@ -102,7 +102,7 @@ export default function StreakScreen() {
         {/* Hero flame */}
         <View style={styles.hero}>
           <View style={[styles.glow, { backgroundColor: displayTier.color + "20" }]} />
-          <LottieView source={displayTier.lottie} autoPlay loop style={styles.heroFlame} />
+          <FlameIcon size={160} color={displayTier.color} />
         </View>
 
         {/* Streak number */}
@@ -145,7 +145,7 @@ export default function StreakScreen() {
                     </Text>
                     {done ? (
                       <View style={[styles.dayFlame, isToday && { backgroundColor: displayTier.color + "22", borderRadius: 18 }]}>
-                        <LottieView source={displayTier.lottie} autoPlay loop style={styles.dayFlameLottie} />
+                        <FlameIcon size={36} color={displayTier.color} />
                       </View>
                     ) : (
                       <View style={styles.dayFlame}>
@@ -173,7 +173,7 @@ export default function StreakScreen() {
 
             {/* Flame — bar — flame on the same row */}
             <View style={styles.milestoneBarRow}>
-              <LottieView source={displayTier.lottie} autoPlay loop style={styles.milestoneFlame} />
+              <FlameIcon size={48} color={displayTier.color} />
               <View style={[styles.progressTrack, { backgroundColor: t.div }]}>
                 <View style={[styles.progressFill, {
                   width: `${Math.min(100, Math.round(progress * 100))}%`,
@@ -181,12 +181,7 @@ export default function StreakScreen() {
                 }]} />
               </View>
               <View style={{ opacity: isMax ? 1 : 0.3 }}>
-                <LottieView
-                  source={isMax ? displayTier.lottie : nextTier!.lottie}
-                  autoPlay={isMax}
-                  loop={isMax}
-                  style={styles.milestoneFlame}
-                />
+                <FlameIcon size={48} color={isMax ? displayTier.color : nextTier!.color} animated={isMax} />
               </View>
             </View>
 
@@ -225,7 +220,7 @@ export default function StreakScreen() {
                         { borderColor: isSelected ? option.color : "transparent" },
                         isSelected && { backgroundColor: option.color + "18" },
                       ]}>
-                        <LottieView source={option.lottie} autoPlay loop style={styles.optionFlame} />
+                        <FlameIcon size={52} color={option.color} />
                       </View>
                     </TouchableOpacity>
                   );
@@ -256,7 +251,7 @@ const styles = StyleSheet.create({
 
   backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
 
-  hero: { alignItems: "center", justifyContent: "center", marginBottom: 24 },
+  hero: { alignItems: "center", justifyContent: "center", marginBottom: 40 },
   glow: { position: "absolute", width: 200, height: 200, borderRadius: 100 },
   heroFlame: { width: 200, height: 200 },
 

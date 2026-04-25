@@ -8,9 +8,9 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
-import LottieView from "lottie-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
+import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
 import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily, ACCT } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
@@ -20,7 +20,7 @@ import {
   STREAK_TIERS,
   FLAME_PREF_KEY,
   MAX_TIER_DAYS,
-  getStreakLottie,
+  getTier,
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, SavedProgram } from "../../constants/programs";
 
@@ -170,9 +170,9 @@ export default function HomeScreen() {
     return REST_DAY_QUOTES[seed % REST_DAY_QUOTES.length];
   }, []);
 
-  const activeLottie = isMax && flameName
-    ? (STREAK_TIERS.find(t2 => t2.name === flameName)?.lottie ?? getStreakLottie(streakDays))
-    : getStreakLottie(streakDays);
+  const activeColor = (isMax && flameName
+    ? STREAK_TIERS.find(t2 => t2.name === flameName)?.color
+    : null) ?? getTier(streakDays).color;
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -340,10 +340,10 @@ export default function HomeScreen() {
       <Image source={require("../../assets/images/logo.png")} style={[styles.logo, { position: "absolute", top: insets.top, left: 20, zIndex: 10 }]} resizeMode="contain" />
 
       {/* Streak badge — fixed, always visible */}
-      <View style={[styles.streakFloat, { top: insets.top }]}>
+      <View style={[styles.streakFloat, { top: insets.top + 6 }]}>
         <BounceButton onPress={() => router.push("/streak")}>
           <View style={styles.streakBadge}>
-            <LottieView source={activeLottie} autoPlay loop style={{ width: 44, height: 44 }} />
+            <FlameIcon size={36} color={activeColor} />
             <Text style={[styles.streakBadgeText, { color: t.ts }]}>{streakDays}</Text>
           </View>
         </BounceButton>
@@ -383,8 +383,8 @@ const styles = StyleSheet.create({
   todayLabel:  { fontFamily: FontFamily.bold, fontSize: 17, color: TP },
   todayDate:   { fontFamily: FontFamily.regular, fontSize: 17, color: TS, marginTop: 1 },
   streakFloat:     { position: "absolute", right: 80, zIndex: 10 },
-  streakBadge:     { flexDirection: "row", alignItems: "flex-start", gap: 0 },
-  streakBadgeText: { fontFamily: FontFamily.semibold, fontSize: 18, color: TS, marginLeft: -4, marginTop: 13 },
+  streakBadge:     { flexDirection: "row", alignItems: "center", gap: 2 },
+  streakBadgeText: { fontFamily: FontFamily.semibold, fontSize: 18, color: TS },
   streakDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: TS, opacity: 0.4 },
   workoutCard: { marginBottom: 20, borderRadius: 24 },
   workoutCardInner: { padding: 20, gap: 18 },
