@@ -213,9 +213,21 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
 
   // Rep mode is a single per-exercise choice driven from the header toggle.
   const currentRepMode: "target" | "range" = sets[0]?.repMode ?? "target";
+  const RANGE_EXTENSION_WIDTH = 72;
+  const rangeProgress = useSharedValue(currentRepMode === "range" ? 1 : 0);
+  const rangeOuterStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, rangeProgress.value));
+    return { width: p * RANGE_EXTENSION_WIDTH };
+  });
+  const rangeInnerStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, rangeProgress.value));
+    return { opacity: p, transform: [{ scaleX: Math.max(p, 0.001) }] };
+  });
+
   const toggleAllRepMode = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const next = currentRepMode === "target" ? "range" : "target";
+    rangeProgress.value = withSpring(next === "range" ? 1 : 0, { damping: 22, stiffness: 300, mass: 0.9 });
     onUpdateSets(sets.map(s => ({ ...s, repMode: next })));
   }, [currentRepMode, sets, onUpdateSets]);
 
@@ -283,14 +295,14 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
 
       {/* Row 2: compact rest timer chip + Reps/Hold toggle */}
       <View style={[styles.exCompactRow, { borderTopColor: divider }]}>
-        <View style={styles.exRestChipGroup}>
+        <TouchableOpacity onPress={openRestPicker} activeOpacity={0.7} style={styles.exRestChipGroup}>
           <Text style={[styles.exRestLabel, { color: t.ts }]}>Rest Timer</Text>
-          <TouchableOpacity onPress={openRestPicker} activeOpacity={0.7} style={styles.exRestChip}>
+          <View style={styles.exRestChip}>
             <Ionicons name="timer-outline" size={14} color={restSecs > 0 ? ACCT : t.ts} />
             <Text style={[styles.exRestChipText, { color: restSecs > 0 ? ACCT : t.ts }]}>{formatRest(restSecs)}</Text>
             <Ionicons name="chevron-down" size={12} color={restSecs > 0 ? ACCT : t.ts} />
-          </TouchableOpacity>
-        </View>
+          </View>
+        </TouchableOpacity>
         <View
           style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
           onLayout={e => { modeTrackWidth.value = e.nativeEvent.layout.width - 6; }}
@@ -323,12 +335,14 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
 
       {/* Column headers */}
       <View style={[styles.exSetHeaderRow, { borderTopColor: divider }]}>
-        <View style={styles.exSetBadgeCol} />
+        <View style={styles.exSetBadgeCol}>
+          <Text style={[styles.exSetHeaderLabel, { color: t.ts, width: 28, textAlign: "center" }]}>Set</Text>
+        </View>
         <View style={styles.exSetValueCol}>
           <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>Weight</Text>
         </View>
         <TouchableOpacity
-          style={[styles.exSetValueCol, styles.exSetHeaderToggle]}
+          style={[styles.exSetValueCol, styles.exSetColRep, styles.exSetHeaderToggle]}
           onPress={toggleAllRepMode}
           activeOpacity={0.7}
         >
@@ -391,34 +405,22 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
             </View>
 
             {/* Rep column */}
-            <View style={styles.exSetValueCol}>
-              {repMode === "target" ? (
-                <View style={[styles.exSetInputBox, { borderColor: divider }]}>
-                  <TextInput
-                    style={[styles.exSetInputText, { color: t.tp }]}
-                    value={set.reps ?? ""}
-                    onChangeText={v => patchSet(idx, { reps: v })}
-                    placeholder="—"
-                    placeholderTextColor={t.ts}
-                    keyboardType={exercise.isIsometric ? "number-pad" : "decimal-pad"}
-                    selectTextOnFocus
-                  />
-                </View>
-              ) : (
-                <>
-                  <View style={[styles.exSetInputBox, { borderColor: divider, width: 40 }]}>
-                    <TextInput
-                      style={[styles.exSetInputText, { color: t.tp }]}
-                      value={set.repsMin ?? ""}
-                      onChangeText={v => patchSet(idx, { repsMin: v })}
-                      placeholder="—"
-                      placeholderTextColor={t.ts}
-                      keyboardType="number-pad"
-                      selectTextOnFocus
-                    />
-                  </View>
+            <View style={[styles.exSetValueCol, styles.exSetColRep]}>
+              <View style={[styles.exSetInputBox, { borderColor: divider }]}>
+                <TextInput
+                  style={[styles.exSetInputText, { color: t.tp }]}
+                  value={repMode === "target" ? (set.reps ?? "") : (set.repsMin ?? "")}
+                  onChangeText={v => patchSet(idx, repMode === "target" ? { reps: v } : { repsMin: v })}
+                  placeholder="—"
+                  placeholderTextColor={t.ts}
+                  keyboardType={exercise.isIsometric ? "number-pad" : "decimal-pad"}
+                  selectTextOnFocus
+                />
+              </View>
+              <Reanimated.View style={[{ overflow: "hidden" }, rangeOuterStyle]}>
+                <Reanimated.View style={[{ flexDirection: "row", alignItems: "center", width: RANGE_EXTENSION_WIDTH, transformOrigin: "left" }, rangeInnerStyle]}>
                   <Text style={{ color: t.ts, fontSize: 13, fontFamily: FontFamily.semibold, marginHorizontal: 4 }}>–</Text>
-                  <View style={[styles.exSetInputBox, { borderColor: divider, width: 40 }]}>
+                  <View style={[styles.exSetInputBox, { borderColor: divider }]}>
                     <TextInput
                       style={[styles.exSetInputText, { color: t.tp }]}
                       value={set.repsMax ?? ""}
@@ -429,8 +431,8 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
                       selectTextOnFocus
                     />
                   </View>
-                </>
-              )}
+                </Reanimated.View>
+              </Reanimated.View>
             </View>
           </View>
           </CollapsibleCard>
@@ -445,7 +447,7 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             setCollapsingSetIdx(sets.length - 1);
           }}
-          style={{ opacity: (sets.length <= 1 || collapsingSetIdx !== null) ? 0.35 : 1, flex: 1, marginRight: 6 }}
+          style={{ opacity: sets.length <= 1 ? 0.35 : 1, flex: 1, marginRight: 6 }}
         >
           <NeuCard dark={isDark} radius={10} shadowSize="sm" style={{ borderRadius: 10 }}>
             <View style={styles.exAddRemoveBtn}>
@@ -1031,10 +1033,11 @@ export default function NewProgramScreen() {
             };
           }
         } else {
-          // Create mode — load draft
+          // Create mode — load draft (ignore drafts that belong to an edit session)
           const raw = await AsyncStorage.getItem(DRAFT_KEY);
           if (raw) {
             const draft = JSON.parse(raw) as ProgramDraft;
+            if (draft.editId) { isDraftLoaded.current = true; return; }
             if (draft.step) setStep(draft.step);
             if (draft.name !== undefined) setName(draft.name);
             if (draft.totalWeeks) setTotalWeeks(draft.totalWeeks);
@@ -1507,15 +1510,16 @@ const styles = StyleSheet.create({
   exTogglePillPill: { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
   exTogglePill:     { paddingHorizontal: 14, paddingVertical: 6, alignItems: "center" },
   exTogglePillText: { fontFamily: FontFamily.semibold, fontSize: 12 },
-  exSetHeaderRow:   { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 6, borderTopWidth: 1, gap: 20 },
+  exSetHeaderRow:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6, borderTopWidth: 1, paddingRight: 16 },
   exSetHeaderLabel: { fontFamily: FontFamily.semibold, fontSize: 13 },
   exSetHeaderToggle:{ flexDirection: "row", alignItems: "center", justifyContent: "center" },
   exSetHeaderToggleSpacer: { width: 14 },
-  exSetRow:         { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 8, borderTopWidth: 1, gap: 20 },
-  exSetBadgeCol:    { width: 36, alignItems: "center" },
+  exSetRow:         { flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 48, borderTopWidth: 1, paddingRight: 16 },
+  exSetBadgeCol:    { width: 54, alignItems: "flex-start", paddingLeft: 10 },
   exSetValueCol:    { width: 100, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  exSetColRep:      { width: 128 },
   exSetUnitSpacer:  { width: 22 },
-  exSetBadge:       { width: 28, height: 28, borderRadius: 14, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
+  exSetBadge:       { width: 28, height: 28, borderRadius: 6, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   exSetBadgeText:   { fontFamily: FontFamily.bold, fontSize: 12 },
   exSetInputBox:    { height: 32, width: 56, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   exSetInputText:   { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", width: "100%" },

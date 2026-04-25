@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
@@ -22,7 +22,7 @@ import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, normaliseSets } from "../../constants/programs";
+import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -85,6 +85,31 @@ function initLog(exercises: Exercise[]): WorkoutLog {
     };
   }
   return log;
+}
+
+// ─── SetRow ────────────────────────────────────────────────────────────────────
+
+function SetRow({ isActive, children }: { isActive: boolean; children: React.ReactNode }) {
+  const glow = useSharedValue(isActive ? 1 : 0);
+  useEffect(() => {
+    glow.value = withSpring(isActive ? 1 : 0, { damping: 20, stiffness: 200, mass: 0.5 });
+  }, [isActive]);
+
+  const containerStyle = useAnimatedStyle(() => ({
+    borderRadius: 14,
+    backgroundColor: interpolateColor(glow.value, [0, 1], ["rgba(0,0,0,0)", `${ACCT}33`]),
+  }));
+  const borderStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
+
+  return (
+    <Reanimated.View style={containerStyle}>
+      {children}
+      <Reanimated.View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFillObject, { borderWidth: 1, borderColor: ACCT, borderRadius: 14 }, borderStyle]}
+      />
+    </Reanimated.View>
+  );
 }
 
 // ─── DumbbellIcon ──────────────────────────────────────────────────────────────
@@ -198,9 +223,10 @@ interface ExerciseCardProps {
   onToggleIsometric: () => void;
   onToggleSetType: (type: "warmup" | "working", localIdx: number) => void;
   onInputFocus: (nextFn: (() => void) | null) => void;
+  activeSetFlatIdx: number | null;
 }
 
-function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onMoveUp, onMoveDown, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onMoveUp, onMoveDown, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const [editing, setEditing] = useState(false);
@@ -216,6 +242,12 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
     ...exLog.working.map((s, i) => ({ ...s, type: "working" as const, localIdx: i, isWarmup: false, programSet: programWorking[i] as ProgramSet | undefined })),
   ];
   const workingCounter = { count: 0 };
+
+  const [collapsingSetIdx, setCollapsingSetIdx] = useState<number | null>(null);
+  const prevSetCount = useRef(allSets.length);
+  const newlyAddedIdx = allSets.length > prevSetCount.current ? allSets.length - 1 : null;
+  const setRowHeight = useRef(0);
+  useEffect(() => { prevSetCount.current = allSets.length; }, [allSets.length]);
 
   return (
     <NeuCard dark={isDark} style={styles.exCard}>
@@ -251,6 +283,13 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
           </TouchableOpacity>
         </View>
 
+        {/* ── Program notes ── */}
+        {exercise.programNotes ? (
+          <Text style={{ fontFamily: FontFamily.regular, fontSize: 13, color: t.ts, lineHeight: 19, paddingHorizontal: 2, paddingBottom: 10 }}>
+            {exercise.programNotes}
+          </Text>
+        ) : null}
+
         {/* ── Column headers ── */}
         <View style={styles.colHeaderRow}>
           <Text style={[styles.colHeaderText, styles.setCol, { color: t.ts }]}>SET</Text>
@@ -261,17 +300,6 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
             <Text style={[styles.colHeaderText, { color: t.ts }]}>WEIGHT (KG)</Text>
           </View>
           <View style={styles.inputHeaderCol}>
-            {(() => {
-              const fw = programSets.find(s => s.type === "working");
-              const repHeader = fw?.repMode === "range"
-                ? `${fw.repsMin || "?"}–${fw.repsMax || "?"}`
-                : (fw?.reps || "");
-              return (
-                <Text style={[styles.repRangeHeader, { color: t.ts, opacity: repHeader ? 1 : 0 }]}>
-                  {repHeader || " "}
-                </Text>
-              );
-            })()}
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 2 }}>
               <Text style={[styles.colHeaderText, { color: t.ts }]}>
                 {isIsometric ? "HOLD" : "REPS"}
@@ -288,13 +316,25 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
         <View style={[styles.headerDivider, { backgroundColor: divider }]} />
 
         {/* ── Set rows ── */}
+        <View>
         {allSets.map((set, flatIdx) => {
           if (!set.isWarmup) workingCounter.count += 1;
           const setLabel = set.isWarmup ? "W" : workingCounter.count;
           const isLast = flatIdx === allSets.length - 1;
 
           return (
-            <View key={`${set.type}-${set.localIdx}`} style={styles.dataRow}>
+            <CollapsibleCard
+              key={`${set.type}-${set.localIdx}`}
+              isCollapsing={flatIdx === collapsingSetIdx}
+              onCollapsed={() => { setCollapsingSetIdx(null); onRemoveSet(); }}
+              expanding={flatIdx === newlyAddedIdx}
+              naturalHeight={flatIdx === newlyAddedIdx ? setRowHeight.current : undefined}
+            >
+            <SetRow isActive={!editing && flatIdx === activeSetFlatIdx}>
+            <View
+              style={styles.dataRow}
+              onLayout={(flatIdx !== newlyAddedIdx && flatIdx !== collapsingSetIdx) ? e => { const h = e.nativeEvent.layout.height; if (h > 0) setRowHeight.current = h; } : undefined}
+            >
               {/* SET label */}
               {editing ? (
                 <View style={[
@@ -364,7 +404,12 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
                     placeholder={(() => {
                       const ps = set.programSet;
                       if (!ps) return "—";
-                      if (ps.repMode === "range") return `${ps.repsMin || ""}–${ps.repsMax || ""}`;
+                      if (ps.repMode === "range") {
+                        const { repsMin: mn, repsMax: mx } = ps;
+                        if (!mn && !mx) return "—";
+                        if (mn && mx) return `${mn}–${mx}`;
+                        return mn || mx || "—";
+                      }
                       return ps.reps || "—";
                     })()}
                     placeholderTextColor={(() => {
@@ -390,7 +435,14 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
               {/* Checkbox or remove-set button */}
               <View style={styles.checkCol}>
                 {editing && isLast && allSets.length > 1 ? (
-                  <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onRemoveSet(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      if (collapsingSetIdx !== null || allSets.length <= 1) return;
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setCollapsingSetIdx(allSets.length - 1);
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
                     <View style={styles.removeSetBtn}>
                       <Ionicons name="remove" size={13} color="#fff" />
                     </View>
@@ -404,8 +456,11 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
                 )}
               </View>
             </View>
+            </SetRow>
+            </CollapsibleCard>
           );
         })}
+        </View>
 
         {/* ── Edit mode controls ── */}
         {editing && (
@@ -523,6 +578,19 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
       </View>
     </NeuCard>
   );
+}
+
+function getActiveSetFlatIdx(exId: string, exercises: Exercise[], log: WorkoutLog): number | null {
+  for (const ex of exercises) {
+    const exLog = log[ex.id];
+    if (!exLog) continue;
+    const allDone = [...exLog.warmup, ...exLog.working].map(s => s.done);
+    const firstUndone = allDone.findIndex(d => !d);
+    if (firstUndone !== -1) {
+      return ex.id === exId ? firstUndone : null;
+    }
+  }
+  return null;
 }
 
 // ─── Screen ────────────────────────────────────────────────────────────────────
@@ -903,7 +971,7 @@ export default function WorkoutScreen() {
         <View style={styles.header}>
           <Text style={[styles.headerName, { color: t.tp }]}>{workoutInfo.name.toUpperCase()}</Text>
           <Text style={[styles.headerSub, { color: t.ts }]}>
-            {activeProgram.name} · Week {activeProgram.currentWeek} of {activeProgram.totalWeeks}
+            {activeProgram.name} · Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}
           </Text>
         </View>
 
@@ -925,40 +993,34 @@ export default function WorkoutScreen() {
                 isCollapsing={collapsingIds.has(exercise.id)}
                 onCollapsed={() => removeExercise(exercise.id)}
               >
-                  <ExerciseCard
-                    exercise={exercise}
-                    exIndex={i}
-                    exLog={exLog}
-                    isDark={isDark}
-                    isFirst={i === 0}
-                    isLast={i === workoutInfo.exercises.length - 1}
-                    onUpdateSet={(type, idx, field, value) => updateSet(exercise.id, type, idx, field, value)}
-                    onToggleDone={(type, idx) => toggleDone(exercise.id, type, idx)}
-                    onAutoTick={(type, idx) => autoTickIfComplete(exercise.id, type, idx)}
-                    exNotes={log[exercise.id]?.notes ?? ""}
-                    onUpdateNotes={notes => updateExNotes(exercise.id, notes)}
-                    onAddSet={() => addSet(exercise.id)}
-                    onRemoveSet={() => removeSet(exercise.id)}
-                    onMoveUp={() => moveExercise(exercise.id, "up")}
-                    onMoveDown={() => moveExercise(exercise.id, "down")}
-                    onChangeExercise={() => setChangingExId(exercise.id)}
-                    onRemoveExercise={() => startCollapse(exercise.id)}
-                    onToggleSetType={(type, localIdx) => toggleSetType(exercise.id, type, localIdx)}
-                    onInputFocus={handleInputFocus}
-                    isIsometric={isometricExIds.has(exercise.id)}
-                    onToggleIsometric={() => setIsometricExIds(prev => {
-                      const next = new Set(prev);
-                      next.has(exercise.id) ? next.delete(exercise.id) : next.add(exercise.id);
-                      return next;
-                    })}
-                  />
-                {exercise.programNotes ? (
-                  <View style={{ paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: 1, borderTopColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)" }}>
-                    <Text style={{ fontFamily: FontFamily.regular, fontSize: 13, color: isDark ? APP_DARK.ts : APP_LIGHT.ts, lineHeight: 20 }}>
-                      {exercise.programNotes}
-                    </Text>
-                  </View>
-                ) : null}
+                <ExerciseCard
+                  exercise={exercise}
+                  exIndex={i}
+                  exLog={exLog}
+                  isDark={isDark}
+                  isFirst={i === 0}
+                  isLast={i === workoutInfo.exercises.length - 1}
+                  onUpdateSet={(type, idx, field, value) => updateSet(exercise.id, type, idx, field, value)}
+                  onToggleDone={(type, idx) => toggleDone(exercise.id, type, idx)}
+                  onAutoTick={(type, idx) => autoTickIfComplete(exercise.id, type, idx)}
+                  exNotes={log[exercise.id]?.notes ?? ""}
+                  onUpdateNotes={notes => updateExNotes(exercise.id, notes)}
+                  onAddSet={() => addSet(exercise.id)}
+                  onRemoveSet={() => removeSet(exercise.id)}
+                  onMoveUp={() => moveExercise(exercise.id, "up")}
+                  onMoveDown={() => moveExercise(exercise.id, "down")}
+                  onChangeExercise={() => setChangingExId(exercise.id)}
+                  onRemoveExercise={() => startCollapse(exercise.id)}
+                  onToggleSetType={(type, localIdx) => toggleSetType(exercise.id, type, localIdx)}
+                  onInputFocus={handleInputFocus}
+                  isIsometric={isometricExIds.has(exercise.id)}
+                  activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
+                  onToggleIsometric={() => setIsometricExIds(prev => {
+                    const next = new Set(prev);
+                    next.has(exercise.id) ? next.delete(exercise.id) : next.add(exercise.id);
+                    return next;
+                  })}
+                />
               </CollapsibleCard>
             );
           })
@@ -1384,7 +1446,7 @@ const styles = StyleSheet.create({
   checkCol:      { width: 32, alignItems: "center", justifyContent: "center" },
 
   // Data rows
-  dataRow:       { flexDirection: "row", alignItems: "center", paddingVertical: 3, paddingHorizontal: 4 },
+  dataRow:       { flexDirection: "row", alignItems: "center", height: 56, paddingHorizontal: 4 },
   setText:       { fontFamily: FontFamily.semibold, fontSize: 15, textAlign: "center" },
   prevText:      { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center" },
   setEditBadge:  { width: 28, height: 28, borderRadius: 6, borderWidth: 1, alignItems: "center", justifyContent: "center" },
