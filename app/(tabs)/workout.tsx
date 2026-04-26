@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing as ReEasing, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
@@ -20,7 +20,7 @@ import FadeScreen from "../../components/FadeScreen";
 import BounceButton from "../../components/BounceButton";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
@@ -136,6 +136,48 @@ function KeyboardDismissIcon({ color }: { color: string }) {
   );
 }
 
+// ─── ExpandablePanel ───────────────────────────────────────────────────────────
+
+function ExpandablePanel({ expanded, children }: { expanded: boolean; children: React.ReactNode }) {
+  const height = useSharedValue(0);
+  const opacity = useSharedValue(0);
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (measuredHeight === null) return;
+    if (expanded) {
+      height.value = withTiming(measuredHeight, { duration: 280, easing: ReEasing.out(ReEasing.cubic) });
+      opacity.value = withTiming(1, { duration: 220, easing: ReEasing.out(ReEasing.cubic) });
+    } else {
+      // Fade out first so overflowing content is invisible before height closes
+      opacity.value = withTiming(0, { duration: 140 });
+      height.value = withTiming(0, { duration: 280, easing: ReEasing.out(ReEasing.cubic) });
+    }
+  }, [expanded, measuredHeight]);
+
+  // No overflow: hidden — lets shadows breathe. Opacity hides overflow during animation.
+  const animStyle = useAnimatedStyle(() => ({ height: height.value, opacity: opacity.value }));
+
+  return (
+    <View>
+      {measuredHeight === null && (
+        <View
+          style={{ position: "absolute", left: 0, right: 0, top: 0, opacity: 0 }}
+          pointerEvents="none"
+          onLayout={e => { const h = e.nativeEvent.layout.height; if (h > 0) setMeasuredHeight(h); }}
+        >
+          {children}
+        </View>
+      )}
+      <Reanimated.View style={animStyle}>
+        <View style={{ position: "absolute", left: 0, right: 0, top: 0 }}>
+          {children}
+        </View>
+      </Reanimated.View>
+    </View>
+  );
+}
+
 // ─── CheckboxCell ──────────────────────────────────────────────────────────────
 
 function CheckboxCell({ done, isDark, onToggle }: { done: boolean; isDark: boolean; onToggle: () => void }) {
@@ -161,39 +203,19 @@ function CheckboxCell({ done, isDark, onToggle }: { done: boolean; isDark: boole
       activeOpacity={0.7}
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
     >
-      <Animated.View style={{ transform: [{ scale }] }}>
-        {done ? (
-          <View style={{
-            borderRadius: 8, backgroundColor: ACCT,
-            shadowColor: ACCT,
-            shadowOffset: { width: 2, height: 2 },
-            shadowOpacity: 0.55,
-            shadowRadius: 5,
-          }}>
-            <View style={[styles.checkbox, { backgroundColor: ACCT, overflow: "hidden" }]}>
-              <Ionicons name="checkmark" size={13} color="#fff" />
-            </View>
-          </View>
-        ) : (
-          <View style={{
-            borderRadius: 8,
-            shadowColor: ACCT,
-            shadowOffset: { width: 0, height: 0 },
-            shadowOpacity: 0.28,
-            shadowRadius: 5,
-          }}>
-            <View style={[styles.checkbox, {
-              backgroundColor: isDark ? APP_DARK.bg : "#fff",
-              borderWidth: 1,
-              borderColor: ACCT,
-              borderRadius: 8,
-              alignItems: "center",
-              justifyContent: "center",
-            }]}>
-              <Ionicons name="checkmark" size={13} color={ACCT} />
-            </View>
-          </View>
-        )}
+      <Animated.View style={[styles.checkCircle, done ? {
+        backgroundColor: ACCT,
+        shadowColor: ACCT,
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.5,
+        shadowRadius: 6,
+        borderWidth: 0,
+      } : {
+        backgroundColor: "transparent",
+        borderWidth: 1,
+        borderColor: isDark ? APP_DARK.ts : APP_LIGHT.ts,
+      }, { transform: [{ scale }] }]}>
+        {done && <Ionicons name="checkmark" size={14} color="#fff" />}
       </Animated.View>
     </TouchableOpacity>
   );
@@ -204,6 +226,7 @@ function CheckboxCell({ done, isDark, onToggle }: { done: boolean; isDark: boole
 interface ExerciseCardProps {
   exercise: Exercise;
   exIndex: number;
+  totalExercises: number;
   exLog: ExerciseLog;
   isDark: boolean;
   isFirst: boolean;
@@ -226,7 +249,7 @@ interface ExerciseCardProps {
   activeSetFlatIdx: number | null;
 }
 
-function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onMoveUp, onMoveDown, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirst, isLast, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onMoveUp, onMoveDown, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const [editing, setEditing] = useState(false);
@@ -255,14 +278,8 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
 
         {/* ── Header ── */}
         <View style={styles.exHeader}>
-          {/* Exercise image — placeholder until API images are wired up */}
-          <NeuCard dark={isDark} radius={12} shadowSize="sm" style={styles.exThumb}>
-            <View style={styles.exThumbInner}>
-              <DumbbellIcon size={22} color={t.ts} />
-            </View>
-          </NeuCard>
           <View style={styles.exTitleBlock}>
-            <Text style={[styles.exNumLabel, { color: t.ts }]}>Exercise {exIndex + 1}</Text>
+            <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
             <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1}>{exercise.name}</Text>
           </View>
           <TouchableOpacity
@@ -463,7 +480,7 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
         </View>
 
         {/* ── Edit mode controls ── */}
-        {editing && (
+        <ExpandablePanel expanded={editing}>
           <>
             {/* Move row */}
             <View style={[styles.editMoveRow, { borderTopColor: divider }]}>
@@ -558,7 +575,7 @@ function ExerciseCard({ exercise, exIndex, exLog, isDark, isFirst, isLast, onUpd
               })}
             </View>
           </>
-        )}
+        </ExpandablePanel>
 
         {/* ── Exercise notes ── */}
         <View style={[styles.exNotesRow, { borderTopColor: divider }]}>
@@ -996,6 +1013,7 @@ export default function WorkoutScreen() {
                 <ExerciseCard
                   exercise={exercise}
                   exIndex={i}
+                  totalExercises={workoutInfo.exercises.length}
                   exLog={exLog}
                   isDark={isDark}
                   isFirst={i === 0}
@@ -1028,12 +1046,12 @@ export default function WorkoutScreen() {
 
         {/* Add Exercise button */}
         <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}>
-          <NeuCard dark={isDark} style={{ borderRadius: 16, marginBottom: 20 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14 }}>
-              <Ionicons name="add-circle-outline" size={20} color={ACCT} />
-              <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: ACCT }}>Add Exercise</Text>
+          <View style={styles.addExBtnWrap}>
+            <View style={styles.addExBtn}>
+              <Ionicons name="add" size={18} color="#fff" />
+              <Text style={styles.addExText}>Add Exercise</Text>
             </View>
-          </NeuCard>
+          </View>
         </BounceButton>
 
         {/* Notes — only shown when there are exercises */}
@@ -1058,10 +1076,10 @@ export default function WorkoutScreen() {
         {/* Finish button */}
         {workoutInfo.exercises.length > 0 && (
           <BounceButton onPress={handleFinish} style={{ marginTop: 16 }}>
-            <View style={[styles.finishWrap, styles.finishWrapActive]}>
-              <View style={[styles.finishBtn, styles.finishBtnActive]}>
-                <Ionicons name="checkmark-circle" size={18} color="#fff" />
-                <Text style={styles.finishBtnText}>Complete Workout</Text>
+            <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
+              <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+                <Ionicons name="checkmark-circle" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
+                <Text style={[styles.finishBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Complete Workout</Text>
               </View>
             </View>
           </BounceButton>
@@ -1420,11 +1438,9 @@ const styles = StyleSheet.create({
   exNumBadge:   { width: 32, height: 32 },
   exNumInner:   { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
   exNumText:    { fontFamily: FontFamily.bold, fontSize: 13 },
-  exThumb:      { width: 52, height: 52 },
-  exThumbInner: { width: 52, height: 52, alignItems: "center", justifyContent: "center" },
-  exTitleBlock: { flex: 1, justifyContent: "center", gap: 2 },
-  exNumLabel:   { fontFamily: FontFamily.regular, fontSize: 11 },
-  exName:       { fontFamily: FontFamily.bold, fontSize: 16, flex: 1 },
+  exTitleBlock: { flex: 1, justifyContent: "center", gap: 6 },
+  exNumLabel:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.8 },
+  exName:       { fontFamily: FontFamily.bold, fontSize: 22, flex: 1 },
   exNotesRow:    { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
   exNotesHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
   exNotesDone:   { fontFamily: FontFamily.semibold, fontSize: 13 },
@@ -1456,12 +1472,11 @@ const styles = StyleSheet.create({
   inputBoxText:  { fontFamily: FontFamily.bold, fontSize: 15, textAlign: "center", flex: 1, paddingVertical: 0 },
 
   // Checkbox
-  checkbox:      { width: 22, height: 22, borderRadius: 7, alignItems: "center", justifyContent: "center" },
 
   // Add / remove set
   addSetBtn:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingVertical: 6, marginTop: 2, borderRadius: 8, borderWidth: 1, borderStyle: "dashed" },
   addSetText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
-  removeSetBtn:  { width: 22, height: 22, borderRadius: 7, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.55, shadowRadius: 5 },
+  removeSetBtn:  { width: 26, height: 26, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 
   // Edit actions
   editMoveRow:   { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
@@ -1481,6 +1496,11 @@ const styles = StyleSheet.create({
   finishBtn:        { borderRadius: 16, backgroundColor: "#8896A7", paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   finishBtnActive:  { backgroundColor: ACCT },
   finishBtnText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
+
+  checkCircle:      { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12, marginTop: 6, marginBottom: 20 },
+  addExBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 10, paddingHorizontal: 22, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 },
+  addExText:        { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
 
   // Keyboard floating dismiss button
   kbFloatRow: { flexDirection: "row", justifyContent: "flex-end", paddingRight: 10, paddingTop: 8, paddingBottom: 4 },

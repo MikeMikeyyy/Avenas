@@ -12,7 +12,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily, ACCT } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
@@ -22,7 +22,7 @@ import {
   MAX_TIER_DAYS,
   getTier,
 } from "../../constants/streakTiers";
-import { PROGRAMS_KEY, SavedProgram } from "../../constants/programs";
+import { PROGRAMS_KEY, SavedProgram, getCurrentWeek } from "../../constants/programs";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
 
@@ -112,15 +112,19 @@ const RECENT_ACTIVITY = [
 ];
 
 function StartButton() {
+  const { isDark } = useTheme();
+  const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+  const contentColor = isDark ? APP_DARK.bg : "#fff";
+  const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
   return (
     <BounceButton>
-      <View style={styles.startBtnDark}>
-        <View style={styles.startBtn}>
+      <View style={[styles.startBtnDark, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
+        <View style={[styles.startBtn, { backgroundColor: btnBg }]}>
           <View style={styles.startBtnContent}>
-            <Text style={styles.startBtnText}>Start Workout</Text>
+            <Text style={[styles.startBtnText, { color: contentColor }]}>Start Workout</Text>
             <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-              <Path d="M14.4302 5.92969L20.5002 11.9997L14.4302 18.0697" stroke="#fff" strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
-              <Path d="M3.5 12H20.33" stroke="#fff" strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d="M14.4302 5.92969L20.5002 11.9997L14.4302 18.0697" stroke={contentColor} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d="M3.5 12H20.33" stroke={contentColor} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
             </Svg>
           </View>
         </View>
@@ -250,7 +254,7 @@ export default function HomeScreen() {
                   <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
                   <Text style={[styles.programName, { color: t.tp }]}>{activeProgram.name.toUpperCase()}</Text>
                 </View>
-                <Text style={[styles.programWeek, { color: t.ts }]}>Week {activeProgram.currentWeek} of {activeProgram.totalWeeks}</Text>
+                <Text style={[styles.programWeek, { color: t.ts }]}>Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}</Text>
               </View>
               <View style={styles.progressRow}>
                 {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => (
@@ -258,8 +262,8 @@ export default function HomeScreen() {
                     key={i}
                     style={[
                       styles.progressSegment,
-                      { backgroundColor: i < activeProgram.currentWeek ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div },
-                      i < activeProgram.currentWeek && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
+                      { backgroundColor: i < getCurrentWeek(activeProgram) ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                      i < getCurrentWeek(activeProgram) && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
                     ]}
                   />
                 ))}

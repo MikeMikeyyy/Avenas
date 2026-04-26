@@ -32,6 +32,12 @@ export type AppTheme = typeof APP_LIGHT;
 // The single source for the app's green accent — import this, never hardcode.
 export const ACCT = "#1deca0";
 
+// ─── Slate button ─────────────────────────────────────────────────────────────
+// Dark slate-black for primary non-accent buttons (light mode bg).
+// Off-white counterpart used in dark mode.
+export const BTN_SLATE      = "#53545f";  // light mode: deep slate black
+export const BTN_SLATE_DARK = APP_DARK.tp; // dark mode: app's existing off-white
+
 // ─── Legacy colours (pre-design-token era) ────────────────────────────────────
 export const Colors = {
   // Main backgrounds

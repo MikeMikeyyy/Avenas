@@ -25,7 +25,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
 import NeuCard from "../components/NeuCard";
@@ -238,7 +238,7 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
       <View style={styles.exTopRow}>
         <NeuCard dark={isDark} radius={12} shadowSize="sm" style={styles.exThumb}>
           <View style={styles.exThumbInner}>
-            <DumbbellIcon size={20} color={t.ts} />
+            <DumbbellIcon size={22} color={t.ts} />
           </View>
         </NeuCard>
         <TouchableOpacity onPress={onEdit} activeOpacity={0.7} style={styles.exNameBtn}>
@@ -811,12 +811,19 @@ function Step1({
         accessibilityRole="button"
         style={{ opacity: canProceed ? 1 : 0.4 }}
       >
-        <View style={styles.primaryBtnWrap}>
-          <View style={styles.primaryBtn}>
-            <Text style={styles.primaryBtnText}>Next</Text>
-            <Ionicons name="arrow-forward" size={18} color="#fff" />
-          </View>
-        </View>
+        {(() => {
+          const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+          const btnContent = isDark ? APP_DARK.bg : "#fff";
+          const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
+          return (
+            <View style={[styles.primaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
+              <View style={[styles.primaryBtn, { backgroundColor: btnBg }]}>
+                <Text style={[styles.primaryBtnText, { color: btnContent }]}>Next</Text>
+                <Ionicons name="arrow-forward" size={18} color={btnContent} />
+              </View>
+            </View>
+          );
+        })()}
       </BounceButton>
     </>
   );
@@ -886,13 +893,15 @@ function Step2({
         </View>
       ))}
 
-      <BounceButton onPress={onFinish} accessibilityLabel={isEditMode ? "Save changes" : "Create program"} accessibilityRole="button">
-        <View style={styles.primaryBtnWrap}>
-          <View style={styles.primaryBtn}>
-            <Text style={styles.primaryBtnText}>{isEditMode ? "Save Changes" : "Create Program"}</Text>
+      {!isEditMode && (
+        <BounceButton onPress={onFinish} accessibilityLabel="Create program" accessibilityRole="button">
+          <View style={styles.primaryBtnWrap}>
+            <View style={styles.primaryBtn}>
+              <Text style={styles.primaryBtnText}>Create Program</Text>
+            </View>
           </View>
-        </View>
-      </BounceButton>
+        </BounceButton>
+      )}
     </>
   );
 }
@@ -1494,13 +1503,13 @@ const styles = StyleSheet.create({
 
   // Exercise row
   exRowWrap:        { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 0 },
-  exThumb:          { width: 44, height: 44 },
-  exThumbInner:     { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  exThumb:          { width: 52, height: 52 },
+  exThumbInner:     { width: 52, height: 52, alignItems: "center", justifyContent: "center" },
   exTopRow:           { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
   exArrows:           { flexDirection: "row", alignItems: "center", gap: 14 },
   exArrowPlaceholder: { width: 18, height: 18 },
   exNameBtn:        { flex: 1, flexDirection: "row", alignItems: "center", gap: 5 },
-  exName:           { fontFamily: FontFamily.semibold, fontSize: 14, flexShrink: 1 },
+  exName:           { fontFamily: FontFamily.bold, fontSize: 16, flexShrink: 1 },
   exCompactRow:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, paddingHorizontal: 9, borderTopWidth: 1 },
   exRestChipGroup:  { flexDirection: "row", alignItems: "center", gap: 8 },
   exRestLabel:      { fontFamily: FontFamily.semibold, fontSize: 13 },

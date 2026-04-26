@@ -8,10 +8,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
+import { PROGRAMS_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
 import Svg, { Path } from "react-native-svg";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
-import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import TrashIcon from "../components/TrashIcon";
@@ -265,6 +265,9 @@ interface ActiveProgramCardProps {
 
 const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onEdit, onSetWorkout }: ActiveProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+  const btnContent = isDark ? APP_DARK.bg : "#fff";
+  const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
@@ -283,10 +286,10 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
 
           <View style={styles.progressRow}>
             {Array.from({ length: program.totalWeeks }).map((_, i) => (
-              <View key={i} style={[styles.progressSeg, { backgroundColor: i < program.currentWeek ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < program.currentWeek && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
+              <View key={i} style={[styles.progressSeg, { backgroundColor: i < getCurrentWeek(program) ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < getCurrentWeek(program) && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
             ))}
           </View>
-          <Text style={[styles.weekLabel, { color: t.ts }]}>Week {program.currentWeek} of {program.totalWeeks}</Text>
+          <Text style={[styles.weekLabel, { color: t.ts }]}>Week {getCurrentWeek(program)} of {program.totalWeeks}</Text>
 
           <View style={styles.metaRow}>
             <Ionicons name="calendar-outline" size={14} color={t.ts} />
@@ -329,10 +332,10 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
         <View style={[styles.cardActions, { borderTopColor: t.div }]}>
           <View style={styles.activeBtnRow}>
             <BounceButton style={{ flex: 1 }} onPress={onSetWorkout} accessibilityLabel="Set workout day" accessibilityRole="button">
-              <View style={styles.activePrimaryBtnWrap}>
-                <View style={styles.activePrimaryBtn}>
-                  <Ionicons name="calendar-outline" size={16} color="#fff" />
-                  <Text style={styles.activePrimaryBtnText}>Set Workout</Text>
+              <View style={[styles.activePrimaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
+                <View style={[styles.activePrimaryBtn, { backgroundColor: btnBg }]}>
+                  <Ionicons name="calendar-outline" size={16} color={btnContent} />
+                  <Text style={[styles.activePrimaryBtnText, { color: btnContent }]}>Set Workout</Text>
                 </View>
               </View>
             </BounceButton>
@@ -363,8 +366,12 @@ interface ProgramCardProps {
 
 const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpanded, onToggle, onMakeActive, onEdit, onDelete }: ProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+  const btnContent = isDark ? APP_DARK.bg : "#fff";
+  const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
 
-  const filledWeeks = program.status === "completed" ? program.totalWeeks : program.currentWeek;
+  const computedWeek = getCurrentWeek(program);
+  const filledWeeks = program.status === "completed" ? program.totalWeeks : computedWeek;
   const statusColor =
     program.status === "active"    ? ACCT :
     program.status === "paused"    ? Colors.warning : t.ts;
@@ -375,7 +382,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
   const weekText =
     program.status === "completed" ? `Completed ${program.totalWeeks} of ${program.totalWeeks} weeks` :
     program.status === "created"   ? `${program.totalWeeks} weeks planned` :
-    `Week ${program.currentWeek} of ${program.totalWeeks}`;
+    `Week ${computedWeek} of ${program.totalWeeks}`;
   const dateLabel = program.status === "created" ? "Created" : "Started";
 
   return (
@@ -437,10 +444,10 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
       <ExpandablePanel expanded={isExpanded}>
         <View style={[styles.cardActions, { borderTopColor: t.div }]}>
           <BounceButton onPress={onMakeActive} style={{ marginBottom: 10 }}>
-            <View style={styles.activePrimaryBtnWrap}>
-              <View style={styles.activePrimaryBtn}>
-                <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
-                <Text style={styles.activePrimaryBtnText}>Make Active Program</Text>
+            <View style={[styles.activePrimaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
+              <View style={[styles.activePrimaryBtn, { backgroundColor: btnBg }]}>
+                <Ionicons name="checkmark-circle-outline" size={16} color={btnContent} />
+                <Text style={[styles.activePrimaryBtnText, { color: btnContent }]}>Make Active Program</Text>
               </View>
             </View>
           </BounceButton>
@@ -477,10 +484,19 @@ export default function ProgramsScreen() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const handleMakeActive = async (program: SavedProgram) => {
-    const updated = programs.map(p => ({
-      ...p,
-      status: p.id === program.id ? "active" as const : p.status === "active" ? (p.currentWeek > 1 ? "paused" as const : "created" as const) : p.status,
-    }));
+    const today = new Date();
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const todayStr = `${String(today.getDate()).padStart(2, "0")} ${months[today.getMonth()]} ${today.getFullYear()}`;
+    const updated = programs.map(p => {
+      if (p.id === program.id) {
+        return { ...p, status: "active" as const, startDate: todayStr, currentWeek: 1 };
+      }
+      if (p.status === "active") {
+        const week = getCurrentWeek(p);
+        return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week };
+      }
+      return p;
+    });
     setPrograms(updated);
     setExpandedId(null);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
@@ -549,7 +565,7 @@ export default function ProgramsScreen() {
   const activeProgram = programs.find((p) => p.status === "active") ?? null;
   const totalCount = programs.length;
   const weeksTrained = programs.reduce((sum, p) =>
-    sum + (p.status === "completed" ? p.totalWeeks : p.currentWeek), 0);
+    sum + (p.status === "completed" ? p.totalWeeks : getCurrentWeek(p)), 0);
   const completedCount = programs.filter((p) => p.status === "completed").length;
 
   return (
