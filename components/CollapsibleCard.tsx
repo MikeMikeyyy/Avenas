@@ -74,8 +74,8 @@ export default function CollapsibleCard({ isCollapsing, onCollapsed, expanding =
       <Reanimated.View
         style={animatedStyle}
         onLayout={e => {
-          const h = e.nativeEvent.layout.height;
-          if (h > 0 && height.value < 0) savedHeight.current = h;
+          const h = e.nativeEvent?.layout?.height;
+          if (h != null && h > 0 && height.value < 0) savedHeight.current = h;
         }}
       >
         {children}

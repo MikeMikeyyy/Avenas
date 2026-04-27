@@ -1,11 +1,10 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, LinearTransition } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, LinearTransition, FadeIn } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
   Text,
   StyleSheet,
-
   TextInput,
   TouchableOpacity,
   Modal,
@@ -115,6 +114,8 @@ const WARMUP_ORANGE = "#ffbf0f";
 
 interface ExerciseRowProps {
   exercise: Exercise;
+  exIndex: number;
+  totalExercises: number;
   isFirst: boolean;
   isLast: boolean;
   isDark: boolean;
@@ -126,7 +127,7 @@ interface ExerciseRowProps {
   onEdit: () => void;
 }
 
-function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onMove, onEdit }: ExerciseRowProps) {
+function ExerciseRow({ exercise, exIndex, totalExercises, isFirst, isLast, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onMove, onEdit }: ExerciseRowProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const restSecs = exercise.restSeconds ?? 0;
@@ -242,28 +243,19 @@ function ExerciseRow({ exercise, isFirst, isLast, isDark, onUpdate, onUpdateSets
           </View>
         </NeuCard>
         <TouchableOpacity onPress={onEdit} activeOpacity={0.7} style={styles.exNameBtn}>
+          <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
           <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1} ellipsizeMode="tail">{exercise.name}</Text>
         </TouchableOpacity>
         <View style={styles.exArrows}>
-          {isLast ? (
-            <>
-              <View style={styles.exArrowPlaceholder} />
-              <TouchableOpacity onPress={() => onMove("up")} activeOpacity={0.7}>
-                <Ionicons name="chevron-up" size={18} color={t.ts} />
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              {isFirst
-                ? <View style={styles.exArrowPlaceholder} />
-                : <TouchableOpacity onPress={() => onMove("up")} activeOpacity={0.7}>
-                    <Ionicons name="chevron-up" size={18} color={t.ts} />
-                  </TouchableOpacity>
-              }
-              <TouchableOpacity onPress={() => onMove("down")} activeOpacity={0.7}>
-                <Ionicons name="chevron-down" size={18} color={t.ts} />
-              </TouchableOpacity>
-            </>
+          {!isFirst && (
+            <TouchableOpacity onPress={() => onMove("up")} activeOpacity={0.7}>
+              <Ionicons name="chevron-up" size={18} color={t.ts} />
+            </TouchableOpacity>
+          )}
+          {!isLast && (
+            <TouchableOpacity onPress={() => onMove("down")} activeOpacity={0.7}>
+              <Ionicons name="chevron-down" size={18} color={t.ts} />
+            </TouchableOpacity>
           )}
         </View>
         <TouchableOpacity
@@ -849,49 +841,150 @@ function Step2({
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const days = Object.keys(workouts);
+  const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set());
+
+  const toggleDay = (day: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCollapsedDays(prev => {
+      const next = new Set(prev);
+      next.has(day) ? next.delete(day) : next.add(day);
+      return next;
+    });
+  };
 
   return (
     <>
-      {days.map((day) => (
-        <View key={day} style={{ marginBottom: 20 }}>
-          <Text style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(day).toUpperCase()}</Text>
-          {workouts[day].length === 0 && (
-            <NeuCard dark={isDark} style={styles.emptyCard}>
-              <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet. Tap below to add.</Text>
-            </NeuCard>
-          )}
-            {workouts[day].map((ex, i) => (
-              <CollapsibleCard
-                key={ex.id}
-                isCollapsing={collapsingIds.has(ex.id)}
-                onCollapsed={() => onRemoveExercise(day, ex.id)}
+      {days.map((day) => {
+        const isCollapsed = collapsedDays.has(day);
+        const exercises = workouts[day] ?? [];
+        return (
+          <Reanimated.View key={day} style={{ marginBottom: 16 }} layout={LinearTransition.duration(300)}>
+            <NeuCard dark={isDark} radius={16} style={styles.dayHeadingCard} innerStyle={styles.dayHeadingCardInner}>
+              <TouchableOpacity
+                onPress={() => toggleDay(day)}
+                activeOpacity={0.8}
+                style={styles.dayHeadingRow}
               >
-                <NeuCard dark={isDark} style={styles.exerciseCard}>
-                  <ExerciseRow
-                    exercise={ex}
-                    isFirst={i === 0}
-                    isLast={i === workouts[day].length - 1}
-                    isDark={isDark}
-                    onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
-                    onUpdateSets={sets => onUpdateExerciseSets(day, ex.id, sets)}
-                    onSetRemoved={sets => onUpdateExerciseSets(day, ex.id, sets)}
-                    onRemove={() => onStartCollapse(day, ex.id)}
-                    onMove={(dir) => onMoveExercise(day, ex.id, dir)}
-                    onEdit={() => onEditExercise(day, ex.id)}
-                  />
-                </NeuCard>
-              </CollapsibleCard>
-            ))}
-            <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
-              <View style={styles.addExBtnWrap}>
-                <View style={styles.addExBtn}>
-                  <Ionicons name="add" size={18} color="#fff" />
-                  <Text style={styles.addExText}>Add Exercise</Text>
+                <View style={styles.dayHeadingLeft}>
+                  <View style={[styles.dayAccentBar, { backgroundColor: ACCT }]} />
+                  <Text style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(day).toUpperCase()}</Text>
+                  {exercises.length > 0 && (
+                    <View style={[styles.dayExBadge, { backgroundColor: ACCT + "22", borderColor: ACCT }]}>
+                      <Text style={[styles.dayExBadgeText, { color: ACCT }]}>{exercises.length}</Text>
+                    </View>
+                  )}
                 </View>
-              </View>
-            </BounceButton>
-        </View>
-      ))}
+                <Ionicons
+                  name={isCollapsed ? "chevron-forward" : "chevron-down"}
+                  size={16}
+                  color={t.ts}
+                />
+              </TouchableOpacity>
+            </NeuCard>
+
+            {isCollapsed ? (
+              <Reanimated.View key="collapsed" entering={FadeIn.duration(220)}>
+                {exercises.length === 0 ? (
+                  <NeuCard dark={isDark} style={styles.emptyCard}>
+                    <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
+                  </NeuCard>
+                ) : (
+                  <NeuCard dark={isDark} style={styles.daySummaryCard} innerStyle={styles.daySummaryCardInner}>
+                    {exercises.map((ex, i) => (
+                      <View
+                        key={ex.id}
+                        style={[
+                          styles.daySummaryRow,
+                          i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)" },
+                        ]}
+                      >
+                        <View style={[styles.daySummaryNumChip, { backgroundColor: ACCT + "18" }]}>
+                          <Text style={[styles.daySummaryNum, { color: ACCT }]}>{i + 1}</Text>
+                        </View>
+                        <Text style={[styles.daySummaryName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
+                        <View style={styles.daySummaryActions}>
+                          <View style={styles.exArrows}>
+                            {i > 0 && (
+                              <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onMoveExercise(day, ex.id, "up"); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                <Ionicons name="chevron-up" size={18} color={t.ts} />
+                              </TouchableOpacity>
+                            )}
+                            {i < exercises.length - 1 && (
+                              <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onMoveExercise(day, ex.id, "down"); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                <Ionicons name="chevron-down" size={18} color={t.ts} />
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              Alert.alert("Remove Exercise", `Remove "${ex.name}"?`, [
+                                { text: "Cancel", style: "cancel" },
+                                { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(day, ex.id) },
+                              ]);
+                            }}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <TrashIcon size={18} color="#ef4444" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                  </NeuCard>
+                )}
+                <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
+                  <View style={styles.addExBtnWrap}>
+                    <View style={styles.addExBtn}>
+                      <Ionicons name="add" size={18} color="#fff" />
+                      <Text style={styles.addExText}>Add Exercise</Text>
+                    </View>
+                  </View>
+                </BounceButton>
+              </Reanimated.View>
+            ) : (
+              <Reanimated.View key="expanded" entering={FadeIn.duration(220)}>
+                {exercises.length === 0 && (
+                  <NeuCard dark={isDark} style={styles.emptyCard}>
+                    <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
+                  </NeuCard>
+                )}
+                {exercises.map((ex, i) => (
+                  <CollapsibleCard
+                    key={ex.id}
+                    isCollapsing={collapsingIds.has(ex.id)}
+                    onCollapsed={() => onRemoveExercise(day, ex.id)}
+                  >
+                    <NeuCard dark={isDark} style={styles.exerciseCard}>
+                      <ExerciseRow
+                        exercise={ex}
+                        exIndex={i}
+                        totalExercises={exercises.length}
+                        isFirst={i === 0}
+                        isLast={i === exercises.length - 1}
+                        isDark={isDark}
+                        onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
+                        onUpdateSets={sets => onUpdateExerciseSets(day, ex.id, sets)}
+                        onSetRemoved={sets => onUpdateExerciseSets(day, ex.id, sets)}
+                        onRemove={() => onStartCollapse(day, ex.id)}
+                        onMove={(dir) => onMoveExercise(day, ex.id, dir)}
+                        onEdit={() => onEditExercise(day, ex.id)}
+                      />
+                    </NeuCard>
+                  </CollapsibleCard>
+                ))}
+                <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
+                  <View style={styles.addExBtnWrap}>
+                    <View style={styles.addExBtn}>
+                      <Ionicons name="add" size={18} color="#fff" />
+                      <Text style={styles.addExText}>Add Exercise</Text>
+                    </View>
+                  </View>
+                </BounceButton>
+              </Reanimated.View>
+            )}
+          </Reanimated.View>
+        );
+      })}
 
       {!isEditMode && (
         <BounceButton onPress={onFinish} accessibilityLabel="Create program" accessibilityRole="button">
@@ -1492,7 +1585,22 @@ const styles = StyleSheet.create({
   updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 14, color: "#FFFFFF", letterSpacing: 0.3 },
 
   // Step 2 — workout days
-  dayHeading:       { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 1.2, marginBottom: 8 },
+  dayHeadingCard:       { borderRadius: 16, marginBottom: 8 },
+  dayHeadingCardInner:  { paddingVertical: 12, paddingHorizontal: 16 },
+  dayHeadingRow:        { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  dayHeadingLeft:       { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
+  dayAccentBar:         { width: 3, height: 18, borderRadius: 2 },
+  dayHeading:           { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 1.2 },
+  dayExBadge:           { borderRadius: 20, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 },
+  dayExBadgeText:       { fontFamily: FontFamily.semibold, fontSize: 12 },
+  daySummaryCard:       { borderRadius: 16, marginBottom: 14 },
+  daySummaryCardInner:  { paddingVertical: 4, paddingHorizontal: 0 },
+  daySummaryEmpty:      { fontFamily: FontFamily.regular, fontSize: 13, fontStyle: "italic", paddingVertical: 14, paddingHorizontal: 16 },
+  daySummaryRow:        { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 16 },
+  daySummaryNumChip:    { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  daySummaryActions:    { flexDirection: "row", alignItems: "center", gap: 14 },
+  daySummaryNum:        { fontFamily: FontFamily.bold, fontSize: 13 },
+  daySummaryName:       { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
   workoutDayCard:   { borderRadius: 16 },
   exerciseCard:     { borderRadius: 16, marginBottom: 14 },
   emptyCard:        { borderRadius: 16, marginBottom: 14 },
@@ -1506,9 +1614,9 @@ const styles = StyleSheet.create({
   exThumb:          { width: 52, height: 52 },
   exThumbInner:     { width: 52, height: 52, alignItems: "center", justifyContent: "center" },
   exTopRow:           { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
-  exArrows:           { flexDirection: "row", alignItems: "center", gap: 14 },
-  exArrowPlaceholder: { width: 18, height: 18 },
-  exNameBtn:        { flex: 1, flexDirection: "row", alignItems: "center", gap: 5 },
+  exArrows:           { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 14, width: 50 },
+  exNameBtn:        { flex: 1, flexDirection: "column", justifyContent: "center", gap: 3 },
+  exNumLabel:       { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.8 },
   exName:           { fontFamily: FontFamily.bold, fontSize: 16, flexShrink: 1 },
   exCompactRow:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, paddingHorizontal: 9, borderTopWidth: 1 },
   exRestChipGroup:  { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -1537,7 +1645,7 @@ const styles = StyleSheet.create({
   exAddRemoveBtn:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10 },
   exAddRemoveText:  { fontFamily: FontFamily.semibold, fontSize: 13 },
   exNotesRow:       { borderTopWidth: 1, paddingVertical: 10, paddingLeft: 9 },
-  exNotesInput:     { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20, paddingLeft: 0 },
+  exNotesInput:     { fontFamily: FontFamily.semibold, fontSize: 13, minHeight: 36, lineHeight: 20, paddingLeft: 0 },
 
   // Rest picker modal
   restBackdrop:     { flex: 1, justifyContent: "flex-end" },

@@ -138,7 +138,7 @@ function KeyboardDismissIcon({ color }: { color: string }) {
 
 // ─── ExpandablePanel ───────────────────────────────────────────────────────────
 
-function ExpandablePanel({ expanded, children }: { expanded: boolean; children: React.ReactNode }) {
+function ExpandablePanel({ expanded, children, duration = 280, clip = false }: { expanded: boolean; children: React.ReactNode; duration?: number; clip?: boolean }) {
   const height = useSharedValue(0);
   const opacity = useSharedValue(0);
   const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
@@ -146,33 +146,57 @@ function ExpandablePanel({ expanded, children }: { expanded: boolean; children: 
   useEffect(() => {
     if (measuredHeight === null) return;
     if (expanded) {
-      height.value = withTiming(measuredHeight, { duration: 280, easing: ReEasing.out(ReEasing.cubic) });
-      opacity.value = withTiming(1, { duration: 220, easing: ReEasing.out(ReEasing.cubic) });
+      height.value = withTiming(measuredHeight, { duration, easing: ReEasing.out(ReEasing.cubic) });
+      if (!clip) opacity.value = withTiming(1, { duration: duration * 0.8, easing: ReEasing.out(ReEasing.cubic) });
     } else {
-      // Fade out first so overflowing content is invisible before height closes
-      opacity.value = withTiming(0, { duration: 140 });
-      height.value = withTiming(0, { duration: 280, easing: ReEasing.out(ReEasing.cubic) });
+      if (!clip) opacity.value = withTiming(0, { duration: duration * 0.5 });
+      height.value = withTiming(0, { duration, easing: ReEasing.out(ReEasing.cubic) });
     }
   }, [expanded, measuredHeight]);
 
-  // No overflow: hidden — lets shadows breathe. Opacity hides overflow during animation.
-  const animStyle = useAnimatedStyle(() => ({ height: height.value, opacity: opacity.value }));
+  // clip mode: overflow:hidden reveals content with height — no separate fade-in.
+  //   Shadows are progressively revealed as the clip boundary passes each button.
+  // default mode: opacity hides absolutely-positioned content while height animates.
+  const animStyle = useAnimatedStyle(() =>
+    clip
+      ? { height: height.value, overflow: "hidden" }
+      : { height: height.value, opacity: opacity.value }
+  );
+
+  // In clip mode, negative horizontal margin extends the clip boundary beyond the
+  // content area so left/right neumorphic shadows aren't cropped. Matching
+  // paddingHorizontal + paddingBottom on the wrapper keeps content visually aligned
+  // and gives bottom shadows room. The measurement view mirrors the same wrapper so
+  // measuredHeight includes the bottom buffer.
+  const clipWrap: object | null = clip ? { paddingHorizontal: 12, paddingBottom: 14 } : null;
 
   return (
     <View>
       {measuredHeight === null && (
         <View
-          style={{ position: "absolute", left: 0, right: 0, top: 0, opacity: 0 }}
+          style={{ position: "absolute", left: clip ? -12 : 0, right: clip ? -12 : 0, top: 0, opacity: 0 }}
           pointerEvents="none"
-          onLayout={e => { const h = e.nativeEvent.layout.height; if (h > 0) setMeasuredHeight(h); }}
+          onLayout={e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setMeasuredHeight(h); }}
         >
-          {children}
+          {clip ? <View style={clipWrap!}>{children}</View> : children}
         </View>
       )}
-      <Reanimated.View style={animStyle}>
-        <View style={{ position: "absolute", left: 0, right: 0, top: 0 }}>
-          {children}
-        </View>
+      <Reanimated.View style={[animStyle, clip && { marginHorizontal: -12 }]}>
+        {clip ? (
+          <View style={clipWrap!}>{children}</View>
+        ) : (
+          <View
+            style={{ position: "absolute", left: 0, right: 0, top: 0 }}
+            onLayout={e => {
+              const h = e.nativeEvent?.layout?.height;
+              if (h == null || h <= 0 || measuredHeight === null || h === measuredHeight) return;
+              setMeasuredHeight(h);
+              if (expanded) height.value = withTiming(h, { duration: 200, easing: ReEasing.out(ReEasing.cubic) });
+            }}
+          >
+            {children}
+          </View>
+        )}
       </Reanimated.View>
     </View>
   );
@@ -350,7 +374,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
             <SetRow isActive={!editing && flatIdx === activeSetFlatIdx}>
             <View
               style={styles.dataRow}
-              onLayout={(flatIdx !== newlyAddedIdx && flatIdx !== collapsingSetIdx) ? e => { const h = e.nativeEvent.layout.height; if (h > 0) setRowHeight.current = h; } : undefined}
+              onLayout={(flatIdx !== newlyAddedIdx && flatIdx !== collapsingSetIdx) ? e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setRowHeight.current = h; } : undefined}
             >
               {/* SET label */}
               {editing ? (
@@ -480,7 +504,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
         </View>
 
         {/* ── Edit mode controls ── */}
-        <ExpandablePanel expanded={editing}>
+        <ExpandablePanel expanded={editing} duration={500} clip>
           <>
             {/* Move row */}
             <View style={[styles.editMoveRow, { borderTopColor: divider }]}>
@@ -626,12 +650,17 @@ export default function WorkoutScreen() {
   const [addingExercise, setAddingExercise] = useState(false);
   const [isometricExIds, setIsometricExIds] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState("");
+  const [showNotes, setShowNotes] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const notesY = useRef(0);
 
   // ── Timer modal ──────────────────────────────────────────────────────────────
   const [showTimerModal, setShowTimerModal] = useState(false);
   const [timerMode, setTimerMode] = useState<"timer" | "stopwatch">("timer");
   const tabOffset = useSharedValue(0); // 0 = timer, 1 = stopwatch
   const tabTrackWidth = useSharedValue(0);
+  const notesBtnOpacity = useSharedValue(1);
+  const notesBtnStyle   = useAnimatedStyle(() => ({ opacity: notesBtnOpacity.value }));
   const pillAnimStyle = useAnimatedStyle(() => ({
     width: tabTrackWidth.value / 2,
     transform: [{ translateX: tabOffset.value * (tabTrackWidth.value / 2) }],
@@ -906,6 +935,20 @@ export default function WorkoutScreen() {
     nextFnRef.current = fn;
     setHasNext(fn !== null);
   }, []);
+
+  const openNotes = () => {
+    notesBtnOpacity.value = withTiming(0, { duration: 180 });
+    setShowNotes(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: notesY.current - 12, animated: true });
+    }, 80);
+  };
+  const closeNotes = () => {
+    setShowNotes(false);
+    notesBtnOpacity.value = withTiming(1, { duration: 180 });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
     const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); nextFnRef.current = null; });
@@ -978,9 +1021,9 @@ export default function WorkoutScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets
         style={{ backgroundColor: t.bg }}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: insets.bottom + 140 }]}
       >
@@ -1044,33 +1087,61 @@ export default function WorkoutScreen() {
           })
         )}
 
-        {/* Add Exercise button */}
-        <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}>
-          <View style={styles.addExBtnWrap}>
-            <View style={styles.addExBtn}>
-              <Ionicons name="add" size={18} color="#fff" />
-              <Text style={styles.addExText}>Add Exercise</Text>
-            </View>
+        {/* Bottom action row: notes icon left, Add Exercise centred */}
+        <View style={styles.bottomActionRow}>
+          {workoutInfo.exercises.length > 0 && (
+            <Reanimated.View style={[styles.notesToggleWrap, notesBtnStyle]}>
+              <BounceButton onPress={openNotes}>
+                <View style={styles.notesToggleBtn}>
+                  <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+                    <Ionicons name="document-text-outline" size={20} color={t.tp} />
+                  </NeuCard>
+                  <View style={styles.notesTogglePlus}>
+                    <Text style={styles.notesTogglePlusText}>+</Text>
+                  </View>
+                </View>
+              </BounceButton>
+            </Reanimated.View>
+          )}
+          <View style={{ flex: 1, alignItems: "center" }}>
+            <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}>
+              <View style={styles.addExBtnWrap}>
+                <View style={styles.addExBtn}>
+                  <Ionicons name="add" size={18} color="#fff" />
+                  <Text style={styles.addExText}>Add Exercise</Text>
+                </View>
+              </View>
+            </BounceButton>
           </View>
-        </BounceButton>
+          {workoutInfo.exercises.length > 0 && <View style={styles.notesToggleWrap} />}
+        </View>
 
-        {/* Notes — only shown when there are exercises */}
+        {/* Session Notes — animated expand/collapse */}
         {workoutInfo.exercises.length > 0 && (
-          <NeuCard dark={isDark} style={{ marginBottom: 4, borderRadius: 16 }}>
-            <View style={styles.notesInner}>
-              <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp, marginBottom: 10 }}>Session Notes</Text>
-              <TextInput
-                style={[styles.notesInput, { color: t.tp }]}
-                placeholder="How's the session going? Anything to note..."
-                placeholderTextColor={t.ts}
-                multiline
-                value={notes}
-                onChangeText={setNotes}
-                onFocus={() => handleInputFocus(null)}
-                textAlignVertical="top"
-              />
-            </View>
-          </NeuCard>
+          <View onLayout={e => { notesY.current = e.nativeEvent.layout.y; }}>
+          <ExpandablePanel expanded={showNotes} duration={500}>
+            <NeuCard dark={isDark} style={{ marginBottom: 4, borderRadius: 16 }}>
+              <View style={styles.notesInner}>
+                <View style={styles.notesHeader}>
+                  <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
+                  <BounceButton onPress={closeNotes} accessibilityLabel="Close notes">
+                    <Ionicons name="close" size={20} color={t.ts} />
+                  </BounceButton>
+                </View>
+                <TextInput
+                  style={[styles.notesInput, { color: t.tp }]}
+                  placeholder="How's the session going? Anything to note..."
+                  placeholderTextColor={t.ts}
+                  multiline
+                  value={notes}
+                  onChangeText={setNotes}
+                  onFocus={() => handleInputFocus(null)}
+                  textAlignVertical="top"
+                />
+              </View>
+            </NeuCard>
+          </ExpandablePanel>
+          </View>
         )}
 
         {/* Finish button */}
@@ -1128,7 +1199,7 @@ export default function WorkoutScreen() {
               {/* Tabs */}
               <View
                 style={[styles.timerTabs, { backgroundColor: t.div }]}
-                onLayout={e => { tabTrackWidth.value = e.nativeEvent.layout.width - 6; }}
+                onLayout={e => { const w = e.nativeEvent?.layout?.width; if (w != null) tabTrackWidth.value = w - 6; }}
               >
                 {/* Sliding pill */}
                 <Reanimated.View style={[styles.timerPill, pillAnimStyle]} />
@@ -1290,23 +1361,23 @@ export default function WorkoutScreen() {
                         <Text style={[styles.timerActionText, { color: t.tp }]}>Reset</Text>
                       </View>
                     </BounceButton>
-                    <View style={[styles.timerActionGlow, { flex: 1 }]}>
-                      <BounceButton style={[styles.timerAction, { backgroundColor: ACCT }]}
+                    <View style={[styles.timerActionGlow, { flex: 1, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
+                      <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}
                         onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setCountdownActive(true); setEditingDuration(false); Keyboard.dismiss(); }}>
                         <View style={styles.timerActionInner}>
-                          <Ionicons name="play" size={20} color="#fff" />
-                          <Text style={[styles.timerActionText, { color: "#fff" }]}>Continue</Text>
+                          <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
+                          <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Continue</Text>
                         </View>
                       </BounceButton>
                     </View>
                   </View>
                 ) : (
-                  <View style={[styles.timerActionGlow, { marginHorizontal: 20, marginBottom: 20 }]}>
-                    <BounceButton style={[styles.timerAction, { backgroundColor: ACCT }]}
+                  <View style={[styles.timerActionGlow, { marginHorizontal: 20, marginBottom: 20, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
+                    <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}
                       onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setCountdownActive(true); setEditingDuration(false); Keyboard.dismiss(); }}>
                       <View style={styles.timerActionInner}>
-                        <Ionicons name="play" size={20} color="#fff" />
-                        <Text style={[styles.timerActionText, { color: "#fff" }]}>Start</Text>
+                        <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
+                        <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Start</Text>
                       </View>
                     </BounceButton>
                   </View>
@@ -1331,12 +1402,12 @@ export default function WorkoutScreen() {
                         </View>
                       </BounceButton>
                     )}
-                    <View style={[styles.timerActionGlow, { flex: 1 }]}>
-                      <BounceButton style={[styles.timerAction, { backgroundColor: ACCT }]}
+                    <View style={[styles.timerActionGlow, { flex: 1, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
+                      <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}
                         onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setSwRunning(true); }}>
                         <View style={styles.timerActionInner}>
-                          <Ionicons name="play" size={20} color="#fff" />
-                          <Text style={[styles.timerActionText, { color: "#fff" }]}>{swElapsed > 0 ? "Continue" : "Start"}</Text>
+                          <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
+                          <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>{swElapsed > 0 ? "Continue" : "Start"}</Text>
                         </View>
                       </BounceButton>
                     </View>
@@ -1489,6 +1560,14 @@ const styles = StyleSheet.create({
   // Notes
   notesInner:  { padding: 16 },
   notesInput:  { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
+  notesHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+
+  // Notes toggle button
+  bottomActionRow:    { flexDirection: "row", alignItems: "center", marginTop: 6, marginBottom: 20 },
+  notesToggleWrap:    { width: 44, alignItems: "center", justifyContent: "center" },
+  notesToggleBtn:     { width: 40, height: 40 },
+  notesTogglePlus:    { position: "absolute", top: -4, right: -6, backgroundColor: ACCT, borderRadius: 7, width: 14, height: 14, alignItems: "center", justifyContent: "center" },
+  notesTogglePlusText: { color: "#fff", fontSize: 10, fontFamily: FontFamily.bold, lineHeight: 14 },
 
   // Finish button
   finishWrap:       { borderRadius: 16, backgroundColor: "#8896A7", shadowColor: "#4a5568", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.45, shadowRadius: 8 },
@@ -1498,7 +1577,7 @@ const styles = StyleSheet.create({
   finishBtnText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
 
   checkCircle:      { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12, marginTop: 6, marginBottom: 20 },
+  addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   addExBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 10, paddingHorizontal: 22, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 },
   addExText:        { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
 
