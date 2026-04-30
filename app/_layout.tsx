@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { StatusBar } from "expo-status-bar";
 import { ThemeProvider } from "../contexts/ThemeContext";
 import { StreakProvider } from "../contexts/StreakContext";
+import { WorkoutTimerProvider } from "../contexts/WorkoutTimerContext";
 import { useTheme } from "../contexts/ThemeContext";
 
 SplashScreen.preventAutoHideAsync();
@@ -15,7 +16,9 @@ function AppShell() {
     <>
       <StatusBar style={isDark ? "light" : "dark"} />
       <StreakProvider>
-        <Stack screenOptions={{ headerShown: false }} />
+        <WorkoutTimerProvider>
+          <Stack screenOptions={{ headerShown: false }} />
+        </WorkoutTimerProvider>
       </StreakProvider>
     </>
   );

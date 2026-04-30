@@ -7,6 +7,8 @@ import {
   Animated,
   useWindowDimensions,
 } from "react-native";
+import { RestTimerProvider } from "../../contexts/RestTimerContext";
+import RestTimerBanner from "../../components/RestTimerBanner";
 import Svg, { Path } from "react-native-svg";
 import { useRef, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
@@ -204,17 +206,22 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
 
 export default function TabLayout() {
   return (
-    <Tabs
-      screenOptions={{ headerShown: false, animation: "none", lazy: false }}
-      tabBar={(props) => (
-        <AnimatedTabBar state={props.state} navigation={props.navigation} />
-      )}
-    >
-      <Tabs.Screen name="home" />
-      <Tabs.Screen name="workout" />
-      <Tabs.Screen name="progress" />
-      <Tabs.Screen name="trainer-hub" />
-    </Tabs>
+    <RestTimerProvider>
+      <View style={{ flex: 1 }}>
+        <Tabs
+          screenOptions={{ headerShown: false, animation: "none", lazy: false }}
+          tabBar={(props) => (
+            <AnimatedTabBar state={props.state} navigation={props.navigation} />
+          )}
+        >
+          <Tabs.Screen name="home" />
+          <Tabs.Screen name="workout" />
+          <Tabs.Screen name="progress" />
+          <Tabs.Screen name="trainer-hub" />
+        </Tabs>
+        <RestTimerBanner />
+      </View>
+    </RestTimerProvider>
   );
 }
 

@@ -24,6 +24,8 @@ import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from
 import { useTheme } from "../../contexts/ThemeContext";
 import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
+import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
+import { useRestTimer } from "../../contexts/RestTimerContext";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -641,6 +643,8 @@ export default function WorkoutScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const { isRunning, elapsedSeconds, startTimer, stopTimer } = useWorkoutTimer();
+  const { startRestTimer } = useRestTimer();
 
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[] } | null>(null);
@@ -770,6 +774,8 @@ export default function WorkoutScreen() {
   };
 
   const autoTickIfComplete = (exId: string, type: "warmup" | "working", idx: number) => {
+    const cur = log[exId]?.[type]?.[idx];
+    const willTick = !!cur && !cur.done && !!cur.weight.trim() && !!cur.reps.trim();
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
@@ -782,9 +788,12 @@ export default function WorkoutScreen() {
       }
       return prev;
     });
+    startTimer();
+    if (willTick) startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
   };
 
   const toggleDone = (exId: string, type: "warmup" | "working", idx: number) => {
+    const becomingDone = !log[exId]?.[type]?.[idx]?.done;
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
@@ -792,6 +801,8 @@ export default function WorkoutScreen() {
       sets[idx] = { ...sets[idx], done: !sets[idx].done };
       return { ...prev, [exId]: { ...exLog, [type]: sets } };
     });
+    startTimer();
+    if (becomingDone) startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
   };
 
   const addSet = (exId: string) => {
@@ -905,7 +916,7 @@ export default function WorkoutScreen() {
     const doFinish = () => Alert.alert(
       "Workout Complete!",
       "Great session. Rest up and come back stronger.",
-      [{ text: "Done", onPress: () => { if (workoutInfo) setLog(initLog(workoutInfo.exercises)); } }]
+      [{ text: "Done", onPress: () => { if (workoutInfo) setLog(initLog(workoutInfo.exercises)); stopTimer(); } }]
     );
 
     if (!allDone) {
@@ -920,6 +931,20 @@ export default function WorkoutScreen() {
     } else {
       doFinish();
     }
+  };
+
+  const handleDiscard = () => {
+    Alert.alert("Discard Workout", "All progress will be lost. Are you sure?", [
+      { text: "Keep Going", style: "cancel" },
+      {
+        text: "Discard", style: "destructive",
+        onPress: () => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          if (workoutInfo) setLog(initLog(workoutInfo.exercises));
+          stopTimer();
+        },
+      },
+    ]);
   };
 
   const deleteCustomExercise = (exName: string) => {
@@ -1155,24 +1180,38 @@ export default function WorkoutScreen() {
             </View>
           </BounceButton>
         )}
+
       </ScrollView>
 
-      {/* Timer button — fixed top-right, always visible */}
-      <TouchableOpacity
-        onPress={() => setShowTimerModal(true)}
-        activeOpacity={0.8}
-        style={{ position: "absolute", top: insets.top, right: 20, zIndex: 10 }}
-      >
-        <View style={{
-          width: 44, height: 44, borderRadius: 22,
-          backgroundColor: ACCT,
-          shadowColor: ACCT, shadowOffset: { width: 0, height: 3 },
-          shadowOpacity: 0.45, shadowRadius: 8,
-          alignItems: "center", justifyContent: "center",
-        }}>
-          <Ionicons name="timer-outline" size={22} color="#fff" />
+      {/* Fixed top bar — workout timer + discard + rest timer */}
+      <View style={[styles.topBar, { top: insets.top }]}>
+        <View style={styles.topBarLeft}>
+          {isRunning ? (
+            <>
+              <View style={styles.workoutTimerPill}>
+                <Ionicons name="time-outline" size={14} color={APP_LIGHT.tp} />
+                <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>{fmtTime(elapsedSeconds)}</Text>
+              </View>
+              <BounceButton onPress={handleDiscard}>
+                <View style={[styles.topIconBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                  <TrashIcon size={18} color={t.ts} />
+                </View>
+              </BounceButton>
+            </>
+          ) : (
+            <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}>
+              <View style={[styles.workoutTimerPill, { paddingHorizontal: 25 }]}>
+                <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>Start</Text>
+              </View>
+            </BounceButton>
+          )}
         </View>
-      </TouchableOpacity>
+        <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
+          <View style={[styles.topIconBtn, { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 }]}>
+            <Ionicons name="timer-outline" size={22} color="#fff" />
+          </View>
+        </TouchableOpacity>
+      </View>
 
       {/* ── Timer Modal ── */}
       <Modal visible={showTimerModal} transparent animationType="fade" onRequestClose={() => setShowTimerModal(false)}>
@@ -1484,6 +1523,7 @@ export default function WorkoutScreen() {
         </TouchableOpacity>
       </View>
     )}
+
     </FadeScreen>
   );
 }
@@ -1498,7 +1538,12 @@ const styles = StyleSheet.create({
   header:       { paddingBottom: 14, gap: 2, marginBottom: 4 },
   headerLabel:  { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.4 },
   headerName:   { fontFamily: FontFamily.bold, fontSize: 28, letterSpacing: 0.3, marginTop: 2 },
-  headerSub:    { fontFamily: FontFamily.regular, fontSize: 14 },
+  headerSub:        { fontFamily: FontFamily.regular, fontSize: 14 },
+  topBar:           { position: "absolute", left: 20, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  topBarLeft:       { flexDirection: "row", alignItems: "center", gap: 10 },
+  topIconBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  workoutTimerPill: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  workoutTimerText: { fontFamily: FontFamily.bold, fontSize: 15, letterSpacing: 0.5 },
 
   scroll: { paddingHorizontal: 20 },
 
@@ -1617,4 +1662,5 @@ const styles = StyleSheet.create({
   timerActionGlow:  { borderRadius: 14, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 },
   timerActionText:  { fontFamily: FontFamily.semibold, fontSize: 16 },
   timerButtonRow:   { flexDirection: "row", gap: 10, marginHorizontal: 20, marginBottom: 20 },
+
 });

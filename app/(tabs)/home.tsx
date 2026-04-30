@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useMemo } from "react";
 import { View, Text, StyleSheet, Image, Animated } from "react-native";
+import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,6 +17,7 @@ import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DAR
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
+import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import {
   STREAK_TIERS,
   FLAME_PREF_KEY,
@@ -111,22 +113,54 @@ const RECENT_ACTIVITY = [
   { id: "3", name: "Leg Day",    sub: "5 days ago · 5 exercises", dur: "38 min" },
 ];
 
+function fmtElapsed(secs: number): string {
+  if (secs >= 3600) {
+    const h = Math.floor(secs / 3600);
+    const m = String(Math.floor((secs % 3600) / 60)).padStart(2, "0");
+    const s = String(secs % 60).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  }
+  return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
+}
+
 function StartButton() {
   const { isDark } = useTheme();
+  const router = useRouter();
+  const { isRunning, elapsedSeconds, startTimer } = useWorkoutTimer();
   const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
   const contentColor = isDark ? APP_DARK.bg : "#fff";
   const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
+
+  const handlePress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (!isRunning) startTimer();
+    router.push("/(tabs)/workout");
+  };
+
+  const arrow = (
+    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+      <Path d="M14.4302 5.92969L20.5002 11.9997L14.4302 18.0697" stroke={contentColor} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M3.5 12H20.33" stroke={contentColor} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+
   return (
-    <BounceButton>
+    <BounceButton onPress={handlePress}>
       <View style={[styles.startBtnDark, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
         <View style={[styles.startBtn, { backgroundColor: btnBg }]}>
-          <View style={styles.startBtnContent}>
-            <Text style={[styles.startBtnText, { color: contentColor }]}>Start Workout</Text>
-            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-              <Path d="M14.4302 5.92969L20.5002 11.9997L14.4302 18.0697" stroke={contentColor} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
-              <Path d="M3.5 12H20.33" stroke={contentColor} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
-            </Svg>
-          </View>
+          {isRunning ? (
+            <View style={styles.startBtnContent}>
+              <Text style={[styles.continueTimer, { color: contentColor }]}>{fmtElapsed(elapsedSeconds)}</Text>
+              <View style={[styles.continueDivider, { backgroundColor: contentColor }]} />
+              <Text style={[styles.startBtnText, { color: contentColor }]}>Continue Workout</Text>
+              {arrow}
+            </View>
+          ) : (
+            <View style={styles.startBtnContent}>
+              <Text style={[styles.startBtnText, { color: contentColor }]}>Start Workout</Text>
+              {arrow}
+            </View>
+          )}
         </View>
       </View>
     </BounceButton>
@@ -404,6 +438,8 @@ const styles = StyleSheet.create({
   startBtn: { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, justifyContent: "center", overflow: "hidden" },
   startBtnContent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
   startBtnText: { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
+  continueTimer: { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.3, opacity: 0.7 },
+  continueDivider: { width: 1, height: 16, opacity: 0.4 },
   quickRow: { flexDirection: "row", gap: 12, marginBottom: 28 },
   quickCard: { borderRadius: 20 },
   quickInner: { alignItems: "center", paddingVertical: 18, paddingHorizontal: 8, gap: 10 },
