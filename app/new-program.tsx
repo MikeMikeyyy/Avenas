@@ -891,8 +891,9 @@ function Step2({
                 ) : (
                   <NeuCard dark={isDark} style={styles.daySummaryCard} innerStyle={styles.daySummaryCardInner}>
                     {exercises.map((ex, i) => (
-                      <View
+                      <Reanimated.View
                         key={ex.id}
+                        layout={LinearTransition.duration(200)}
                         style={[
                           styles.daySummaryRow,
                           i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)" },
@@ -901,7 +902,13 @@ function Step2({
                         <View style={[styles.daySummaryNumChip, { backgroundColor: ACCT + "18" }]}>
                           <Text style={[styles.daySummaryNum, { color: ACCT }]}>{i + 1}</Text>
                         </View>
-                        <Text style={[styles.daySummaryName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
+                        <TouchableOpacity
+                          style={styles.daySummaryNameBtn}
+                          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(day, ex.id); }}
+                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                        >
+                          <Text style={[styles.daySummaryName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
+                        </TouchableOpacity>
                         <View style={styles.daySummaryActions}>
                           <View style={styles.exArrows}>
                             {i > 0 && (
@@ -928,7 +935,7 @@ function Step2({
                             <TrashIcon size={18} color="#ef4444" />
                           </TouchableOpacity>
                         </View>
-                      </View>
+                      </Reanimated.View>
                     ))}
                   </NeuCard>
                 )}
@@ -1600,6 +1607,7 @@ const styles = StyleSheet.create({
   daySummaryNumChip:    { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   daySummaryActions:    { flexDirection: "row", alignItems: "center", gap: 14 },
   daySummaryNum:        { fontFamily: FontFamily.bold, fontSize: 13 },
+  daySummaryNameBtn:    { flex: 1, flexDirection: "row", alignItems: "center" },
   daySummaryName:       { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
   workoutDayCard:   { borderRadius: 16 },
   exerciseCard:     { borderRadius: 16, marginBottom: 14 },
