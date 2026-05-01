@@ -6,6 +6,7 @@ import { StatusBar } from "expo-status-bar";
 import { ThemeProvider } from "../contexts/ThemeContext";
 import { StreakProvider } from "../contexts/StreakContext";
 import { WorkoutTimerProvider } from "../contexts/WorkoutTimerContext";
+import { UnitProvider } from "../contexts/UnitContext";
 import { useTheme } from "../contexts/ThemeContext";
 
 SplashScreen.preventAutoHideAsync();
@@ -41,7 +42,9 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <AppShell />
+      <UnitProvider>
+        <AppShell />
+      </UnitProvider>
     </ThemeProvider>
   );
 }

@@ -2,10 +2,11 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "re
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "../contexts/ThemeContext";
+import { useUnit } from "../contexts/UnitContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
@@ -72,8 +73,13 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { isDark, toggleDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const [isKg, setIsKg] = useState(true);
-  const unitOffset     = useSharedValue(0); // 0 = kg, 1 = lbs
+  const { isKg, setIsKg } = useUnit();
+  const unitOffset        = useSharedValue(isKg ? 0 : 1); // 0 = kg, 1 = lbs
+  const userTriggeredRef  = useRef(false);
+  useEffect(() => {
+    if (!userTriggeredRef.current) unitOffset.value = isKg ? 0 : 1; // snap on external change (AsyncStorage load)
+    userTriggeredRef.current = false;
+  }, [isKg]);
   const unitTrackWidth = useSharedValue(0);
   const unitPillStyle  = useAnimatedStyle(() => ({
     width: unitTrackWidth.value / 2,
@@ -162,6 +168,7 @@ export default function SettingsScreen() {
                         <TouchableOpacity
                           onPress={() => {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            userTriggeredRef.current = true;
                             setIsKg(true);
                             unitOffset.value = withSpring(0, { damping: 22, stiffness: 300, mass: 0.9 });
                           }}
@@ -174,6 +181,7 @@ export default function SettingsScreen() {
                         <TouchableOpacity
                           onPress={() => {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            userTriggeredRef.current = true;
                             setIsKg(false);
                             unitOffset.value = withSpring(1, { damping: 22, stiffness: 300, mass: 0.9 });
                           }}

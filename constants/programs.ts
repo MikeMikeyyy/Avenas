@@ -1,4 +1,28 @@
 export const PROGRAMS_KEY = "@avenas/programs";
+export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
+export const WORKOUT_HISTORY_KEY = "@avenas/workout_history";
+
+export type CompletedSet = {
+  type: "warmup" | "working";
+  weight: string;
+  reps: string;
+  done: boolean;
+};
+
+export type CompletedExercise = {
+  name: string;
+  sets: CompletedSet[];
+  notes: string;
+};
+
+export type CompletedWorkout = {
+  id: string;
+  date: string;          // YYYY-MM-DD
+  completedAt: string;   // ISO timestamp
+  workoutName: string;
+  durationSeconds: number;
+  exercises: CompletedExercise[];
+};
 
 export type ProgramSet = {
   type: "warmup" | "working";

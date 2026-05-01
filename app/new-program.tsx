@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, LinearTransition, FadeIn } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
@@ -33,6 +33,7 @@ import BounceButton from "../components/BounceButton";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
 import { useTheme } from "../contexts/ThemeContext";
+import { useUnit } from "../contexts/UnitContext";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,14 @@ function KeyboardDismissIcon({ color }: { color: string }) {
       <Path d="M2 2.5C2 1.67 2.67 1 3.5 1h19c.83 0 1.5.67 1.5 1.5v10c0 .83-.67 1.5-1.5 1.5h-19C2.67 14 2 13.33 2 12.5v-10z" stroke={color} strokeWidth="1.4"/>
       <Path d="M6 5.5h1.2M10 5.5h1.2M14 5.5h1.2M18 5.5h1.2M6 8.5h1.2M10 8.5h1.2M14 8.5h1.2M18 8.5h1.2M8 11.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
       <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+    </Svg>
+  );
+}
+
+function DragHandleIcon({ color }: { color: string }) {
+  return (
+    <Svg width={16} height={12} viewBox="0 0 16 12" fill="none">
+      <Path d="M1 1.5h14M1 6h14M1 10.5h14" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
     </Svg>
   );
 }
@@ -129,6 +138,7 @@ interface ExerciseRowProps {
 
 function ExerciseRow({ exercise, exIndex, totalExercises, isFirst, isLast, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onMove, onEdit }: ExerciseRowProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const restSecs = exercise.restSeconds ?? 0;
   const sets = normaliseSets(exercise);
@@ -331,7 +341,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isFirst, isLast, isDar
           <Text style={[styles.exSetHeaderLabel, { color: t.ts, width: 28, textAlign: "center" }]}>Set</Text>
         </View>
         <View style={styles.exSetValueCol}>
-          <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>Weight</Text>
+          <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>{isKg ? "Weight (KG)" : "Weight (LBS)"}</Text>
         </View>
         <TouchableOpacity
           style={[styles.exSetValueCol, styles.exSetColRep, styles.exSetHeaderToggle]}
@@ -381,7 +391,6 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isFirst, isLast, isDar
 
             {/* Weight column */}
             <View style={styles.exSetValueCol}>
-              <View style={styles.exSetUnitSpacer} />
               <View style={[styles.exSetInputBox, { borderColor: divider }]}>
                 <TextInput
                   style={[styles.exSetInputText, { color: t.tp }]}
@@ -393,7 +402,6 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isFirst, isLast, isDar
                   selectTextOnFocus
                 />
               </View>
-              <Text style={[styles.exSetUnit, { color: t.ts }]}>kg</Text>
             </View>
 
             {/* Rep column */}
@@ -821,10 +829,180 @@ function Step1({
   );
 }
 
+// ─── Draggable Exercise List ──────────────────────────────────────────────────
+
+interface DraggableExerciseListProps {
+  exercises: Exercise[];
+  day: string;
+  isDark: boolean;
+  t: typeof APP_LIGHT;
+  onReorderExercises: (day: string, exercises: Exercise[]) => void;
+  onDragStateChange: (dragging: boolean) => void;
+  onRemoveExercise: (day: string, id: string) => void;
+  onEditExercise: (day: string, id: string) => void;
+}
+
+function DraggableExerciseList({
+  exercises, day, isDark, t,
+  onReorderExercises, onDragStateChange, onRemoveExercise, onEditExercise,
+}: DraggableExerciseListProps) {
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const activeIdxRef = useRef<number | null>(null);
+  const hoverIdxRef = useRef<number | null>(null);
+  const rowHeightRef = useRef(50);
+
+  // Keyed by exercise ID so offsets survive reorders without index mismatch.
+  // Using a Map means each exercise always owns its Animated.Value regardless of position changes.
+  const rowAnimsMap = useRef(new Map<string, Animated.Value>());
+  exercises.forEach(ex => {
+    if (!rowAnimsMap.current.has(ex.id)) rowAnimsMap.current.set(ex.id, new Animated.Value(0));
+  });
+
+  const exercisesRef = useRef(exercises);
+  exercisesRef.current = exercises;
+  const onReorderRef = useRef(onReorderExercises);
+  onReorderRef.current = onReorderExercises;
+  const onDragStateRef = useRef(onDragStateChange);
+  onDragStateRef.current = onDragStateChange;
+
+  // After a reorder, React commits the new order to native then this fires before the frame
+  // paints — resetting all offsets to 0 is invisible because exercises are already at their
+  // correct rendered positions. Always reset on exercises change; no flag needed.
+  useLayoutEffect(() => {
+    rowAnimsMap.current.forEach(a => a.setValue(0));
+  }, [exercises]);
+
+  const panResponders = useMemo(() =>
+    exercises.map((ex, idx) =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderGrant: () => {
+          activeIdxRef.current = idx;
+          hoverIdxRef.current = idx;
+          rowAnimsMap.current.forEach(a => a.setValue(0));
+          setActiveIdx(idx);
+          onDragStateRef.current(true);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        },
+        onPanResponderMove: (_, gs) => {
+          // Drive active row directly via its stable ID — synchronous, no React state needed
+          rowAnimsMap.current.get(ex.id)?.setValue(gs.dy);
+          const rh = rowHeightRef.current;
+          const exList = exercisesRef.current;
+          const newHover = Math.max(0, Math.min(exList.length - 1, Math.round(idx + gs.dy / rh)));
+          if (newHover !== hoverIdxRef.current) {
+            hoverIdxRef.current = newHover;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            // useNativeDriver: false runs on the JS thread where starting a new spring
+            // automatically cancels the previous one on the same value — no race conditions
+            exList.forEach((item, i) => {
+              if (i === idx) return;
+              let toVal = 0;
+              if (newHover > idx && i > idx && i <= newHover) toVal = -rh;
+              else if (newHover < idx && i < idx && i >= newHover) toVal = rh;
+              Animated.spring(rowAnimsMap.current.get(item.id)!, {
+                toValue: toVal,
+                useNativeDriver: false,
+                damping: 20,
+                stiffness: 280,
+              }).start();
+            });
+          }
+        },
+        onPanResponderRelease: () => {
+          const from = activeIdxRef.current!;
+          const to = hoverIdxRef.current ?? from;
+          if (to !== from) {
+            const arr = [...exercisesRef.current];
+            const [moved] = arr.splice(from, 1);
+            arr.splice(to, 0, moved);
+            onReorderRef.current(day, arr);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            // Don't reset anims here — useLayoutEffect resets them after React commits
+            // the new order so the reset is invisible (no jump-back glitch)
+          } else {
+            rowAnimsMap.current.forEach(a => a.setValue(0));
+          }
+          activeIdxRef.current = null;
+          hoverIdxRef.current = null;
+          setActiveIdx(null);
+          onDragStateRef.current(false);
+        },
+        onPanResponderTerminate: () => {
+          rowAnimsMap.current.forEach(a => a.setValue(0));
+          activeIdxRef.current = null;
+          hoverIdxRef.current = null;
+          setActiveIdx(null);
+          onDragStateRef.current(false);
+        },
+      })
+    ),
+  [exercises, day]);
+
+  const divider = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+
+  return (
+    <>
+      {exercises.map((ex, i) => {
+        const isActive = activeIdx === i;
+        const anim = rowAnimsMap.current.get(ex.id)!;
+        return (
+          <Animated.View
+            key={ex.id}
+            style={[
+              styles.daySummaryRow,
+              i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isActive ? "transparent" : divider },
+              { transform: [{ translateY: anim }], zIndex: isActive ? 10 : 1 },
+              isActive && {
+                backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)",
+                borderRadius: 8,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.2,
+                shadowRadius: 8,
+              },
+            ]}
+            onLayout={i === 0 ? (e) => { rowHeightRef.current = e.nativeEvent.layout.height; } : undefined}
+          >
+            <View {...panResponders[i].panHandlers} style={styles.dragHandleArea}>
+              <DragHandleIcon color={t.ts} />
+            </View>
+            <View style={[styles.daySummaryNumChip, { backgroundColor: ACCT + "18" }]}>
+              <Text style={[styles.daySummaryNum, { color: ACCT }]}>{i + 1}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.daySummaryNameBtn}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(day, ex.id); }}
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            >
+              <Text style={[styles.daySummaryName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                Alert.alert("Remove Exercise", `Remove "${ex.name}"?`, [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(day, ex.id) },
+                ]);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <TrashIcon size={18} color="#ef4444" />
+            </TouchableOpacity>
+          </Animated.View>
+        );
+      })}
+    </>
+  );
+}
+
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onMoveExercise, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onMoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -833,6 +1011,8 @@ function Step2({
   onUpdateExerciseSets: (day: string, id: string, sets: ProgramSet[]) => void;
   onRemoveExercise: (day: string, id: string) => void;
   onMoveExercise: (day: string, id: string, dir: "up" | "down") => void;
+  onReorderExercises: (day: string, exercises: Exercise[]) => void;
+  onDragStateChange: (dragging: boolean) => void;
   isDark: boolean;
   onFinish: () => void;
   isEditMode: boolean;
@@ -890,53 +1070,16 @@ function Step2({
                   </NeuCard>
                 ) : (
                   <NeuCard dark={isDark} style={styles.daySummaryCard} innerStyle={styles.daySummaryCardInner}>
-                    {exercises.map((ex, i) => (
-                      <Reanimated.View
-                        key={ex.id}
-                        layout={LinearTransition.duration(200)}
-                        style={[
-                          styles.daySummaryRow,
-                          i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)" },
-                        ]}
-                      >
-                        <View style={[styles.daySummaryNumChip, { backgroundColor: ACCT + "18" }]}>
-                          <Text style={[styles.daySummaryNum, { color: ACCT }]}>{i + 1}</Text>
-                        </View>
-                        <TouchableOpacity
-                          style={styles.daySummaryNameBtn}
-                          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(day, ex.id); }}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                        >
-                          <Text style={[styles.daySummaryName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
-                        </TouchableOpacity>
-                        <View style={styles.daySummaryActions}>
-                          <View style={styles.exArrows}>
-                            {i > 0 && (
-                              <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onMoveExercise(day, ex.id, "up"); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                                <Ionicons name="chevron-up" size={18} color={t.ts} />
-                              </TouchableOpacity>
-                            )}
-                            {i < exercises.length - 1 && (
-                              <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onMoveExercise(day, ex.id, "down"); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                                <Ionicons name="chevron-down" size={18} color={t.ts} />
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                          <TouchableOpacity
-                            onPress={() => {
-                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                              Alert.alert("Remove Exercise", `Remove "${ex.name}"?`, [
-                                { text: "Cancel", style: "cancel" },
-                                { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(day, ex.id) },
-                              ]);
-                            }}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <TrashIcon size={18} color="#ef4444" />
-                          </TouchableOpacity>
-                        </View>
-                      </Reanimated.View>
-                    ))}
+                    <DraggableExerciseList
+                      exercises={exercises}
+                      day={day}
+                      isDark={isDark}
+                      t={t}
+                      onReorderExercises={onReorderExercises}
+                      onDragStateChange={onDragStateChange}
+                      onRemoveExercise={onRemoveExercise}
+                      onEditExercise={onEditExercise}
+                    />
                   </NeuCard>
                 )}
                 <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
@@ -1018,6 +1161,7 @@ export default function NewProgramScreen() {
   const isEditMode = !!editId;
 
   const [step, setStep] = useState<1 | 2>(1);
+  const [scrollEnabled, setScrollEnabled] = useState(true);
   const [name, setName] = useState("");
   const [totalWeeks, setTotalWeeks] = useState(8);
   const [cycleDays, setCycleDays] = useState(7);
@@ -1290,6 +1434,10 @@ export default function NewProgramScreen() {
     });
   }, []);
 
+  const reorderExercises = useCallback((day: string, exercises: Exercise[]) => {
+    setWorkouts(prev => ({ ...prev, [day]: exercises }));
+  }, []);
+
   const deleteCustomExercise = useCallback((exName: string) => {
     const next = customExercises.filter(e => e.name !== exName);
     setCustomExercises(next);
@@ -1442,6 +1590,7 @@ export default function NewProgramScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         automaticallyAdjustKeyboardInsets
+        scrollEnabled={scrollEnabled}
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }}
       >
         <View style={styles.header}>
@@ -1475,6 +1624,8 @@ export default function NewProgramScreen() {
             onUpdateExerciseSets={updateExerciseSets}
             onRemoveExercise={removeExercise}
             onMoveExercise={moveExercise}
+            onReorderExercises={reorderExercises}
+            onDragStateChange={dragging => setScrollEnabled(!dragging)}
             isDark={isDark}
             onFinish={handleFinish}
             isEditMode={isEditMode}
@@ -1588,7 +1739,7 @@ const styles = StyleSheet.create({
   primaryBtnWrap:   { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   primaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
-  updateBtn:        { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 8, paddingHorizontal: 16, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 12 },
+  updateBtn:        { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 8, paddingHorizontal: 16, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.65, shadowRadius: 8 },
   updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 14, color: "#FFFFFF", letterSpacing: 0.3 },
 
   // Step 2 — workout days
@@ -1603,7 +1754,8 @@ const styles = StyleSheet.create({
   daySummaryCard:       { borderRadius: 16, marginBottom: 14 },
   daySummaryCardInner:  { paddingVertical: 4, paddingHorizontal: 0 },
   daySummaryEmpty:      { fontFamily: FontFamily.regular, fontSize: 13, fontStyle: "italic", paddingVertical: 14, paddingHorizontal: 16 },
-  daySummaryRow:        { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 16 },
+  daySummaryRow:        { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
+  dragHandleArea:       { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },
   daySummaryNumChip:    { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   daySummaryActions:    { flexDirection: "row", alignItems: "center", gap: 14 },
   daySummaryNum:        { fontFamily: FontFamily.bold, fontSize: 13 },

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing as ReEasing, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
@@ -22,7 +22,8 @@ import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { useUnit } from "../../contexts/UnitContext";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../../contexts/RestTimerContext";
@@ -42,6 +43,15 @@ function fmtTime(secs: number): string {
     return `${h}:${m}:${s}`;
   }
   return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
+}
+
+function fmtDuration(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  if (secs < 3600) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
 }
 
 function parseStoredDate(dateStr: string): Date {
@@ -87,6 +97,12 @@ function initLog(exercises: Exercise[]): WorkoutLog {
     };
   }
   return log;
+}
+
+function hasWorkoutProgress(log: WorkoutLog): boolean {
+  return Object.values(log).some(exLog =>
+    [...exLog.warmup, ...exLog.working].some(s => s.done || !!s.weight.trim() || !!s.reps.trim())
+  );
 }
 
 // ─── SetRow ────────────────────────────────────────────────────────────────────
@@ -273,14 +289,17 @@ interface ExerciseCardProps {
   onToggleSetType: (type: "warmup" | "working", localIdx: number) => void;
   onInputFocus: (nextFn: (() => void) | null) => void;
   activeSetFlatIdx: number | null;
+  isLocked?: boolean;
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirst, isLast, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onMoveUp, onMoveDown, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirst, isLast, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onMoveUp, onMoveDown, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const [editing, setEditing] = useState(false);
   const weightRefs = useRef<(TextInput | null)[]>([]);
   const repsRefs = useRef<(TextInput | null)[]>([]);
+  useEffect(() => { if (isLocked && editing) setEditing(false); }, [isLocked]);
 
   // Flatten all sets: warmup first, then working
   const programSets = normaliseSets(exercise);
@@ -308,22 +327,24 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
             <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
             <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1}>{exercise.name}</Text>
           </View>
-          <TouchableOpacity
-            onPress={() => setEditing(e => !e)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            {editing ? (
-              <View style={{
-                width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT,
-                alignItems: "center", justifyContent: "center",
-                shadowColor: ACCT, shadowOffset: { width: 1, height: 1 }, shadowOpacity: 0.5, shadowRadius: 3,
-              }}>
-                <Ionicons name="checkmark" size={14} color="#fff" />
-              </View>
-            ) : (
-              <Ionicons name="ellipsis-horizontal" size={22} color={t.ts} />
-            )}
-          </TouchableOpacity>
+          {!isLocked && (
+            <TouchableOpacity
+              onPress={() => setEditing(e => !e)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              {editing ? (
+                <View style={{
+                  width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT,
+                  alignItems: "center", justifyContent: "center",
+                  shadowColor: ACCT, shadowOffset: { width: 1, height: 1 }, shadowOpacity: 0.5, shadowRadius: 3,
+                }}>
+                  <Ionicons name="checkmark" size={14} color="#fff" />
+                </View>
+              ) : (
+                <Ionicons name="ellipsis-horizontal" size={22} color={t.ts} />
+              )}
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* ── Program notes ── */}
@@ -340,7 +361,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
             <Text style={[styles.colHeaderText, { color: t.ts }]}>PREV</Text>
           </View>
           <View style={styles.inputHeaderCol}>
-            <Text style={[styles.colHeaderText, { color: t.ts }]}>WEIGHT (KG)</Text>
+            <Text style={[styles.colHeaderText, { color: t.ts }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{isKg ? "WEIGHT (KG)" : "WEIGHT (LBS)"}</Text>
           </View>
           <View style={styles.inputHeaderCol}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 2 }}>
@@ -414,7 +435,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
 
               {/* PREV */}
               <View style={styles.prevCol}>
-                <Text style={[styles.prevText, { color: t.ts }]}>—</Text>
+                <Text style={[styles.prevText, { color: t.ts }]} numberOfLines={1}>—</Text>
               </View>
 
               {/* WEIGHT input */}
@@ -428,6 +449,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
                     placeholder={set.programSet?.weightKg || "—"}
                     placeholderTextColor={set.programSet?.weightKg ? `${t.tp}70` : t.ts}
                     value={set.weight}
+                    editable={!isLocked}
                     onFocus={() => onInputFocus(() => repsRefs.current[flatIdx]?.focus())}
                     onChangeText={v => onUpdateSet(set.type, set.localIdx, "weight", v)}
                     onEndEditing={() => onAutoTick(set.type, set.localIdx)}
@@ -461,6 +483,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
                       return hasTarget ? `${t.tp}70` : t.ts;
                     })()}
                     value={set.reps}
+                    editable={!isLocked}
                     onFocus={() => {
                       if (flatIdx < allSets.length - 1) {
                         onInputFocus(() => weightRefs.current[flatIdx + 1]?.focus());
@@ -494,7 +517,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
                   <CheckboxCell
                     done={set.done}
                     isDark={isDark}
-                    onToggle={() => onToggleDone(set.type, set.localIdx)}
+                    onToggle={isLocked ? () => {} : () => onToggleDone(set.type, set.localIdx)}
                   />
                 )}
               </View>
@@ -611,6 +634,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
             placeholder="Exercise notes..."
             placeholderTextColor={t.ts}
             value={exNotes}
+            editable={!isLocked}
             onChangeText={onUpdateNotes}
             onFocus={() => onInputFocus(null)}
             multiline
@@ -655,8 +679,27 @@ export default function WorkoutScreen() {
   const [isometricExIds, setIsometricExIds] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState("");
   const [showNotes, setShowNotes] = useState(false);
+  const [todaysCompletedWorkout, setTodaysCompletedWorkout] = useState<CompletedWorkout | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const notesY = useRef(0);
+
+  const lockedData = useMemo(() => {
+    if (!todaysCompletedWorkout) return null;
+    const exercises = todaysCompletedWorkout.exercises.map((ex, i) => ({
+      id: `locked_${i}`,
+      name: ex.name,
+      sets: [] as ProgramSet[],
+    }));
+    const lockedLog: WorkoutLog = {};
+    todaysCompletedWorkout.exercises.forEach((ex, i) => {
+      lockedLog[`locked_${i}`] = {
+        warmup: ex.sets.filter(s => s.type === "warmup").map(s => ({ weight: s.weight, reps: s.reps, done: s.done, fillKey: 0 })),
+        working: ex.sets.filter(s => s.type === "working").map(s => ({ weight: s.weight, reps: s.reps, done: s.done, fillKey: 0 })),
+        notes: ex.notes,
+      };
+    });
+    return { exercises, log: lockedLog };
+  }, [todaysCompletedWorkout]);
 
   // ── Timer modal ──────────────────────────────────────────────────────────────
   const [showTimerModal, setShowTimerModal] = useState(false);
@@ -690,6 +733,10 @@ export default function WorkoutScreen() {
   const swOffsetRef = useRef(0);
 
   const pendingChangingExId = useRef<string | null>(null);
+  const isWorkoutActiveRef = useRef(false);
+  useEffect(() => {
+    isWorkoutActiveRef.current = isRunning || hasWorkoutProgress(log);
+  }, [isRunning, log]);
 
   // Countdown — wall-clock based to avoid drift
   useEffect(() => {
@@ -729,16 +776,13 @@ export default function WorkoutScreen() {
         const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
         const found = programs.find(p => p.status === "active") ?? null;
         setActiveProgram(found);
-        if (found) {
+        // Don't overwrite exercises/log if a workout is already in progress
+        if (found && !isWorkoutActiveRef.current) {
           const workout = getTodaysWorkout(found);
           setWorkoutInfo(workout);
           if (workout) {
             setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
-            setLog(prev => {
-              const existingIds = Object.keys(prev).sort().join(",");
-              const newIds = workout.exercises.map(e => e.id).sort().join(",");
-              return existingIds === newIds ? prev : initLog(workout.exercises);
-            });
+            setLog(initLog(workout.exercises));
           }
         }
       })
@@ -748,6 +792,13 @@ export default function WorkoutScreen() {
       if (!v) return;
       const parsed: unknown = JSON.parse(v);
       if (Array.isArray(parsed)) setCustomExercises(parsed as CustomExercise[]);
+    }).catch(() => {});
+
+    const nd = new Date();
+    const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+    AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
+      const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
+      setTodaysCompletedWorkout(history.find(w => w.date === todayStr) ?? null);
     }).catch(() => {});
   }, []);
 
@@ -912,11 +963,49 @@ export default function WorkoutScreen() {
       return [...exLog.warmup, ...exLog.working].every(s => s.done);
     });
 
+  const saveWorkoutData = (): CompletedWorkout | null => {
+    if (!workoutInfo) return null;
+    const d = new Date();
+    const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+
+    AsyncStorage.getItem(WORKOUT_DATES_KEY).then(raw => {
+      const dates: string[] = raw ? JSON.parse(raw) : [];
+      if (!dates.includes(ds))
+        AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify([...dates, ds]));
+    }).catch(() => {});
+
+    const completed: CompletedWorkout = {
+      id: `workout_${Date.now()}`,
+      date: ds,
+      completedAt: d.toISOString(),
+      workoutName: workoutInfo.name,
+      durationSeconds: elapsedSeconds,
+      exercises: workoutInfo.exercises.map(ex => {
+        const exLog = log[ex.id];
+        return {
+          name: ex.name,
+          sets: [
+            ...(exLog?.warmup  ?? []).map(s => ({ type: "warmup"  as const, weight: s.weight, reps: s.reps, done: s.done })),
+            ...(exLog?.working ?? []).map(s => ({ type: "working" as const, weight: s.weight, reps: s.reps, done: s.done })),
+          ],
+          notes: exLog?.notes ?? "",
+        };
+      }),
+    };
+
+    AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
+      const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
+      AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify([completed, ...history]));
+    }).catch(() => {});
+
+    return completed;
+  };
+
   const handleFinish = () => {
     const doFinish = () => Alert.alert(
       "Workout Complete!",
       "Great session. Rest up and come back stronger.",
-      [{ text: "Done", onPress: () => { if (workoutInfo) setLog(initLog(workoutInfo.exercises)); stopTimer(); } }]
+      [{ text: "Done", onPress: () => { const c = saveWorkoutData(); if (c) setTodaysCompletedWorkout(c); stopTimer(); } }]
     );
 
     if (!allDone) {
@@ -945,6 +1034,39 @@ export default function WorkoutScreen() {
         },
       },
     ]);
+  };
+
+  const handleDiscardCompleted = () => {
+    Alert.alert(
+      "Redo Workout",
+      "Today's logged workout will be deleted. You can start fresh.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete & Redo", style: "destructive",
+          onPress: () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            const nd = new Date();
+            const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+            const targetId = todaysCompletedWorkout?.id;
+            AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
+              const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
+              const updated = history.filter(w => w.id !== targetId);
+              AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(updated));
+              if (!updated.some(w => w.date === todayStr)) {
+                AsyncStorage.getItem(WORKOUT_DATES_KEY).then(raw2 => {
+                  const dates: string[] = raw2 ? JSON.parse(raw2) : [];
+                  AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== todayStr)));
+                }).catch(() => {});
+              }
+            }).catch(() => {});
+            setTodaysCompletedWorkout(null);
+            if (workoutInfo) setLog(initLog(workoutInfo.exercises));
+            stopTimer();
+          },
+        },
+      ]
+    );
   };
 
   const deleteCustomExercise = (exName: string) => {
@@ -1054,13 +1176,66 @@ export default function WorkoutScreen() {
       >
         {/* Header scrolls with content */}
         <View style={styles.header}>
-          <Text style={[styles.headerName, { color: t.tp }]}>{workoutInfo.name.toUpperCase()}</Text>
+          <Text style={[styles.headerName, { color: t.tp }]}>
+            {(todaysCompletedWorkout?.workoutName ?? workoutInfo.name).toUpperCase()}
+          </Text>
           <Text style={[styles.headerSub, { color: t.ts }]}>
             {activeProgram.name} · Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}
           </Text>
         </View>
 
-        {workoutInfo.exercises.length === 0 ? (
+        {todaysCompletedWorkout && lockedData ? (
+          <>
+            {/* Completed banner */}
+            <View style={[styles.completedBanner, { backgroundColor: isDark ? "rgba(29,236,160,0.08)" : "rgba(29,236,160,0.07)", borderColor: `${ACCT}40` }]}>
+              <Ionicons name="checkmark-circle" size={16} color={ACCT} />
+              <Text style={[styles.completedBannerText, { color: ACCT }]}>
+                Logged{todaysCompletedWorkout.durationSeconds > 0 ? ` · ${fmtDuration(todaysCompletedWorkout.durationSeconds)}` : ""}
+              </Text>
+            </View>
+
+            {/* Locked exercise cards */}
+            {lockedData.exercises.map((exercise, i) => (
+              <ExerciseCard
+                key={exercise.id}
+                exercise={exercise as Exercise}
+                exIndex={i}
+                totalExercises={lockedData.exercises.length}
+                exLog={lockedData.log[exercise.id] ?? { warmup: [], working: [], notes: "" }}
+                isDark={isDark}
+                isFirst={i === 0}
+                isLast={i === lockedData.exercises.length - 1}
+                isLocked
+                onUpdateSet={() => {}} onToggleDone={() => {}} onAutoTick={() => {}}
+                exNotes={lockedData.log[exercise.id]?.notes ?? ""}
+                onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
+                onMoveUp={() => {}} onMoveDown={() => {}} onChangeExercise={() => {}}
+                onRemoveExercise={() => {}} isIsometric={false} onToggleIsometric={() => {}}
+                onToggleSetType={() => {}} onInputFocus={() => {}} activeSetFlatIdx={null}
+              />
+            ))}
+
+            {/* Edit in Journal */}
+            <BounceButton onPress={() => router.push("/journal")} style={{ marginTop: 16 }}>
+              <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
+                <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+                  <Ionicons name="book-outline" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
+                  <Text style={[styles.finishBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Edit in Journal</Text>
+                </View>
+              </View>
+            </BounceButton>
+
+            {/* Redo Workout */}
+            <BounceButton onPress={handleDiscardCompleted} style={{ marginTop: 10 }}>
+              <View style={[styles.finishWrap, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", shadowOpacity: 0 }]}>
+                <View style={[styles.finishBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
+                  <TrashIcon size={16} color={t.ts} />
+                  <Text style={[styles.finishBtnText, { color: t.ts }]}>Redo Workout</Text>
+                </View>
+              </View>
+            </BounceButton>
+          </>
+        ) : workoutInfo.exercises.length === 0 ? (
           <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 16 }}>
             <View style={{ padding: 32, alignItems: "center", gap: 8 }}>
               <Text style={[styles.emptyTitle, { color: t.tp, fontSize: 16 }]}>No exercises added</Text>
@@ -1112,37 +1287,39 @@ export default function WorkoutScreen() {
           })
         )}
 
-        {/* Bottom action row: notes icon left, Add Exercise centred */}
-        <View style={styles.bottomActionRow}>
-          {workoutInfo.exercises.length > 0 && (
-            <Reanimated.View style={[styles.notesToggleWrap, notesBtnStyle]}>
-              <BounceButton onPress={openNotes}>
-                <View style={styles.notesToggleBtn}>
-                  <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
-                    <Ionicons name="document-text-outline" size={20} color={t.tp} />
-                  </NeuCard>
-                  <View style={styles.notesTogglePlus}>
-                    <Text style={styles.notesTogglePlusText}>+</Text>
+        {/* Bottom action row — only when not locked */}
+        {!todaysCompletedWorkout && (
+          <View style={styles.bottomActionRow}>
+            {workoutInfo.exercises.length > 0 && (
+              <Reanimated.View style={[styles.notesToggleWrap, notesBtnStyle]}>
+                <BounceButton onPress={openNotes}>
+                  <View style={styles.notesToggleBtn}>
+                    <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+                      <Ionicons name="document-text-outline" size={20} color={t.tp} />
+                    </NeuCard>
+                    <View style={styles.notesTogglePlus}>
+                      <Text style={styles.notesTogglePlusText}>+</Text>
+                    </View>
+                  </View>
+                </BounceButton>
+              </Reanimated.View>
+            )}
+            <View style={{ flex: 1, alignItems: "center" }}>
+              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}>
+                <View style={styles.addExBtnWrap}>
+                  <View style={styles.addExBtn}>
+                    <Ionicons name="add" size={18} color="#fff" />
+                    <Text style={styles.addExText}>Add Exercise</Text>
                   </View>
                 </View>
               </BounceButton>
-            </Reanimated.View>
-          )}
-          <View style={{ flex: 1, alignItems: "center" }}>
-            <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}>
-              <View style={styles.addExBtnWrap}>
-                <View style={styles.addExBtn}>
-                  <Ionicons name="add" size={18} color="#fff" />
-                  <Text style={styles.addExText}>Add Exercise</Text>
-                </View>
-              </View>
-            </BounceButton>
+            </View>
+            {workoutInfo.exercises.length > 0 && <View style={styles.notesToggleWrap} />}
           </View>
-          {workoutInfo.exercises.length > 0 && <View style={styles.notesToggleWrap} />}
-        </View>
+        )}
 
-        {/* Session Notes — animated expand/collapse */}
-        {workoutInfo.exercises.length > 0 && (
+        {/* Session Notes — only when not locked */}
+        {!todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (
           <View onLayout={e => { notesY.current = e.nativeEvent.layout.y; }}>
           <ExpandablePanel expanded={showNotes} duration={500}>
             <NeuCard dark={isDark} style={{ marginBottom: 4, borderRadius: 16 }}>
@@ -1160,7 +1337,7 @@ export default function WorkoutScreen() {
                   multiline
                   value={notes}
                   onChangeText={setNotes}
-                  onFocus={() => handleInputFocus(null)}
+                  onFocus={() => { handleInputFocus(null); }}
                   textAlignVertical="top"
                 />
               </View>
@@ -1169,8 +1346,8 @@ export default function WorkoutScreen() {
           </View>
         )}
 
-        {/* Finish button */}
-        {workoutInfo.exercises.length > 0 && (
+        {/* Finish button — only when not locked */}
+        {!todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (
           <BounceButton onPress={handleFinish} style={{ marginTop: 16 }}>
             <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
               <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
@@ -1186,7 +1363,14 @@ export default function WorkoutScreen() {
       {/* Fixed top bar — workout timer + discard + rest timer */}
       <View style={[styles.topBar, { top: insets.top }]}>
         <View style={styles.topBarLeft}>
-          {isRunning ? (
+          {todaysCompletedWorkout ? (
+            <View style={styles.workoutTimerPill}>
+              <Ionicons name="checkmark-circle" size={14} color={ACCT} />
+              <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>
+                {todaysCompletedWorkout.durationSeconds > 0 ? fmtTime(todaysCompletedWorkout.durationSeconds) : "Done"}
+              </Text>
+            </View>
+          ) : isRunning ? (
             <>
               <View style={styles.workoutTimerPill}>
                 <Ionicons name="time-outline" size={14} color={APP_LIGHT.tp} />
@@ -1534,6 +1718,10 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
 
+  // Completed / locked banner
+  completedBanner:     { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, borderWidth: 1, marginBottom: 14 },
+  completedBannerText: { fontFamily: FontFamily.semibold, fontSize: 14 },
+
   // Header
   header:       { paddingBottom: 14, gap: 2, marginBottom: 4 },
   headerLabel:  { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.4 },
@@ -1555,7 +1743,7 @@ const styles = StyleSheet.create({
   exNumInner:   { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
   exNumText:    { fontFamily: FontFamily.bold, fontSize: 13 },
   exTitleBlock: { flex: 1, justifyContent: "center", gap: 6 },
-  exNumLabel:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.8 },
+  exNumLabel:   { fontFamily: FontFamily.semibold, fontSize: 13 },
   exName:       { fontFamily: FontFamily.bold, fontSize: 22, flex: 1 },
   exNotesRow:    { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
   exNotesHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
@@ -1566,7 +1754,7 @@ const styles = StyleSheet.create({
 
   // Column headers
   colHeaderRow:   { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 4, paddingBottom: 4 },
-  colHeaderText:  { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 1, textAlign: "center" },
+  colHeaderText:  { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: "center" },
   repRangeHeader: { fontFamily: FontFamily.bold, fontSize: 10, letterSpacing: 0.5, textAlign: "center", marginBottom: 1 },
   headerDivider:  { height: 1, marginBottom: 4, opacity: 0.6 },
 
@@ -1592,7 +1780,7 @@ const styles = StyleSheet.create({
   // Add / remove set
   addSetBtn:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingVertical: 6, marginTop: 2, borderRadius: 8, borderWidth: 1, borderStyle: "dashed" },
   addSetText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
-  removeSetBtn:  { width: 26, height: 26, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  removeSetBtn:  { width: 24, height: 24, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 
   // Edit actions
   editMoveRow:   { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
@@ -1621,7 +1809,7 @@ const styles = StyleSheet.create({
   finishBtnActive:  { backgroundColor: ACCT },
   finishBtnText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
 
-  checkCircle:      { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  checkCircle:      { width: 24, height: 24, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   addExBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 10, paddingHorizontal: 22, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 },
   addExText:        { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
