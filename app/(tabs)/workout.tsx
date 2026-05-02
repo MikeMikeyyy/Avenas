@@ -1024,14 +1024,14 @@ export default function WorkoutScreen() {
     return () => { clearInterval(id); sub.remove(); };
   }, [swRunning]);
 
-  const loadData = useCallback(() => {
+  const loadData = useCallback((forceReload = false) => {
     AsyncStorage.getItem(PROGRAMS_KEY)
       .then(raw => {
         const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
         const found = programs.find(p => p.status === "active") ?? null;
         setActiveProgram(found);
-        // Don't overwrite exercises/log if a workout is already in progress
-        if (found && !isWorkoutActiveRef.current) {
+        // Don't overwrite exercises/log if a workout is already in progress (unless forceReload after discard)
+        if (found && (!isWorkoutActiveRef.current || forceReload)) {
           const workout = getTodaysWorkout(found);
           setWorkoutInfo(workout);
           if (workout) {
@@ -1288,8 +1288,9 @@ export default function WorkoutScreen() {
         text: "Discard", style: "destructive",
         onPress: () => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          if (workoutInfo) setLog(initLog(workoutInfo.exercises));
           stopTimer();
+          // Reload from the latest saved program so any edits made during the workout are picked up
+          loadData(true);
         },
       },
     ]);
