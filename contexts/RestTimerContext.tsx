@@ -3,6 +3,7 @@ import { AppState } from "react-native";
 
 type RestTimerCtx = {
   restDisplay: number;
+  restTotal: number;
   restBannerActive: boolean;
   startRestTimer: (seconds: number) => void;
   dismissRestTimer: () => void;
@@ -15,6 +16,7 @@ export function RestTimerProvider({ children }: { children: React.ReactNode }) {
   const restTimerEndRef = useRef<number | null>(null);
   const [restBannerActive, setRestBannerActive] = useState(false);
   const [restDisplay, setRestDisplay] = useState(0);
+  const [restTotal, setRestTotal] = useState(0);
 
   const dismissRestTimer = useCallback(() => {
     restTimerEndRef.current = null;
@@ -42,6 +44,7 @@ export function RestTimerProvider({ children }: { children: React.ReactNode }) {
     if (seconds > 0) {
       restTimerEndRef.current = Date.now() + seconds * 1000;
       setRestDisplay(seconds);
+      setRestTotal(seconds);
       setRestBannerActive(true);
     } else {
       dismissRestTimer();
@@ -57,7 +60,7 @@ export function RestTimerProvider({ children }: { children: React.ReactNode }) {
   }, [dismissRestTimer]);
 
   return (
-    <RestTimerContext.Provider value={{ restDisplay, restBannerActive, startRestTimer, dismissRestTimer, adjustRestTimer }}>
+    <RestTimerContext.Provider value={{ restDisplay, restTotal, restBannerActive, startRestTimer, dismissRestTimer, adjustRestTimer }}>
       {children}
     </RestTimerContext.Provider>
   );
