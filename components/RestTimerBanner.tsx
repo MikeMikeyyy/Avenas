@@ -44,15 +44,13 @@ export default function RestTimerBanner() {
         <View style={styles.handle} />
         <View style={styles.row}>
           <Text style={[styles.label, { color: t.tp }]}>REST</Text>
+          <BounceButton onPress={() => handleAdjust(-15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
+            <Text style={[styles.adjText, { color: t.tp }]}>−15s</Text>
+          </BounceButton>
           <Text style={[styles.time, { color: t.tp }]}>{fmtTime(restDisplay)}</Text>
-          <View style={styles.adjusters}>
-            <BounceButton onPress={() => handleAdjust(-15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
-              <Text style={[styles.adjText, { color: t.tp }]}>−15s</Text>
-            </BounceButton>
-            <BounceButton onPress={() => handleAdjust(15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
-              <Text style={[styles.adjText, { color: t.tp }]}>+15s</Text>
-            </BounceButton>
-          </View>
+          <BounceButton onPress={() => handleAdjust(15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
+            <Text style={[styles.adjText, { color: t.tp }]}>+15s</Text>
+          </BounceButton>
           <BounceButton onPress={dismissRestTimer} style={styles.skipBtn}>
             <Text style={styles.skipText}>Skip</Text>
           </BounceButton>
@@ -69,7 +67,6 @@ const styles = StyleSheet.create({
   row:         { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 14, gap: 10 },
   label:       { fontFamily: FontFamily.bold, fontSize: 12, letterSpacing: 1.2, opacity: 0.5 },
   time:        { fontFamily: FontFamily.bold, fontSize: 28, letterSpacing: 1, flex: 1, textAlign: "center" },
-  adjusters:   { flexDirection: "row", gap: 6 },
   adjBtn:      { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
   adjText:     { fontFamily: FontFamily.semibold, fontSize: 13 },
   skipBtn:     { borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
