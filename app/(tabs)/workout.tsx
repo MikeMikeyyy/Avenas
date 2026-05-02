@@ -1,10 +1,11 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing as ReEasing, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
   Alert, Animated, Keyboard, Modal, AppState, LayoutAnimation,
+  PanResponder, Easing,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -154,6 +155,269 @@ function KeyboardDismissIcon({ color }: { color: string }) {
   );
 }
 
+// ─── DragHandleIcon ────────────────────────────────────────────────────────────
+
+function DragHandleIcon({ color }: { color: string }) {
+  return (
+    <Svg width={16} height={12} viewBox="0 0 16 12" fill="none">
+      <Path d="M1 1.5h14M1 6h14M1 10.5h14" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+// ─── WorkoutDraggableList ──────────────────────────────────────────────────────
+
+interface WorkoutDraggableListProps {
+  exercises: Exercise[];
+  isDark: boolean;
+  t: typeof APP_LIGHT | typeof APP_DARK;
+  onReorderExercises: (exercises: Exercise[]) => void;
+  onRemoveExercise: (id: string) => void;
+  onEditExercise: (id: string) => void;
+}
+
+function WorkoutDraggableList({ exercises, isDark, t, onReorderExercises, onRemoveExercise, onEditExercise }: WorkoutDraggableListProps) {
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const activeIdxRef = useRef<number | null>(null);
+  const hoverIdxRef = useRef<number | null>(null);
+  const rowHeightRef = useRef(50);
+
+  const rowAnimsMap = useRef(new Map<string, Animated.Value>());
+  exercises.forEach(ex => {
+    if (!rowAnimsMap.current.has(ex.id)) rowAnimsMap.current.set(ex.id, new Animated.Value(0));
+  });
+
+  const exercisesRef = useRef(exercises);
+  exercisesRef.current = exercises;
+  const onReorderRef = useRef(onReorderExercises);
+  onReorderRef.current = onReorderExercises;
+
+  useLayoutEffect(() => {
+    rowAnimsMap.current.forEach(a => a.setValue(0));
+  }, [exercises]);
+
+  const panResponders = useMemo(() =>
+    exercises.map((ex, idx) =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderGrant: () => {
+          activeIdxRef.current = idx;
+          hoverIdxRef.current = idx;
+          rowAnimsMap.current.forEach(a => a.setValue(0));
+          setActiveIdx(idx);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        },
+        onPanResponderMove: (_, gs) => {
+          rowAnimsMap.current.get(ex.id)?.setValue(gs.dy);
+          const rh = rowHeightRef.current;
+          const exList = exercisesRef.current;
+          const newHover = Math.max(0, Math.min(exList.length - 1, Math.round(idx + gs.dy / rh)));
+          if (newHover !== hoverIdxRef.current) {
+            hoverIdxRef.current = newHover;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            exList.forEach((item, i) => {
+              if (i === idx) return;
+              let toVal = 0;
+              if (newHover > idx && i > idx && i <= newHover) toVal = -rh;
+              else if (newHover < idx && i < idx && i >= newHover) toVal = rh;
+              Animated.spring(rowAnimsMap.current.get(item.id)!, {
+                toValue: toVal, useNativeDriver: false, damping: 20, stiffness: 280,
+              }).start();
+            });
+          }
+        },
+        onPanResponderRelease: () => {
+          const from = activeIdxRef.current!;
+          const to = hoverIdxRef.current ?? from;
+          if (to !== from) {
+            const arr = [...exercisesRef.current];
+            const [moved] = arr.splice(from, 1);
+            arr.splice(to, 0, moved);
+            onReorderRef.current(arr);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          } else {
+            rowAnimsMap.current.forEach(a => a.setValue(0));
+          }
+          activeIdxRef.current = null;
+          hoverIdxRef.current = null;
+          setActiveIdx(null);
+        },
+        onPanResponderTerminate: () => {
+          rowAnimsMap.current.forEach(a => a.setValue(0));
+          activeIdxRef.current = null;
+          hoverIdxRef.current = null;
+          setActiveIdx(null);
+        },
+      })
+    ),
+  [exercises]);
+
+  const divider = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+
+  return (
+    <>
+      {exercises.map((ex, i) => {
+        const isActive = activeIdx === i;
+        const anim = rowAnimsMap.current.get(ex.id)!;
+        return (
+          <Animated.View
+            key={ex.id}
+            style={[
+              styles.woDragRow,
+              i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isActive ? "transparent" : divider },
+              { transform: [{ translateY: anim }], zIndex: isActive ? 10 : 1 },
+              isActive && {
+                backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)",
+                borderRadius: 8,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.2,
+                shadowRadius: 8,
+              },
+            ]}
+            onLayout={i === 0 ? (e) => { rowHeightRef.current = e.nativeEvent.layout.height; } : undefined}
+          >
+            <View {...panResponders[i].panHandlers} style={styles.woDragHandle}>
+              <DragHandleIcon color={t.ts} />
+            </View>
+            <View style={[styles.woDragNumChip, { backgroundColor: ACCT + "18" }]}>
+              <Text style={[styles.woDragNum, { color: ACCT }]}>{i + 1}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.woDragNameBtn}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(ex.id); }}
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            >
+              <Text style={[styles.woDragName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                Alert.alert("Remove Exercise", `Remove "${ex.name}"?`, [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(ex.id) },
+                ]);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <TrashIcon size={18} color="#ef4444" />
+            </TouchableOpacity>
+          </Animated.View>
+        );
+      })}
+    </>
+  );
+}
+
+// ─── WorkoutReorderSheet ───────────────────────────────────────────────────────
+
+interface WorkoutReorderSheetProps {
+  visible: boolean;
+  workoutName: string;
+  exercises: Exercise[];
+  isDark: boolean;
+  t: typeof APP_LIGHT | typeof APP_DARK;
+  onReorderExercises: (exercises: Exercise[]) => void;
+  onRemoveExercise: (id: string) => void;
+  onEditExercise: (id: string) => void;
+  onClose: () => void;
+}
+
+function WorkoutReorderSheet({ visible, workoutName, exercises, isDark, t, onReorderExercises, onRemoveExercise, onEditExercise, onClose }: WorkoutReorderSheetProps) {
+  const slideY = useRef(new Animated.Value(500)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) {
+          slideY.setValue(g.dy);
+          backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300));
+        }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.8) {
+          Animated.parallel([
+            Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+          ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
+        } else {
+          Animated.parallel([
+            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+    })
+  ).current;
+
+  useEffect(() => {
+    if (visible) {
+      slideY.setValue(500);
+      backdropOpacity.setValue(0);
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const closeSheet = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
+  }, [slideY, backdropOpacity, onClose]);
+
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
+      <View style={styles.woReorderBackdrop}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
+        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
+        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+          <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
+            <View style={styles.woReorderHandle} />
+          </View>
+          <View style={[styles.woReorderHeader, { borderBottomColor: divider }]}>
+            <Text style={[styles.woReorderTitle, { color: t.tp }]}>Reorder Exercises</Text>
+            <Text style={[styles.woReorderSubtitle, { color: t.ts }]}>{workoutName}</Text>
+          </View>
+          <View style={styles.woReorderListWrap}>
+            <WorkoutDraggableList
+              exercises={exercises}
+              isDark={isDark}
+              t={t}
+              onReorderExercises={onReorderExercises}
+              onRemoveExercise={onRemoveExercise}
+              onEditExercise={onEditExercise}
+            />
+          </View>
+          <View style={styles.woReorderDoneRow}>
+            <BounceButton
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}
+              accessibilityLabel="Done"
+              accessibilityRole="button"
+            >
+              <View style={styles.woReorderDoneWrap}>
+                <View style={styles.woReorderDoneBtn}>
+                  <Text style={styles.woReorderDone}>Done</Text>
+                </View>
+              </View>
+            </BounceButton>
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
 // ─── ExpandablePanel ───────────────────────────────────────────────────────────
 
 function ExpandablePanel({ expanded, children, duration = 280, clip = false }: { expanded: boolean; children: React.ReactNode; duration?: number; clip?: boolean }) {
@@ -271,8 +535,6 @@ interface ExerciseCardProps {
   totalExercises: number;
   exLog: ExerciseLog;
   isDark: boolean;
-  isFirst: boolean;
-  isLast: boolean;
   onUpdateSet: (type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string) => void;
   onToggleDone: (type: "warmup" | "working", idx: number) => void;
   onAutoTick: (type: "warmup" | "working", idx: number) => void;
@@ -280,8 +542,7 @@ interface ExerciseCardProps {
   exNotes: string;
   onAddSet: () => void;
   onRemoveSet: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
+  onOpenReorder: () => void;
   onChangeExercise: () => void;
   onRemoveExercise: () => void;
   isIsometric: boolean;
@@ -292,7 +553,7 @@ interface ExerciseCardProps {
   isLocked?: boolean;
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirst, isLast, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onMoveUp, onMoveDown, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
@@ -534,20 +795,13 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, isFirs
             {/* Move row */}
             <View style={[styles.editMoveRow, { borderTopColor: divider }]}>
               <TouchableOpacity
-                onPress={onMoveUp}
-                disabled={isFirst}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                style={{ opacity: isFirst ? 0.3 : 1 }}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(); }}
+                activeOpacity={0.7}
+                style={styles.exReorderBtn}
+                accessibilityLabel="Reorder exercises"
+                accessibilityRole="button"
               >
-                <Ionicons name="chevron-up" size={18} color={t.ts} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={onMoveDown}
-                disabled={isLast}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                style={{ opacity: isLast ? 0.3 : 1 }}
-              >
-                <Ionicons name="chevron-down" size={18} color={t.ts} />
+                <DragHandleIcon color={t.ts} />
               </TouchableOpacity>
               <Text style={[styles.editMoveLabel, { color: t.ts, flex: 1 }]}>Move exercise</Text>
               <TouchableOpacity
@@ -948,6 +1202,11 @@ export default function WorkoutScreen() {
   const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
   const startCollapse = (exId: string) => setCollapsingIds(prev => new Set(prev).add(exId));
 
+  const [reorderOpen, setReorderOpen] = useState(false);
+  const reorderExercises = useCallback((exercises: Exercise[]) => {
+    setWorkoutInfo(prev => prev ? { ...prev, exercises } : prev);
+  }, []);
+
   const addExercise = (name: string, idOffset = 0) => {
     const id = `session_${Date.now() + idOffset}`;
     const ex: Exercise = { id, name, sets: Array.from({ length: 3 }, () => ({ type: "working" as const })) };
@@ -1203,13 +1462,11 @@ export default function WorkoutScreen() {
                 totalExercises={lockedData.exercises.length}
                 exLog={lockedData.log[exercise.id] ?? { warmup: [], working: [], notes: "" }}
                 isDark={isDark}
-                isFirst={i === 0}
-                isLast={i === lockedData.exercises.length - 1}
                 isLocked
                 onUpdateSet={() => {}} onToggleDone={() => {}} onAutoTick={() => {}}
                 exNotes={lockedData.log[exercise.id]?.notes ?? ""}
                 onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
-                onMoveUp={() => {}} onMoveDown={() => {}} onChangeExercise={() => {}}
+                onOpenReorder={() => {}} onChangeExercise={() => {}}
                 onRemoveExercise={() => {}} isIsometric={false} onToggleIsometric={() => {}}
                 onToggleSetType={() => {}} onInputFocus={() => {}} activeSetFlatIdx={null}
               />
@@ -1259,8 +1516,6 @@ export default function WorkoutScreen() {
                   totalExercises={workoutInfo.exercises.length}
                   exLog={exLog}
                   isDark={isDark}
-                  isFirst={i === 0}
-                  isLast={i === workoutInfo.exercises.length - 1}
                   onUpdateSet={(type, idx, field, value) => updateSet(exercise.id, type, idx, field, value)}
                   onToggleDone={(type, idx) => toggleDone(exercise.id, type, idx)}
                   onAutoTick={(type, idx) => autoTickIfComplete(exercise.id, type, idx)}
@@ -1268,8 +1523,7 @@ export default function WorkoutScreen() {
                   onUpdateNotes={notes => updateExNotes(exercise.id, notes)}
                   onAddSet={() => addSet(exercise.id)}
                   onRemoveSet={() => removeSet(exercise.id)}
-                  onMoveUp={() => moveExercise(exercise.id, "up")}
-                  onMoveDown={() => moveExercise(exercise.id, "down")}
+                  onOpenReorder={() => setReorderOpen(true)}
                   onChangeExercise={() => setChangingExId(exercise.id)}
                   onRemoveExercise={() => startCollapse(exercise.id)}
                   onToggleSetType={(type, localIdx) => toggleSetType(exercise.id, type, localIdx)}
@@ -1686,6 +1940,18 @@ export default function WorkoutScreen() {
           isDark={isDark}
         />
       )}
+
+      <WorkoutReorderSheet
+        visible={reorderOpen}
+        workoutName={workoutInfo?.name ?? ""}
+        exercises={workoutInfo?.exercises ?? []}
+        isDark={isDark}
+        t={t}
+        onReorderExercises={reorderExercises}
+        onRemoveExercise={id => { startCollapse(id); setReorderOpen(false); }}
+        onEditExercise={id => { setChangingExId(id); setReorderOpen(false); }}
+        onClose={() => setReorderOpen(false)}
+      />
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
       <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
@@ -1817,6 +2083,32 @@ const styles = StyleSheet.create({
   // Keyboard floating dismiss button
   kbFloatRow: { flexDirection: "row", justifyContent: "flex-end", paddingRight: 10, paddingTop: 8, paddingBottom: 4 },
   kbFloatBtn: { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 9, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
+
+  // Reorder button in exercise edit panel
+  exReorderBtn:   { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+
+  // Workout reorder sheet
+  woReorderBackdrop:  { flex: 1, justifyContent: "flex-end" },
+  woReorderOverlay:   { backgroundColor: "rgba(0,0,0,0.45)" },
+  woReorderSheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36 },
+  woReorderHandleArea:{ paddingVertical: 12, alignItems: "center" },
+  woReorderHandle:    { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
+  woReorderHeader:    { alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1 },
+  woReorderTitle:     { fontFamily: FontFamily.bold, fontSize: 16 },
+  woReorderSubtitle:  { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
+  woReorderListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
+  woReorderDoneRow:   { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
+  woReorderDoneWrap:  { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  woReorderDoneBtn:   { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
+  woReorderDone:      { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
+
+  // Draggable list rows
+  woDragRow:      { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
+  woDragHandle:   { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },
+  woDragNumChip:  { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  woDragNum:      { fontFamily: FontFamily.bold, fontSize: 13 },
+  woDragNameBtn:  { flex: 1, flexDirection: "row", alignItems: "center" },
+  woDragName:     { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
 
   // Empty states
   emptyWrap:      { flex: 1, alignItems: "center", paddingHorizontal: 40, gap: 14 },
