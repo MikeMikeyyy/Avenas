@@ -117,6 +117,10 @@ function SetRow({ isActive, children }: { isActive: boolean; children: React.Rea
   const containerStyle = useAnimatedStyle(() => ({
     borderRadius: 14,
     backgroundColor: interpolateColor(glow.value, [0, 1], ["rgba(0,0,0,0)", `${ACCT}33`]),
+    shadowColor: ACCT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: glow.value * 0.55,
+    shadowRadius: glow.value * 12,
   }));
   const borderStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
 
