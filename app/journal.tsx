@@ -28,7 +28,7 @@ import ActivityCalendar from "../components/ActivityCalendar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
-  type SavedProgram, type CompletedWorkout,
+  getCurrentWeek, type SavedProgram, type CompletedWorkout,
 } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
@@ -239,6 +239,35 @@ function DeleteSheet({ visible, isDark, entryTitle, onConfirm, onClose, title = 
   );
 }
 
+// ─── Active badge (pulsing green pill) ────────────────────────────────────────
+
+function ActiveBadge() {
+  const scale    = useRef(new Animated.Value(1)).current;
+  const dotPulse = useRef(new Animated.Value(0.25)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(scale,    { toValue: 1.08, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+          Animated.timing(dotPulse, { toValue: 1,    duration: 900, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(scale,    { toValue: 1,    duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+          Animated.timing(dotPulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+        ]),
+      ])
+    ).start();
+  }, []);
+
+  return (
+    <Animated.View style={[styles.activeBadge, { transform: [{ scale }] }]}>
+      <Animated.View style={[styles.activeBadgeDot, { opacity: dotPulse }]} />
+      <Text style={styles.activeBadgeText}>Active</Text>
+    </Animated.View>
+  );
+}
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function JournalScreen() {
@@ -361,6 +390,7 @@ export default function JournalScreen() {
         )}
       </TouchableOpacity>
 
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
@@ -372,8 +402,58 @@ export default function JournalScreen() {
           <View style={{ width: 66 }} />
         </View>
 
-        {/* Activity calendar */}
-        <ActivityCalendar isDark={isDark} workoutDates={workoutDates} activeProgram={activeProgram} />
+        {/* Programs shortcut */}
+        <View style={styles.programsBlock}>
+          <View style={styles.programsHeadingRow}>
+            {activeProgram && (
+              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Active Program</Text>
+            )}
+            <BounceButton onPress={() => router.push("/program-history")}>
+              <NeuCard dark={isDark} radius={20} innerStyle={styles.allProgramsBtnInner}>
+                <Text style={[styles.allProgramsText, { color: t.tp }]}>All Programs</Text>
+                <Ionicons name="chevron-forward" size={14} color={t.tp} />
+              </NeuCard>
+            </BounceButton>
+          </View>
+          {activeProgram && (
+            <BounceButton
+              style={{ marginBottom: 10 }}
+              onPress={() => router.push({ pathname: "/program-history-detail", params: { programId: activeProgram.id } })}
+            >
+              <NeuCard dark={isDark} style={styles.activeProgramCard}>
+                <View style={styles.apCardInner}>
+                  <View style={styles.apNameRow}>
+                    <Text style={[styles.apName, { color: t.tp, flex: 1 }]} numberOfLines={1}>{activeProgram.name}</Text>
+                    <ActiveBadge />
+                    <Ionicons name="chevron-forward" size={16} color={t.ts} style={{ marginLeft: 6 }} />
+                  </View>
+                  <Text style={[styles.apSub, { color: t.ts }]}>
+                    Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}
+                  </Text>
+                  <View style={styles.apDateRow}>
+                    <Ionicons name="calendar-outline" size={13} color={t.ts} />
+                    <Text style={[styles.apDate, { color: t.ts }]}>Started {activeProgram.startDate}</Text>
+                  </View>
+                  <View style={styles.apProgressRow}>
+                    {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => {
+                      const filled = i < getCurrentWeek(activeProgram);
+                      return (
+                        <View
+                          key={i}
+                          style={[
+                            styles.apProgressSeg,
+                            { backgroundColor: filled ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                            filled && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
+                          ]}
+                        />
+                      );
+                    })}
+                  </View>
+                </View>
+              </NeuCard>
+            </BounceButton>
+          )}
+        </View>
 
         {/* Recent activity heading */}
         {timeline.length > 0 && (
@@ -424,7 +504,7 @@ export default function JournalScreen() {
                           current={sessionNum}
                           total={progInfo.totalSessions}
                           accent={ACCT}
-                          track={t.div}
+                          track={isDark ? "rgba(255,255,255,0.1)" : t.div}
                         />
                       </View>
                     )}
@@ -488,6 +568,23 @@ const styles = StyleSheet.create({
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1, color: TP },
 
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18, color: TP, marginTop: 24, marginBottom: 12 },
+
+  programsBlock:       { marginTop: 20, marginBottom: 4 },
+  programsHeadingRow:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
+  activeProgramCard:{ borderRadius: 20 },
+  apCardInner:      { padding: 18, gap: 8 },
+  apNameRow:        { flexDirection: "row", alignItems: "center", gap: 8 },
+  apName:           { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
+  activeBadge:     { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: ACCT, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
+  activeBadgeDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
+  activeBadgeText: { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff", letterSpacing: 0.3 },
+  apSub:            { fontFamily: FontFamily.regular, fontSize: 13, color: TS },
+  apDateRow:        { flexDirection: "row", alignItems: "center", gap: 6 },
+  apDate:           { fontFamily: FontFamily.regular, fontSize: 13, color: TS },
+  apProgressRow:    { flexDirection: "row", gap: 4, marginTop: 4 },
+  apProgressSeg:    { flex: 1, height: 6, borderRadius: 3 },
+  allProgramsBtnInner: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 7, paddingHorizontal: 14 },
+  allProgramsText:     { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.2 },
 
   emptyCard:    { borderRadius: 24, marginBottom: 20 },
   emptyInner:   { padding: 32, alignItems: "center", gap: 12 },

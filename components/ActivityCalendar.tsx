@@ -84,8 +84,8 @@ function MonthSection({
   const rows: CellState[][] = [];
   for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
 
-  const darkCell  = isDark ? "#363A52" : "#babeccff";
-  const lightCell = isDark ? "#252840" : "#DDE0EA";
+  const darkCell  = isDark ? "#474C6D" : "#babeccff";
+  const lightCell = isDark ? "rgba(255,255,255,0.05)" : "#DDE0EA";
 
   const cellBg = (state: CellState): object => {
     if (!state) return {};

@@ -18,6 +18,7 @@ interface NeuCardProps {
   bg?: string;
   shadowSize?: "sm" | "md";
   dark?: boolean;
+  fill?: boolean;
 }
 
 export default function NeuCard({
@@ -29,10 +30,13 @@ export default function NeuCard({
   bg,
   shadowSize = "md",
   dark = false,
+  fill = false,
 }: NeuCardProps) {
   const resolvedBg = bg ?? (dark ? NEU_BG_DARK : NEU_BG);
   const isInset = variant === "inset";
   const sm = shadowSize === "sm";
+
+  const fillStyle = fill ? { flex: 1 } : undefined;
 
   // Dark mode: clean single shadow, no light highlight
   if (dark) {
@@ -48,6 +52,7 @@ export default function NeuCard({
             shadowRadius: 8,
             elevation: 4,
           },
+          fillStyle,
           style,
         ]}
       >
@@ -60,6 +65,7 @@ export default function NeuCard({
               borderWidth: 1,
               borderColor: "rgba(255,255,255,0.2)",
             },
+            fillStyle,
             innerStyle,
           ]}
         >
@@ -85,19 +91,23 @@ export default function NeuCard({
           shadowOpacity: isInset ? 1 : 0.5,
           shadowRadius: isInset ? 5 : sm ? 5 : 8,
         },
+        fillStyle,
         style,
       ]}
     >
       {/* White/light shadow wrapper (top-left highlight) */}
       <View
-        style={{
-          borderRadius: radius,
-          backgroundColor: resolvedBg,
-          shadowColor: shadowB,
-          shadowOffset: { width: sm ? -2 : -3, height: sm ? -2 : -3 },
-          shadowOpacity: 1,
-          shadowRadius: isInset ? 5 : sm ? 3 : 4,
-        }}
+        style={[
+          {
+            borderRadius: radius,
+            backgroundColor: resolvedBg,
+            shadowColor: shadowB,
+            shadowOffset: { width: sm ? -2 : -3, height: sm ? -2 : -3 },
+            shadowOpacity: 1,
+            shadowRadius: isInset ? 5 : sm ? 3 : 4,
+          },
+          fillStyle,
+        ]}
       >
         {/* Clip layer — prevents any shadow bleed at corners */}
         <View
@@ -109,6 +119,7 @@ export default function NeuCard({
               borderWidth: 1,
               borderColor: "rgba(255,255,255,0.85)",
             },
+            fillStyle,
             innerStyle,
           ]}
         >

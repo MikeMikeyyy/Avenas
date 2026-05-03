@@ -16,6 +16,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import TrashIcon from "../components/TrashIcon";
 import { useTheme } from "../contexts/ThemeContext";
+import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 
 // Accordion panel — animates height from 0 ↔ measured natural height.
 // Measures once via a hidden layout layer, then re-uses that height.
@@ -261,9 +262,11 @@ interface ActiveProgramCardProps {
   isDark: boolean;
   onEdit: () => void;
   onSetWorkout: () => void;
+  onComplete: () => void;
+  onCopy: () => void;
 }
 
-const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onEdit, onSetWorkout }: ActiveProgramCardProps) {
+const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onEdit, onSetWorkout, onComplete, onCopy }: ActiveProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
   const btnContent = isDark ? APP_DARK.bg : "#fff";
@@ -294,43 +297,33 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
           <View style={styles.metaRow}>
             <Ionicons name="calendar-outline" size={14} color={t.ts} />
             <Text style={[styles.metaText, { color: t.ts }]}>Started {program.startDate}</Text>
-            <View style={styles.metaDot} />
-            <DumbbellIcon size={14} color={t.ts} />
-            <Text style={[styles.metaText, { color: t.ts }]}>{program.trainingDays} days / {program.cycleDays} day cycle</Text>
           </View>
 
           <View style={styles.cycleGrid}>
-            {chunk(program.cyclePattern, 5).map((row, rowIdx) => (
-              <View key={rowIdx} style={styles.cycleRow}>
-                {row.map((day, i) => {
-                  const isTraining = day !== "Rest";
-                  return (
-                    <View
-                      key={i}
-                      style={[
-                        styles.cycleChip,
-                        { backgroundColor: isTraining ? ACCT + "22" : t.div },
-                        isTraining && { borderColor: ACCT, borderWidth: 1 },
-                      ]}
-                    >
-                      <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                        {day}
-                      </Text>
-                    </View>
-                  );
-                })}
-                {Array.from({ length: 5 - row.length }).map((_, i) => (
-                  <View key={`ph-${i}`} style={[styles.cycleChip, { opacity: 0 }]} />
-                ))}
-              </View>
-            ))}
+            {program.cyclePattern.map((day, i) => {
+              const isTraining = day !== "Rest";
+              return (
+                <View
+                  key={i}
+                  style={[
+                    styles.cycleChip,
+                    { backgroundColor: isTraining ? ACCT + "22" : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                    isTraining && { borderColor: ACCT, borderWidth: 1 },
+                  ]}
+                >
+                  <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
+                    {day}
+                  </Text>
+                </View>
+              );
+            })}
           </View>
         </View>
       </TouchableOpacity>
 
       <ExpandablePanel expanded={isExpanded}>
         <View style={[styles.cardActions, { borderTopColor: t.div }]}>
-          <View style={styles.activeBtnRow}>
+          <View style={[styles.activeBtnRow, { marginBottom: 10 }]}>
             <BounceButton style={{ flex: 1 }} onPress={onSetWorkout} accessibilityLabel="Set workout day" accessibilityRole="button">
               <View style={[styles.activePrimaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
                 <View style={[styles.activePrimaryBtn, { backgroundColor: btnBg }]}>
@@ -343,6 +336,20 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
               <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
                 <Ionicons name="create-outline" size={16} color={t.tp} />
                 <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Edit</Text>
+              </NeuCard>
+            </BounceButton>
+          </View>
+          <View style={styles.activeBtnRow}>
+            <BounceButton style={{ flex: 1 }} onPress={onComplete}>
+              <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                <Ionicons name="checkmark-circle-outline" size={16} color={ACCT} />
+                <Text style={[styles.activeSecondaryBtnText, { color: ACCT }]}>Mark Complete</Text>
+              </NeuCard>
+            </BounceButton>
+            <BounceButton style={{ flex: 1 }} onPress={onCopy}>
+              <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                <Ionicons name="copy-outline" size={16} color={t.tp} />
+                <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Duplicate</Text>
               </NeuCard>
             </BounceButton>
           </View>
@@ -360,27 +367,30 @@ interface ProgramCardProps {
   isExpanded: boolean;
   onToggle: () => void;
   onMakeActive: () => void;
+  onDuplicate: () => void;
+  onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }
 
-const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpanded, onToggle, onMakeActive, onEdit, onDelete }: ProgramCardProps) {
+const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpanded, onToggle, onMakeActive, onDuplicate, onCopy, onEdit, onDelete }: ProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
   const btnContent = isDark ? APP_DARK.bg : "#fff";
   const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
 
   const computedWeek = getCurrentWeek(program);
-  const filledWeeks = program.status === "completed" ? program.totalWeeks : computedWeek;
+  const filledWeeks = program.status === "completed" ? program.currentWeek : computedWeek;
   const statusColor =
     program.status === "active"    ? ACCT :
-    program.status === "paused"    ? Colors.warning : t.ts;
+    program.status === "paused"    ? Colors.warning :
+    program.status === "completed" ? ACCT : t.ts;
   const statusLabel =
     program.status === "active"    ? "Active" :
     program.status === "paused"    ? "Paused" :
     program.status === "created"   ? "Not Started" : "Completed";
   const weekText =
-    program.status === "completed" ? `Completed ${program.totalWeeks} of ${program.totalWeeks} weeks` :
+    program.status === "completed" ? `Completed ${program.currentWeek} of ${program.totalWeeks} weeks` :
     program.status === "created"   ? `${program.totalWeeks} weeks planned` :
     `Week ${computedWeek} of ${program.totalWeeks}`;
   const dateLabel = program.status === "created" ? "Created" : "Started";
@@ -392,7 +402,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
           <View style={styles.rowBetween}>
             <Text style={[styles.programName, { color: t.tp }]} numberOfLines={1}>{program.name}</Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View style={[styles.statusBadge, { borderColor: statusColor }]}>
+              <View style={[styles.statusBadge, { backgroundColor: isDark ? `${statusColor}22` : `${statusColor}18` }]}>
                 <Text style={[styles.statusBadgeText, { color: statusColor }]}>{statusLabel}</Text>
               </View>
               <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={16} color={t.ts} />
@@ -401,70 +411,95 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
 
           <View style={styles.progressRow}>
             {Array.from({ length: program.totalWeeks }).map((_, i) => (
-              <View key={i} style={[styles.progressSeg, { backgroundColor: i < filledWeeks ? statusColor : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < filledWeeks && program.status !== "completed" && { shadowColor: statusColor, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
+              <View key={i} style={[styles.progressSeg, { backgroundColor: i < filledWeeks ? statusColor : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < filledWeeks && { shadowColor: statusColor, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
             ))}
           </View>
           <Text style={[styles.weekLabel, { color: t.ts }]}>{weekText}</Text>
-          <View style={styles.metaRow}>
-            <Ionicons name="calendar-outline" size={13} color={t.ts} />
-            <Text style={[styles.metaText, { color: t.ts }]}>{dateLabel} {program.startDate}</Text>
-            <View style={styles.metaDot} />
-            <DumbbellIcon size={13} color={t.ts} />
-            <Text style={[styles.metaText, { color: t.ts }]}>{program.trainingDays} days / {program.cycleDays} day cycle</Text>
+          <View style={{ gap: 4 }}>
+            <View style={styles.metaRow}>
+              <Ionicons name="calendar-outline" size={13} color={t.ts} />
+              <Text style={[styles.metaText, { color: t.ts }]}>{dateLabel} {program.startDate}</Text>
+            </View>
+            {program.status === "completed" && program.completedDate && (
+              <View style={styles.metaRow}>
+                <Ionicons name="flag-outline" size={13} color={ACCT} />
+                <Text style={[styles.metaText, { color: ACCT }]}>Completed {program.completedDate}</Text>
+              </View>
+            )}
           </View>
           <View style={styles.cycleGrid}>
-            {chunk(program.cyclePattern, 5).map((row, rowIdx) => (
-              <View key={rowIdx} style={styles.cycleRow}>
-                {row.map((day, i) => {
-                  const isTraining = day !== "Rest";
-                  return (
-                    <View
-                      key={i}
-                      style={[
-                        styles.cycleChip,
-                        { backgroundColor: isTraining ? statusColor + "22" : t.div },
-                        isTraining && { borderColor: statusColor, borderWidth: 1 },
-                      ]}
-                    >
-                      <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                        {day}
-                      </Text>
-                    </View>
-                  );
-                })}
-                {Array.from({ length: 5 - row.length }).map((_, i) => (
-                  <View key={`ph-${i}`} style={[styles.cycleChip, { opacity: 0 }]} />
-                ))}
-              </View>
-            ))}
+            {program.cyclePattern.map((day, i) => {
+              const isTraining = day !== "Rest";
+              return (
+                <View
+                  key={i}
+                  style={[
+                    styles.cycleChip,
+                    { backgroundColor: isTraining ? statusColor + "22" : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                    isTraining && { borderColor: statusColor, borderWidth: 1 },
+                  ]}
+                >
+                  <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
+                    {day}
+                  </Text>
+                </View>
+              );
+            })}
           </View>
         </View>
       </TouchableOpacity>
 
       <ExpandablePanel expanded={isExpanded}>
         <View style={[styles.cardActions, { borderTopColor: t.div }]}>
-          <BounceButton onPress={onMakeActive} style={{ marginBottom: 10 }}>
-            <View style={[styles.activePrimaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
-              <View style={[styles.activePrimaryBtn, { backgroundColor: btnBg }]}>
-                <Ionicons name="checkmark-circle-outline" size={16} color={btnContent} />
-                <Text style={[styles.activePrimaryBtnText, { color: btnContent }]}>Make Active Program</Text>
+          {program.status === "completed" ? (
+            <>
+              <View style={styles.activeBtnRow}>
+                <BounceButton style={{ flex: 1 }} onPress={onDuplicate}>
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                    <Ionicons name="copy-outline" size={16} color={t.tp} />
+                    <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Duplicate</Text>
+                  </NeuCard>
+                </BounceButton>
+                <BounceButton style={{ flex: 1 }} onPress={onDelete}>
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                    <TrashIcon size={16} color="#E53935" />
+                    <Text style={styles.deleteBtnText}>Delete</Text>
+                  </NeuCard>
+                </BounceButton>
               </View>
-            </View>
-          </BounceButton>
-          <View style={styles.activeBtnRow}>
-            <BounceButton style={{ flex: 1 }} onPress={onEdit}>
-              <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                <Ionicons name="create-outline" size={16} color={t.tp} />
-                <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Edit</Text>
-              </NeuCard>
-            </BounceButton>
-            <BounceButton style={{ flex: 1 }} onPress={onDelete}>
-              <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                <TrashIcon size={16} color="#E53935" />
-                <Text style={styles.deleteBtnText}>Delete</Text>
-              </NeuCard>
-            </BounceButton>
-          </View>
+            </>
+          ) : (
+            <>
+              <BounceButton onPress={onMakeActive} style={{ marginBottom: 10 }}>
+                <View style={[styles.activePrimaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
+                  <View style={[styles.activePrimaryBtn, { backgroundColor: btnBg }]}>
+                    <Ionicons name="checkmark-circle-outline" size={16} color={btnContent} />
+                    <Text style={[styles.activePrimaryBtnText, { color: btnContent }]}>Make Active Program</Text>
+                  </View>
+                </View>
+              </BounceButton>
+              <View style={styles.activeBtnRow}>
+                <BounceButton style={{ flex: 1 }} onPress={onCopy}>
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                    <Ionicons name="copy-outline" size={16} color={t.tp} />
+                    <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Duplicate</Text>
+                  </NeuCard>
+                </BounceButton>
+                <BounceButton style={{ flex: 1 }} onPress={onEdit}>
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                    <Ionicons name="create-outline" size={16} color={t.tp} />
+                    <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Edit</Text>
+                  </NeuCard>
+                </BounceButton>
+                <BounceButton style={{ flex: 1 }} onPress={onDelete}>
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                    <TrashIcon size={16} color="#E53935" />
+                    <Text style={styles.deleteBtnText}>Delete</Text>
+                  </NeuCard>
+                </BounceButton>
+              </View>
+            </>
+          )}
         </View>
       </ExpandablePanel>
     </NeuCard>
@@ -478,21 +513,30 @@ export default function ProgramsScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const { isRunning } = useWorkoutTimer();
 
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [setWorkoutOpen, setSetWorkoutOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const todayFormatted = () => {
+    const d = new Date();
+    return `${String(d.getDate()).padStart(2, "0")} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  };
+
   const handleMakeActive = async (program: SavedProgram) => {
-    const today = new Date();
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const todayStr = `${String(today.getDate()).padStart(2, "0")} ${months[today.getMonth()]} ${today.getFullYear()}`;
+    const todayStr = todayFormatted();
     const updated = programs.map(p => {
       if (p.id === program.id) {
         return { ...p, status: "active" as const, startDate: todayStr, currentWeek: 1 };
       }
       if (p.status === "active") {
         const week = getCurrentWeek(p);
+        if (week >= p.totalWeeks) {
+          return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: todayStr };
+        }
         return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week };
       }
       return p;
@@ -500,6 +544,50 @@ export default function ProgramsScreen() {
     setPrograms(updated);
     setExpandedId(null);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+  };
+
+  const handleCompleteProgram = () => {
+    if (!activeProgram) return;
+    const weeksRemaining = activeProgram.totalWeeks - getCurrentWeek(activeProgram);
+    const message = weeksRemaining > 0
+      ? `Are you sure you want to mark this program as complete? You still have ${weeksRemaining} week${weeksRemaining === 1 ? "" : "s"} remaining.`
+      : "Are you sure you want to mark this program as complete?";
+    Alert.alert("Mark as Complete", message, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Complete",
+        style: "destructive",
+        onPress: async () => {
+          const todayStr = todayFormatted();
+          const updated = programs.map(p =>
+            p.id === activeProgram.id
+              ? { ...p, status: "completed" as const, currentWeek: getCurrentWeek(activeProgram), completedDate: todayStr }
+              : p
+          );
+          setPrograms(updated);
+          setExpandedId(null);
+          await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+        },
+      },
+    ]);
+  };
+
+  const handleDuplicateProgram = async (program: SavedProgram) => {
+    const todayStr = todayFormatted();
+    const copy: SavedProgram = {
+      ...program,
+      id: `program_${Date.now()}`,
+      status: "created",
+      currentWeek: 0,
+      startDate: todayStr,
+      cycleOffset: undefined,
+      completedDate: undefined,
+    };
+    const updated = [...programs, copy];
+    setPrograms(updated);
+    setExpandedId(null);
+    await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    Alert.alert("Program Duplicated", `"${program.name}" has been duplicated. Find it in your program list to start or edit.`);
   };
 
   const handleDeleteProgram = (program: SavedProgram) => {
@@ -637,7 +725,19 @@ export default function ProgramsScreen() {
               program={activeProgram}
               isDark={isDark}
               onEdit={() => router.push({ pathname: "/new-program", params: { id: activeProgram.id } })}
-              onSetWorkout={() => setSetWorkoutOpen(true)}
+              onSetWorkout={() => {
+                if (isRunning) {
+                  Alert.alert(
+                    "Workout In Progress",
+                    "Please end or discard your current workout before changing the workout day.",
+                    [{ text: "OK" }]
+                  );
+                } else {
+                  setSetWorkoutOpen(true);
+                }
+              }}
+              onComplete={handleCompleteProgram}
+              onCopy={() => handleDuplicateProgram(activeProgram)}
             />
           </>
         )}
@@ -669,6 +769,8 @@ export default function ProgramsScreen() {
               isExpanded={expandedId === p.id}
               onToggle={() => setExpandedId(expandedId === p.id ? null : p.id)}
               onMakeActive={() => handleMakeActive(p)}
+              onDuplicate={() => handleDuplicateProgram(p)}
+              onCopy={() => handleDuplicateProgram(p)}
               onEdit={() => router.push({ pathname: "/new-program", params: { id: p.id } })}
               onDelete={() => handleDeleteProgram(p)}
             />
@@ -719,9 +821,9 @@ const styles = StyleSheet.create({
   programCard:        { marginBottom: 12, borderRadius: 20 },
   programCardInner:   { padding: 16, gap: 10 },
   programName:        { fontFamily: FontFamily.semibold, fontSize: 15, flex: 1, marginRight: 8 },
-  statusBadge:        { borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 3 },
+  statusBadge:        { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   statusBadgeText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
-  activeBadge:        { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: ACCT, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.6, shadowRadius: 10 },
+  activeBadge:        { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: ACCT, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
   activeBadgeDot:     { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   activeBadgeText:    { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff", letterSpacing: 0.3 },
 
@@ -738,9 +840,8 @@ const styles = StyleSheet.create({
   cardActions:        { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 0 },
   deleteBtnText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#E53935", letterSpacing: 0.2 },
 
-  cycleGrid:          { gap: 4 },
-  cycleRow:           { flexDirection: "row", gap: 4 },
-  cycleChip:          { flex: 1, alignItems: "center", paddingVertical: 6, paddingHorizontal: 2, borderRadius: 8 },
+  cycleGrid:          { flexDirection: "row", flexWrap: "wrap", gap: 4 },
+  cycleChip:          { alignItems: "center", paddingVertical: 6, paddingHorizontal: 8, borderRadius: 8, minWidth: 60 },
   cycleChipText:      { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
 
   // Set Workout Picker

@@ -335,21 +335,24 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
         <View style={styles.exSetBadgeCol}>
           <Text style={[styles.exSetHeaderLabel, { color: t.ts, width: 28, textAlign: "center" }]}>Set</Text>
         </View>
-        <View style={styles.exSetValueCol}>
+        <View style={[styles.exSetValueCol, { flexDirection: "column", alignItems: "center", gap: 1 }]}>
+          <Text style={[styles.exSetTargetLabel, { color: t.ts }]}>Target</Text>
           <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>{isKg ? "Weight (KG)" : "Weight (LBS)"}</Text>
         </View>
         <TouchableOpacity
-          style={[styles.exSetValueCol, styles.exSetColRep, styles.exSetHeaderToggle]}
+          style={[styles.exSetValueCol, styles.exSetColRep, styles.exSetHeaderToggle, { flexDirection: "column", alignItems: "center", gap: 1 }]}
           onPress={toggleAllRepMode}
           activeOpacity={0.7}
         >
-          <View style={styles.exSetHeaderToggleSpacer} />
-          <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>
-            {exercise.isIsometric
-              ? (currentRepMode === "range" ? "Hold Range" : "Hold")
-              : (currentRepMode === "range" ? "Rep Range" : "Reps")}
-          </Text>
-          <Ionicons name="chevron-down" size={12} color={t.ts} style={{ marginLeft: 2 }} />
+          <Text style={[styles.exSetTargetLabel, { color: t.ts }]}>Target</Text>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>
+              {exercise.isIsometric
+                ? (currentRepMode === "range" ? "Hold Range" : "Hold")
+                : (currentRepMode === "range" ? "Rep Range" : "Reps")}
+            </Text>
+            <Ionicons name="chevron-down" size={12} color={t.ts} style={{ marginLeft: 2 }} />
+          </View>
         </TouchableOpacity>
       </View>
 
@@ -1901,6 +1904,7 @@ const styles = StyleSheet.create({
   exTogglePillText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   exSetHeaderRow:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6, borderTopWidth: 1, paddingRight: 16 },
   exSetHeaderLabel: { fontFamily: FontFamily.semibold, fontSize: 13 },
+  exSetTargetLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.8, textTransform: "uppercase" },
   exSetHeaderToggle:{ flexDirection: "row", alignItems: "center", justifyContent: "center" },
   exSetHeaderToggleSpacer: { width: 14 },
   exSetRow:         { flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 48, borderTopWidth: 1, paddingRight: 16 },
@@ -1909,7 +1913,7 @@ const styles = StyleSheet.create({
   exSetColRep:      { width: 128 },
   exSetUnitSpacer:  { width: 22 },
   exSetBadge:       { width: 28, height: 28, borderRadius: 6, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  exSetBadgeText:   { fontFamily: FontFamily.bold, fontSize: 12 },
+  exSetBadgeText:   { fontFamily: FontFamily.semibold, fontSize: 15 },
   exSetInputBox:    { height: 32, width: 56, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   exSetInputText:   { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", width: "100%" },
   exSetUnit:        { fontFamily: FontFamily.semibold, fontSize: 13, marginLeft: 4 },

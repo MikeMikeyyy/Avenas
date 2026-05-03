@@ -63,11 +63,11 @@ export default function RestTimerBanner() {
         </View>
         <View style={styles.row}>
           <Text style={[styles.label, { color: t.tp }]}>REST</Text>
-          <BounceButton onPress={() => handleAdjust(-15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
+          <BounceButton onPress={() => handleAdjust(-15)} style={[styles.adjBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}>
             <Text style={[styles.adjText, { color: t.tp }]}>−15s</Text>
           </BounceButton>
           <Text style={[styles.time, { color: t.tp }]}>{fmtTime(restDisplay)}</Text>
-          <BounceButton onPress={() => handleAdjust(15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
+          <BounceButton onPress={() => handleAdjust(15)} style={[styles.adjBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}>
             <Text style={[styles.adjText, { color: t.tp }]}>+15s</Text>
           </BounceButton>
           <BounceButton onPress={dismissRestTimer} style={styles.skipBtn}>

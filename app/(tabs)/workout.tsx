@@ -490,7 +490,7 @@ function ExpandablePanel({ expanded, children, duration = 280, clip = false }: {
 
 // ─── CheckboxCell ──────────────────────────────────────────────────────────────
 
-function CheckboxCell({ done, isDark, onToggle }: { done: boolean; isDark: boolean; onToggle: () => void }) {
+function CheckboxCell({ done, isDark, isActive, onToggle }: { done: boolean; isDark: boolean; isActive?: boolean; onToggle: () => void }) {
   const scale = useRef(new Animated.Value(1)).current;
   const wasDone = useRef(done);
 
@@ -523,7 +523,7 @@ function CheckboxCell({ done, isDark, onToggle }: { done: boolean; isDark: boole
       } : {
         backgroundColor: "transparent",
         borderWidth: 1,
-        borderColor: isDark ? APP_DARK.ts : APP_LIGHT.ts,
+        borderColor: isDark ? "rgba(255,255,255,0.75)" : APP_LIGHT.ts,
       }, { transform: [{ scale }] }]}>
         {done && <Ionicons name="checkmark" size={14} color="#fff" />}
       </Animated.View>
@@ -650,6 +650,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           if (!set.isWarmup) workingCounter.count += 1;
           const setLabel = set.isWarmup ? "W" : workingCounter.count;
           const isLast = flatIdx === allSets.length - 1;
+          const rowIsActive = !editing && flatIdx === activeSetFlatIdx;
 
           return (
             <CollapsibleCard
@@ -659,7 +660,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
               expanding={flatIdx === newlyAddedIdx}
               naturalHeight={flatIdx === newlyAddedIdx ? setRowHeight.current : undefined}
             >
-            <SetRow isActive={!editing && flatIdx === activeSetFlatIdx}>
+            <SetRow isActive={rowIsActive}>
             <View
               style={styles.dataRow}
               onLayout={(flatIdx !== newlyAddedIdx && flatIdx !== collapsingSetIdx) ? e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setRowHeight.current = h; } : undefined}
@@ -700,19 +701,19 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
               {/* PREV */}
               <View style={styles.prevCol}>
-                <Text style={[styles.prevText, { color: t.ts }]} numberOfLines={1}>—</Text>
+                <Text style={[styles.prevText, { color: `${t.tp}66` }]} numberOfLines={1}>—</Text>
               </View>
 
               {/* WEIGHT input */}
               <View style={styles.inputCell}>
-                <View style={[styles.inputBox, { backgroundColor: t.bg, borderWidth: 1, borderColor: isDark ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.07)" }]}>
+                <View style={[styles.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                   <TextInput
                     key={`w-${set.type}-${set.localIdx}-${set.fillKey}`}
                     ref={r => { weightRefs.current[flatIdx] = r; }}
-                    style={[styles.inputBoxText, { color: t.tp }]}
+                    style={[styles.inputBoxText, { color: isDark ? "#ffffff" : t.tp }]}
                     keyboardType="decimal-pad"
                     placeholder={set.programSet?.weightKg || "—"}
-                    placeholderTextColor={set.programSet?.weightKg ? `${t.tp}70` : t.ts}
+                    placeholderTextColor={`${t.tp}66`}
                     value={set.weight}
                     editable={!isLocked}
                     onFocus={() => onInputFocus(() => repsRefs.current[flatIdx]?.focus())}
@@ -725,11 +726,11 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
               {/* REPS input */}
               <View style={styles.inputCell}>
-                <View style={[styles.inputBox, { backgroundColor: t.bg, borderWidth: 1, borderColor: isDark ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.07)" }]}>
+                <View style={[styles.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                   <TextInput
                     key={`r-${set.type}-${set.localIdx}-${set.fillKey}`}
                     ref={r => { repsRefs.current[flatIdx] = r; }}
-                    style={[styles.inputBoxText, { color: t.tp }]}
+                    style={[styles.inputBoxText, { color: isDark ? "#ffffff" : t.tp }]}
                     keyboardType="decimal-pad"
                     placeholder={(() => {
                       const ps = set.programSet;
@@ -745,7 +746,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     placeholderTextColor={(() => {
                       const ps = set.programSet;
                       const hasTarget = ps?.reps || ps?.repsMin || ps?.repsMax;
-                      return hasTarget ? `${t.tp}70` : t.ts;
+                      return `${t.tp}66`;
                     })()}
                     value={set.reps}
                     editable={!isLocked}
@@ -782,6 +783,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   <CheckboxCell
                     done={set.done}
                     isDark={isDark}
+                    isActive={rowIsActive}
                     onToggle={isLocked ? () => {} : () => onToggleDone(set.type, set.localIdx)}
                   />
                 )}
@@ -926,7 +928,7 @@ export default function WorkoutScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isRunning, elapsedSeconds, startTimer, stopTimer } = useWorkoutTimer();
-  const { startRestTimer } = useRestTimer();
+  const { startRestTimer, dismissRestTimer } = useRestTimer();
 
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[] } | null>(null);
@@ -1293,6 +1295,7 @@ export default function WorkoutScreen() {
         onPress: () => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           stopTimer();
+          dismissRestTimer();
           // Reload from the latest saved program so any edits made during the workout are picked up
           loadData(true);
         },
@@ -1605,9 +1608,10 @@ export default function WorkoutScreen() {
           </View>
         )}
 
-        {/* Finish button — only when not locked */}
-        {!todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (
-          <BounceButton onPress={handleFinish} style={{ marginTop: 16 }}>
+
+        {/* Complete Workout button — inline at bottom of scroll, only while running */}
+        {isRunning && !todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (
+          <BounceButton onPress={handleFinish} style={{ marginHorizontal: 0, marginTop: 12, marginBottom: 16 }}>
             <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
               <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
                 <Ionicons name="checkmark-circle" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
@@ -1616,7 +1620,6 @@ export default function WorkoutScreen() {
             </View>
           </BounceButton>
         )}
-
       </ScrollView>
 
       {/* Fixed top bar — workout timer + discard + rest timer */}
@@ -1636,7 +1639,7 @@ export default function WorkoutScreen() {
                 <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>{fmtTime(elapsedSeconds)}</Text>
               </View>
               <BounceButton onPress={handleDiscard}>
-                <View style={[styles.topIconBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                   <TrashIcon size={18} color={t.ts} />
                 </View>
               </BounceButton>
@@ -1759,7 +1762,7 @@ export default function WorkoutScreen() {
                       return (
                         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 16 }}>
                           <BounceButton
-                            style={[styles.timerAdjust, { backgroundColor: t.div, opacity: showAdj ? 1 : 0 }]}
+                            style={[styles.timerAdjust, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div, opacity: showAdj ? 1 : 0 }]}
                             onPress={showAdj ? () => {
                               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                               const v = Math.max(5, countdownDuration - 15);
@@ -1787,7 +1790,7 @@ export default function WorkoutScreen() {
                           </BounceButton>
 
                           <BounceButton
-                            style={[styles.timerAdjust, { backgroundColor: t.div, opacity: showAdj ? 1 : 0 }]}
+                            style={[styles.timerAdjust, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div, opacity: showAdj ? 1 : 0 }]}
                             onPress={showAdj ? () => {
                               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                               const v = countdownDuration + 15;

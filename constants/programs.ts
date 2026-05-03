@@ -88,6 +88,7 @@ export type SavedProgram = {
   currentWeek: number;
   status: "active" | "completed" | "paused" | "created";
   startDate: string;
+  completedDate?: string;
   cycleOffset?: number;
   trainingDays: number;
   cycleDays: number;
