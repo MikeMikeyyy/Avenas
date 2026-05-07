@@ -10,6 +10,9 @@ import {
   PanResponder,
   Easing,
   TouchableWithoutFeedback,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -20,18 +23,18 @@ import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Haptics from "expo-haptics";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import TrashIcon from "../components/TrashIcon";
-import ActivityCalendar from "../components/ActivityCalendar";
+import JournalCalendar from "../components/JournalCalendar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   getCurrentWeek, type SavedProgram, type CompletedWorkout,
 } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
-import { useUnit } from "../contexts/UnitContext";
 
 const JOURNAL_KEY = "@avenas_journal_entries";
 
@@ -268,6 +271,276 @@ function ActiveBadge() {
   );
 }
 
+// ─── Workout picker sheet (multi-step) ────────────────────────────────────────
+
+type PickerStep = "menu" | "active" | "others" | "program" | "custom";
+
+function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect, onClose }: {
+  visible: boolean; isDark: boolean;
+  activeProgram: SavedProgram | null; programs: SavedProgram[];
+  onSelect: (name: string, addToProgramId?: string, fromProgramId?: string) => void; onClose: () => void;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const insets = useSafeAreaInsets();
+  const slideY = useRef(new Animated.Value(600)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const customInputRef = useRef<TextInput>(null);
+
+  const [step, setStep] = useState<PickerStep>("menu");
+  const [focusedProgram, setFocusedProgram] = useState<SavedProgram | null>(null);
+  const [customName, setCustomName] = useState("");
+  const [assocProgramId, setAssocProgramId] = useState<string | null>(null);
+
+  // Reset internal state each time sheet opens
+  useEffect(() => {
+    if (visible) {
+      setStep("menu");
+      setCustomName("Custom Workout");
+      setAssocProgramId(null);
+    }
+  }, [visible, activeProgram]);
+
+  // Focus + select all when custom step opens
+  useEffect(() => {
+    if (step === "custom") {
+      setTimeout(() => customInputRef.current?.focus(), 80);
+    }
+  }, [step]);
+
+  const dismiss = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 600, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); });
+  }, [onClose]);
+
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderMove: (_, g) => { if (g.dy > 0) { slideY.setValue(g.dy); backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300)); } },
+    onPanResponderRelease: (_, g) => {
+      if (g.dy > 100 || g.vy > 0.8) {
+        Animated.parallel([
+          Animated.timing(slideY, { toValue: 600, duration: 220, useNativeDriver: true }),
+          Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+        ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); });
+      } else {
+        Animated.parallel([
+          Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+          Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+        ]).start();
+      }
+    },
+  })).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 340, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 280, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const otherPrograms = programs.filter(p => p.id !== activeProgram?.id);
+  const activeWorkouts = activeProgram
+    ? [...new Set(activeProgram.cyclePattern.filter(n => n && n !== "Rest"))]
+    : [];
+
+  const pick = (name: string, fromProgramId?: string) => { dismiss(); onSelect(name, undefined, fromProgramId); };
+
+  // ── Step header with back button ──
+  function StepHeader({ title, onBack }: { title: string; onBack: () => void }) {
+    return (
+      <View style={styles.pickerStepHeader}>
+        <TouchableOpacity onPress={onBack} style={styles.pickerBackBtn} activeOpacity={0.7}>
+          <Ionicons name="chevron-back" size={20} color={t.tp} />
+        </TouchableOpacity>
+        <Text style={[styles.pickerStepTitle, { color: t.tp }]}>{title}</Text>
+        <View style={styles.pickerBackBtn} />
+      </View>
+    );
+  }
+
+  // ── Workout row ──
+  function WorkoutRow({ name, accent, fromProgramId }: { name: string; accent?: boolean; fromProgramId?: string }) {
+    return (
+      <BounceButton style={{ marginBottom: 16 }} onPress={() => pick(name, fromProgramId)}>
+        <NeuCard dark={isDark} radius={14}>
+          <View style={styles.pickerOptionInner}>
+            <WorkoutIcon size={18} color={accent ? ACCT : t.ts} />
+            <Text style={[styles.pickerOptionText, { color: t.tp }]}>{name}</Text>
+            <Ionicons name="chevron-forward" size={16} color={t.ts} />
+          </View>
+        </NeuCard>
+      </BounceButton>
+    );
+  }
+
+  // ── Step content ──
+  const renderStep = () => {
+    if (step === "menu") {
+      return (
+        <View style={styles.pickerMenuContent}>
+          <Text style={[styles.pickerTitle, { color: t.tp }]}>Log a Workout</Text>
+          <View style={{ gap: 16 }}>
+            {activeProgram && (
+              <BounceButton onPress={() => setStep("active")}>
+                <NeuCard dark={isDark} radius={14}>
+                  <View style={styles.pickerOptionInner}>
+                    <WorkoutIcon size={18} color={t.tp} />
+                    <Text style={[styles.pickerOptionText, { color: t.tp }]}>Active Program</Text>
+                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                  </View>
+                </NeuCard>
+              </BounceButton>
+            )}
+            {otherPrograms.length > 0 && (
+              <BounceButton onPress={() => setStep("others")}>
+                <NeuCard dark={isDark} radius={14}>
+                  <View style={styles.pickerOptionInner}>
+                    <Ionicons name="albums-outline" size={18} color={t.tp} />
+                    <Text style={[styles.pickerOptionText, { color: t.tp }]}>Other Programs</Text>
+                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                  </View>
+                </NeuCard>
+              </BounceButton>
+            )}
+            <BounceButton onPress={() => setStep("custom")}>
+              <NeuCard dark={isDark} radius={14}>
+                <View style={styles.pickerOptionInner}>
+                  <Ionicons name="pencil-outline" size={18} color={t.tp} />
+                  <Text style={[styles.pickerOptionText, { color: t.tp }]}>Custom Workout</Text>
+                  <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                </View>
+              </NeuCard>
+            </BounceButton>
+            <BounceButton onPress={dismiss}>
+              <View style={[styles.cancelBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
+                <Text style={[styles.cancelBtnText, { color: t.tp }]}>Cancel</Text>
+              </View>
+            </BounceButton>
+          </View>
+        </View>
+      );
+    }
+
+    if (step === "active") {
+      return (
+        <>
+          <StepHeader title="Active Program" onBack={() => setStep("menu")} />
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
+            <Text style={[styles.pickerSection, { color: t.tp }]}>{activeProgram?.name.toUpperCase()}</Text>
+            {activeWorkouts.map(name => <WorkoutRow key={name} name={name} fromProgramId={activeProgram?.id} />)}
+          </ScrollView>
+        </>
+      );
+    }
+
+    if (step === "others") {
+      return (
+        <>
+          <StepHeader title="Other Programs" onBack={() => setStep("menu")} />
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
+            {otherPrograms.map(prog => (
+              <BounceButton key={prog.id} style={{ marginBottom: 16 }} onPress={() => { setFocusedProgram(prog); setStep("program"); }}>
+                <NeuCard dark={isDark} radius={14}>
+                  <View style={styles.pickerOptionInner}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.pickerOptionText, { color: t.tp }]}>{prog.name}</Text>
+                      <Text style={[styles.pickerOptionSub, { color: t.ts }]}>
+                        {[...new Set(prog.cyclePattern.filter(n => n && n !== "Rest"))].join(" · ")}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                  </View>
+                </NeuCard>
+              </BounceButton>
+            ))}
+          </ScrollView>
+        </>
+      );
+    }
+
+    if (step === "program" && focusedProgram) {
+      const workouts = [...new Set(focusedProgram.cyclePattern.filter(n => n && n !== "Rest"))];
+      return (
+        <>
+          <StepHeader title={focusedProgram.name} onBack={() => setStep("others")} />
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
+            {workouts.map(name => <WorkoutRow key={name} name={name} fromProgramId={focusedProgram.id} />)}
+          </ScrollView>
+        </>
+      );
+    }
+
+    if (step === "custom") {
+      const addToActive = assocProgramId === activeProgram?.id && activeProgram != null;
+      return (
+        <>
+          <StepHeader title="Name Your Workout" onBack={() => setStep("menu")} />
+          <View style={[styles.pickerContent, { paddingBottom: 0 }]}>
+            <TextInput
+              ref={customInputRef}
+              style={[styles.customInput, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)", color: t.tp, borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)" }]}
+              placeholder="Workout name"
+              placeholderTextColor={t.ts}
+              value={customName}
+              onChangeText={setCustomName}
+              selectTextOnFocus
+            />
+            {activeProgram && (
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => setAssocProgramId(addToActive ? null : activeProgram.id)}
+                style={[styles.cnToggleRow, { borderTopColor: isDark ? "rgba(255,255,255,0.1)" : t.div, borderBottomColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.cnToggleTitle, { color: t.tp }]}>Add to {activeProgram.name}</Text>
+                  <Text style={[styles.cnToggleSub, { color: t.ts }]}>Saves stats under this program in your journal</Text>
+                </View>
+                <View style={[styles.cnToggle, addToActive
+                  ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                  : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" }
+                ]}>
+                  {addToActive && <Ionicons name="checkmark" size={14} color="#fff" />}
+                </View>
+              </TouchableOpacity>
+            )}
+          </View>
+          <View style={[styles.confirmRow, !customName.trim() && { opacity: 0.35 }]}>
+            <BounceButton onPress={() => { if (customName.trim()) { dismiss(); onSelect(customName.trim(), assocProgramId ?? undefined, undefined); } }}>
+              <View style={styles.confirmBtn}>
+                <Text style={styles.confirmBtnText}>Custom Workout</Text>
+              </View>
+            </BounceButton>
+          </View>
+        </>
+      );
+    }
+
+    return null;
+  };
+
+  return (
+    <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <View style={{ flex: 1, justifyContent: "flex-end" }}>
+          <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOpacity }]} />
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={dismiss} />
+          <Animated.View style={[styles.pickerSheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 8, transform: [{ translateY: slideY }] }]}>
+            <View {...panResponder.panHandlers}>
+              <View style={styles.handleArea}><View style={styles.handle} /></View>
+            </View>
+            {renderStep()}
+            <View style={{ height: 8 }} />
+          </Animated.View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function JournalScreen() {
@@ -282,6 +555,8 @@ export default function JournalScreen() {
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<JournalEntry | null>(null);
+  const [workoutPickerVisible, setWorkoutPickerVisible] = useState(false);
+  const [selectedDate, setSelectedDate] = useState("");
 
   useFocusEffect(
     useCallback(() => {
@@ -309,6 +584,32 @@ export default function JournalScreen() {
     setEntries(updated);
     await AsyncStorage.setItem(JOURNAL_KEY, JSON.stringify(updated));
   };
+
+  const handleCalendarDayPress = useCallback((date: string, workoutId?: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (workoutId) {
+      router.push({ pathname: "/workout-detail", params: { id: workoutId } });
+    } else {
+      setSelectedDate(date);
+      setWorkoutPickerVisible(true);
+    }
+  }, [router]);
+
+  const handleWorkoutSelect = useCallback((
+    workoutName: string,
+    addToProgramId?: string,
+    fromProgramId?: string,
+  ) => {
+    router.push({
+      pathname: "/log-workout",
+      params: {
+        date: selectedDate,
+        workoutName,
+        programId: fromProgramId ?? "",
+        addToProgramId: addToProgramId ?? "",
+      },
+    });
+  }, [router, selectedDate]);
 
   // workoutName → { programName, totalSessions }
   const programLookup = useMemo(() => {
@@ -405,6 +706,15 @@ export default function JournalScreen() {
           <Text style={[styles.screenTitle, { color: t.tp }]}>JOURNAL</Text>
           <View style={{ width: 66 }} />
         </View>
+
+        {/* Monthly activity calendar */}
+        <JournalCalendar
+          isDark={isDark}
+          workoutDates={workoutDates}
+          workoutHistory={workoutHistory}
+          activeProgram={activeProgram}
+          onDayPress={handleCalendarDayPress}
+        />
 
         {/* Programs shortcut */}
         <View style={styles.programsBlock}>
@@ -561,6 +871,15 @@ export default function JournalScreen() {
         onClose={() => setDeleteTarget(null)}
       />
 
+      <WorkoutPickerSheet
+        visible={workoutPickerVisible}
+        isDark={isDark}
+        activeProgram={activeProgram}
+        programs={programs}
+        onSelect={handleWorkoutSelect}
+        onClose={() => setWorkoutPickerVisible(false)}
+      />
+
     </FadeScreen>
   );
 }
@@ -632,5 +951,27 @@ const styles = StyleSheet.create({
   deleteBtnText:  { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff" },
   cancelBtn:      { borderRadius: 14, paddingVertical: 15, alignItems: "center" },
   cancelBtnText:  { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
+
+  // Workout picker sheet
+  pickerSheet:       { borderTopLeftRadius: 28, borderTopRightRadius: 28 },
+  pickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, color: TP, paddingHorizontal: 24, paddingBottom: 12, textAlign: "center" },
+  pickerContent:     { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 },
+  pickerSection:     { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.8, color: TS, marginTop: 8, marginBottom: 12 },
+  pickerOption:      {},
+  pickerOptionInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
+  pickerOptionText:  { fontFamily: FontFamily.semibold, fontSize: 15, color: TP, flex: 1 },
+  pickerOptionSub:   { fontFamily: FontFamily.regular, fontSize: 12, color: TS, marginTop: 2 },
+  pickerMenuContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 20 },
+  pickerStepHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 10 },
+  pickerBackBtn:     { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 18 },
+  pickerStepTitle:   { fontFamily: FontFamily.bold, fontSize: 17, color: TP, textAlign: "center", flex: 1 },
+  customInput:       { fontFamily: FontFamily.regular, fontSize: 16, borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 13, marginBottom: 4 },
+  confirmRow:        { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
+  confirmBtn:        { borderRadius: 50, paddingVertical: 13, paddingHorizontal: 40, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  confirmBtnText:    { fontFamily: FontFamily.semibold, fontSize: 16, color: "#fff" },
+  cnToggleRow:       { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 4, paddingVertical: 16, marginTop: 12, borderTopWidth: 1, borderBottomWidth: 1 },
+  cnToggleTitle:     { fontFamily: FontFamily.semibold, fontSize: 15 },
+  cnToggleSub:       { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
+  cnToggle:          { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
 
 });

@@ -425,7 +425,7 @@ function WorkoutReorderSheet({ visible, workoutName, exercises, isDark, t, onReo
 // ─── WorkoutOptionsSheet ───────────────────────────────────────────────────────
 
 function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, onClose }: {
-  visible: boolean; isDark: boolean; t: typeof APP_LIGHT;
+  visible: boolean; isDark: boolean; t: typeof APP_LIGHT | typeof APP_DARK;
   onStartCustom: () => void; onChangeDay: () => void; onClose: () => void;
 }) {
   const slideY = useRef(new Animated.Value(500)).current;
@@ -519,7 +519,7 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
 // ─── ChangeDaySheet ────────────────────────────────────────────────────────────
 
 function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName, onSelectDay, onClose, onDismiss }: {
-  visible: boolean; isDark: boolean; t: typeof APP_LIGHT;
+  visible: boolean; isDark: boolean; t: typeof APP_LIGHT | typeof APP_DARK;
   activeProgram: SavedProgram; currentWorkoutName: string;
   onSelectDay: (dayName: string) => void; onClose: () => void; onDismiss: () => void;
 }) {
@@ -633,7 +633,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName,
 // ─── CustomWorkoutNameSheet ────────────────────────────────────────────────────
 
 function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, onClose }: {
-  visible: boolean; isDark: boolean; t: typeof APP_LIGHT;
+  visible: boolean; isDark: boolean; t: typeof APP_LIGHT | typeof APP_DARK;
   activeProgram: SavedProgram | null;
   onStart: (name: string, addToProgram: boolean) => void;
   onClose: () => void;
@@ -2568,7 +2568,7 @@ const styles = StyleSheet.create({
   woReorderSubtitle:  { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
   woReorderListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
   woReorderDoneRow:   { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
-  woReorderDoneWrap:  { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  woReorderDoneWrap:  { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 10 },
   woReorderDoneBtn:   { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
   woReorderDone:      { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
 
