@@ -24,7 +24,7 @@ import TrashIcon from "../../components/TrashIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../../contexts/RestTimerContext";
@@ -418,6 +418,344 @@ function WorkoutReorderSheet({ visible, workoutName, exercises, isDark, t, onReo
           </View>
         </Animated.View>
       </View>
+    </Modal>
+  );
+}
+
+// ─── WorkoutOptionsSheet ───────────────────────────────────────────────────────
+
+function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, onClose }: {
+  visible: boolean; isDark: boolean; t: typeof APP_LIGHT;
+  onStartCustom: () => void; onChangeDay: () => void; onClose: () => void;
+}) {
+  const slideY = useRef(new Animated.Value(500)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) { slideY.setValue(g.dy); backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300)); }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.8) {
+          Animated.parallel([
+            Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+          ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
+        } else {
+          Animated.parallel([
+            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+    })
+  ).current;
+
+  useEffect(() => {
+    if (visible) {
+      slideY.setValue(500);
+      backdropOpacity.setValue(0);
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const closeSheet = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
+  }, [slideY, backdropOpacity, onClose]);
+
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
+      <View style={styles.woReorderBackdrop}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
+        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
+        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+          <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
+            <View style={styles.woReorderHandle} />
+          </View>
+          <View style={[styles.woReorderHeader, { borderBottomColor: divider }]}>
+            <Text style={[styles.woReorderTitle, { color: t.tp }]}>Workout Options</Text>
+          </View>
+          <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChangeDay(); }}>
+            <View style={[styles.woOptionRow, { borderBottomColor: divider }]}>
+              <View style={styles.woOptionIcon}>
+                <Ionicons name="swap-horizontal-outline" size={22} color={t.ts} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.woOptionTitle, { color: t.tp }]}>Change Workout Day</Text>
+                <Text style={[styles.woOptionSub, { color: t.ts }]}>Swap to a different day from your program</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={t.ts} />
+            </View>
+          </BounceButton>
+          <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onStartCustom(); }}>
+            <View style={[styles.woOptionRow, { borderBottomColor: "transparent" }]}>
+              <View style={styles.woOptionIcon}>
+                <Ionicons name="add-circle-outline" size={22} color={t.ts} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.woOptionTitle, { color: t.tp }]}>Custom Workout</Text>
+                <Text style={[styles.woOptionSub, { color: t.ts }]}>Log a custom workout day here — not tied to your program</Text>
+              </View>
+            </View>
+          </BounceButton>
+          <View style={{ height: 28 }} />
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── ChangeDaySheet ────────────────────────────────────────────────────────────
+
+function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName, onSelectDay, onClose, onDismiss }: {
+  visible: boolean; isDark: boolean; t: typeof APP_LIGHT;
+  activeProgram: SavedProgram; currentWorkoutName: string;
+  onSelectDay: (dayName: string) => void; onClose: () => void; onDismiss: () => void;
+}) {
+  const slideY = useRef(new Animated.Value(500)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  const animateOut = useCallback((cb: () => void) => {
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); cb(); });
+  }, [slideY, backdropOpacity]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) { slideY.setValue(g.dy); backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300)); }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.8) {
+          Animated.parallel([
+            Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+          ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onDismiss(); });
+        } else {
+          Animated.parallel([
+            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+    })
+  ).current;
+
+  useEffect(() => {
+    if (visible) {
+      slideY.setValue(500);
+      backdropOpacity.setValue(0);
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const closeSheet = useCallback(() => {
+    animateOut(onClose);
+  }, [animateOut, onClose]);
+
+  const workoutDays = useMemo(() => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const name of activeProgram.cyclePattern) {
+      if (name && name !== "Rest" && !seen.has(name)) {
+        seen.add(name);
+        result.push(name);
+      }
+    }
+    return result;
+  }, [activeProgram]);
+
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={() => animateOut(onDismiss)}>
+      <View style={styles.woReorderBackdrop}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
+        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => animateOut(onDismiss)} />
+        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+          <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
+            <View style={styles.woReorderHandle} />
+          </View>
+          <View style={[styles.woReorderHeader, { borderBottomColor: divider, flexDirection: "row", alignItems: "center" }]}>
+            <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}>
+              <View style={{ paddingRight: 12, paddingVertical: 4 }}>
+                <Ionicons name="chevron-back" size={22} color={t.ts} />
+              </View>
+            </BounceButton>
+            <View style={{ flex: 1, alignItems: "center" }}>
+              <Text style={[styles.woReorderTitle, { color: t.tp }]}>Change Workout Day</Text>
+              <Text style={[styles.woReorderSubtitle, { color: t.ts }]}>{activeProgram.name}</Text>
+            </View>
+            <View style={{ width: 34 }} />
+          </View>
+          {workoutDays.map((dayName, i) => {
+            const isActive = dayName === currentWorkoutName;
+            return (
+              <BounceButton key={dayName} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onSelectDay(dayName); }}>
+                <View style={[styles.woOptionRow, { borderBottomColor: i < workoutDays.length - 1 ? divider : "transparent" }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.woOptionTitle, { color: isActive ? ACCT : t.tp }]}>{dayName}</Text>
+                  </View>
+                  {isActive && (
+                    <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 }}>
+                      <Ionicons name="checkmark" size={14} color="#fff" />
+                    </View>
+                  )}
+                </View>
+              </BounceButton>
+            );
+          })}
+          <View style={{ height: 28 }} />
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── CustomWorkoutNameSheet ────────────────────────────────────────────────────
+
+function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, onClose }: {
+  visible: boolean; isDark: boolean; t: typeof APP_LIGHT;
+  activeProgram: SavedProgram | null;
+  onStart: (name: string, addToProgram: boolean) => void;
+  onClose: () => void;
+}) {
+  const [nameInput, setNameInput] = useState("Custom Workout");
+  const [addToProgram, setAddToProgram] = useState(false);
+  const inputRef = useRef<TextInput>(null);
+
+  const slideY = useRef(new Animated.Value(500)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      setNameInput("Custom Workout");
+      setAddToProgram(false);
+      slideY.setValue(500);
+      backdropOpacity.setValue(0);
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start(() => setTimeout(() => inputRef.current?.focus(), 50));
+    }
+  }, [visible]);
+
+  const animateOut = useCallback((cb: () => void) => {
+    Keyboard.dismiss();
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); cb(); });
+  }, [slideY, backdropOpacity]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) { slideY.setValue(g.dy); backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300)); }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.8) {
+          animateOut(onClose);
+        } else {
+          Animated.parallel([
+            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+    })
+  ).current;
+
+  const canStart = nameInput.trim().length > 0;
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={() => animateOut(onClose)}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <View style={styles.woReorderBackdrop}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
+        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => animateOut(onClose)} />
+        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+          <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
+            <View style={styles.woReorderHandle} />
+          </View>
+          <View style={[styles.woReorderHeader, { borderBottomColor: divider }]}>
+            <Text style={[styles.woReorderTitle, { color: t.tp }]}>Name Your Workout</Text>
+          </View>
+
+          <View style={{ paddingHorizontal: 20, paddingTop: 16 }}>
+            <View style={[styles.cnNameInputWrap, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}>
+              <TextInput
+                ref={inputRef}
+                style={[styles.cnNameInput, { color: t.tp }]}
+                value={nameInput}
+                onChangeText={setNameInput}
+                placeholder="e.g. Arms Day"
+                placeholderTextColor={t.ts}
+                autoCapitalize="words"
+                returnKeyType="done"
+                onSubmitEditing={() => { if (canStart) { animateOut(() => onStart(nameInput.trim(), addToProgram)); } }}
+                selectTextOnFocus
+              />
+            </View>
+          </View>
+
+          {activeProgram && (
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddToProgram(v => !v); }}
+              style={[styles.cnToggleRow, { borderTopColor: divider, borderBottomColor: divider }]}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.cnToggleTitle, { color: t.tp }]}>Add to {activeProgram.name}</Text>
+                <Text style={[styles.cnToggleSub, { color: t.ts }]}>Saves stats under this program in your journal</Text>
+              </View>
+              <View style={[styles.cnToggle, addToProgram
+                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" }
+              ]}>
+                {addToProgram && <Ionicons name="checkmark" size={14} color="#fff" />}
+              </View>
+            </TouchableOpacity>
+          )}
+
+          <View style={[styles.woReorderDoneRow, { opacity: canStart ? 1 : 0.35 }]}>
+            <BounceButton
+              onPress={() => { if (canStart) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); animateOut(() => onStart(nameInput.trim(), addToProgram)); } }}
+              accessibilityLabel="Start workout"
+              accessibilityRole="button"
+            >
+              <View style={styles.woReorderDoneWrap}>
+                <View style={styles.woReorderDoneBtn}>
+                  <Text style={styles.woReorderDone}>Custom Workout</Text>
+                </View>
+              </View>
+            </BounceButton>
+          </View>
+          <View style={{ height: 12 }} />
+        </Animated.View>
+      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -940,6 +1278,11 @@ export default function WorkoutScreen() {
   const [notes, setNotes] = useState("");
   const [showNotes, setShowNotes] = useState(false);
   const [todaysCompletedWorkout, setTodaysCompletedWorkout] = useState<CompletedWorkout | null>(null);
+  const [isFreeWorkout, setIsFreeWorkout] = useState(false);
+  const [freeWorkoutAddToProgram, setFreeWorkoutAddToProgram] = useState(false);
+  const [workoutOptionsOpen, setWorkoutOptionsOpen] = useState(false);
+  const [changeDayOpen, setChangeDayOpen] = useState(false);
+  const [customWorkoutNamingOpen, setCustomWorkoutNamingOpen] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const notesY = useRef(0);
 
@@ -1038,12 +1381,32 @@ export default function WorkoutScreen() {
         setActiveProgram(found);
         // Don't overwrite exercises/log if a workout is already in progress (unless forceReload after discard)
         if (found && (!isWorkoutActiveRef.current || forceReload)) {
-          const workout = getTodaysWorkout(found);
-          setWorkoutInfo(workout);
-          if (workout) {
-            setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
-            setLog(initLog(workout.exercises));
-          }
+          const nd = new Date();
+          const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+          AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY).then(overrideRaw => {
+            let workout = getTodaysWorkout(found);
+            if (overrideRaw) {
+              const override: { date: string; workoutName: string } = JSON.parse(overrideRaw);
+              if (override.date === todayStr) {
+                const dayIndex = found.cyclePattern.indexOf(override.workoutName);
+                const workoutKey = `${dayIndex}:${override.workoutName}`;
+                const exercises = found.workouts[workoutKey] ?? [];
+                workout = { name: override.workoutName, exercises };
+              }
+            }
+            setWorkoutInfo(workout);
+            if (workout) {
+              setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
+              setLog(initLog(workout.exercises));
+            }
+          }).catch(() => {
+            const workout = getTodaysWorkout(found);
+            setWorkoutInfo(workout);
+            if (workout) {
+              setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
+              setLog(initLog(workout.exercises));
+            }
+          });
         }
       })
       .catch(() => {});
@@ -1213,6 +1576,23 @@ export default function WorkoutScreen() {
     setWorkoutInfo(prev => prev ? { ...prev, exercises } : prev);
   }, []);
 
+  const openCustomWorkoutNaming = () => {
+    setCustomWorkoutNamingOpen(true);
+    setWorkoutOptionsOpen(false);
+  };
+
+  const confirmCustomWorkout = (name: string, addToProgram: boolean) => {
+    setFreeWorkoutAddToProgram(addToProgram);
+    setIsFreeWorkout(true);
+    setWorkoutInfo({ name, exercises: [] });
+    setLog({});
+    const nd = new Date();
+    const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: name })).catch(() => {});
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setCustomWorkoutNamingOpen(false);
+  };
+
   const addExercise = (name: string, idOffset = 0) => {
     const id = `session_${Date.now() + idOffset}`;
     const ex: Exercise = { id, name, sets: Array.from({ length: 3 }, () => ({ type: "working" as const })) };
@@ -1270,7 +1650,25 @@ export default function WorkoutScreen() {
     const doFinish = () => Alert.alert(
       "Workout Complete!",
       "Great session. Rest up and come back stronger.",
-      [{ text: "Done", onPress: () => { const c = saveWorkoutData(); if (c) setTodaysCompletedWorkout(c); stopTimer(); } }]
+      [{ text: "Done", onPress: () => {
+        const c = saveWorkoutData();
+        if (c) setTodaysCompletedWorkout(c);
+        if (isFreeWorkout && freeWorkoutAddToProgram && activeProgram && workoutInfo) {
+          AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
+            const progs: SavedProgram[] = raw ? JSON.parse(raw) : [];
+            const updated = progs.map(p => {
+              if (p.id !== activeProgram.id) return p;
+              const extras = p.extraWorkouts ?? [];
+              if (extras.includes(workoutInfo.name)) return p;
+              return { ...p, extraWorkouts: [...extras, workoutInfo.name] };
+            });
+            AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+          }).catch(() => {});
+        }
+        stopTimer();
+        setIsFreeWorkout(false);
+        setFreeWorkoutAddToProgram(false);
+      } }]
     );
 
     if (!allDone) {
@@ -1296,7 +1694,8 @@ export default function WorkoutScreen() {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           stopTimer();
           dismissRestTimer();
-          // Reload from the latest saved program so any edits made during the workout are picked up
+          setIsFreeWorkout(false);
+          setFreeWorkoutAddToProgram(false);
           loadData(true);
         },
       },
@@ -1305,7 +1704,7 @@ export default function WorkoutScreen() {
 
   const handleDiscardCompleted = () => {
     Alert.alert(
-      "Redo Workout",
+      "Discard Workout",
       "Today's logged workout will be deleted. You can start fresh.",
       [
         { text: "Cancel", style: "cancel" },
@@ -1370,7 +1769,7 @@ export default function WorkoutScreen() {
   }, []);
 
   // ─── No active program ──────────────────────────────────────────────────────
-  if (!activeProgram) {
+  if (!activeProgram && !isFreeWorkout) {
     return (
       <FadeScreen style={{ backgroundColor: t.bg }}>
         <View style={[styles.emptyWrap, { paddingTop: insets.top + 60 }]}>
@@ -1379,11 +1778,11 @@ export default function WorkoutScreen() {
           </NeuCard>
           <Text style={[styles.emptyTitle, { color: t.tp }]}>No Active Program</Text>
           <Text style={[styles.emptySub, { color: t.ts }]}>
-            Set a program as active in My Programs to start logging workouts.
+            Start a custom session to log exercises without a program.
           </Text>
-          <BounceButton onPress={() => router.push("/programs")} style={{ marginTop: 8 }}>
+          <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 8 }}>
             <View style={styles.emptyBtn}>
-              <Text style={styles.emptyBtnText}>Go to My Programs</Text>
+              <Text style={styles.emptyBtnText}>Custom Workout</Text>
             </View>
           </BounceButton>
         </View>
@@ -1446,9 +1845,11 @@ export default function WorkoutScreen() {
           <Text style={[styles.headerName, { color: t.tp }]}>
             {(todaysCompletedWorkout?.workoutName ?? workoutInfo.name).toUpperCase()}
           </Text>
-          <Text style={[styles.headerSub, { color: t.ts }]}>
-            {activeProgram.name} · Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}
-          </Text>
+          {(!isFreeWorkout || freeWorkoutAddToProgram) && activeProgram && (
+            <Text style={[styles.headerSub, { color: t.ts }]}>
+              {activeProgram.name} · Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}
+            </Text>
+          )}
         </View>
 
         {todaysCompletedWorkout && lockedData ? (
@@ -1456,9 +1857,37 @@ export default function WorkoutScreen() {
             {/* Completed banner */}
             <View style={[styles.completedBanner, { backgroundColor: isDark ? "rgba(29,236,160,0.08)" : "rgba(29,236,160,0.07)", borderColor: `${ACCT}40` }]}>
               <Ionicons name="checkmark-circle" size={16} color={ACCT} />
-              <Text style={[styles.completedBannerText, { color: ACCT }]}>
-                Logged{todaysCompletedWorkout.durationSeconds > 0 ? ` · ${fmtDuration(todaysCompletedWorkout.durationSeconds)}` : ""}
+              <Text style={[styles.completedBannerText, { color: t.tp }]}>
+                {(() => {
+                  if (todaysCompletedWorkout.durationSeconds > 0) {
+                    const end = new Date(todaysCompletedWorkout.completedAt);
+                    const start = new Date(end.getTime() - todaysCompletedWorkout.durationSeconds * 1000);
+                    const fmt = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+                    return `Logged · ${fmt(start)} – ${fmt(end)}`;
+                  }
+                  return "Logged";
+                })()}
               </Text>
+            </View>
+
+            {/* Edit in Journal + Discard row */}
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 16 }}>
+              <BounceButton onPress={() => router.push("/journal")} style={{ flex: 1 }}>
+                <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
+                  <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+                    <Ionicons name="book-outline" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
+                    <Text style={[styles.finishBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Edit in Journal</Text>
+                  </View>
+                </View>
+              </BounceButton>
+              <BounceButton onPress={handleDiscardCompleted} style={{ flex: 1 }}>
+                <View style={[styles.finishWrap, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? "#000" : "#a3afc0", shadowOpacity: isDark ? 0.35 : 0.5 }]}>
+                  <View style={[styles.finishBtn, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)", shadowColor: isDark ? "transparent" : "#FFFFFF", shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4, paddingVertical: 15 }]}>
+                    <TrashIcon size={16} color="#ef4444" />
+                    <Text style={[styles.finishBtnText, { color: "#ef4444" }]}>Discard Workout</Text>
+                  </View>
+                </View>
+              </BounceButton>
             </View>
 
             {/* Locked exercise cards */}
@@ -1480,25 +1909,6 @@ export default function WorkoutScreen() {
               />
             ))}
 
-            {/* Edit in Journal */}
-            <BounceButton onPress={() => router.push("/journal")} style={{ marginTop: 16 }}>
-              <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
-                <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
-                  <Ionicons name="book-outline" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
-                  <Text style={[styles.finishBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Edit in Journal</Text>
-                </View>
-              </View>
-            </BounceButton>
-
-            {/* Redo Workout */}
-            <BounceButton onPress={handleDiscardCompleted} style={{ marginTop: 10 }}>
-              <View style={[styles.finishWrap, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", shadowOpacity: 0 }]}>
-                <View style={[styles.finishBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
-                  <TrashIcon size={16} color={t.ts} />
-                  <Text style={[styles.finishBtnText, { color: t.ts }]}>Redo Workout</Text>
-                </View>
-              </View>
-            </BounceButton>
           </>
         ) : workoutInfo.exercises.length === 0 ? (
           <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 16 }}>
@@ -1645,11 +2055,20 @@ export default function WorkoutScreen() {
               </BounceButton>
             </>
           ) : (
-            <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}>
-              <View style={[styles.workoutTimerPill, { paddingHorizontal: 25 }]}>
-                <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>Start</Text>
-              </View>
-            </BounceButton>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}>
+                <View style={[styles.workoutTimerPill, { paddingHorizontal: 25 }]}>
+                  <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>Start</Text>
+                </View>
+              </BounceButton>
+              {activeProgram && (
+                <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
+                  <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                    <Ionicons name="add" size={22} color={t.tp} />
+                  </View>
+                </BounceButton>
+              )}
+            </View>
           )}
         </View>
         <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
@@ -1960,6 +2379,49 @@ export default function WorkoutScreen() {
         onEditExercise={id => { setChangingExId(id); setReorderOpen(false); }}
         onClose={() => setReorderOpen(false)}
       />
+
+      <WorkoutOptionsSheet
+        visible={workoutOptionsOpen}
+        isDark={isDark}
+        t={t}
+        onStartCustom={openCustomWorkoutNaming}
+        onChangeDay={() => { setChangeDayOpen(true); setWorkoutOptionsOpen(false); }}
+        onClose={() => setWorkoutOptionsOpen(false)}
+      />
+
+      {activeProgram && (
+        <ChangeDaySheet
+          visible={changeDayOpen}
+          isDark={isDark}
+          t={t}
+          activeProgram={activeProgram}
+          currentWorkoutName={workoutInfo?.name ?? ""}
+          onSelectDay={(dayName) => {
+            const dayIndex = activeProgram.cyclePattern.indexOf(dayName);
+            const workoutKey = `${dayIndex}:${dayName}`;
+            const exercises = activeProgram.workouts[workoutKey] ?? [];
+            setWorkoutInfo({ name: dayName, exercises });
+            setLog(initLog(exercises));
+            setIsFreeWorkout(false);
+            setFreeWorkoutAddToProgram(false);
+            const nd = new Date();
+            const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+            AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: dayName })).catch(() => {});
+            setChangeDayOpen(false);
+          }}
+          onClose={() => { setChangeDayOpen(false); setWorkoutOptionsOpen(true); }}
+          onDismiss={() => setChangeDayOpen(false)}
+        />
+      )}
+
+      <CustomWorkoutNameSheet
+        visible={customWorkoutNamingOpen}
+        isDark={isDark}
+        t={t}
+        activeProgram={activeProgram}
+        onStart={confirmCustomWorkout}
+        onClose={() => setCustomWorkoutNamingOpen(false)}
+      />
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
       <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
@@ -2109,6 +2571,20 @@ const styles = StyleSheet.create({
   woReorderDoneWrap:  { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   woReorderDoneBtn:   { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
   woReorderDone:      { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
+
+  // Options sheet rows
+  woOptionRow:   { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1 },
+  woOptionIcon:  { width: 36, alignItems: "center" },
+  woOptionTitle: { fontFamily: FontFamily.semibold, fontSize: 15 },
+  woOptionSub:   { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
+
+  // Custom workout naming sheet
+  cnNameInputWrap: { borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 4, marginBottom: 4 },
+  cnNameInput:     { fontFamily: FontFamily.semibold, fontSize: 18, paddingVertical: 12 },
+  cnToggleRow:     { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 20, paddingVertical: 16, marginTop: 12, borderTopWidth: 1, borderBottomWidth: 1 },
+  cnToggleTitle:   { fontFamily: FontFamily.semibold, fontSize: 15 },
+  cnToggleSub:     { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
+  cnToggle:        { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
 
   // Draggable list rows
   woDragRow:      { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },

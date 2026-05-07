@@ -1,6 +1,7 @@
 export const PROGRAMS_KEY = "@avenas/programs";
 export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
 export const WORKOUT_HISTORY_KEY = "@avenas/workout_history";
+export const WORKOUT_DAY_OVERRIDE_KEY = "@avenas/today_workout_override";
 
 export type CompletedSet = {
   type: "warmup" | "working";
@@ -94,4 +95,5 @@ export type SavedProgram = {
   cycleDays: number;
   cyclePattern: string[];
   workouts: WorkoutMap;
+  extraWorkouts?: string[];
 };

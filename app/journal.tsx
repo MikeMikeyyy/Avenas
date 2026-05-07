@@ -323,6 +323,10 @@ export default function JournalScreen() {
         const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
         map[name] = { programName: prog.name, totalSessions: perCycle * totalCycles };
       }
+      for (const name of (prog.extraWorkouts ?? [])) {
+        if (map[name]) continue;
+        map[name] = { programName: prog.name, totalSessions: 0 };
+      }
     }
     return map;
   }, [programs]);
@@ -500,12 +504,14 @@ export default function JournalScreen() {
                           <Text style={[styles.workoutProgName, { color: t.tp }]}>{progInfo.programName.toUpperCase()}</Text>
                           <Text style={[styles.workoutProgSession, { color: t.tp }]}>{ordinal(sessionNum)} session</Text>
                         </View>
-                        <SessionTrack
-                          current={sessionNum}
-                          total={progInfo.totalSessions}
-                          accent={ACCT}
-                          track={isDark ? "rgba(255,255,255,0.1)" : t.div}
-                        />
+                        {progInfo.totalSessions > 0 && (
+                          <SessionTrack
+                            current={sessionNum}
+                            total={progInfo.totalSessions}
+                            accent={ACCT}
+                            track={isDark ? "rgba(255,255,255,0.1)" : t.div}
+                          />
+                        )}
                       </View>
                     )}
                   </View>

@@ -57,9 +57,7 @@ function formatWorkoutDate(completedIso: string, durationSeconds: number): strin
 
 function workoutsForProgram(prog: SavedProgram, history: CompletedWorkout[]): CompletedWorkout[] {
   const dayNames = new Set(
-    Object.keys(prog.workouts)
-      .map(k => k.split(":")[1])
-      .filter(n => n && n.toLowerCase() !== "rest")
+    prog.cyclePattern.filter(n => n && n.toLowerCase() !== "rest")
   );
   const start = parseStoredDate(prog.startDate);
   start.setHours(0, 0, 0, 0);

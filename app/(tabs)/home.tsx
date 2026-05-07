@@ -8,12 +8,12 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { Ionicons } from "@expo/vector-icons";
-import Svg, { Path, Circle, Defs, Filter, FeGaussianBlur } from "react-native-svg";
+import Svg, { Path, Circle, Defs, Filter, FeGaussianBlur, Line } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, NEU_BG, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
@@ -25,13 +25,13 @@ import {
   MAX_TIER_DAYS,
   getTier,
 } from "../../constants/streakTiers";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
 import ActivityCalendar from "../../components/ActivityCalendar";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
 
 const RING_SIZE          = 110;
-const RING_STROKE        = 5;
+const RING_STROKE        = 7;
 const RING_RADIUS        = (RING_SIZE - RING_STROKE) / 2;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const RING_GLOW_PAD      = 12;
@@ -230,7 +230,7 @@ function fmtElapsed(secs: number): string {
   return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
 }
 
-function StartButton() {
+function StartButton({ isTodayCompleted }: { isTodayCompleted: boolean }) {
   const { isDark } = useTheme();
   const router = useRouter();
   const { isRunning, elapsedSeconds, startTimer } = useWorkoutTimer();
@@ -240,7 +240,7 @@ function StartButton() {
 
   const handlePress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (!isRunning) startTimer();
+    if (!isTodayCompleted && !isRunning) startTimer();
     router.push("/(tabs)/workout");
   };
 
@@ -255,7 +255,12 @@ function StartButton() {
     <BounceButton onPress={handlePress}>
       <View style={[styles.startBtnDark, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
         <View style={[styles.startBtn, { backgroundColor: btnBg }]}>
-          {isRunning ? (
+          {isTodayCompleted ? (
+            <View style={styles.startBtnContent}>
+              <Text style={[styles.startBtnText, { color: contentColor }]}>View Today's Workout</Text>
+              {arrow}
+            </View>
+          ) : isRunning ? (
             <View style={styles.startBtnContent}>
               <Text style={[styles.continueTimer, { color: contentColor }]}>{fmtElapsed(elapsedSeconds)}</Text>
               <View style={[styles.continueDivider, { backgroundColor: contentColor }]} />
@@ -293,6 +298,7 @@ export default function HomeScreen() {
   const [workoutDates, setWorkoutDates] = useState<string[]>([]);
   const [workoutHistory, setWorkoutHistory] = useState<CompletedWorkout[]>([]);
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
+  const [todayOverride, setTodayOverride] = useState<{ date: string; workoutName: string } | null>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
 
   // Re-read the preference and active program every time this screen comes into focus
@@ -317,6 +323,13 @@ export default function HomeScreen() {
       AsyncStorage.getItem(WORKOUT_HISTORY_KEY)
         .then((raw) => { if (raw) setWorkoutHistory(JSON.parse(raw)); })
         .catch(() => {});
+      AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY)
+        .then((raw) => {
+          if (!raw) { setTodayOverride(null); return; }
+          const override: { date: string; workoutName: string } = JSON.parse(raw);
+          setTodayOverride(override.date === toYMD(new Date()) ? override : null);
+        })
+        .catch(() => {});
     }, [isMax])
   );
 
@@ -335,6 +348,10 @@ export default function HomeScreen() {
         const perCycle = prog.cyclePattern.filter(n => n === name).length;
         const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
         map[name] = { programName: prog.name, totalSessions: perCycle * totalCycles };
+      }
+      for (const name of (prog.extraWorkouts ?? [])) {
+        if (map[name]) continue;
+        map[name] = { programName: prog.name, totalSessions: 0 };
       }
     }
     return map;
@@ -358,6 +375,11 @@ export default function HomeScreen() {
     [...workoutHistory].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()).slice(0, 5),
     [workoutHistory]
   );
+
+  const isTodayCompleted = useMemo(() => {
+    const todayStr = toYMD(new Date());
+    return workoutHistory.some(w => w.date === todayStr);
+  }, [workoutHistory]);
 
   const weeklyStats = useMemo(() => {
     const today = new Date();
@@ -451,7 +473,17 @@ export default function HomeScreen() {
         </View>
 
         {(() => {
-          const todaysWorkout = activeProgram ? getTodaysWorkout(activeProgram) : null;
+          const baseTodaysWorkout = activeProgram ? getTodaysWorkout(activeProgram) : null;
+          const todaysWorkout = (() => {
+            if (!todayOverride) return baseTodaysWorkout;
+            if (activeProgram) {
+              const dayIndex = activeProgram.cyclePattern.indexOf(todayOverride.workoutName);
+              const workoutKey = `${dayIndex}:${todayOverride.workoutName}`;
+              const exercises = activeProgram.workouts[workoutKey] ?? [];
+              return { name: todayOverride.workoutName, exerciseCount: exercises.length };
+            }
+            return { name: todayOverride.workoutName, exerciseCount: 0 };
+          })();
           return (
             <NeuCard dark={isDark} style={styles.workoutCard}>
     <View style={styles.workoutCardInner}>
@@ -459,27 +491,46 @@ export default function HomeScreen() {
                 {todaysWorkout ? (
                   <>
                     <Text style={[styles.workoutName, { color: t.tp }]}>{todaysWorkout.name.toUpperCase()}</Text>
-                    <View style={[styles.metaRow, { marginTop: -10 }]}>
-                      <View style={styles.metaItem}>
-                        <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                          <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.ts} strokeWidth="1.5" />
-                          <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.ts} strokeWidth="1.5" />
-                          <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.ts} strokeWidth="1.5" />
-                        </Svg>
-                        <Text style={[styles.metaText, { color: t.ts }]}>{todaysWorkout.exerciseCount} exercise{todaysWorkout.exerciseCount !== 1 ? "s" : ""}</Text>
+                    {todaysWorkout.exerciseCount > 0 && (
+                      <View style={[styles.metaRow, { marginTop: -10 }]}>
+                        <View style={styles.metaItem}>
+                          <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                            <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                            <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                            <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.ts} strokeWidth="1.5" />
+                          </Svg>
+                          <Text style={[styles.metaText, { color: t.ts }]}>{todaysWorkout.exerciseCount} exercise{todaysWorkout.exerciseCount !== 1 ? "s" : ""}</Text>
+                        </View>
                       </View>
-                    </View>
-                    <StartButton />
+                    )}
+                    <StartButton isTodayCompleted={isTodayCompleted} />
                   </>
                 ) : isRunning ? (
                   <>
                     <Text style={[styles.workoutName, { color: t.tp }]}>WORKOUT IN PROGRESS</Text>
-                    <StartButton />
+                    <StartButton isTodayCompleted={isTodayCompleted} />
                   </>
                 ) : activeProgram ? (
                   <>
                     <Text style={[styles.workoutName, { color: t.tp }]}>REST DAY</Text>
                     <Text style={[styles.metaText, { color: t.ts, fontStyle: "italic", marginTop: -8 }]}>{restDayQuote}</Text>
+                  </>
+                ) : programs.length === 0 ? (
+                  <>
+                    <Text style={[styles.metaText, { color: t.ts }]}>No programs yet. Start a custom session or create a program.</Text>
+                    <BounceButton onPress={() => router.push("/(tabs)/workout")}>
+                      <View style={[styles.startBtnDark, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
+                        <View style={[styles.startBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+                          <View style={styles.startBtnContent}>
+                            <Text style={[styles.startBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Start Workout</Text>
+                            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                              <Path d="M14.4302 5.92969L20.5002 11.9997L14.4302 18.0697" stroke={isDark ? APP_DARK.bg : "#fff"} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+                              <Path d="M3.5 12H20.33" stroke={isDark ? APP_DARK.bg : "#fff"} strokeWidth="2" strokeMiterlimit="10" strokeLinecap="round" strokeLinejoin="round" />
+                            </Svg>
+                          </View>
+                        </View>
+                      </View>
+                    </BounceButton>
                   </>
                 ) : (
                   <Text style={[styles.metaText, { color: t.ts }]}>No active program. Set one in My Programs.</Text>
@@ -540,37 +591,43 @@ export default function HomeScreen() {
 
         <ActivityCalendar isDark={isDark} workoutDates={workoutDates} activeProgram={activeProgram} />
 
-        <Text style={[styles.sectionTitle, { color: t.tp, marginTop: 16 }]}>This Week</Text>
-        <View style={styles.weekRow}>
-          {/* Left card: stats + all workout days */}
-          <View style={{ flex: 1 }}>
-          <NeuCard dark={isDark} fill style={styles.weekStatCard}>
-            {weeklyStats.weekDays.map((day, i) => (
-              <View key={toYMD(day.date)} style={[styles.weekDayRow, i === 0 && { paddingTop: 12 }, i === 6 && { paddingBottom: 12 }]}>
-                <Text style={[styles.weekDayLabel, { color: day.isToday ? t.tp : t.ts, fontFamily: day.isToday ? FontFamily.bold : FontFamily.semibold }]}>
-                  {day.label}
-                </Text>
-                <Text style={[styles.weekDayName, { color: day.isRest ? t.ts : day.completed ? t.ts : t.tp, opacity: day.isRest ? 0.4 : day.completed ? 0.4 : 1 }]}>
-                  {day.workoutName}
-                </Text>
-                {day.completed
-                  ? <Ionicons name="checkmark-circle" size={14} color={ACCT} />
-                  : day.isToday && !day.isRest && <View style={[styles.weekTodayDot, { backgroundColor: ACCT }]} />}
-              </View>
-            ))}
-          </NeuCard>
-          </View>
+        <Text style={[styles.sectionTitle, { color: t.tp, marginTop: 16 }]}>This Week's Schedule</Text>
+        <NeuCard dark={isDark} style={styles.weekCard}>
+          <View style={styles.weekCardInner}>
+            {/* Left: day list */}
+            <View style={styles.weekDaysCol}>
+              {weeklyStats.weekDays.map((day, i) => (
+                <View key={toYMD(day.date)} style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}>
+                  <Text style={[styles.weekDayLabel, { color: day.isToday ? t.tp : t.ts, fontFamily: day.isToday ? FontFamily.bold : FontFamily.semibold }]}>
+                    {day.label}
+                  </Text>
+                  <Text style={[styles.weekDayName, { color: day.isRest ? t.ts : day.completed ? t.ts : t.tp, opacity: day.isRest ? 0.4 : day.completed ? 0.4 : 1 }]}>
+                    {day.workoutName}
+                  </Text>
+                </View>
+              ))}
+            </View>
 
-          {/* Right card: circular progress */}
-          <View style={{ flex: 1 }}>
-          <NeuCard dark={isDark} fill style={styles.weekCircleCard}>
-            <View style={styles.weekCircleCardInner}>
-              <Text style={[styles.weekCircleLabelTop, { color: t.ts }]}>Workouts This Week</Text>
+            {/* Divider */}
+            <View style={[styles.weekVDivider, { backgroundColor: t.div }]} />
+
+            {/* Right: circular progress + stats */}
+            <View style={styles.weekCircleCol}>
+              <Text style={[styles.weekCircleLabelTop, { color: "#000", alignSelf: "center" }]}>Completed Workouts</Text>
+              <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+              <View style={[styles.weekCircleBtn, {
+                backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
+                shadowColor: isDark ? "#0e1020" : "#a3afc0",
+              }]}>
+                <View style={[styles.weekCircleBtnHighlight, {
+                  backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
+                  shadowColor: isDark ? "#2e3555" : "#FFFFFF",
+                }]}>
               <View style={styles.weekCircleWrap}>
                 <Svg width={SVG_SIZE} height={SVG_SIZE} style={{ transform: [{ rotate: "-90deg" }] }}>
                   <Defs>
                     <Filter id="ringGlow" x="-40%" y="-40%" width="180%" height="180%">
-                      <FeGaussianBlur in="SourceGraphic" stdDeviation="3.5" />
+                      <FeGaussianBlur in="SourceGraphic" stdDeviation="3.0" />
                     </Filter>
                   </Defs>
                   <Circle
@@ -579,7 +636,15 @@ export default function HomeScreen() {
                     opacity={0.18}
                   />
                   {activeProgram && weeklyStats.plannedCount > 0 && weeklyStats.completedCount > 0 && (() => {
-                    const offset = RING_CIRCUMFERENCE * (1 - Math.min(1, weeklyStats.completedCount / weeklyStats.plannedCount));
+                    const pct = Math.min(1, weeklyStats.completedCount / weeklyStats.plannedCount);
+                    const offset = RING_CIRCUMFERENCE * (1 - pct);
+                    const endAngle = 2 * Math.PI * pct;
+                    const tickInner = RING_RADIUS - RING_STROKE / 2 - 1.5;
+                    const tickOuter = RING_RADIUS + RING_STROKE / 2 + 1.5;
+                    const tx1 = RING_CENTER + tickInner * Math.cos(endAngle);
+                    const ty1 = RING_CENTER + tickInner * Math.sin(endAngle);
+                    const tx2 = RING_CENTER + tickOuter * Math.cos(endAngle);
+                    const ty2 = RING_CENTER + tickOuter * Math.sin(endAngle);
                     return (
                       <>
                         <Circle
@@ -587,16 +652,20 @@ export default function HomeScreen() {
                           stroke={ACCT} strokeWidth={RING_STROKE} fill="none"
                           strokeDasharray={RING_CIRCUMFERENCE}
                           strokeDashoffset={offset}
-                          strokeLinecap="round"
+                          strokeLinecap="butt"
                           filter="url(#ringGlow)"
-                          opacity={0.9}
+                          opacity={0.7}
                         />
                         <Circle
                           cx={RING_CENTER} cy={RING_CENTER} r={RING_RADIUS}
                           stroke={ACCT} strokeWidth={RING_STROKE} fill="none"
                           strokeDasharray={RING_CIRCUMFERENCE}
                           strokeDashoffset={offset}
-                          strokeLinecap="round"
+                          strokeLinecap="butt"
+                        />
+                        <Line
+                          x1={tx1} y1={ty1} x2={tx2} y2={ty2}
+                          stroke="white" strokeWidth={3.5} strokeLinecap="round"
                         />
                       </>
                     );
@@ -610,6 +679,9 @@ export default function HomeScreen() {
                   </Text>
                 </View>
               </View>
+                </View>
+              </View>
+              </View>
               <View style={styles.weekStatGrid}>
                 <View style={styles.weekStatItem}>
                   <Text style={[styles.weekStatValue, { color: t.tp }]}>{weeklyStats.totalMinutes}</Text>
@@ -622,9 +694,8 @@ export default function HomeScreen() {
                 </View>
               </View>
             </View>
-          </NeuCard>
           </View>
-        </View>
+        </NeuCard>
 
         {recentWorkouts.length > 0 && (
           <Text style={[styles.sectionTitle, { color: t.tp }]}>Recent Activity</Text>
@@ -650,12 +721,14 @@ export default function HomeScreen() {
                         <Text style={[styles.workoutProgName, { color: t.tp }]}>{progInfo.programName.toUpperCase()}</Text>
                         <Text style={[styles.workoutProgSession, { color: t.tp }]}>{ordinal(sessionNum)} session</Text>
                       </View>
-                      <SessionTrack
-                        current={sessionNum}
-                        total={progInfo.totalSessions}
-                        accent={ACCT}
-                        track={isDark ? "rgba(255,255,255,0.1)" : t.div}
-                      />
+                      {progInfo.totalSessions > 0 && (
+                        <SessionTrack
+                          current={sessionNum}
+                          total={progInfo.totalSessions}
+                          accent={ACCT}
+                          track={isDark ? "rgba(255,255,255,0.1)" : t.div}
+                        />
+                      )}
                     </View>
                   )}
                 </View>
@@ -739,6 +812,13 @@ const styles = StyleSheet.create({
   quickLabel: { fontFamily: FontFamily.regular, fontSize: 14, color: TS, textAlign: "center", lineHeight: 18 },
   sectionTitle: { fontFamily: FontFamily.bold, fontSize: 18, color: TP, marginBottom: 12 },
   weekRow:             { flexDirection: "row", gap: 12, marginBottom: 28 },
+  weekCard:            { borderRadius: 20, marginBottom: 28 },
+  weekCardInner:       { flexDirection: "row", padding: 14, gap: 0 },
+  weekDaysCol:         { flex: 1, justifyContent: "center" },
+  weekVDivider:        { width: 1, marginHorizontal: 10, alignSelf: "stretch" },
+  weekCircleCol:       { flex: 1, alignItems: "center", justifyContent: "flex-start", paddingTop: 6 },
+  weekCircleBtn:       { borderRadius: 999, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.55, shadowRadius: 8 },
+  weekCircleBtnHighlight: { borderRadius: 999, width: 124, height: 124, shadowOffset: { width: -2, height: -2 }, shadowOpacity: 0.6, shadowRadius: 4, alignItems: "center", justifyContent: "center" },
   weekStatCard:        { borderRadius: 20 },
   weekStatGrid:        { flexDirection: "row", alignItems: "center" },
   weekStatItem:        { flex: 1, alignItems: "center", paddingVertical: 6, gap: 3 },
@@ -746,13 +826,13 @@ const styles = StyleSheet.create({
   weekStatValue:       { fontFamily: FontFamily.bold, fontSize: 20, color: TP },
   weekStatLabel:       { fontFamily: FontFamily.regular, fontSize: 12, color: TS },
   weekHDivider:        { height: 1, marginHorizontal: 14, marginBottom: 2 },
-  weekDayRow:          { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 7, gap: 8 },
+  weekDayRow:          { flexDirection: "row", alignItems: "center", paddingLeft: 0, paddingRight: 8, paddingVertical: 7, gap: 8 },
   weekDayLabel:        { fontFamily: FontFamily.semibold, fontSize: 12, width: 34 },
   weekDayName:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 13, color: TP },
   weekTodayDot:        { width: 6, height: 6, borderRadius: 3 },
   weekCircleCard:      { borderRadius: 20 },
   weekCircleCardInner: { alignItems: "center", paddingVertical: 12, gap: 0 },
-  weekCircleLabelTop:  { fontFamily: FontFamily.regular, fontSize: 11, color: TS, textAlign: "center" },
+  weekCircleLabelTop:  { fontFamily: FontFamily.bold, fontSize: 12, color: TS, textAlign: "center" },
   weekCircleWrap:      { width: SVG_SIZE, height: SVG_SIZE, alignItems: "center", justifyContent: "center" },
   weekCircleCenter:    { position: "absolute", alignItems: "center", justifyContent: "center" },
   weekCircleCount:     { fontFamily: FontFamily.bold, fontSize: 26, color: TP },
