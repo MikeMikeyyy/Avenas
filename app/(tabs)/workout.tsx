@@ -159,6 +159,23 @@ function KeyboardDismissIcon({ color }: { color: string }) {
   );
 }
 
+// ─── buildPrevByName ──────────────────────────────────────────────────────────
+
+function buildPrevByName(history: CompletedWorkout[]): Record<string, string[]> {
+  // history is newest-first (prepend on save), so first match per name = most recent
+  const result: Record<string, string[]> = {};
+  for (const workout of history) {
+    for (const ex of workout.exercises) {
+      if (result[ex.name]) continue;
+      result[ex.name] = ex.sets.map(s => {
+        if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
+        return s.weight || s.reps || "—";
+      });
+    }
+  }
+  return result;
+}
+
 // ─── DragHandleIcon ────────────────────────────────────────────────────────────
 
 function DragHandleIcon({ color }: { color: string }) {
@@ -893,9 +910,10 @@ interface ExerciseCardProps {
   onInputFocus: (nextFn: (() => void) | null) => void;
   activeSetFlatIdx: number | null;
   isLocked?: boolean;
+  prevSets?: string[];
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
@@ -1039,7 +1057,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
               {/* PREV */}
               <View style={styles.prevCol}>
-                <Text style={[styles.prevText, { color: `${t.tp}66` }]} numberOfLines={1}>—</Text>
+                <Text style={[styles.prevText, { color: `${t.tp}66` }]} numberOfLines={1}>
+                  {prevSets?.[flatIdx] ?? "—"}
+                </Text>
               </View>
 
               {/* WEIGHT input */}
@@ -1422,6 +1442,7 @@ export default function WorkoutScreen() {
     AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
       const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
       setTodaysCompletedWorkout(history.find(w => w.date === todayStr) ?? null);
+      setPrevByName(buildPrevByName(history));
     }).catch(() => {});
   }, []);
 
@@ -1741,6 +1762,7 @@ export default function WorkoutScreen() {
     AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next)).catch(() => {});
   };
 
+  const [prevByName, setPrevByName] = useState<Record<string, string[]>>({});
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const nextFnRef = useRef<(() => void) | null>(null);
@@ -1948,6 +1970,7 @@ export default function WorkoutScreen() {
                   onInputFocus={handleInputFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
+                  prevSets={prevByName[exercise.name] ?? []}
                   onToggleIsometric={() => setIsometricExIds(prev => {
                     const next = new Set(prev);
                     next.has(exercise.id) ? next.delete(exercise.id) : next.add(exercise.id);

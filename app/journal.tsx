@@ -651,9 +651,10 @@ export default function JournalScreen() {
   const timeline = useMemo(() => {
     type JItem = { kind: "journal"; data: JournalEntry; ts: number };
     type WItem = { kind: "workout"; data: CompletedWorkout; ts: number };
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
     const items: (JItem | WItem)[] = [
-      ...entries.map(e => ({ kind: "journal" as const, data: e, ts: new Date(e.createdAt).getTime() })),
-      ...workoutHistory.map(w => ({ kind: "workout" as const, data: w, ts: new Date(w.completedAt).getTime() })),
+      ...entries.map(e => ({ kind: "journal" as const, data: e, ts: new Date(e.createdAt).getTime() })).filter(i => i.ts >= cutoff),
+      ...workoutHistory.map(w => ({ kind: "workout" as const, data: w, ts: new Date(w.completedAt).getTime() })).filter(i => i.ts >= cutoff),
     ];
     return items.sort((a, b) => b.ts - a.ts);
   }, [entries, workoutHistory]);

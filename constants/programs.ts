@@ -23,6 +23,7 @@ export type CompletedWorkout = {
   workoutName: string;
   durationSeconds: number;
   exercises: CompletedExercise[];
+  sessionNotes?: string;
 };
 
 export type ProgramSet = {

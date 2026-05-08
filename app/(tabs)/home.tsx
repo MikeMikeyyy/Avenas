@@ -371,10 +371,12 @@ export default function HomeScreen() {
     return result;
   }, [workoutHistory]);
 
-  const recentWorkouts = useMemo(() =>
-    [...workoutHistory].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()).slice(0, 5),
-    [workoutHistory]
-  );
+  const recentWorkouts = useMemo(() => {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return [...workoutHistory]
+      .filter(w => new Date(w.completedAt).getTime() >= cutoff)
+      .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+  }, [workoutHistory]);
 
   const isTodayCompleted = useMemo(() => {
     const todayStr = toYMD(new Date());
