@@ -132,9 +132,10 @@ interface ExerciseRowProps {
   onRemove: () => void;
   onOpenReorder: () => void;
   onEdit: () => void;
+  onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
 }
 
-function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onOpenReorder, onEdit }: ExerciseRowProps) {
+function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onOpenReorder, onEdit, onInputFocus }: ExerciseRowProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
@@ -211,6 +212,11 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
   const newlyAddedIdx = sets.length > prevSetCount.current ? sets.length - 1 : null;
   const setRowHeight = useRef(0);
   useEffect(() => { prevSetCount.current = sets.length; }, [sets.length]);
+
+  // Refs for keyboard prev/next navigation across set inputs
+  const weightRefs  = useRef<Array<TextInput | null>>([]);
+  const repsRefs    = useRef<Array<TextInput | null>>([]);
+  const repsMaxRefs = useRef<Array<TextInput | null>>([]);
 
   // Pre-compute set labels (W for warmup, 1/2/3 for working)
   let wc = 0;
@@ -337,7 +343,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
         </View>
         <View style={[styles.exSetValueCol, { flexDirection: "column", alignItems: "center", gap: 1 }]}>
           <Text style={[styles.exSetTargetLabel, { color: t.ts }]}>Target</Text>
-          <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>{isKg ? "Weight (KG)" : "Weight (LBS)"}</Text>
+          <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>{"Weight"}</Text>
         </View>
         <TouchableOpacity
           style={[styles.exSetValueCol, styles.exSetColRep, styles.exSetHeaderToggle, { flexDirection: "column", alignItems: "center", gap: 1 }]}
@@ -346,6 +352,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
         >
           <Text style={[styles.exSetTargetLabel, { color: t.ts }]}>Target</Text>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Ionicons name="chevron-down" size={12} color="transparent" style={{ marginRight: 2 }} />
             <Text style={[styles.exSetHeaderLabel, { color: t.ts }]}>
               {exercise.isIsometric
                 ? (currentRepMode === "range" ? "Hold Range" : "Hold")
@@ -389,8 +396,9 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
 
             {/* Weight column */}
             <View style={styles.exSetValueCol}>
-              <View style={[styles.exSetInputBox, { borderColor: divider }]}>
+              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                 <TextInput
+                  ref={r => { weightRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
                   value={set.weightKg ?? ""}
                   onChangeText={v => patchSet(idx, { weightKg: v })}
@@ -398,14 +406,24 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
                   placeholderTextColor={t.ts}
                   keyboardType="decimal-pad"
                   selectTextOnFocus
+                  onFocus={() => {
+                    const next = () => repsRefs.current[idx]?.focus();
+                    const prev = idx > 0
+                      ? (currentRepMode === "range"
+                          ? () => repsMaxRefs.current[idx - 1]?.focus()
+                          : () => repsRefs.current[idx - 1]?.focus())
+                      : null;
+                    onInputFocus(next, prev);
+                  }}
                 />
               </View>
             </View>
 
             {/* Rep column */}
             <View style={[styles.exSetValueCol, styles.exSetColRep]}>
-              <View style={[styles.exSetInputBox, { borderColor: divider }]}>
+              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                 <TextInput
+                  ref={r => { repsRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
                   value={repMode === "target" ? (set.reps ?? "") : (set.repsMin ?? "")}
                   onChangeText={v => patchSet(idx, repMode === "target" ? { reps: v } : { repsMin: v })}
@@ -413,13 +431,21 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
                   placeholderTextColor={t.ts}
                   keyboardType={exercise.isIsometric ? "number-pad" : "decimal-pad"}
                   selectTextOnFocus
+                  onFocus={() => {
+                    const next = currentRepMode === "range"
+                      ? () => repsMaxRefs.current[idx]?.focus()
+                      : (idx < sets.length - 1 ? () => weightRefs.current[idx + 1]?.focus() : null);
+                    const prev = () => weightRefs.current[idx]?.focus();
+                    onInputFocus(next, prev);
+                  }}
                 />
               </View>
               <Reanimated.View style={[{ overflow: "hidden" }, rangeOuterStyle]}>
                 <Reanimated.View style={[{ flexDirection: "row", alignItems: "center", width: RANGE_EXTENSION_WIDTH, transformOrigin: "left" }, rangeInnerStyle]}>
                   <Text style={{ color: t.ts, fontSize: 13, fontFamily: FontFamily.semibold, marginHorizontal: 4 }}>–</Text>
-                  <View style={[styles.exSetInputBox, { borderColor: divider }]}>
+                  <View style={[styles.exSetInputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                     <TextInput
+                      ref={r => { repsMaxRefs.current[idx] = r; }}
                       style={[styles.exSetInputText, { color: t.tp }]}
                       value={set.repsMax ?? ""}
                       onChangeText={v => patchSet(idx, { repsMax: v })}
@@ -427,6 +453,11 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
                       placeholderTextColor={t.ts}
                       keyboardType="number-pad"
                       selectTextOnFocus
+                      onFocus={() => {
+                        const next = idx < sets.length - 1 ? () => weightRefs.current[idx + 1]?.focus() : null;
+                        const prev = () => repsRefs.current[idx]?.focus();
+                        onInputFocus(next, prev);
+                      }}
                     />
                   </View>
                 </Reanimated.View>
@@ -1108,7 +1139,7 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse, onInputFocus,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1123,6 +1154,7 @@ function Step2({
   isEditMode: boolean;
   collapsingIds: Set<string>;
   onStartCollapse: (day: string, id: string) => void;
+  onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const days = Object.keys(workouts);
@@ -1222,6 +1254,7 @@ function Step2({
                         onRemove={() => onStartCollapse(day, ex.id)}
                         onOpenReorder={() => setReorderDay(day)}
                         onEdit={() => onEditExercise(day, ex.id)}
+                        onInputFocus={onInputFocus}
                       />
                     </NeuCard>
                   </CollapsibleCard>
@@ -1301,13 +1334,15 @@ export default function NewProgramScreen() {
     if (!isEditMode) return false;
     const orig = originalEdit.current;
     if (!orig) return false;
+    const sortedJson = (w: WorkoutMap) =>
+      JSON.stringify(Object.fromEntries(Object.keys(w).sort().map(k => [k, w[k]])));
     return (
       name !== orig.name ||
       totalWeeks !== orig.totalWeeks ||
       cycleDays !== orig.cycleDays ||
       JSON.stringify(isTrainingDay) !== JSON.stringify(orig.isTrainingDay) ||
       JSON.stringify(cyclePattern) !== JSON.stringify(orig.cyclePattern) ||
-      JSON.stringify(workouts) !== JSON.stringify(orig.workouts)
+      sortedJson(workouts) !== sortedJson(orig.workouts)
     );
   }, [isEditMode, name, totalWeeks, cycleDays, isTrainingDay, cyclePattern, workouts]);
 
@@ -1320,9 +1355,19 @@ export default function NewProgramScreen() {
   }, [hasChanges, updateBtnScale]);
 
   const [kbHeight, setKbHeight] = useState(0);
+  const [hasNext, setHasNext] = useState(false);
+  const [hasPrev, setHasPrev] = useState(false);
+  const nextFnRef = useRef<(() => void) | null>(null);
+  const prevFnRef = useRef<(() => void) | null>(null);
+  const handleInputFocus = useCallback((nextFn: (() => void) | null, prevFn: (() => void) | null = null) => {
+    nextFnRef.current = nextFn;
+    prevFnRef.current = prevFn;
+    setHasNext(nextFn !== null);
+    setHasPrev(prevFn !== null);
+  }, []);
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => setKbHeight(0));
+    const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null; });
     return () => { show.remove(); hide.remove(); };
   }, []);
 
@@ -1373,7 +1418,13 @@ export default function NewProgramScreen() {
               if (draft.cycleDays) setCycleDays(draft.cycleDays);
               if (draft.cyclePattern) setCyclePattern(draft.cyclePattern);
               if (draft.isTrainingDay) setIsTrainingDay(draft.isTrainingDay);
-              if (draft.workouts) setWorkouts(draft.workouts);
+              if (draft.workouts) {
+                // Canonicalize draft workouts so stale key formats don't cause false "hasChanges"
+                const draftDays = trainingDayKeys(draft.cyclePattern ?? [], draft.isTrainingDay ?? []);
+                const canonical: WorkoutMap = {};
+                draftDays.forEach(d => { canonical[d] = draft.workouts[d] ?? []; });
+                setWorkouts(canonical);
+              }
               loadedFromDraft = true;
             }
           }
@@ -1384,13 +1435,18 @@ export default function NewProgramScreen() {
           if (program) {
             const isTraining = program.cyclePattern.map(d => d !== "Rest");
             const names = program.cyclePattern.map(d => d === "Rest" ? "" : d);
+            // Canonicalize workouts to the same key format `handleNext` produces so
+            // navigating between steps never triggers a spurious "hasChanges" diff.
+            const canonicalDays = trainingDayKeys(names, isTraining);
+            const canonicalWorkouts: WorkoutMap = {};
+            canonicalDays.forEach(d => { canonicalWorkouts[d] = (program.workouts ?? {})[d] ?? []; });
             if (!loadedFromDraft) {
               setName(program.name);
               setTotalWeeks(program.totalWeeks);
               setCycleDays(program.cycleDays);
               setIsTrainingDay(isTraining);
               setCyclePattern(names);
-              setWorkouts(program.workouts ?? {});
+              setWorkouts(canonicalWorkouts);
             }
             originalEdit.current = {
               name: program.name,
@@ -1398,7 +1454,7 @@ export default function NewProgramScreen() {
               cycleDays: program.cycleDays,
               isTrainingDay: isTraining,
               cyclePattern: names,
-              workouts: program.workouts ?? {},
+              workouts: canonicalWorkouts,
             };
           }
         } else {
@@ -1502,6 +1558,8 @@ export default function NewProgramScreen() {
   const handleNext = useCallback(() => {
     const days = trainingDayKeys(cyclePattern, isTrainingDay);
     setWorkouts(prev => {
+      const prevKeys = Object.keys(prev);
+      if (prevKeys.length === days.length && days.every(d => d in prev)) return prev;
       const next: WorkoutMap = {};
       days.forEach((d: string) => { next[d] = prev[d] ?? []; });
       return next;
@@ -1681,10 +1739,10 @@ export default function NewProgramScreen() {
 
 
       {isEditMode && (
-        <Reanimated.View style={[{ position: "absolute", top: insets.top + 16, right: 26, zIndex: 10 }, updateBtnStyle]}>
+        <Reanimated.View style={[{ position: "absolute", top: insets.top + 16, right: 20, zIndex: 10 }, updateBtnStyle]} pointerEvents={hasChanges ? "box-none" : "none"}>
           <BounceButton onPress={handleFinish} accessibilityLabel="Save changes" accessibilityRole="button">
-            <View style={styles.updateBtn}>
-              <Text style={styles.updateBtnText}>Update</Text>
+            <View style={[styles.updateBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+              <Text style={[styles.updateBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Update</Text>
             </View>
           </BounceButton>
         </Reanimated.View>
@@ -1746,32 +1804,38 @@ export default function NewProgramScreen() {
             isEditMode={isEditMode}
             collapsingIds={collapsingIds}
             onStartCollapse={startCollapse}
+            onInputFocus={handleInputFocus}
           />
         )}
       </Reanimated.ScrollView>
 
-      {/* Floating keyboard dismiss button */}
+      {/* Floating keyboard toolbar (back / forward / dismiss) */}
       {kbHeight > 0 && Platform.OS === "ios" && (
-        <TouchableOpacity
-          onPress={() => Keyboard.dismiss()}
-          activeOpacity={0.75}
-          style={{
-            position: "absolute",
-            right: 10,
-            bottom: kbHeight + 8,
-            borderRadius: 12,
-            paddingHorizontal: 14,
-            paddingVertical: 9,
-            backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff",
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.15,
-            shadowRadius: 4,
-            zIndex: 999,
-          }}
-        >
-          <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
-        </TouchableOpacity>
+        <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
+          <TouchableOpacity
+            onPress={() => prevFnRef.current?.()}
+            activeOpacity={hasPrev ? 0.75 : 1}
+            disabled={!hasPrev}
+            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}
+          >
+            <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => nextFnRef.current?.()}
+            activeOpacity={hasNext ? 0.75 : 1}
+            disabled={!hasNext}
+            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}
+          >
+            <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => Keyboard.dismiss()}
+            activeOpacity={0.75}
+            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}
+          >
+            <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
+          </TouchableOpacity>
+        </View>
       )}
 
       {/* Exercise picker — rendered above ScrollView so it's never clipped */}
@@ -1811,6 +1875,7 @@ export default function NewProgramScreen() {
 
 const styles = StyleSheet.create({
   root:             { flex: 1 },
+  kbFloatBtn:       { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
   topGradient:      { position: "absolute", left: 0, right: 0, zIndex: 5 },
   backBtn:          { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   header:           { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 20 },
@@ -1854,8 +1919,8 @@ const styles = StyleSheet.create({
   primaryBtnWrap:   { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   primaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
-  updateBtn:        { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 8, paddingHorizontal: 16, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.65, shadowRadius: 8 },
-  updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 14, color: "#FFFFFF", letterSpacing: 0.3 },
+  updateBtn:        { height: 40, borderRadius: 20, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
+  updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.3 },
 
   // Step 2 — workout days
   dayHeadingCard:       { borderRadius: 16, marginBottom: 8 },
@@ -1904,7 +1969,7 @@ const styles = StyleSheet.create({
   exTogglePillText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   exSetHeaderRow:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6, borderTopWidth: 1, paddingRight: 16 },
   exSetHeaderLabel: { fontFamily: FontFamily.semibold, fontSize: 13 },
-  exSetTargetLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.8, textTransform: "uppercase" },
+  exSetTargetLabel: { fontFamily: FontFamily.semibold, fontSize: 13 },
   exSetHeaderToggle:{ flexDirection: "row", alignItems: "center", justifyContent: "center" },
   exSetHeaderToggleSpacer: { width: 14 },
   exSetRow:         { flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 48, borderTopWidth: 1, paddingRight: 16 },
