@@ -28,7 +28,7 @@ export default function StreakScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
-  const { streakDays, startDate, highestStreak } = useStreak();
+  const { streakDays, startDate, highestStreak, openedDates } = useStreak();
 
   const tier = getTier(streakDays);
   const isMax = streakDays >= MAX_TIER_DAYS;
@@ -61,6 +61,26 @@ export default function StreakScreen() {
     : "—";
 
   const todayIdx = (new Date().getDay() + 6) % 7;
+
+  // Compute YYYY-MM-DD for Monday → Sunday of the current week (local time)
+  const weekDates: string[] = (() => {
+    const out: string[] = [];
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    const monday = new Date(base);
+    monday.setDate(base.getDate() - todayIdx);
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      out.push(`${y}-${m}-${day}`);
+    }
+    return out;
+  })();
+
+  const openedSet = new Set(openedDates);
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
@@ -132,8 +152,9 @@ export default function StreakScreen() {
             <Text style={[styles.sectionLabel, { color: t.tp }]}>THIS WEEK</Text>
             <View style={styles.daysRow}>
               {WEEK_LABELS.map((label, i) => {
-                const done = i <= todayIdx;
                 const isToday = i === todayIdx;
+                const isFuture = i > todayIdx;
+                const done = openedSet.has(weekDates[i]);
                 return (
                   <View key={label} style={styles.dayCell}>
                     <Text style={[
@@ -147,9 +168,13 @@ export default function StreakScreen() {
                       <View style={[styles.dayFlame, isToday && { backgroundColor: displayTier.color + "22", borderRadius: 18 }]}>
                         <FlameIcon size={36} color={displayTier.color} />
                       </View>
-                    ) : (
+                    ) : isFuture ? (
                       <View style={styles.dayFlame}>
                         <View style={[styles.dayEmpty, { borderColor: t.ts }]} />
+                      </View>
+                    ) : (
+                      <View style={styles.dayFlame}>
+                        <FlameIcon size={36} color={isDark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.18)"} />
                       </View>
                     )}
                   </View>

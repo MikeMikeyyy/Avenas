@@ -99,13 +99,17 @@ export default function ExercisePicker({
   };
 
   useEffect(() => {
-    setPickedOrder([]);
-    setSearch("");
-    Animated.parallel([
-      Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-    ]).start();
-  }, []);
+    if (visible) {
+      setPickedOrder([]);
+      setSearch("");
+      slideY.setValue(600);
+      backdropOpacity.setValue(0);
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
 
   const filteredPresets = PRESET_EXERCISES.filter(e =>
     e.toLowerCase().includes(search.toLowerCase()) &&

@@ -8,12 +8,14 @@ interface StreakData {
   startDate: string;       // ISO date string (YYYY-MM-DD)
   highestStreak: number;
   lastOpenedDate: string;  // ISO date string (YYYY-MM-DD)
+  openedDates: string[];   // every distinct day the user opened the app (YYYY-MM-DD)
 }
 
 interface StreakContextValue {
   streakDays: number;
   startDate: string;
   highestStreak: number;
+  openedDates: string[];
   isLoaded: boolean;
 }
 
@@ -21,6 +23,7 @@ const StreakContext = createContext<StreakContextValue>({
   streakDays: 0,
   startDate: "",
   highestStreak: 0,
+  openedDates: [],
   isLoaded: false,
 });
 
@@ -42,6 +45,7 @@ function isValidStreakData(parsed: unknown): parsed is StreakData {
     typeof d.highestStreak === "number" &&
     typeof d.lastOpenedDate === "string"
   );
+  // openedDates is optional for migration from older records — handled at load time.
 }
 
 export function StreakProvider({ children }: { children: React.ReactNode }) {
@@ -65,6 +69,7 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
           startDate: today,
           highestStreak: 1,
           lastOpenedDate: today,
+          openedDates: [today],
         };
         try {
           await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
@@ -89,19 +94,34 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
 
       if (!saved) {
         // Corrupt data — reset cleanly
-        const initial: StreakData = { count: 1, startDate: today, highestStreak: 1, lastOpenedDate: today };
+        const initial: StreakData = { count: 1, startDate: today, highestStreak: 1, lastOpenedDate: today, openedDates: [today] };
         try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(initial)); } catch { /* best effort */ }
         setData(initial);
         return;
       }
 
+      // Migrate older records that don't have openedDates yet
+      const existingOpenedDates: string[] = Array.isArray((saved as StreakData).openedDates)
+        ? (saved as StreakData).openedDates
+        : [saved.lastOpenedDate];
+
       const diff = daysBetween(saved.lastOpenedDate, today);
 
       if (diff === 0) {
-        // Already opened today — no change
-        setData(saved);
+        // Already opened today — ensure today is tracked
+        if (!existingOpenedDates.includes(today)) {
+          const merged: StreakData = { ...saved, openedDates: [...existingOpenedDates, today] };
+          try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch { /* best effort */ }
+          setData(merged);
+          return;
+        }
+        setData({ ...saved, openedDates: existingOpenedDates });
         return;
       }
+
+      const nextOpenedDates = existingOpenedDates.includes(today)
+        ? existingOpenedDates
+        : [...existingOpenedDates, today];
 
       let next: StreakData;
 
@@ -112,6 +132,7 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
           startDate: saved.startDate,
           highestStreak: Math.max(saved.highestStreak, saved.count + 1),
           lastOpenedDate: today,
+          openedDates: nextOpenedDates,
         };
       } else {
         // Missed 2+ days — reset streak but preserve highest
@@ -120,6 +141,7 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
           startDate: today,
           highestStreak: saved.highestStreak,
           lastOpenedDate: today,
+          openedDates: nextOpenedDates,
         };
       }
 
@@ -136,6 +158,7 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
     streakDays: data?.count ?? 0,
     startDate: data?.startDate ?? "",
     highestStreak: data?.highestStreak ?? 0,
+    openedDates: data?.openedDates ?? [],
     isLoaded: data !== null,
   }), [data]);
 

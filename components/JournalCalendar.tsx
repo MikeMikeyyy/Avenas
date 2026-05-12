@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useCallback } from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import React, { useState, useMemo, useCallback, useRef } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, LayoutChangeEvent } from "react-native";
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
@@ -7,7 +8,7 @@ import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 
 const MONTH_LABELS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const MONTH_SHORT  = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const DAY_ABBRS    = ["M","T","W","T","F","S","S"];
+const DAY_ABBRS    = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 
 // Rest-day colours
 const REST_BG_LIGHT     = "#b8bec8";
@@ -57,13 +58,33 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
   const [viewYear, setViewYear]   = useState(curYear);
   const [viewMonth, setViewMonth] = useState(curMonth);
 
+  const gridHeight       = useSharedValue(0);
+  const gridInitialized  = useRef(false);
+
+  const animatedGridStyle = useAnimatedStyle(() => ({
+    height: gridHeight.value === 0 ? undefined : gridHeight.value,
+    overflow: "hidden" as const,
+  }));
+
+  const onGridLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (!gridInitialized.current) {
+      gridHeight.value = h;
+      gridInitialized.current = true;
+    } else {
+      gridHeight.value = withTiming(h, { duration: 300, easing: Easing.inOut(Easing.ease) });
+    }
+  }, [gridHeight]);
+
   const t = isDark ? APP_DARK : APP_LIGHT;
   const atCurrentMonth = viewYear === curYear && viewMonth === curMonth;
+  const atMinMonth = viewYear === 2026 && viewMonth === 0;
 
   const goBack = useCallback(() => {
+    if (atMinMonth) return;
     if (viewMonth === 0) { setViewYear(y => y - 1); setViewMonth(11); }
     else setViewMonth(m => m - 1);
-  }, [viewMonth]);
+  }, [viewMonth, atMinMonth]);
 
   const goForward = useCallback(() => {
     if (atCurrentMonth) return;
@@ -157,22 +178,23 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
       cellBg           = neutralBg;
       cellOuterShadow  = outerShadow;
       cellInnerShadow  = innerShadow;
-      numColor         = t.tp;
+      numColor         = isFuture ? (isDark ? "#7a7068" : "#a89f96") : t.tp;
       bold             = isToday;
       cellBorder       = isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)";
     }
 
     return (
-      <View key={ci} style={s.cellWrap}>
+      <View key={ci} style={[s.cellWrap, isFuture && { opacity: 0.4 }]}>
         {/* Outer layer: dark drop-shadow + today border */}
         <View style={[
           s.cellOuter,
           { shadowColor: cellOuterShadow },
           isWorkout && s.workoutGlow,
+          isToday && s.todayGlow,
           isToday && { borderWidth: 2, borderColor: ACCT },
         ]}>
           {/* Inner layer: light highlight shadow + background */}
-          <View style={[s.cellInner, { shadowColor: cellInnerShadow, backgroundColor: cellBg, borderWidth: 1, borderColor: cellBorder }, isWorkout && { shadowOpacity: 0 }]}>
+          <View style={[s.cellInner, { shadowColor: cellInnerShadow, backgroundColor: cellBg, borderWidth: 1, borderColor: cellBorder }, (isWorkout || isToday) && { shadowOpacity: 0 }, isToday && { borderWidth: 0 }]}>
             <TouchableOpacity
               activeOpacity={0.75}
               onPress={() => onDayPress(ds, dateToWorkoutId[ds])}
@@ -194,8 +216,19 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
       <View style={s.inner}>
         {/* Month navigation */}
         <View style={s.header}>
-          <TouchableOpacity onPress={goBack} style={s.navBtn} activeOpacity={0.7}>
-            <Ionicons name="chevron-back" size={20} color={t.tp} />
+          <TouchableOpacity
+            onPress={goBack}
+            style={s.navBtn}
+            activeOpacity={atMinMonth ? 1 : 0.7}
+            disabled={atMinMonth}
+          >
+            <Ionicons
+              name="chevron-back"
+              size={20}
+              color={atMinMonth
+                ? (isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)")
+                : t.tp}
+            />
           </TouchableOpacity>
           <Text style={[s.monthTitle, { color: t.tp }]}>
             {MONTH_LABELS[viewMonth]} {viewYear}
@@ -226,11 +259,15 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
         </View>
 
         {/* Calendar grid */}
-        {rows.map((row, ri) => (
-          <View key={ri} style={[s.row, s.gridRow]}>
-            {row.map((cell, ci) => renderCell(cell, ci))}
+        <Animated.View style={animatedGridStyle}>
+          <View onLayout={onGridLayout} style={s.gridInner}>
+            {rows.map((row, ri) => (
+              <View key={ri} style={[s.row, s.gridRow]}>
+                {row.map((cell, ci) => renderCell(cell, ci))}
+              </View>
+            ))}
           </View>
-        ))}
+        </Animated.View>
       </View>
     </NeuCard>
   );
@@ -246,13 +283,14 @@ const s = StyleSheet.create({
 
   row:     { flexDirection: "row" },
   gridRow: { marginBottom: 8 },
+  gridInner: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 12 },
   cellWrap:{ flex: 1, alignItems: "center" },
-  dayHdr:  { fontFamily: FontFamily.semibold, fontSize: 11, marginBottom: 8, textAlign: "center" },
+  dayHdr:  { fontFamily: FontFamily.semibold, fontSize: 11, marginBottom: 12, textAlign: "center" },
 
   cellOuter: {
     width: "86%",
     aspectRatio: 1,
-    borderRadius: 10,
+    borderRadius: 999,
     shadowOffset: { width: 2.5, height: 2.5 },
     shadowOpacity: 0.32,
     shadowRadius: 5,
@@ -260,7 +298,7 @@ const s = StyleSheet.create({
   },
   cellInner: {
     flex: 1,
-    borderRadius: 10,
+    borderRadius: 999,
     shadowOffset: { width: -2, height: -2 },
     shadowOpacity: 0.9,
     shadowRadius: 3,
@@ -269,7 +307,14 @@ const s = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 10,
+    borderRadius: 999,
+  },
+  todayGlow: {
+    shadowColor: ACCT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.42,
+    shadowRadius: 6,
+    elevation: 5,
   },
   workoutGlow: {
     shadowColor: ACCT,
