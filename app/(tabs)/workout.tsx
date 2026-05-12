@@ -161,10 +161,16 @@ function KeyboardDismissIcon({ color }: { color: string }) {
 
 // ─── buildPrevByName ──────────────────────────────────────────────────────────
 
-function buildPrevByName(history: CompletedWorkout[]): Record<string, string[]> {
-  // history is newest-first (prepend on save), so first match per name = most recent
+function buildPrevByName(
+  history: CompletedWorkout[],
+  beforeDate?: string,
+): Record<string, string[]> {
+  const sorted = [...history].sort(
+    (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
+  );
+  const filtered = beforeDate ? sorted.filter(w => w.completedAt < beforeDate) : sorted;
   const result: Record<string, string[]> = {};
-  for (const workout of history) {
+  for (const workout of filtered) {
     for (const ex of workout.exercises) {
       if (result[ex.name]) continue;
       result[ex.name] = ex.sets.map(s => {
@@ -907,7 +913,7 @@ interface ExerciseCardProps {
   isIsometric: boolean;
   onToggleIsometric: () => void;
   onToggleSetType: (type: "warmup" | "working", localIdx: number) => void;
-  onInputFocus: (nextFn: (() => void) | null) => void;
+  onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   activeSetFlatIdx: number | null;
   isLocked?: boolean;
   prevSets?: string[];
@@ -982,17 +988,10 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
             <Text style={[styles.colHeaderText, { color: t.ts }]}>PREV</Text>
           </View>
           <View style={styles.inputHeaderCol}>
-            <Text style={[styles.colHeaderText, { color: t.ts }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{isKg ? "WEIGHT (KG)" : "WEIGHT (LBS)"}</Text>
+            <Text style={[styles.colHeaderText, { color: t.ts }]} numberOfLines={1}>WEIGHT</Text>
           </View>
           <View style={styles.inputHeaderCol}>
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 2 }}>
-              <Text style={[styles.colHeaderText, { color: t.ts }]}>
-                {isIsometric ? "HOLD" : "REPS"}
-              </Text>
-              {isIsometric && (
-                <Text style={[styles.colHeaderText, { color: t.ts }]}>(S)</Text>
-              )}
-            </View>
+            <Text style={[styles.colHeaderText, { color: t.ts }]}>{isIsometric ? "HOLD" : "REPS"}</Text>
           </View>
           <View style={styles.checkCol} />
         </View>
@@ -1074,7 +1073,10 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     placeholderTextColor={`${t.tp}66`}
                     value={set.weight}
                     editable={!isLocked}
-                    onFocus={() => onInputFocus(() => repsRefs.current[flatIdx]?.focus())}
+                    onFocus={() => onInputFocus(
+                      () => repsRefs.current[flatIdx]?.focus(),
+                      flatIdx > 0 ? () => repsRefs.current[flatIdx - 1]?.focus() : null,
+                    )}
                     onChangeText={v => onUpdateSet(set.type, set.localIdx, "weight", v)}
                     onEndEditing={() => onAutoTick(set.type, set.localIdx)}
                     selectTextOnFocus
@@ -1109,10 +1111,11 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     value={set.reps}
                     editable={!isLocked}
                     onFocus={() => {
+                      const prevFn = () => weightRefs.current[flatIdx]?.focus();
                       if (flatIdx < allSets.length - 1) {
-                        onInputFocus(() => weightRefs.current[flatIdx + 1]?.focus());
+                        onInputFocus(() => weightRefs.current[flatIdx + 1]?.focus(), prevFn);
                       } else {
-                        onInputFocus(null);
+                        onInputFocus(null, prevFn);
                       }
                     }}
                     onChangeText={v => onUpdateSet(set.type, set.localIdx, "reps", v)}
@@ -1142,7 +1145,17 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     done={set.done}
                     isDark={isDark}
                     isActive={rowIsActive}
-                    onToggle={isLocked ? () => {} : () => onToggleDone(set.type, set.localIdx)}
+                    onToggle={isLocked ? () => {} : () => {
+                      if (!set.done && !set.weight.trim() && !set.reps.trim()) {
+                        const prev = prevSets?.[flatIdx];
+                        if (prev && prev !== "—") {
+                          const parts = prev.split("×");
+                          onUpdateSet(set.type, set.localIdx, "weight", parts[0] ?? "");
+                          onUpdateSet(set.type, set.localIdx, "reps", parts[1] ?? "");
+                        }
+                      }
+                      onToggleDone(set.type, set.localIdx);
+                    }}
                   />
                 )}
               </View>
@@ -1215,16 +1228,16 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
                     <View style={{
                       borderRadius: 12, backgroundColor: bg,
-                      shadowColor: isDark ? "#090B13" : "#a3afc0",
-                      shadowOffset: { width: 4, height: 4 },
-                      shadowOpacity: isDark ? 0.9 : 0.7,
-                      shadowRadius: 7,
+                      shadowColor: isDark ? "#000" : "#a3afc0",
+                      shadowOffset: { width: isDark ? 0 : 4, height: isDark ? 2 : 4 },
+                      shadowOpacity: isDark ? 0.35 : 0.5,
+                      shadowRadius: 8,
                     }}>
                       <View style={{
                         borderRadius: 12, backgroundColor: bg,
-                        shadowColor: isDark ? "#262A40" : "#FFFFFF",
-                        shadowOffset: { width: -2, height: -2 },
-                        shadowOpacity: 1,
+                        shadowColor: isDark ? "transparent" : "#FFFFFF",
+                        shadowOffset: { width: -3, height: -3 },
+                        shadowOpacity: isDark ? 0 : 1,
                         shadowRadius: 3,
                       }}>
                         <View style={{
@@ -1249,12 +1262,12 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: t.tp, marginBottom: 6 }}>Notes</Text>
           <TextInput
             style={[styles.exNotesInput, { color: t.tp }]}
-            placeholder="Exercise notes..."
+            placeholder="Add exercise notes..."
             placeholderTextColor={t.ts}
             value={exNotes}
             editable={!isLocked}
             onChangeText={onUpdateNotes}
-            onFocus={() => onInputFocus(null)}
+            onFocus={() => onInputFocus(null, null)}
             multiline
             textAlignVertical="top"
           />
@@ -1483,8 +1496,10 @@ export default function WorkoutScreen() {
       }
       return prev;
     });
-    startTimer();
-    if (willTick) startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
+    if (willTick) {
+      startTimer();
+      startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
+    }
   };
 
   const toggleDone = (exId: string, type: "warmup" | "working", idx: number) => {
@@ -1765,10 +1780,14 @@ export default function WorkoutScreen() {
   const [prevByName, setPrevByName] = useState<Record<string, string[]>>({});
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
+  const [hasPrev, setHasPrev] = useState(false);
   const nextFnRef = useRef<(() => void) | null>(null);
-  const handleInputFocus = useCallback((fn: (() => void) | null) => {
+  const prevFnRef = useRef<(() => void) | null>(null);
+  const handleInputFocus = useCallback((fn: (() => void) | null, prevFn: (() => void) | null = null) => {
     nextFnRef.current = fn;
+    prevFnRef.current = prevFn;
     setHasNext(fn !== null);
+    setHasPrev(prevFn !== null);
   }, []);
 
   const openNotes = () => {
@@ -1786,7 +1805,7 @@ export default function WorkoutScreen() {
   };
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); nextFnRef.current = null; });
+    const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null; });
     return () => { show.remove(); hide.remove(); };
   }, []);
 
@@ -2032,7 +2051,7 @@ export default function WorkoutScreen() {
                   multiline
                   value={notes}
                   onChangeText={setNotes}
-                  onFocus={() => { handleInputFocus(null); }}
+                  onFocus={() => { handleInputFocus(null, null); }}
                   textAlignVertical="top"
                 />
               </View>
@@ -2095,8 +2114,8 @@ export default function WorkoutScreen() {
           )}
         </View>
         <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
-          <View style={[styles.topIconBtn, { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 }]}>
-            <Ionicons name="timer-outline" size={22} color="#fff" />
+          <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+            <Ionicons name="timer-outline" size={22} color={t.tp} />
           </View>
         </TouchableOpacity>
       </View>
@@ -2448,15 +2467,22 @@ export default function WorkoutScreen() {
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
       <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
-        {hasNext && (
+        <TouchableOpacity
+            onPress={() => prevFnRef.current?.()}
+            activeOpacity={hasPrev ? 0.75 : 1}
+            disabled={!hasPrev}
+            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}
+          >
+            <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={() => nextFnRef.current?.()}
-            activeOpacity={0.75}
-            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}
+            activeOpacity={hasNext ? 0.75 : 1}
+            disabled={!hasNext}
+            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}
           >
             <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
           </TouchableOpacity>
-        )}
         <TouchableOpacity
           onPress={() => Keyboard.dismiss()}
           activeOpacity={0.75}
@@ -2575,7 +2601,7 @@ const styles = StyleSheet.create({
 
   // Keyboard floating dismiss button
   kbFloatRow: { flexDirection: "row", justifyContent: "flex-end", paddingRight: 10, paddingTop: 8, paddingBottom: 4 },
-  kbFloatBtn: { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 9, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
+  kbFloatBtn: { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
 
   // Reorder button in exercise edit panel
   exReorderBtn:   { width: 36, height: 36, alignItems: "center", justifyContent: "center" },

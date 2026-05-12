@@ -91,9 +91,16 @@ function fmtDurationMins(mins: number): string {
 
 // ─── buildPrevByName ──────────────────────────────────────────────────────────
 
-function buildPrevByName(history: CompletedWorkout[]): Record<string, string[]> {
+function buildPrevByName(
+  history: CompletedWorkout[],
+  beforeDate?: string,
+): Record<string, string[]> {
+  const sorted = [...history].sort(
+    (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
+  );
+  const filtered = beforeDate ? sorted.filter(w => w.completedAt < beforeDate) : sorted;
   const result: Record<string, string[]> = {};
-  for (const workout of history) {
+  for (const workout of filtered) {
     for (const ex of workout.exercises) {
       if (result[ex.name]) continue;
       result[ex.name] = ex.sets.map(s => {
@@ -683,7 +690,7 @@ interface ExerciseCardProps {
   onChangeExercise: () => void;
   onToggleIsometric: () => void;
   onUpdateNotes: (notes: string) => void;
-  onInputFocus: (nextFn: (() => void) | null) => void;
+  onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   prevSets?: string[];
 }
 
@@ -747,8 +754,8 @@ function ExerciseCard({
         <View style={[s.colHeaderRow, { borderBottomColor: divider }]}>
           <Text style={[s.colText, s.setCol,  { color: t.ts }]}>SET</Text>
           <Text style={[s.colText, s.prevCol, { color: t.ts }]}>PREV</Text>
-          <Text style={[s.colText, s.inputCol, { color: t.ts }]}>KG</Text>
-          <Text style={[s.colText, s.inputCol, { color: t.ts }]}>{ex.isIsometric ? "HOLD (S)" : "REPS"}</Text>
+          <Text style={[s.colText, s.inputCol, { color: t.ts }]}>WEIGHT</Text>
+          <Text style={[s.colText, s.inputCol, { color: t.ts }]}>REPS</Text>
           <View style={s.checkCol} />
         </View>
 
@@ -806,7 +813,10 @@ function ExerciseCard({
                       keyboardType="decimal-pad"
                       value={set.weight}
                       onChangeText={v => onUpdateSet(idx, "weight", v)}
-                      onFocus={() => onInputFocus(() => repsRefs.current[idx]?.focus())}
+                      onFocus={() => onInputFocus(
+                        () => repsRefs.current[idx]?.focus(),
+                        idx > 0 ? () => repsRefs.current[idx - 1]?.focus() : null,
+                      )}
                       placeholder={set.programSet?.weightKg || "—"}
                       placeholderTextColor={`${t.tp}66`}
                       selectTextOnFocus
@@ -823,22 +833,12 @@ function ExerciseCard({
                       onChangeText={v => onUpdateSet(idx, "reps", v)}
                       onFocus={() => {
                         if (idx < ex.sets.length - 1) {
-                          onInputFocus(() => weightRefs.current[idx + 1]?.focus());
+                          onInputFocus(() => weightRefs.current[idx + 1]?.focus(), () => weightRefs.current[idx]?.focus());
                         } else {
-                          onInputFocus(null);
+                          onInputFocus(null, () => weightRefs.current[idx]?.focus());
                         }
                       }}
-                      placeholder={(() => {
-                        const ps = set.programSet;
-                        if (!ps) return "—";
-                        if (ps.repMode === "range") {
-                          const { repsMin: mn, repsMax: mx } = ps;
-                          if (!mn && !mx) return "—";
-                          if (mn && mx) return `${mn}–${mx}`;
-                          return mn || mx || "—";
-                        }
-                        return ps.reps || "—";
-                      })()}
+                      placeholder={set.programSet?.reps || "—"}
                       placeholderTextColor={`${t.tp}66`}
                       selectTextOnFocus
                     />
@@ -863,7 +863,17 @@ function ExerciseCard({
                       <CheckboxCell
                         done={set.done}
                         isDark={isDark}
-                        onToggle={() => onToggleDone(idx)}
+                        onToggle={() => {
+                          if (!set.done && !set.weight.trim() && !set.reps.trim()) {
+                            const prev = prevSets?.[idx];
+                            if (prev && prev !== "—") {
+                              const parts = prev.split("×");
+                              onUpdateSet(idx, "weight", parts[0] ?? "");
+                              onUpdateSet(idx, "reps", parts[1] ?? "");
+                            }
+                          }
+                          onToggleDone(idx);
+                        }}
                       />
                     )}
                   </View>
@@ -937,17 +947,17 @@ function ExerciseCard({
                 <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
                   <View style={{
                     borderRadius: 12, backgroundColor: bg,
-                    shadowColor: isDark ? "#090B13" : "#a3afc0",
-                    shadowOffset: { width: 4, height: 4 },
-                    shadowOpacity: isDark ? 0.9 : 0.7,
-                    shadowRadius: 7,
+                    shadowColor: isDark ? "#000" : "#a3afc0",
+                    shadowOffset: { width: isDark ? 0 : 4, height: isDark ? 2 : 4 },
+                    shadowOpacity: isDark ? 0.35 : 0.5,
+                    shadowRadius: 8,
                   }}>
                     <View style={{
                       borderRadius: 12, backgroundColor: bg,
-                      shadowColor: isDark ? "#262A40" : "#FFFFFF",
-                      shadowOffset: { width: -2, height: -2 },
-                      shadowOpacity: 1,
-                      shadowRadius: 3,
+                      shadowColor: isDark ? "transparent" : "#FFFFFF",
+                      shadowOffset: { width: -3, height: -3 },
+                      shadowOpacity: isDark ? 0 : 1,
+                      shadowRadius: 4,
                     }}>
                       <View style={{
                         borderRadius: 12, backgroundColor: bg, overflow: "hidden",
@@ -970,7 +980,7 @@ function ExerciseCard({
           <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: t.tp, marginBottom: 6 }}>Notes</Text>
           <TextInput
             style={[s.exNotesInput, { color: t.tp }]}
-            placeholder="Exercise notes..."
+            placeholder="Add exercise notes..."
             placeholderTextColor={t.ts}
             value={ex.notes}
             onChangeText={onUpdateNotes}
@@ -1008,10 +1018,14 @@ export default function LogWorkoutScreen() {
   const [prevByName, setPrevByName] = useState<Record<string, string[]>>({});
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
+  const [hasPrev, setHasPrev] = useState(false);
   const nextFnRef = useRef<(() => void) | null>(null);
-  const handleInputFocus = useCallback((fn: (() => void) | null) => {
+  const prevFnRef = useRef<(() => void) | null>(null);
+  const handleInputFocus = useCallback((fn: (() => void) | null, prevFn: (() => void) | null = null) => {
     nextFnRef.current = fn;
+    prevFnRef.current = prevFn;
     setHasNext(fn !== null);
+    setHasPrev(prevFn !== null);
   }, []);
 
   // Load exercise template from program
@@ -1048,13 +1062,13 @@ export default function LogWorkoutScreen() {
   useEffect(() => {
     AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
       if (!raw) return;
-      setPrevByName(buildPrevByName(JSON.parse(raw)));
+      setPrevByName(buildPrevByName(JSON.parse(raw), date));
     }).catch(() => {});
   }, []);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); nextFnRef.current = null; });
+    const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null; });
     return () => { show.remove(); hide.remove(); };
   }, []);
 
@@ -1388,15 +1402,22 @@ export default function LogWorkoutScreen() {
       {/* Keyboard toolbar */}
       {kbHeight > 0 && Platform.OS === "ios" && (
         <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
-          {hasNext && (
+          <TouchableOpacity
+              onPress={() => prevFnRef.current?.()}
+              activeOpacity={hasPrev ? 0.75 : 1}
+              disabled={!hasPrev}
+              style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}
+            >
+              <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => nextFnRef.current?.()}
-              activeOpacity={0.75}
-              style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}
+              activeOpacity={hasNext ? 0.75 : 1}
+              disabled={!hasNext}
+              style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}
             >
               <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
             </TouchableOpacity>
-          )}
           <TouchableOpacity
             onPress={() => Keyboard.dismiss()}
             activeOpacity={0.75}
@@ -1492,7 +1513,7 @@ const s = StyleSheet.create({
   prevText: { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center" },
 
   // Column headers
-  colHeaderRow: { flexDirection: "row", alignItems: "center", paddingBottom: 4, borderBottomWidth: 1, paddingHorizontal: 4 },
+  colHeaderRow: { flexDirection: "row", alignItems: "center", paddingBottom: 4, borderBottomWidth: 1, paddingHorizontal: 4, gap: 6 },
   colText:      { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: "center" },
   setCol:       { width: 36, textAlign: "center" },
   inputCol:     { flex: 1 },
@@ -1536,7 +1557,7 @@ const s = StyleSheet.create({
   notesHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
 
   // Keyboard toolbar
-  kbFloatBtn: { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 9, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
+  kbFloatBtn: { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
 
   // Save button
   saveRow:    { position: "absolute", left: 20, right: 20 },
