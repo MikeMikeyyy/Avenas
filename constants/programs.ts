@@ -2,6 +2,10 @@ export const PROGRAMS_KEY = "@avenas/programs";
 export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
 export const WORKOUT_HISTORY_KEY = "@avenas/workout_history";
 export const WORKOUT_DAY_OVERRIDE_KEY = "@avenas/today_workout_override";
+export const WORKOUT_DRAFT_KEY = "@avenas/workout_draft";
+export const LOG_DRAFT_KEY_PREFIX = "@avenas/log_draft:";
+export const logDraftKey = (date: string, workoutName: string) =>
+  `${LOG_DRAFT_KEY_PREFIX}${date}:${workoutName}`;
 
 export type CompletedSet = {
   type: "warmup" | "working";

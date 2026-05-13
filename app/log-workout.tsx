@@ -23,7 +23,7 @@ import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import {
-  PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
+  PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
   normaliseSets, type SavedProgram, type CompletedWorkout, type ProgramSet,
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
@@ -1019,6 +1019,11 @@ export default function LogWorkoutScreen() {
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
+  // Draft persistence — sets/notes/time entered here are autosaved per (date, workoutName)
+  // so a full app exit doesn't lose them. Cleared on successful save.
+  const draftLockedRef = useRef(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftKey = date && workoutName ? logDraftKey(date, workoutName) : null;
   const nextFnRef = useRef<(() => void) | null>(null);
   const prevFnRef = useRef<(() => void) | null>(null);
   const handleInputFocus = useCallback((fn: (() => void) | null, prevFn: (() => void) | null = null) => {
@@ -1028,8 +1033,32 @@ export default function LogWorkoutScreen() {
     setHasPrev(prevFn !== null);
   }, []);
 
-  // Load exercise template from program
+  // Restore an in-progress log draft (if any) before the program-template loader runs.
   useEffect(() => {
+    if (!draftKey) { setDraftRestored(true); return; }
+    AsyncStorage.getItem(draftKey).then(raw => {
+      if (raw) {
+        try {
+          const draft = JSON.parse(raw);
+          if (Array.isArray(draft?.exercises)) {
+            setExercises(draft.exercises);
+            setNotes(draft.notes ?? "");
+            setWorkoutTime(draft.workoutTime ?? null);
+            draftLockedRef.current = true;
+          }
+        } catch {
+          AsyncStorage.removeItem(draftKey).catch(() => {});
+        }
+      }
+      setDraftRestored(true);
+    }).catch(() => setDraftRestored(true));
+  }, [draftKey]);
+
+  // Load exercise template from program — skipped if a draft was restored, so we don't
+  // overwrite the user's in-progress entries with a fresh template.
+  useEffect(() => {
+    if (!draftRestored) return;
+    if (draftLockedRef.current) return;
     const pid = programId && programId.length > 0 ? programId : null;
     if (!pid || !workoutName) return;
 
@@ -1057,7 +1086,29 @@ export default function LogWorkoutScreen() {
       });
       setExercises(loaded);
     }).catch(() => {});
-  }, [programId, workoutName]);
+  }, [draftRestored, programId, workoutName]);
+
+  // Autosave draft on change after restoration. Only persist once the user has actually
+  // engaged (entered something, customised the list, or set a workout time), to avoid
+  // creating spurious empty drafts the moment they open the screen.
+  useEffect(() => {
+    if (!draftRestored) return;
+    if (!draftKey) return;
+    const hasContent =
+      draftLockedRef.current ||
+      notes.trim().length > 0 ||
+      workoutTime !== null ||
+      exercises.some(ex =>
+        ex.notes.trim().length > 0 ||
+        ex.sets.some(s => s.weight.trim().length > 0 || s.reps.trim().length > 0 || s.done)
+      );
+    if (!hasContent) return;
+    draftLockedRef.current = true;
+    AsyncStorage.setItem(
+      draftKey,
+      JSON.stringify({ exercises, notes, workoutTime })
+    ).catch(() => {});
+  }, [draftRestored, draftKey, exercises, notes, workoutTime]);
 
   useEffect(() => {
     AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
@@ -1215,6 +1266,13 @@ export default function LogWorkoutScreen() {
           return { ...p, extraWorkouts: [...extras, workoutName] };
         });
         await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+      }
+
+      // Draft has been committed to history — clear it so reopening this date+workout
+      // starts fresh next time.
+      if (draftKey) {
+        draftLockedRef.current = false;
+        await AsyncStorage.removeItem(draftKey);
       }
     } catch (_) {}
 

@@ -24,7 +24,7 @@ import TrashIcon from "../../components/TrashIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../../contexts/RestTimerContext";
@@ -106,6 +106,11 @@ function hasWorkoutProgress(log: WorkoutLog): boolean {
   );
 }
 
+function todayDateStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // ─── SetRow ────────────────────────────────────────────────────────────────────
 
 function SetRow({ isActive, children }: { isActive: boolean; children: React.ReactNode }) {
@@ -117,10 +122,6 @@ function SetRow({ isActive, children }: { isActive: boolean; children: React.Rea
   const containerStyle = useAnimatedStyle(() => ({
     borderRadius: 14,
     backgroundColor: interpolateColor(glow.value, [0, 1], ["rgba(0,0,0,0)", `${ACCT}33`]),
-    shadowColor: ACCT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: glow.value * 0.55,
-    shadowRadius: glow.value * 12,
   }));
   const borderStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
 
@@ -1370,8 +1371,13 @@ export default function WorkoutScreen() {
 
   const pendingChangingExId = useRef<string | null>(null);
   const isWorkoutActiveRef = useRef(false);
+  // Draft persistence — survives full app exit so sets/notes/exercise edits aren't lost.
+  // Held in a ref so it can short-circuit loadData's reset even when log is still empty
+  // (e.g. user reordered or added an exercise but hasn't ticked any sets yet).
+  const draftLockedRef = useRef(false);
+  const [draftRestored, setDraftRestored] = useState(false);
   useEffect(() => {
-    isWorkoutActiveRef.current = isRunning || hasWorkoutProgress(log);
+    isWorkoutActiveRef.current = draftLockedRef.current || isRunning || hasWorkoutProgress(log);
   }, [isRunning, log]);
 
   // Countdown — wall-clock based to avoid drift
@@ -1459,17 +1465,76 @@ export default function WorkoutScreen() {
     }).catch(() => {});
   }, []);
 
+  // Restore an in-progress workout draft (if any) before loadData runs, so the
+  // template loader doesn't clobber a workout the user was mid-way through.
+  useEffect(() => {
+    AsyncStorage.getItem(WORKOUT_DRAFT_KEY).then(raw => {
+      if (raw) {
+        try {
+          const draft = JSON.parse(raw);
+          if (draft?.date === todayDateStr() && draft.workoutInfo && draft.log) {
+            setWorkoutInfo(draft.workoutInfo);
+            setLog(draft.log);
+            setIsometricExIds(new Set(draft.isometricExIds ?? []));
+            setNotes(draft.notes ?? "");
+            setIsFreeWorkout(!!draft.isFreeWorkout);
+            setFreeWorkoutAddToProgram(!!draft.freeWorkoutAddToProgram);
+            draftLockedRef.current = true;
+            isWorkoutActiveRef.current = true;
+          } else {
+            // Stale draft from a previous day — discard
+            AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch(() => {});
+          }
+        } catch {
+          AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch(() => {});
+        }
+      }
+      setDraftRestored(true);
+    }).catch(() => setDraftRestored(true));
+  }, []);
+
   // Pre-load on mount so data is ready before user navigates here
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { if (draftRestored) loadData(); }, [draftRestored, loadData]);
 
   useFocusEffect(useCallback(() => {
-    loadData();
+    if (draftRestored) loadData();
 
     if (pendingChangingExId.current) {
       setChangingExId(pendingChangingExId.current);
       pendingChangingExId.current = null;
     }
-  }, [loadData]));
+  }, [loadData, draftRestored]));
+
+  // Autosave draft on any change after restoration. Skip while a completed workout
+  // is shown (nothing to save), and skip the empty pre-start baseline (saving only
+  // when the user has actually engaged: running timer, real progress, or notes).
+  useEffect(() => {
+    if (!draftRestored) return;
+    if (!workoutInfo) return;
+    if (todaysCompletedWorkout) return;
+    const hasContent =
+      isRunning || hasWorkoutProgress(log) || notes.trim().length > 0 || isFreeWorkout;
+    if (!hasContent && !draftLockedRef.current) return;
+    draftLockedRef.current = true;
+    isWorkoutActiveRef.current = true;
+    AsyncStorage.setItem(
+      WORKOUT_DRAFT_KEY,
+      JSON.stringify({
+        date: todayDateStr(),
+        workoutInfo,
+        log,
+        isometricExIds: Array.from(isometricExIds),
+        notes,
+        isFreeWorkout,
+        freeWorkoutAddToProgram,
+      })
+    ).catch(() => {});
+  }, [draftRestored, todaysCompletedWorkout, isRunning, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram]);
+
+  const clearDraft = useCallback(() => {
+    draftLockedRef.current = false;
+    AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch(() => {});
+  }, []);
 
   const updateSet = (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string) => {
     setLog(prev => {
@@ -1704,6 +1769,7 @@ export default function WorkoutScreen() {
         stopTimer();
         setIsFreeWorkout(false);
         setFreeWorkoutAddToProgram(false);
+        clearDraft();
       } }]
     );
 
@@ -1732,6 +1798,7 @@ export default function WorkoutScreen() {
           dismissRestTimer();
           setIsFreeWorkout(false);
           setFreeWorkoutAddToProgram(false);
+          clearDraft();
           loadData(true);
         },
       },
@@ -1765,6 +1832,7 @@ export default function WorkoutScreen() {
             setTodaysCompletedWorkout(null);
             if (workoutInfo) setLog(initLog(workoutInfo.exercises));
             stopTimer();
+            clearDraft();
           },
         },
       ]
@@ -2106,7 +2174,7 @@ export default function WorkoutScreen() {
               {activeProgram && (
                 <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
                   <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                    <Ionicons name="add" size={22} color={t.tp} />
+                    <Ionicons name="add" size={22} color={APP_LIGHT.tp} />
                   </View>
                 </BounceButton>
               )}
@@ -2115,7 +2183,7 @@ export default function WorkoutScreen() {
         </View>
         <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
           <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-            <Ionicons name="timer-outline" size={22} color={t.tp} />
+            <Ionicons name="timer-outline" size={22} color={APP_LIGHT.tp} />
           </View>
         </TouchableOpacity>
       </View>
