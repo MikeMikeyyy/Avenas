@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from "react-native";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
 import type { SavedProgram } from "../constants/programs";
+import { parseStoredDate, toYMD } from "../utils/dates";
 
 const MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_ABBRS    = ["M","T","W","T","F","S","S"];
@@ -15,18 +16,9 @@ interface Props {
   activeProgram: SavedProgram | null;
 }
 
-function toYMD(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
-}
-
-function parseProgDate(s: string): Date {
-  const parts = s.split(" ");
-  const mi = MONTH_LABELS.indexOf(parts[1]);
-  return new Date(+parts[2], mi < 0 ? 0 : mi, +parts[0]);
-}
-
 function isRestDayForDate(d: Date, prog: SavedProgram): boolean {
-  const start = parseProgDate(prog.startDate);
+  const start = parseStoredDate(prog.startDate);
+  if (!start) return false;
   start.setHours(0, 0, 0, 0);
   const target = new Date(d);
   target.setHours(0, 0, 0, 0);

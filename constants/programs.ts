@@ -65,20 +65,19 @@ export function normaliseSets(ex: Exercise): ProgramSet[] {
 
 export type WorkoutMap = Record<string, Exercise[]>;
 
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function parseStoredDate(dateStr: string): Date {
-  const parts = dateStr.split(" ");
-  const day = parseInt(parts[0], 10);
-  const month = MONTH_NAMES.indexOf(parts[1]);
-  const year = parseInt(parts[2], 10);
-  return new Date(year, month < 0 ? 0 : month, day);
-}
+// Date helpers live in utils/dates.ts. Re-exported here to preserve the
+// existing import paths used by older callers; new code should import from
+// utils/dates.ts directly.
+import { parseStoredDate } from "../utils/dates";
+export { parseStoredDate };
 
 export function getCurrentWeek(program: SavedProgram): number {
   if (program.status === "completed") return program.totalWeeks;
   if (program.status === "paused" || program.status === "created") return program.currentWeek;
   const start = parseStoredDate(program.startDate);
+  // Corrupt / unparseable startDate: fall back to the stored currentWeek rather
+  // than silently treating the program as having started in January year-0.
+  if (!start) return Math.min(Math.max(program.currentWeek || 1, 1), program.totalWeeks);
   start.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);

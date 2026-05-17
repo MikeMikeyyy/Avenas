@@ -34,16 +34,17 @@ import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   getCurrentWeek, type SavedProgram, type CompletedWorkout,
 } from "../constants/programs";
+import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
+import { fmtDuration } from "../utils/dates";
 import { useTheme } from "../contexts/ThemeContext";
 
-const JOURNAL_KEY = "@avenas_journal_entries";
-
-type JournalEntry = {
-  id: string;
-  title: string;
-  body: string;
-  createdAt: string;
-};
+// Dev-only warning helper. Compiled out of release builds via `__DEV__`.
+function warnStorage(op: string, key: string, err: unknown) {
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.warn("[avenas]", op, key, err);
+  }
+}
 
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_ABBR    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -81,15 +82,6 @@ function formatWorkoutDate(completedIso: string, durationSeconds: number): strin
   return `${dateStr}  ·  ${endTime}`;
 }
 
-function fmtDuration(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  if (secs < 3600) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
-}
-
 function ordinal(n: number): string {
   if (n === 11 || n === 12 || n === 13) return `${n}th`;
   const mod = n % 10;
@@ -105,6 +97,8 @@ const TS  = APP_LIGHT.ts;
 const DIV = APP_LIGHT.div;
 
 // Custom dumbbell icon (3-path SVG from _layout.tsx)
+// TODO(program-page-prep): unify with components/DumbbellIcon after a pixel-diff
+// confirms equivalence — this variant's `d` path differs subtly from the canonical.
 const WorkoutIcon = ({ size, color }: { size: number; color: string }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={color} strokeWidth="1.5" />
@@ -562,13 +556,13 @@ export default function JournalScreen() {
     useCallback(() => {
       AsyncStorage.getItem(JOURNAL_KEY)
         .then(raw => { if (raw) setEntries(JSON.parse(raw)); })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", JOURNAL_KEY, e));
       AsyncStorage.getItem(WORKOUT_HISTORY_KEY)
         .then(raw => { if (raw) setWorkoutHistory(JSON.parse(raw)); })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
       AsyncStorage.getItem(WORKOUT_DATES_KEY)
         .then(raw => { if (raw) setWorkoutDates(JSON.parse(raw)); })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
       AsyncStorage.getItem(PROGRAMS_KEY)
         .then(raw => {
           if (!raw) return;
@@ -576,13 +570,22 @@ export default function JournalScreen() {
           setPrograms(progs);
           setActiveProgram(progs.find(p => p.status === "active") ?? null);
         })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
     }, [])
   );
 
+  // Optimistic UI update with rollback on storage failure — keeps the list
+  // responsive while ensuring AsyncStorage stays in sync. Previously the
+  // setItem was uncaught, so a failed write would leave UI and disk diverging.
   const saveEntries = async (updated: JournalEntry[]) => {
+    const previous = entries;
     setEntries(updated);
-    await AsyncStorage.setItem(JOURNAL_KEY, JSON.stringify(updated));
+    try {
+      await AsyncStorage.setItem(JOURNAL_KEY, JSON.stringify(updated));
+    } catch (e) {
+      warnStorage("setItem", JOURNAL_KEY, e);
+      setEntries(previous);
+    }
   };
 
   const handleCalendarDayPress = useCallback((date: string, workoutId?: string) => {

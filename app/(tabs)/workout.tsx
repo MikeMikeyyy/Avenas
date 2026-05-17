@@ -21,18 +21,27 @@ import FadeScreen from "../../components/FadeScreen";
 import BounceButton from "../../components/BounceButton";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
+import DumbbellIcon from "../../components/DumbbellIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
+import { parseStoredDate, toYMD, todayYMD } from "../../utils/dates";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../../contexts/RestTimerContext";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const WARMUP_ORANGE = "#ffbf0f";
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// Dev-only warning helper. Compiled out of release builds via `__DEV__`.
+function warnStorage(op: string, key: string, err: unknown) {
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.warn("[avenas]", op, key, err);
+  }
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -46,25 +55,9 @@ function fmtTime(secs: number): string {
   return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
 }
 
-function fmtDuration(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  if (secs < 3600) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
-}
-
-function parseStoredDate(dateStr: string): Date {
-  const parts = dateStr.split(" ");
-  const day = parseInt(parts[0], 10);
-  const month = MONTH_NAMES.indexOf(parts[1]);
-  const year = parseInt(parts[2], 10);
-  return new Date(year, month < 0 ? 0 : month, day);
-}
-
 function getTodaysWorkout(program: SavedProgram): { name: string; exercises: Exercise[] } | null {
   const start = parseStoredDate(program.startDate);
+  if (!start) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   start.setHours(0, 0, 0, 0);
@@ -106,11 +99,6 @@ function hasWorkoutProgress(log: WorkoutLog): boolean {
   );
 }
 
-function todayDateStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 // ─── SetRow ────────────────────────────────────────────────────────────────────
 
 function SetRow({ isActive, children }: { isActive: boolean; children: React.ReactNode }) {
@@ -133,18 +121,6 @@ function SetRow({ isActive, children }: { isActive: boolean; children: React.Rea
         style={[StyleSheet.absoluteFillObject, { borderWidth: 1, borderColor: ACCT, borderRadius: 14 }, borderStyle]}
       />
     </Reanimated.View>
-  );
-}
-
-// ─── DumbbellIcon ──────────────────────────────────────────────────────────────
-
-function DumbbellIcon({ size, color }: { size: number; color: string }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={color} strokeWidth="1.5" />
-      <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={color} strokeWidth="1.5" />
-      <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={color} strokeWidth="1.5" />
-    </Svg>
   );
 }
 
@@ -496,8 +472,6 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
     ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
   }, [slideY, backdropOpacity, onClose]);
 
-  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
-
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
       <View style={styles.woReorderBackdrop}>
@@ -507,33 +481,32 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
           <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
             <View style={styles.woReorderHandle} />
           </View>
-          <View style={[styles.woReorderHeader, { borderBottomColor: divider }]}>
-            <Text style={[styles.woReorderTitle, { color: t.tp }]}>Workout Options</Text>
+          <Text style={[styles.woPickerTitle, { color: t.tp }]}>Workout Options</Text>
+          <View style={styles.woPickerContent}>
+            <BounceButton style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChangeDay(); }}>
+              <NeuCard dark={isDark} radius={14}>
+                <View style={styles.woPickerOptionInner}>
+                  <Ionicons name="swap-horizontal-outline" size={18} color={t.tp} />
+                  <Text style={[styles.woPickerOptionText, { color: t.tp }]}>Change Workout Day</Text>
+                  <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                </View>
+              </NeuCard>
+            </BounceButton>
+            <BounceButton style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onStartCustom(); }}>
+              <NeuCard dark={isDark} radius={14}>
+                <View style={styles.woPickerOptionInner}>
+                  <Ionicons name="pencil-outline" size={18} color={t.tp} />
+                  <Text style={[styles.woPickerOptionText, { color: t.tp }]}>Custom Workout</Text>
+                  <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                </View>
+              </NeuCard>
+            </BounceButton>
+            <BounceButton onPress={closeSheet}>
+              <View style={[styles.woPickerCancelBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
+                <Text style={[styles.woPickerCancelText, { color: t.tp }]}>Cancel</Text>
+              </View>
+            </BounceButton>
           </View>
-          <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChangeDay(); }}>
-            <View style={[styles.woOptionRow, { borderBottomColor: divider }]}>
-              <View style={styles.woOptionIcon}>
-                <Ionicons name="swap-horizontal-outline" size={22} color={t.ts} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.woOptionTitle, { color: t.tp }]}>Change Workout Day</Text>
-                <Text style={[styles.woOptionSub, { color: t.ts }]}>Swap to a different day from your program</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={t.ts} />
-            </View>
-          </BounceButton>
-          <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onStartCustom(); }}>
-            <View style={[styles.woOptionRow, { borderBottomColor: "transparent" }]}>
-              <View style={styles.woOptionIcon}>
-                <Ionicons name="add-circle-outline" size={22} color={t.ts} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.woOptionTitle, { color: t.tp }]}>Custom Workout</Text>
-                <Text style={[styles.woOptionSub, { color: t.ts }]}>Log a custom workout day here — not tied to your program</Text>
-              </View>
-            </View>
-          </BounceButton>
-          <View style={{ height: 28 }} />
         </Animated.View>
       </View>
     </Modal>
@@ -542,13 +515,16 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
 
 // ─── ChangeDaySheet ────────────────────────────────────────────────────────────
 
-function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName, onSelectDay, onClose, onDismiss }: {
+function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWorkoutName, onSelectDay, onClose, onDismiss }: {
   visible: boolean; isDark: boolean; t: typeof APP_LIGHT | typeof APP_DARK;
-  activeProgram: SavedProgram; currentWorkoutName: string;
-  onSelectDay: (dayName: string) => void; onClose: () => void; onDismiss: () => void;
+  activeProgram: SavedProgram; programs: SavedProgram[]; currentWorkoutName: string;
+  onSelectDay: (dayName: string, fromProgram?: SavedProgram) => void;
+  onClose: () => void; onDismiss: () => void;
 }) {
   const slideY = useRef(new Animated.Value(500)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [step, setStep] = useState<"menu" | "others" | "program">("menu");
+  const [focusedProgram, setFocusedProgram] = useState<SavedProgram | null>(null);
 
   const animateOut = useCallback((cb: () => void) => {
     Animated.parallel([
@@ -582,6 +558,8 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName,
 
   useEffect(() => {
     if (visible) {
+      setStep("menu");
+      setFocusedProgram(null);
       slideY.setValue(500);
       backdropOpacity.setValue(0);
       Animated.parallel([
@@ -591,23 +569,45 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName,
     }
   }, [visible]);
 
-  const closeSheet = useCallback(() => {
-    animateOut(onClose);
-  }, [animateOut, onClose]);
-
   const workoutDays = useMemo(() => {
     const seen = new Set<string>();
     const result: string[] = [];
     for (const name of activeProgram.cyclePattern) {
-      if (name && name !== "Rest" && !seen.has(name)) {
-        seen.add(name);
-        result.push(name);
-      }
+      if (name && name !== "Rest" && !seen.has(name)) { seen.add(name); result.push(name); }
     }
     return result;
   }, [activeProgram]);
 
-  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+  const otherPrograms = useMemo(() => programs.filter(p => p.id !== activeProgram.id), [programs, activeProgram]);
+
+  const headerTitle = step === "menu" ? "Change Workout Day" : step === "others" ? "Other Programs" : (focusedProgram?.name ?? "");
+  const headerSubtitle = step === "menu" ? activeProgram.name : null;
+  const handleBack = () => {
+    if (step === "menu") { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(onClose); }
+    else if (step === "others") setStep("menu");
+    else setStep("others");
+  };
+
+  const renderDayCard = (dayName: string, prog: SavedProgram) => {
+    const isActive = prog.id === activeProgram.id && dayName === currentWorkoutName;
+    return (
+      <BounceButton key={dayName} style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(() => onSelectDay(dayName, prog.id !== activeProgram.id ? prog : undefined)); }}>
+        <NeuCard dark={isDark} radius={14}>
+          <View style={styles.woPickerOptionInner}>
+            <DumbbellIcon size={18} color={isActive ? ACCT : t.tp} />
+            <Text style={[styles.woPickerOptionText, { color: isActive ? ACCT : t.tp }]}>{dayName}</Text>
+            {isActive ? (
+              <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 }}>
+                <Ionicons name="checkmark" size={14} color="#fff" />
+              </View>
+            ) : (
+              <Ionicons name="chevron-forward" size={16} color={t.ts} />
+            )}
+          </View>
+        </NeuCard>
+      </BounceButton>
+    );
+  };
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={() => animateOut(onDismiss)}>
@@ -618,36 +618,56 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName,
           <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
             <View style={styles.woReorderHandle} />
           </View>
-          <View style={[styles.woReorderHeader, { borderBottomColor: divider, flexDirection: "row", alignItems: "center" }]}>
-            <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}>
-              <View style={{ paddingRight: 12, paddingVertical: 4 }}>
-                <Ionicons name="chevron-back" size={22} color={t.ts} />
-              </View>
-            </BounceButton>
+          <View style={styles.woStepHeader}>
+            <TouchableOpacity onPress={handleBack} style={styles.woStepBackBtn} activeOpacity={0.7}>
+              <Ionicons name="chevron-back" size={20} color={t.tp} />
+            </TouchableOpacity>
             <View style={{ flex: 1, alignItems: "center" }}>
-              <Text style={[styles.woReorderTitle, { color: t.tp }]}>Change Workout Day</Text>
-              <Text style={[styles.woReorderSubtitle, { color: t.ts }]}>{activeProgram.name}</Text>
+              <Text style={[styles.woReorderTitle, { color: t.tp }]}>{headerTitle}</Text>
+              {headerSubtitle && <Text style={[styles.woReorderSubtitle, { color: t.ts }]}>{headerSubtitle}</Text>}
             </View>
-            <View style={{ width: 34 }} />
+            <View style={styles.woStepBackBtn} />
           </View>
-          {workoutDays.map((dayName, i) => {
-            const isActive = dayName === currentWorkoutName;
-            return (
-              <BounceButton key={dayName} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onSelectDay(dayName); }}>
-                <View style={[styles.woOptionRow, { borderBottomColor: i < workoutDays.length - 1 ? divider : "transparent" }]}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.woOptionTitle, { color: isActive ? ACCT : t.tp }]}>{dayName}</Text>
-                  </View>
-                  {isActive && (
-                    <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 }}>
-                      <Ionicons name="checkmark" size={14} color="#fff" />
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.woPickerContent}>
+            {step === "menu" && (
+              <>
+                {workoutDays.map(dayName => renderDayCard(dayName, activeProgram))}
+                {otherPrograms.length > 0 && (
+                  <BounceButton style={{ marginBottom: 16 }} onPress={() => setStep("others")}>
+                    <NeuCard dark={isDark} radius={14}>
+                      <View style={styles.woPickerOptionInner}>
+                        <Ionicons name="albums-outline" size={18} color={t.tp} />
+                        <Text style={[styles.woPickerOptionText, { color: t.tp }]}>Other Programs</Text>
+                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                      </View>
+                    </NeuCard>
+                  </BounceButton>
+                )}
+              </>
+            )}
+            {step === "others" && otherPrograms.map(prog => (
+              <BounceButton key={prog.id} style={{ marginBottom: 16 }} onPress={() => { setFocusedProgram(prog); setStep("program"); }}>
+                <NeuCard dark={isDark} radius={14}>
+                  <View style={styles.woPickerOptionInner}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.woPickerOptionText, { color: t.tp }]}>{prog.name}</Text>
+                      <Text style={[styles.woPickerOptionSub, { color: t.ts }]}>
+                        {[...new Set(prog.cyclePattern.filter(n => n && n !== "Rest"))].join(" · ")}
+                      </Text>
                     </View>
-                  )}
-                </View>
+                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                  </View>
+                </NeuCard>
               </BounceButton>
-            );
-          })}
-          <View style={{ height: 28 }} />
+            ))}
+            {step === "program" && focusedProgram && (
+              <>
+                {[...new Set(focusedProgram.cyclePattern.filter(n => n && n !== "Rest"))].map(dayName =>
+                  renderDayCard(dayName, focusedProgram)
+                )}
+              </>
+            )}
+          </ScrollView>
         </Animated.View>
       </View>
     </Modal>
@@ -656,11 +676,12 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, currentWorkoutName,
 
 // ─── CustomWorkoutNameSheet ────────────────────────────────────────────────────
 
-function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, onClose }: {
+function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, onClose, onBack }: {
   visible: boolean; isDark: boolean; t: typeof APP_LIGHT | typeof APP_DARK;
   activeProgram: SavedProgram | null;
   onStart: (name: string, addToProgram: boolean) => void;
   onClose: () => void;
+  onBack?: () => void;
 }) {
   const [nameInput, setNameInput] = useState("Custom Workout");
   const [addToProgram, setAddToProgram] = useState(false);
@@ -723,8 +744,14 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
           <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
             <View style={styles.woReorderHandle} />
           </View>
-          <View style={[styles.woReorderHeader, { borderBottomColor: divider }]}>
-            <Text style={[styles.woReorderTitle, { color: t.tp }]}>Name Your Workout</Text>
+          <View style={styles.woStepHeader}>
+            {onBack ? (
+              <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(onBack); }} style={styles.woStepBackBtn} activeOpacity={0.7}>
+                <Ionicons name="chevron-back" size={20} color={t.tp} />
+              </TouchableOpacity>
+            ) : <View style={styles.woStepBackBtn} />}
+            <Text style={[styles.woStepTitle, { color: t.tp }]}>Name Your Workout</Text>
+            <View style={styles.woStepBackBtn} />
           </View>
 
           <View style={{ paddingHorizontal: 20, paddingTop: 16 }}>
@@ -1303,6 +1330,7 @@ export default function WorkoutScreen() {
   const { startRestTimer, dismissRestTimer } = useRestTimer();
 
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
+  const [allPrograms, setAllPrograms] = useState<SavedProgram[]>([]);
   const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[] } | null>(null);
   const [log, setLog] = useState<WorkoutLog>({});
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
@@ -1418,10 +1446,10 @@ export default function WorkoutScreen() {
         const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
         const found = programs.find(p => p.status === "active") ?? null;
         setActiveProgram(found);
+        setAllPrograms(programs);
         // Don't overwrite exercises/log if a workout is already in progress (unless forceReload after discard)
         if (found && (!isWorkoutActiveRef.current || forceReload)) {
-          const nd = new Date();
-          const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+          const todayStr = todayYMD();
           AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY).then(overrideRaw => {
             let workout = getTodaysWorkout(found);
             if (overrideRaw) {
@@ -1438,7 +1466,8 @@ export default function WorkoutScreen() {
               setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
               setLog(initLog(workout.exercises));
             }
-          }).catch(() => {
+          }).catch((e) => {
+            warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e);
             const workout = getTodaysWorkout(found);
             setWorkoutInfo(workout);
             if (workout) {
@@ -1448,21 +1477,20 @@ export default function WorkoutScreen() {
           });
         }
       })
-      .catch(() => {});
+      .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
 
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
       if (!v) return;
       const parsed: unknown = JSON.parse(v);
       if (Array.isArray(parsed)) setCustomExercises(parsed as CustomExercise[]);
-    }).catch(() => {});
+    }).catch((e) => warnStorage("getItem", CUSTOM_KEY, e));
 
-    const nd = new Date();
-    const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+    const todayStr = todayYMD();
     AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
       const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
       setTodaysCompletedWorkout(history.find(w => w.date === todayStr) ?? null);
       setPrevByName(buildPrevByName(history));
-    }).catch(() => {});
+    }).catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
   }, []);
 
   // Restore an in-progress workout draft (if any) before loadData runs, so the
@@ -1472,7 +1500,7 @@ export default function WorkoutScreen() {
       if (raw) {
         try {
           const draft = JSON.parse(raw);
-          if (draft?.date === todayDateStr() && draft.workoutInfo && draft.log) {
+          if (draft?.date === todayYMD() && draft.workoutInfo && draft.log) {
             setWorkoutInfo(draft.workoutInfo);
             setLog(draft.log);
             setIsometricExIds(new Set(draft.isometricExIds ?? []));
@@ -1483,14 +1511,15 @@ export default function WorkoutScreen() {
             isWorkoutActiveRef.current = true;
           } else {
             // Stale draft from a previous day — discard
-            AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch(() => {});
+            AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
           }
-        } catch {
-          AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch(() => {});
+        } catch (e) {
+          warnStorage("parse", WORKOUT_DRAFT_KEY, e);
+          AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((err) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, err));
         }
       }
       setDraftRestored(true);
-    }).catch(() => setDraftRestored(true));
+    }).catch((e) => { warnStorage("getItem", WORKOUT_DRAFT_KEY, e); setDraftRestored(true); });
   }, []);
 
   // Pre-load on mount so data is ready before user navigates here
@@ -1520,7 +1549,7 @@ export default function WorkoutScreen() {
     AsyncStorage.setItem(
       WORKOUT_DRAFT_KEY,
       JSON.stringify({
-        date: todayDateStr(),
+        date: todayYMD(),
         workoutInfo,
         log,
         isometricExIds: Array.from(isometricExIds),
@@ -1528,12 +1557,12 @@ export default function WorkoutScreen() {
         isFreeWorkout,
         freeWorkoutAddToProgram,
       })
-    ).catch(() => {});
+    ).catch((e) => warnStorage("setItem", WORKOUT_DRAFT_KEY, e));
   }, [draftRestored, todaysCompletedWorkout, isRunning, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram]);
 
   const clearDraft = useCallback(() => {
     draftLockedRef.current = false;
-    AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch(() => {});
+    AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
   }, []);
 
   const updateSet = (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string) => {
@@ -1687,9 +1716,9 @@ export default function WorkoutScreen() {
     setIsFreeWorkout(true);
     setWorkoutInfo({ name, exercises: [] });
     setLog({});
-    const nd = new Date();
-    const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
-    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: name })).catch(() => {});
+    const todayStr = todayYMD();
+    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: name }))
+      .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setCustomWorkoutNamingOpen(false);
   };
@@ -1709,23 +1738,20 @@ export default function WorkoutScreen() {
       return [...exLog.warmup, ...exLog.working].every(s => s.done);
     });
 
-  const saveWorkoutData = (): CompletedWorkout | null => {
+  // Build the in-memory CompletedWorkout from current state. Pure — no I/O.
+  const buildCompletedWorkout = (): CompletedWorkout | null => {
     if (!workoutInfo) return null;
     const d = new Date();
-    const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-
-    AsyncStorage.getItem(WORKOUT_DATES_KEY).then(raw => {
-      const dates: string[] = raw ? JSON.parse(raw) : [];
-      if (!dates.includes(ds))
-        AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify([...dates, ds]));
-    }).catch(() => {});
-
-    const completed: CompletedWorkout = {
+    const ds = toYMD(d);
+    const trimmedNotes = notes.trim();
+    return {
       id: `workout_${Date.now()}`,
       date: ds,
       completedAt: d.toISOString(),
       workoutName: workoutInfo.name,
       durationSeconds: elapsedSeconds,
+      // sessionNotes mirrors log-workout.tsx's behaviour. Stored only when non-empty.
+      sessionNotes: trimmedNotes ? notes : undefined,
       exercises: workoutInfo.exercises.map(ex => {
         const exLog = log[ex.id];
         return {
@@ -1738,13 +1764,28 @@ export default function WorkoutScreen() {
         };
       }),
     };
+  };
 
-    AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
-      const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
-      AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify([completed, ...history]));
-    }).catch(() => {});
-
-    return completed;
+  // Persist a completed workout to AsyncStorage with sequential awaits so
+  // rapid back-to-back finishes (or any concurrent writer) can't interleave
+  // the read→write pair and lose data. Also refreshes prevByName from the
+  // newly-written history.
+  const persistCompletedWorkout = async (completed: CompletedWorkout) => {
+    try {
+      const datesRaw = await AsyncStorage.getItem(WORKOUT_DATES_KEY);
+      const dates: string[] = datesRaw ? JSON.parse(datesRaw) : [];
+      if (!dates.includes(completed.date)) {
+        await AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify([...dates, completed.date]));
+      }
+      const histRaw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
+      const history: CompletedWorkout[] = histRaw ? JSON.parse(histRaw) : [];
+      const newHistory = [completed, ...history];
+      await AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(newHistory));
+      // Keep prev-set suggestions correct for any same-session discard → restart.
+      setPrevByName(buildPrevByName(newHistory));
+    } catch (e) {
+      warnStorage("persistCompletedWorkout", WORKOUT_HISTORY_KEY, e);
+    }
   };
 
   const handleFinish = () => {
@@ -1752,8 +1793,13 @@ export default function WorkoutScreen() {
       "Workout Complete!",
       "Great session. Rest up and come back stronger.",
       [{ text: "Done", onPress: () => {
-        const c = saveWorkoutData();
-        if (c) setTodaysCompletedWorkout(c);
+        const c = buildCompletedWorkout();
+        if (c) {
+          // Show the locked completed view synchronously so the UI flips on the
+          // same tick — persistence runs in the background.
+          setTodaysCompletedWorkout(c);
+          void persistCompletedWorkout(c);
+        }
         if (isFreeWorkout && freeWorkoutAddToProgram && activeProgram && workoutInfo) {
           AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
             const progs: SavedProgram[] = raw ? JSON.parse(raw) : [];
@@ -1763,8 +1809,9 @@ export default function WorkoutScreen() {
               if (extras.includes(workoutInfo.name)) return p;
               return { ...p, extraWorkouts: [...extras, workoutInfo.name] };
             });
-            AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
-          }).catch(() => {});
+            AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated))
+              .catch((e) => warnStorage("setItem", PROGRAMS_KEY, e));
+          }).catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
         }
         stopTimer();
         setIsFreeWorkout(false);
@@ -1815,20 +1862,21 @@ export default function WorkoutScreen() {
           text: "Delete & Redo", style: "destructive",
           onPress: () => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            const nd = new Date();
-            const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
+            const todayStr = todayYMD();
             const targetId = todaysCompletedWorkout?.id;
             AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
               const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
               const updated = history.filter(w => w.id !== targetId);
-              AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(updated));
+              AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(updated))
+                .catch((e) => warnStorage("setItem", WORKOUT_HISTORY_KEY, e));
               if (!updated.some(w => w.date === todayStr)) {
                 AsyncStorage.getItem(WORKOUT_DATES_KEY).then(raw2 => {
                   const dates: string[] = raw2 ? JSON.parse(raw2) : [];
-                  AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== todayStr)));
-                }).catch(() => {});
+                  AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== todayStr)))
+                    .catch((e) => warnStorage("setItem", WORKOUT_DATES_KEY, e));
+                }).catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
               }
-            }).catch(() => {});
+            }).catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
             setTodaysCompletedWorkout(null);
             if (workoutInfo) setLog(initLog(workoutInfo.exercises));
             stopTimer();
@@ -1842,7 +1890,8 @@ export default function WorkoutScreen() {
   const deleteCustomExercise = (exName: string) => {
     const next = customExercises.filter(e => e.name !== exName);
     setCustomExercises(next);
-    AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next)).catch(() => {});
+    AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next))
+      .catch((e) => warnStorage("setItem", CUSTOM_KEY, e));
   };
 
   const [prevByName, setPrevByName] = useState<Record<string, string[]>>({});
@@ -1914,6 +1963,64 @@ export default function WorkoutScreen() {
             Recovery is where the gains are made. Enjoy the rest.
           </Text>
         </View>
+
+        {activeProgram && (
+          <View style={[styles.topBar, { top: insets.top }]}>
+            <View style={styles.topBarLeft}>
+              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
+                <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                  <Ionicons name="add" size={22} color={APP_LIGHT.tp} />
+                </View>
+              </BounceButton>
+            </View>
+          </View>
+        )}
+
+        <WorkoutOptionsSheet
+          visible={workoutOptionsOpen}
+          isDark={isDark}
+          t={t}
+          onStartCustom={openCustomWorkoutNaming}
+          onChangeDay={() => { setChangeDayOpen(true); setWorkoutOptionsOpen(false); }}
+          onClose={() => setWorkoutOptionsOpen(false)}
+        />
+
+        {activeProgram && (
+          <ChangeDaySheet
+            visible={changeDayOpen}
+            isDark={isDark}
+            t={t}
+            activeProgram={activeProgram}
+            programs={allPrograms}
+            currentWorkoutName=""
+            onSelectDay={(dayName, fromProgram) => {
+              const src = fromProgram ?? activeProgram;
+              const dayIndex = src.cyclePattern.indexOf(dayName);
+              const workoutKey = `${dayIndex}:${dayName}`;
+              const exercises = src.workouts[workoutKey] ?? [];
+              setWorkoutInfo({ name: dayName, exercises });
+              setLog(initLog(exercises));
+              setIsFreeWorkout(false);
+              setFreeWorkoutAddToProgram(false);
+              const todayStr = todayYMD();
+              AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: dayName }))
+                .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
+              setChangeDayOpen(false);
+            }}
+            onClose={() => { setChangeDayOpen(false); setWorkoutOptionsOpen(true); }}
+            onDismiss={() => setChangeDayOpen(false)}
+          />
+        )}
+
+        <CustomWorkoutNameSheet
+          visible={customWorkoutNamingOpen}
+          isDark={isDark}
+          t={t}
+          activeProgram={activeProgram}
+          onStart={confirmCustomWorkout}
+          onClose={() => setCustomWorkoutNamingOpen(false)}
+          onBack={activeProgram ? () => { setCustomWorkoutNamingOpen(false); setWorkoutOptionsOpen(true); } : undefined}
+        />
       </FadeScreen>
     );
   }
@@ -2153,7 +2260,7 @@ export default function WorkoutScreen() {
               </Text>
             </View>
           ) : isRunning ? (
-            <>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View style={styles.workoutTimerPill}>
                 <Ionicons name="time-outline" size={14} color={APP_LIGHT.tp} />
                 <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>{fmtTime(elapsedSeconds)}</Text>
@@ -2163,11 +2270,11 @@ export default function WorkoutScreen() {
                   <TrashIcon size={18} color={t.ts} />
                 </View>
               </BounceButton>
-            </>
+            </View>
           ) : (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}>
-                <View style={[styles.workoutTimerPill, { paddingHorizontal: 25 }]}>
+                <View style={styles.workoutTimerPill}>
                   <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>Start</Text>
                 </View>
               </BounceButton>
@@ -2386,15 +2493,13 @@ export default function WorkoutScreen() {
                     </View>
                   </View>
                 ) : (
-                  <View style={[styles.timerActionGlow, { marginHorizontal: 20, marginBottom: 20, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
-                    <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}
-                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setCountdownActive(true); setEditingDuration(false); Keyboard.dismiss(); }}>
-                      <View style={styles.timerActionInner}>
-                        <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
-                        <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Start</Text>
-                      </View>
-                    </BounceButton>
-                  </View>
+                  <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, marginHorizontal: 20, marginBottom: 20, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 }]}
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setCountdownActive(true); setEditingDuration(false); Keyboard.dismiss(); }}>
+                    <View style={styles.timerActionInner}>
+                      <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
+                      <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Start</Text>
+                    </View>
+                  </BounceButton>
                 )
               ) : (
                 swRunning ? (
@@ -2405,23 +2510,29 @@ export default function WorkoutScreen() {
                       <Text style={[styles.timerActionText, { color: t.tp }]}>Stop</Text>
                     </View>
                   </BounceButton>
+                ) : swElapsed === 0 ? (
+                  <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, marginHorizontal: 20, marginBottom: 20, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 }]}
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setSwRunning(true); }}>
+                    <View style={styles.timerActionInner}>
+                      <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
+                      <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Start</Text>
+                    </View>
+                  </BounceButton>
                 ) : (
                   <View style={styles.timerButtonRow}>
-                    {swElapsed > 0 && (
-                      <BounceButton style={[styles.timerAction, { backgroundColor: t.div, flex: 1 }]}
-                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSwElapsed(0); swOffsetRef.current = 0; swStartRef.current = null; }}>
-                        <View style={styles.timerActionInner}>
-                          <Ionicons name="refresh" size={20} color={t.tp} />
-                          <Text style={[styles.timerActionText, { color: t.tp }]}>Reset</Text>
-                        </View>
-                      </BounceButton>
-                    )}
+                    <BounceButton style={[styles.timerAction, { backgroundColor: t.div, flex: 1 }]}
+                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSwElapsed(0); swOffsetRef.current = 0; swStartRef.current = null; }}>
+                      <View style={styles.timerActionInner}>
+                        <Ionicons name="refresh" size={20} color={t.tp} />
+                        <Text style={[styles.timerActionText, { color: t.tp }]}>Reset</Text>
+                      </View>
+                    </BounceButton>
                     <View style={[styles.timerActionGlow, { flex: 1, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
                       <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}
                         onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setSwRunning(true); }}>
                         <View style={styles.timerActionInner}>
                           <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
-                          <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>{swElapsed > 0 ? "Continue" : "Start"}</Text>
+                          <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Continue</Text>
                         </View>
                       </BounceButton>
                     </View>
@@ -2505,18 +2616,20 @@ export default function WorkoutScreen() {
           isDark={isDark}
           t={t}
           activeProgram={activeProgram}
+          programs={allPrograms}
           currentWorkoutName={workoutInfo?.name ?? ""}
-          onSelectDay={(dayName) => {
-            const dayIndex = activeProgram.cyclePattern.indexOf(dayName);
+          onSelectDay={(dayName, fromProgram) => {
+            const src = fromProgram ?? activeProgram;
+            const dayIndex = src.cyclePattern.indexOf(dayName);
             const workoutKey = `${dayIndex}:${dayName}`;
-            const exercises = activeProgram.workouts[workoutKey] ?? [];
+            const exercises = src.workouts[workoutKey] ?? [];
             setWorkoutInfo({ name: dayName, exercises });
             setLog(initLog(exercises));
             setIsFreeWorkout(false);
             setFreeWorkoutAddToProgram(false);
-            const nd = new Date();
-            const todayStr = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,"0")}-${String(nd.getDate()).padStart(2,"0")}`;
-            AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: dayName })).catch(() => {});
+            const todayStr = todayYMD();
+            AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: dayName }))
+              .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
             setChangeDayOpen(false);
           }}
           onClose={() => { setChangeDayOpen(false); setWorkoutOptionsOpen(true); }}
@@ -2531,6 +2644,7 @@ export default function WorkoutScreen() {
         activeProgram={activeProgram}
         onStart={confirmCustomWorkout}
         onClose={() => setCustomWorkoutNamingOpen(false)}
+        onBack={activeProgram ? () => { setCustomWorkoutNamingOpen(false); setWorkoutOptionsOpen(true); } : undefined}
       />
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
@@ -2583,7 +2697,7 @@ const styles = StyleSheet.create({
   topBar:           { position: "absolute", left: 20, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   topBarLeft:       { flexDirection: "row", alignItems: "center", gap: 10 },
   topIconBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
-  workoutTimerPill: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  workoutTimerPill: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 100, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   workoutTimerText: { fontFamily: FontFamily.bold, fontSize: 15, letterSpacing: 0.5 },
 
   scroll: { paddingHorizontal: 20 },
@@ -2689,11 +2803,26 @@ const styles = StyleSheet.create({
   woReorderDoneBtn:   { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
   woReorderDone:      { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
 
-  // Options sheet rows
+  // Options sheet rows (used by ChangeDaySheet)
   woOptionRow:   { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1 },
   woOptionIcon:  { width: 36, alignItems: "center" },
   woOptionTitle: { fontFamily: FontFamily.semibold, fontSize: 15 },
   woOptionSub:   { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
+
+  // Shared step-header (matches journal pickerStepHeader style)
+  woStepHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 10 },
+  woStepBackBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 18 },
+  woStepTitle:   { fontFamily: FontFamily.bold, fontSize: 17, textAlign: "center", flex: 1 },
+
+  // WorkoutOptionsSheet card-style picker
+  woPickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, textAlign: "center", paddingHorizontal: 24, paddingTop: 4, paddingBottom: 16 },
+  woPickerContent:     { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 },
+  woPickerSection:     { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.8, marginTop: 8, marginBottom: 12 },
+  woPickerOptionInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
+  woPickerOptionText:  { fontFamily: FontFamily.semibold, fontSize: 15, flex: 1 },
+  woPickerOptionSub:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
+  woPickerCancelBtn:   { borderRadius: 14, paddingVertical: 15, alignItems: "center" },
+  woPickerCancelText:  { fontFamily: FontFamily.bold, fontSize: 16 },
 
   // Custom workout naming sheet
   cnNameInputWrap: { borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 4, marginBottom: 4 },

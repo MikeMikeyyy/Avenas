@@ -26,6 +26,7 @@ import {
   getTier,
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
+import { parseStoredDate, toYMD, fmtDuration } from "../../utils/dates";
 import ActivityCalendar from "../../components/ActivityCalendar";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
@@ -58,13 +59,16 @@ const REST_DAY_QUOTES = [
   "Progress doesn't pause on rest days, it accelerates.",
 ];
 
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const FULL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_ABBR       = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const SHORT_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function toYMD(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+// Dev-only warning helper. Compiled out of release builds via `__DEV__`.
+function warnStorage(op: string, key: string, err: unknown) {
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.warn("[avenas]", op, key, err);
+  }
 }
 
 function getOrdinal(n: number): string {
@@ -78,17 +82,9 @@ function formatTodayDate(): string {
   return `${DAY_ABBR[now.getDay()]} ${getOrdinal(now.getDate())} ${FULL_MONTHS[now.getMonth()]}`;
 }
 
-function parseStoredDate(dateStr: string): Date {
-  // Format: "09 Apr 2026"
-  const parts = dateStr.split(" ");
-  const day = parseInt(parts[0], 10);
-  const month = MONTH_NAMES.indexOf(parts[1]);
-  const year = parseInt(parts[2], 10);
-  return new Date(year, month < 0 ? 0 : month, day);
-}
-
 function getTodaysWorkout(program: SavedProgram): { name: string; exerciseCount: number } | null {
   const start = parseStoredDate(program.startDate);
+  if (!start) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   start.setHours(0, 0, 0, 0);
@@ -104,6 +100,7 @@ function getTodaysWorkout(program: SavedProgram): { name: string; exerciseCount:
 
 function getWorkoutForDate(program: SavedProgram, date: Date): string | null {
   const start = parseStoredDate(program.startDate);
+  if (!start) return null;
   start.setHours(0, 0, 0, 0);
   const target = new Date(date);
   target.setHours(0, 0, 0, 0);
@@ -141,15 +138,6 @@ const QUICK_ACTIONS: QuickAction[] = [
 
 const MONTH_SHORT_J = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_FULL_J    = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-
-function fmtDuration(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  if (secs < 3600) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
-}
 
 function ordinal(n: number): string {
   if (n === 11 || n === 12 || n === 13) return `${n}th`;
@@ -307,7 +295,7 @@ export default function HomeScreen() {
       if (isMax) {
         AsyncStorage.getItem(FLAME_PREF_KEY)
           .then((saved: string | null) => { if (saved) setFlameName(saved); })
-          .catch(() => {});
+          .catch((e) => warnStorage("getItem", FLAME_PREF_KEY, e));
       }
       AsyncStorage.getItem(PROGRAMS_KEY)
         .then((raw) => {
@@ -316,20 +304,20 @@ export default function HomeScreen() {
           setPrograms(progs);
           setActiveProgram(progs.find((p) => p.status === "active") ?? null);
         })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
       AsyncStorage.getItem(WORKOUT_DATES_KEY)
         .then((raw) => { if (raw) setWorkoutDates(JSON.parse(raw)); })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
       AsyncStorage.getItem(WORKOUT_HISTORY_KEY)
         .then((raw) => { if (raw) setWorkoutHistory(JSON.parse(raw)); })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
       AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY)
         .then((raw) => {
           if (!raw) { setTodayOverride(null); return; }
           const override: { date: string; workoutName: string } = JSON.parse(raw);
           setTodayOverride(override.date === toYMD(new Date()) ? override : null);
         })
-        .catch(() => {});
+        .catch((e) => warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     }, [isMax])
   );
 

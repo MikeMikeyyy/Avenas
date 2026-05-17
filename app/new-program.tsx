@@ -32,6 +32,7 @@ import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
+import DumbbellIcon from "../components/DumbbellIcon";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 
@@ -39,17 +40,27 @@ import { useUnit } from "../contexts/UnitContext";
 
 const DRAFT_KEY = "@avenas/new_program_draft";
 
-// ─── Icons ────────────────────────────────────────────────────────────────────
-
-function DumbbellIcon({ size, color }: { size: number; color: string }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={color} strokeWidth="1.5" />
-      <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={color} strokeWidth="1.5" />
-      <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={color} strokeWidth="1.5" />
-    </Svg>
-  );
+// Dev-only warning helper. Compiled out of release builds via `__DEV__`.
+function warnStorage(op: string, key: string, err: unknown) {
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.warn("[avenas]", op, key, err);
+  }
 }
+
+/**
+ * Compare two WorkoutMaps by value. Key insertion order is irrelevant
+ * (sorting keys before stringify). Use this anywhere we ask "did the
+ * workouts actually change?" — both the in-memo `hasChanges` flag and the
+ * `beforeRemove` navigation guard must agree to avoid spurious prompts.
+ */
+function workoutsEqual(a: WorkoutMap, b: WorkoutMap): boolean {
+  const sortedJson = (w: WorkoutMap) =>
+    JSON.stringify(Object.fromEntries(Object.keys(w).sort().map(k => [k, w[k]])));
+  return sortedJson(a) === sortedJson(b);
+}
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
 
 function KeyboardDismissIcon({ color }: { color: string }) {
   return (
@@ -1334,15 +1345,13 @@ export default function NewProgramScreen() {
     if (!isEditMode) return false;
     const orig = originalEdit.current;
     if (!orig) return false;
-    const sortedJson = (w: WorkoutMap) =>
-      JSON.stringify(Object.fromEntries(Object.keys(w).sort().map(k => [k, w[k]])));
     return (
       name !== orig.name ||
       totalWeeks !== orig.totalWeeks ||
       cycleDays !== orig.cycleDays ||
       JSON.stringify(isTrainingDay) !== JSON.stringify(orig.isTrainingDay) ||
       JSON.stringify(cyclePattern) !== JSON.stringify(orig.cyclePattern) ||
-      sortedJson(workouts) !== sortedJson(orig.workouts)
+      !workoutsEqual(workouts, orig.workouts)
     );
   }, [isEditMode, name, totalWeeks, cycleDays, isTrainingDay, cyclePattern, workouts]);
 
@@ -1379,7 +1388,7 @@ export default function NewProgramScreen() {
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] !== "string") {
         setCustomExercises(parsed as CustomExercise[]);
       }
-    }).catch(() => {});
+    }).catch((e) => warnStorage("getItem", CUSTOM_KEY, e));
 
     if (pendingPickerDay.current) {
       setPickerState({ day: pendingPickerDay.current });
@@ -1397,11 +1406,12 @@ export default function NewProgramScreen() {
         // Migrate old string[] format to CustomExercise[]
         const migrated: CustomExercise[] = (parsed as string[]).map(n => ({ name: n, muscles: [] }));
         setCustomExercises(migrated);
-        AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(migrated)).catch(() => {});
+        AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(migrated))
+          .catch((e) => warnStorage("setItem", CUSTOM_KEY, e));
       } else {
         setCustomExercises(parsed as CustomExercise[]);
       }
-    }).catch(() => {});
+    }).catch((e) => warnStorage("getItem", CUSTOM_KEY, e));
 
     (async () => {
       try {
@@ -1481,7 +1491,8 @@ export default function NewProgramScreen() {
   useEffect(() => {
     if (!isDraftLoaded.current) return;
     const draft: ProgramDraft = { step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, ...(editId ? { editId } : {}) };
-    AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft)).catch(() => {});
+    AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+      .catch((e) => warnStorage("setItem", DRAFT_KEY, e));
   }, [step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, editId]);
 
   // Intercept back navigation — prompt save or discard
@@ -1492,13 +1503,16 @@ export default function NewProgramScreen() {
       if (isEditMode) {
         const orig = originalEdit.current;
         if (!orig) return;
+        // Use workoutsEqual (sorted-keys form) — matches the `hasChanges` useMemo
+        // exactly. Previously this used plain JSON.stringify, so insertion-order
+        // differences between draft and original surfaced as phantom prompts.
         const hasChanges =
           name !== orig.name ||
           totalWeeks !== orig.totalWeeks ||
           cycleDays !== orig.cycleDays ||
           JSON.stringify(isTrainingDay) !== JSON.stringify(orig.isTrainingDay) ||
           JSON.stringify(cyclePattern) !== JSON.stringify(orig.cyclePattern) ||
-          JSON.stringify(workouts) !== JSON.stringify(orig.workouts);
+          !workoutsEqual(workouts, orig.workouts);
         if (!hasChanges) return;
       } else {
         const hasDraft =
@@ -1519,7 +1533,7 @@ export default function NewProgramScreen() {
             style: "destructive",
             onPress: () => {
               isLeavingIntentionally.current = true;
-              AsyncStorage.removeItem(DRAFT_KEY).catch(() => {});
+              AsyncStorage.removeItem(DRAFT_KEY).catch((err) => warnStorage("removeItem", DRAFT_KEY, err));
               navigation.dispatch(e.data.action);
             },
           },
@@ -1615,7 +1629,8 @@ export default function NewProgramScreen() {
   const deleteCustomExercise = useCallback((exName: string) => {
     const next = customExercises.filter(e => e.name !== exName);
     setCustomExercises(next);
-    AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next)).catch(() => {});
+    AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next))
+      .catch((e) => warnStorage("setItem", CUSTOM_KEY, e));
     // Also remove this exercise from every day in the current program
     setWorkouts(prev => {
       const updated: WorkoutMap = {};
@@ -1694,7 +1709,7 @@ export default function NewProgramScreen() {
         return;
       }
       isLeavingIntentionally.current = true;
-      AsyncStorage.removeItem(DRAFT_KEY).catch(() => {});
+      AsyncStorage.removeItem(DRAFT_KEY).catch((err) => warnStorage("removeItem", DRAFT_KEY, err));
       router.back();
     };
 

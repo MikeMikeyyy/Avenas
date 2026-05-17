@@ -5,9 +5,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
+import { parseStoredDate } from "../utils/dates";
 
 const MONTH_LABELS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const MONTH_SHORT  = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_ABBRS    = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 
 // Rest-day colours
@@ -28,18 +28,16 @@ interface Props {
   onDayPress: (date: string, workoutId?: string) => void;
 }
 
+// Local toYMD has a different signature — (year, month, day) — than the one
+// in utils/dates.ts; leave it local to avoid an overload that complicates
+// the shared helper.
 function toYMD(year: number, month: number, day: number): string {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function parseProgDate(s: string): Date {
-  const parts = s.split(" ");
-  const mi = MONTH_SHORT.indexOf(parts[1]);
-  return new Date(+parts[2], mi < 0 ? 0 : mi, +parts[0]);
-}
-
 function isRestDayForDate(d: Date, prog: SavedProgram): boolean {
-  const start = parseProgDate(prog.startDate);
+  const start = parseStoredDate(prog.startDate);
+  if (!start) return false;
   start.setHours(0, 0, 0, 0);
   const target = new Date(d);
   target.setHours(0, 0, 0, 0);
