@@ -1,12 +1,15 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Linking } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
+import * as StoreReview from "expo-store-review";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
+import { useAccountType } from "../contexts/AccountTypeContext";
+import PeopleIcon from "../components/icons/PeopleIcon";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
@@ -17,10 +20,22 @@ import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT } from "../constants/them
 
 // ─── Settings item types ──────────────────────────────────────────────────────
 type BaseItem     = { icon: string; label: string; renderIcon?: (c: string) => React.ReactNode };
-type NavigateItem = BaseItem;
+type NavigateItem = BaseItem & { route?: string; onPress?: () => void };
 type ToggleItem   = BaseItem & { toggle: true };
 type UnitItem     = BaseItem & { unitToggle: true };
 type SettingsItem = NavigateItem | ToggleItem | UnitItem;
+
+// In-app rating prompt (Apple allows max 3 per year; falls back to App Store URL)
+const APP_STORE_URL = "https://apps.apple.com/app/idXXXXXXXXX";
+const requestAppRating = async () => {
+  try {
+    if (await StoreReview.isAvailableAsync()) {
+      await StoreReview.requestReview();
+      return;
+    }
+  } catch {}
+  Linking.openURL(APP_STORE_URL).catch(() => {});
+};
 
 // ─── Static values for StyleSheet (dark overrides applied inline) ─────────────
 const TP   = APP_LIGHT.tp;
@@ -58,12 +73,12 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
   {
     title: "Support",
     items: [
-      { icon: "document-text-outline", label: "Terms of Service"  },
-      { icon: "shield-outline",        label: "Privacy Policy"    },
-      { icon: "help-circle-outline",   label: "Help & FAQ"        },
-      { icon: "warning-outline",       label: "Report a Bug"      },
-      { icon: "bulb-outline",          label: "Request a Feature" },
-      { icon: "star-outline",          label: "Rate Avenas"       },
+      { icon: "document-text-outline", label: "Terms of Service",  route: "/terms-of-service" },
+      { icon: "shield-outline",        label: "Privacy Policy",    route: "/privacy-policy"   },
+      { icon: "help-circle-outline",   label: "Help & FAQ",        route: "/help-faq"         },
+      { icon: "warning-outline",       label: "Report a Bug",      route: "/report-bug"       },
+      { icon: "bulb-outline",          label: "Request a Feature", route: "/request-feature"  },
+      { icon: "star-outline",          label: "Rate Avenas",       onPress: requestAppRating  },
     ],
   },
 ];
@@ -74,6 +89,7 @@ export default function SettingsScreen() {
   const { isDark, toggleDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg, setIsKg } = useUnit();
+  const { accountType, setAccountType } = useAccountType();
   const unitOffset        = useSharedValue(isKg ? 0 : 1); // 0 = kg, 1 = lbs
   const userTriggeredRef  = useRef(false);
   useEffect(() => {
@@ -146,6 +162,43 @@ export default function SettingsScreen() {
           <Text style={[styles.userEmail, { color: t.ts }]}>michael@avenas.com</Text>
         </View>
 
+        {/* Account Type */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: t.ts }]}>Account Type</Text>
+          <NeuCard dark={isDark} style={styles.sectionCard}>
+            <View style={styles.row}>
+              <View style={styles.rowLeft}>
+                <PeopleIcon size={20} color={t.icon} />
+                <Text style={[styles.rowLabel, { color: t.tp }]}>I am a</Text>
+              </View>
+              <View style={[styles.acctToggle, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}>
+                <TouchableOpacity
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setAccountType("gym_user");
+                  }}
+                  style={[styles.acctBtn, accountType === "gym_user" && { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Gym user"
+                >
+                  <Text style={[styles.acctBtnText, { color: accountType === "gym_user" ? "#fff" : t.ts }]}>Gym User</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setAccountType("pt");
+                  }}
+                  style={[styles.acctBtn, accountType === "pt" && { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Trainer"
+                >
+                  <Text style={[styles.acctBtnText, { color: accountType === "pt" ? "#fff" : t.ts }]}>Trainer</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </NeuCard>
+        </View>
+
         {/* Sections */}
         {SECTIONS.map((section) => (
           <View key={section.title} style={styles.section}>
@@ -209,7 +262,21 @@ export default function SettingsScreen() {
                       />
                     </View>
                   ) : (
-                    <TouchableOpacity activeOpacity={0.7} style={styles.row}>
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      style={styles.row}
+                      onPress={() => {
+                        const route = "route" in item ? item.route : undefined;
+                        const onPress = "onPress" in item ? item.onPress : undefined;
+                        if (route) {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          router.push(route as any);
+                        } else if (onPress) {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          onPress();
+                        }
+                      }}
+                    >
                       <View style={styles.rowLeft}>
                         {item.renderIcon
                           ? item.renderIcon(t.icon)
@@ -264,4 +331,7 @@ const styles = StyleSheet.create({
   unitPill:   { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
   unitBtn:    { paddingHorizontal: 12, paddingVertical: 5, alignItems: "center" },
   unitBtnText:{ fontFamily: FontFamily.semibold, fontSize: 13 },
+  acctToggle: { flexDirection: "row", borderRadius: 20, padding: 3 },
+  acctBtn:    { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  acctBtnText:{ fontFamily: FontFamily.semibold, fontSize: 12 },
 });
