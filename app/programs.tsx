@@ -5,7 +5,7 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter, useFocusEffect } from "expo-router";
+import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
@@ -18,6 +18,9 @@ import DumbbellIcon from "../components/DumbbellIcon";
 import { parseStoredDate } from "../utils/dates";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
+import { useAccountType } from "../contexts/AccountTypeContext";
+import SendIcon from "../components/icons/SendIcon";
+import { appendSentProgram, loadAssignedPT, removeSharedProgramByLocalId, type AssignedPT, type SentProgram } from "../utils/trainerStore";
 
 // Accordion panel — animates height from 0 ↔ measured natural height.
 // Measures once via a hidden layout layer, then re-uses that height.
@@ -352,9 +355,10 @@ interface ProgramCardProps {
   onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onSend?: () => void;
 }
 
-const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpanded, onToggle, onMakeActive, onDuplicate, onCopy, onEdit, onDelete }: ProgramCardProps) {
+const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpanded, onToggle, onMakeActive, onDuplicate, onCopy, onEdit, onDelete, onSend }: ProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
   const btnContent = isDark ? APP_DARK.bg : "#fff";
@@ -448,14 +452,22 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
                   </NeuCard>
                 </BounceButton>
               </View>
+              {onSend && (
+                <BounceButton style={{ marginTop: 10 }} onPress={onSend}>
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                    <SendIcon size={16} color={ACCT} />
+                    <Text style={[styles.activeSecondaryBtnText, { color: ACCT }]}>Send to Trainer</Text>
+                  </NeuCard>
+                </BounceButton>
+              )}
             </>
           ) : (
             <>
               <BounceButton onPress={onMakeActive} style={{ marginBottom: 10 }}>
-                <View style={[styles.activePrimaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
-                  <View style={[styles.activePrimaryBtn, { backgroundColor: btnBg }]}>
-                    <Ionicons name="checkmark-circle-outline" size={16} color={btnContent} />
-                    <Text style={[styles.activePrimaryBtnText, { color: btnContent }]}>Make Active Program</Text>
+                <View style={[styles.activePrimaryBtnWrap, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                  <View style={[styles.activePrimaryBtn, { backgroundColor: ACCT }]}>
+                    <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
+                    <Text style={[styles.activePrimaryBtnText, { color: "#fff" }]}>Make Active Program</Text>
                   </View>
                 </View>
               </BounceButton>
@@ -479,6 +491,14 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
                   </NeuCard>
                 </BounceButton>
               </View>
+              {onSend && (
+                <BounceButton style={{ marginTop: 10 }} onPress={onSend}>
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
+                    <SendIcon size={16} color={ACCT} />
+                    <Text style={[styles.activeSecondaryBtnText, { color: ACCT }]}>Send to Trainer</Text>
+                  </NeuCard>
+                </BounceButton>
+              )}
             </>
           )}
         </View>
@@ -495,10 +515,16 @@ export default function ProgramsScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isRunning } = useWorkoutTimer();
+  const { accountType } = useAccountType();
+  const [assignedPT, setAssignedPT] = useState<AssignedPT | null>(null);
 
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [setWorkoutOpen, setSetWorkoutOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { focus } = useLocalSearchParams<{ focus?: string }>();
+  const scrollRef = useRef<ScrollView | null>(null);
+  const cardOffsets = useRef<Record<string, number>>({});
+  const focusHandled = useRef<string | null>(null);
 
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -585,6 +611,9 @@ export default function ProgramsScreen() {
             setPrograms(updated);
             setExpandedId(null);
             await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+            // Clear any SharedProgram entries that pointed at this local program
+            // so the gym user's My Trainer page doesn't keep stale "received" cards.
+            await removeSharedProgramByLocalId(program.id);
           },
         },
       ]
@@ -622,7 +651,37 @@ export default function ProgramsScreen() {
     }).catch(() => {});
   }, []);
 
+  // Honor ?focus=<programId>: expand and scroll that program into view once after
+  // the cards have laid out. We track the last handled focus value in a ref so we
+  // don't re-scroll on every render or when the user manually scrolls away.
+  useEffect(() => {
+    if (!focus || typeof focus !== "string") return;
+    if (focusHandled.current === focus) return;
+    if (programs.length === 0) return;
+    if (!programs.some(p => p.id === focus)) return;
+
+    setExpandedId(focus);
+
+    let cancelled = false;
+    const tryScroll = (attempt: number) => {
+      if (cancelled) return;
+      const y = cardOffsets.current[focus];
+      if (typeof y === "number") {
+        // Leave room for: safe-area top + back button (40) + gradient blur fade
+        // + a generous breathing gap so the program title isn't hugging the chrome.
+        const target = Math.max(0, y - (insets.top + 110));
+        scrollRef.current?.scrollTo({ y: target, animated: true });
+        focusHandled.current = focus;
+        return;
+      }
+      if (attempt < 10) setTimeout(() => tryScroll(attempt + 1), 60);
+    };
+    const t = setTimeout(() => tryScroll(0), 80);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [focus, programs, insets.top]);
+
   useFocusEffect(useCallback(() => {
+    loadAssignedPT().then(setAssignedPT).catch(() => {});
     AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
       if (!raw) { setPrograms([]); return; }
       try {
@@ -633,6 +692,32 @@ export default function ProgramsScreen() {
   }, []));
 
   const activeProgram = programs.find((p) => p.status === "active") ?? null;
+  const canSendToPT = accountType === "gym_user" && assignedPT !== null;
+
+  const handleSendToPT = (program: SavedProgram) => {
+    if (!assignedPT) return;
+    Alert.alert(
+      "Send to Trainer",
+      `Send "${program.name}" to ${assignedPT.name} for review?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Send",
+          onPress: async () => {
+            const entry: SentProgram = {
+              id: `sent_${Date.now()}`,
+              programId: program.id,
+              programName: program.name,
+              sentAtISO: new Date().toISOString(),
+              status: "sent",
+            };
+            await appendSentProgram(entry);
+            Alert.alert("Sent", `"${program.name}" was sent to ${assignedPT.name}.`);
+          },
+        },
+      ]
+    );
+  };
   const totalCount = programs.length;
   const weeksTrained = programs.reduce((sum, p) =>
     sum + (p.status === "completed" ? p.totalWeeks : getCurrentWeek(p)), 0);
@@ -671,6 +756,7 @@ export default function ProgramsScreen() {
       </View>
 
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }}
       >
@@ -703,24 +789,26 @@ export default function ProgramsScreen() {
         {activeProgram !== null && (
           <>
             <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE</Text>
-            <ActiveProgramCard
-              program={activeProgram}
-              isDark={isDark}
-              onEdit={() => router.push({ pathname: "/new-program", params: { id: activeProgram.id } })}
-              onSetWorkout={() => {
-                if (isRunning) {
-                  Alert.alert(
-                    "Workout In Progress",
-                    "Please end or discard your current workout before changing the workout day.",
-                    [{ text: "OK" }]
-                  );
-                } else {
-                  setSetWorkoutOpen(true);
-                }
-              }}
-              onComplete={handleCompleteProgram}
-              onCopy={() => handleDuplicateProgram(activeProgram)}
-            />
+            <View onLayout={e => { cardOffsets.current[activeProgram.id] = e.nativeEvent.layout.y; }}>
+              <ActiveProgramCard
+                program={activeProgram}
+                isDark={isDark}
+                onEdit={() => router.push({ pathname: "/new-program", params: { id: activeProgram.id } })}
+                onSetWorkout={() => {
+                  if (isRunning) {
+                    Alert.alert(
+                      "Workout In Progress",
+                      "Please end or discard your current workout before changing the workout day.",
+                      [{ text: "OK" }]
+                    );
+                  } else {
+                    setSetWorkoutOpen(true);
+                  }
+                }}
+                onComplete={handleCompleteProgram}
+                onCopy={() => handleDuplicateProgram(activeProgram)}
+              />
+            </View>
           </>
         )}
 
@@ -744,8 +832,8 @@ export default function ProgramsScreen() {
           </NeuCard>
         ) : (
           programs.filter(p => p.status !== "active").map((p) => (
+            <View key={p.id} onLayout={e => { cardOffsets.current[p.id] = e.nativeEvent.layout.y; }}>
             <ProgramCard
-              key={p.id}
               program={p}
               isDark={isDark}
               isExpanded={expandedId === p.id}
@@ -755,7 +843,9 @@ export default function ProgramsScreen() {
               onCopy={() => handleDuplicateProgram(p)}
               onEdit={() => router.push({ pathname: "/new-program", params: { id: p.id } })}
               onDelete={() => handleDeleteProgram(p)}
+              onSend={canSendToPT ? () => handleSendToPT(p) : undefined}
             />
+            </View>
           ))
         )}
       </ScrollView>

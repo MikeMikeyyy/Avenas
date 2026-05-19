@@ -365,7 +365,7 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
                 so the shared progress value starts fresh at 0 — same fresh-
                 start guarantee the old useMemo'd Animated.Value gave us. */}
             <GlowBars
-              key={chartKey}
+              key={`glow|${chartKey}`}
               buckets={buckets}
               axisMax={axis.max}
               barWidth={barWidth}

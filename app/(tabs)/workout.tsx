@@ -5,7 +5,7 @@ import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
   Alert, Animated, Keyboard, Modal, AppState, LayoutAnimation,
-  PanResponder, Easing,
+  PanResponder, Easing, Switch,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -34,6 +34,7 @@ import { useRestTimer } from "../../contexts/RestTimerContext";
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const WARMUP_ORANGE = "#ffbf0f";
+const WORKOUT_VIEW_MODE_KEY = "@avenas/workout_view_mode";
 
 // Dev-only warning helper. Compiled out of release builds via `__DEV__`.
 function warnStorage(op: string, key: string, err: unknown) {
@@ -121,6 +122,26 @@ function SetRow({ isActive, children }: { isActive: boolean; children: React.Rea
         style={[StyleSheet.absoluteFillObject, { borderWidth: 1, borderColor: ACCT, borderRadius: 14 }, borderStyle]}
       />
     </Reanimated.View>
+  );
+}
+
+// ─── AnimatedProgressBar ───────────────────────────────────────────────────────
+
+function AnimatedProgressBar({ pct, trackColor }: { pct: number; trackColor: string }) {
+  const progress = useSharedValue(pct);
+  useEffect(() => {
+    progress.value = withTiming(pct, { duration: 450, easing: ReEasing.out(ReEasing.cubic) });
+  }, [pct]);
+  const fillStyle = useAnimatedStyle(() => ({ width: `${progress.value}%` }));
+  return (
+    <View style={{ height: 4, borderRadius: 2, backgroundColor: trackColor }}>
+      <Reanimated.View
+        style={[
+          { height: "100%", borderRadius: 2, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 3, elevation: 2 },
+          fillStyle,
+        ]}
+      />
+    </View>
   );
 }
 
@@ -424,9 +445,10 @@ function WorkoutReorderSheet({ visible, workoutName, exercises, isDark, t, onReo
 
 // ─── WorkoutOptionsSheet ───────────────────────────────────────────────────────
 
-function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, onClose }: {
+function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, onClose, focusMode, onToggleFocusMode }: {
   visible: boolean; isDark: boolean; t: typeof APP_LIGHT | typeof APP_DARK;
   onStartCustom: () => void; onChangeDay: () => void; onClose: () => void;
+  focusMode: boolean; onToggleFocusMode: (next: boolean) => void;
 }) {
   const slideY = useRef(new Animated.Value(500)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -501,6 +523,19 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
                 </View>
               </NeuCard>
             </BounceButton>
+            <NeuCard dark={isDark} radius={14} style={{ marginBottom: 16 }}>
+              <View style={styles.woPickerOptionInner}>
+                <Ionicons name="eye-outline" size={18} color={t.tp} />
+                <Text style={[styles.woPickerOptionText, { color: t.tp, flex: 1 }]}>Focus Mode</Text>
+                <Switch
+                  value={focusMode}
+                  onValueChange={(v) => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggleFocusMode(v); }}
+                  trackColor={{ false: t.div, true: ACCT }}
+                  thumbColor="#fff"
+                  style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }], marginVertical: -6 }}
+                />
+              </View>
+            </NeuCard>
             <BounceButton onPress={closeSheet}>
               <View style={[styles.woPickerCancelBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
                 <Text style={[styles.woPickerCancelText, { color: t.tp }]}>Cancel</Text>
@@ -945,9 +980,10 @@ interface ExerciseCardProps {
   activeSetFlatIdx: number | null;
   isLocked?: boolean;
   prevSets?: string[];
+  hideIndexLabel?: boolean;
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, hideIndexLabel = false }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
@@ -979,7 +1015,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
         {/* ── Header ── */}
         <View style={styles.exHeader}>
           <View style={styles.exTitleBlock}>
-            <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
+            {!hideIndexLabel && (
+              <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
+            )}
             <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1}>{exercise.name}</Text>
           </View>
           {!isLocked && (
@@ -1345,6 +1383,16 @@ export default function WorkoutScreen() {
   const [workoutOptionsOpen, setWorkoutOptionsOpen] = useState(false);
   const [changeDayOpen, setChangeDayOpen] = useState(false);
   const [customWorkoutNamingOpen, setCustomWorkoutNamingOpen] = useState(false);
+  const [focusMode, setFocusModeState] = useState(false);
+  const [focusIndex, setFocusIndex] = useState(0);
+  const setFocusMode = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    setFocusModeState(prev => {
+      const v = typeof next === "function" ? (next as (p: boolean) => boolean)(prev) : next;
+      AsyncStorage.setItem(WORKOUT_VIEW_MODE_KEY, v ? "focus" : "list")
+        .catch((e) => warnStorage("setItem", WORKOUT_VIEW_MODE_KEY, e));
+      return v;
+    });
+  }, []);
   const scrollRef = useRef<ScrollView>(null);
   const notesY = useRef(0);
 
@@ -1738,6 +1786,19 @@ export default function WorkoutScreen() {
       return [...exLog.warmup, ...exLog.working].every(s => s.done);
     });
 
+  const exerciseProgress = useMemo(() => {
+    if (!workoutInfo) return { done: 0, total: 0 };
+    const total = workoutInfo.exercises.length;
+    let done = 0;
+    for (const ex of workoutInfo.exercises) {
+      const exLog = log[ex.id];
+      if (!exLog) continue;
+      const sets = [...exLog.warmup, ...exLog.working];
+      if (sets.length > 0 && sets.every(s => s.done)) done++;
+    }
+    return { done, total };
+  }, [workoutInfo, log]);
+
   // Build the in-memory CompletedWorkout from current state. Pure — no I/O.
   const buildCompletedWorkout = (): CompletedWorkout | null => {
     if (!workoutInfo) return null;
@@ -1926,6 +1987,23 @@ export default function WorkoutScreen() {
     return () => { show.remove(); hide.remove(); };
   }, []);
 
+  // Load persisted view mode preference once.
+  useEffect(() => {
+    AsyncStorage.getItem(WORKOUT_VIEW_MODE_KEY)
+      .then(v => { if (v === "focus") setFocusModeState(true); })
+      .catch((e) => warnStorage("getItem", WORKOUT_VIEW_MODE_KEY, e));
+  }, []);
+
+  // Clamp focus index when exercises change (e.g., user removes the currently-shown exercise).
+  useEffect(() => {
+    const n = workoutInfo?.exercises.length ?? 0;
+    if (n === 0) { if (focusIndex !== 0) setFocusIndex(0); return; }
+    if (focusIndex > n - 1) setFocusIndex(n - 1);
+  }, [workoutInfo?.exercises.length, focusIndex]);
+
+  // Reset the focus index (but not the persisted view mode) when switching workouts.
+  useEffect(() => { setFocusIndex(0); }, [workoutInfo?.name]);
+
   // ─── No active program ──────────────────────────────────────────────────────
   if (!activeProgram && !isFreeWorkout) {
     return (
@@ -1983,6 +2061,8 @@ export default function WorkoutScreen() {
           onStartCustom={openCustomWorkoutNaming}
           onChangeDay={() => { setChangeDayOpen(true); setWorkoutOptionsOpen(false); }}
           onClose={() => setWorkoutOptionsOpen(false)}
+          focusMode={focusMode}
+          onToggleFocusMode={(v) => { setFocusMode(v); if (v) setFocusIndex(0); }}
         />
 
         {activeProgram && (
@@ -2068,6 +2148,21 @@ export default function WorkoutScreen() {
           )}
         </View>
 
+        {/* Focus mode: inline progress under header */}
+        {focusMode && !todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (() => {
+          const total = workoutInfo.exercises.length;
+          const idx = Math.min(focusIndex, total - 1);
+          const pct = ((idx + 1) / total) * 100;
+          return (
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: t.tp, marginBottom: 8 }}>
+                Exercise {idx + 1} of {total}
+              </Text>
+              <AnimatedProgressBar pct={pct} trackColor={t.div} />
+            </View>
+          );
+        })()}
+
         {todaysCompletedWorkout && lockedData ? (
           <>
             {/* Completed banner */}
@@ -2136,7 +2231,14 @@ export default function WorkoutScreen() {
             </View>
           </NeuCard>
         ) : (
-          workoutInfo.exercises.map((exercise: Exercise, i: number) => {
+          (focusMode
+            ? workoutInfo.exercises.slice(
+                Math.min(focusIndex, workoutInfo.exercises.length - 1),
+                Math.min(focusIndex, workoutInfo.exercises.length - 1) + 1,
+              )
+            : workoutInfo.exercises
+          ).map((exercise: Exercise, localI: number) => {
+            const i = focusMode ? Math.min(focusIndex, workoutInfo.exercises.length - 1) : localI;
             const exLog = log[exercise.id] ?? { warmup: [], working: [] };
             return (
               <CollapsibleCard
@@ -2165,6 +2267,7 @@ export default function WorkoutScreen() {
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
                   prevSets={prevByName[exercise.name] ?? []}
+                  hideIndexLabel
                   onToggleIsometric={() => setIsometricExIds(prev => {
                     const next = new Set(prev);
                     next.has(exercise.id) ? next.delete(exercise.id) : next.add(exercise.id);
@@ -2176,8 +2279,8 @@ export default function WorkoutScreen() {
           })
         )}
 
-        {/* Bottom action row — only when not locked */}
-        {!todaysCompletedWorkout && (
+        {/* Bottom action row — only when not locked and not in focus mode */}
+        {!todaysCompletedWorkout && !focusMode && (
           <View style={styles.bottomActionRow}>
             {workoutInfo.exercises.length > 0 && (
               <Reanimated.View style={[styles.notesToggleWrap, notesBtnStyle]}>
@@ -2207,8 +2310,8 @@ export default function WorkoutScreen() {
           </View>
         )}
 
-        {/* Session Notes — only when not locked */}
-        {!todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (
+        {/* Session Notes — only when not locked and not in focus mode */}
+        {!todaysCompletedWorkout && !focusMode && workoutInfo.exercises.length > 0 && (
           <View onLayout={e => { notesY.current = e.nativeEvent.layout.y; }}>
           <ExpandablePanel expanded={showNotes} duration={500}>
             <NeuCard dark={isDark} style={{ marginBottom: 4, borderRadius: 16 }}>
@@ -2236,8 +2339,8 @@ export default function WorkoutScreen() {
         )}
 
 
-        {/* Complete Workout button — inline at bottom of scroll, only while running */}
-        {isRunning && !todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (
+        {/* Complete Workout button — inline at bottom of scroll, only while running (hidden in focus mode) */}
+        {isRunning && !todaysCompletedWorkout && !focusMode && workoutInfo.exercises.length > 0 && (
           <BounceButton onPress={handleFinish} style={{ marginHorizontal: 0, marginTop: 12, marginBottom: 16 }}>
             <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
               <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
@@ -2247,7 +2350,71 @@ export default function WorkoutScreen() {
             </View>
           </BounceButton>
         )}
+
       </ScrollView>
+
+      {/* List mode: pinned progress card just above the nav bar */}
+      {!focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
+        const pct = exerciseProgress.total === 0 ? 0 : (exerciseProgress.done / exerciseProgress.total) * 100;
+        return (
+          <View pointerEvents="none" style={{ position: "absolute", left: 20, right: 20, bottom: insets.bottom + 80, zIndex: 9 }}>
+            <View style={{ backgroundColor: "#fff", borderRadius: 999, paddingHorizontal: 20, paddingVertical: 10, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
+              <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: APP_LIGHT.tp, marginBottom: 8 }}>
+                {exerciseProgress.done} of {exerciseProgress.total} Exercises Complete
+              </Text>
+              <AnimatedProgressBar pct={pct} trackColor={APP_LIGHT.div} />
+            </View>
+          </View>
+        );
+      })()}
+
+      {/* Focus mode: pinned Prev / Next or Complete Workout above the tab bar */}
+      {focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
+        const total = workoutInfo.exercises.length;
+        const idx = Math.min(focusIndex, total - 1);
+        const isFirst = idx === 0;
+        const isLast = idx === total - 1;
+        const goPrev = () => {
+          if (isFirst) return;
+          setFocusIndex(idx - 1);
+          scrollRef.current?.scrollTo({ y: 0, animated: true });
+        };
+        const goNext = () => {
+          setFocusIndex(idx + 1);
+          scrollRef.current?.scrollTo({ y: 0, animated: true });
+        };
+        return (
+          <View pointerEvents="box-none" style={{ position: "absolute", left: 20, right: 20, bottom: insets.bottom + 80, zIndex: 5 }}>
+            <View style={{ flexDirection: "row", gap: 16, alignItems: "center", justifyContent: isLast ? "flex-start" : "center" }}>
+              <BounceButton onPress={isFirst ? undefined : goPrev} accessibilityLabel="Previous exercise">
+                <View style={[styles.focusBackWrap, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? "#000" : "#a3afc0", shadowOpacity: isDark ? 0.35 : 0.5, opacity: isFirst ? 0.4 : 1 }]}>
+                  <View style={[styles.focusBackBtn, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, borderColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)", shadowColor: isDark ? "transparent" : "#FFFFFF" }]}>
+                    <Ionicons name="chevron-back" size={22} color={t.tp} />
+                  </View>
+                </View>
+              </BounceButton>
+              {isLast ? (
+                <BounceButton onPress={handleFinish} style={{ flex: 1 }}>
+                  <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                    <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: ACCT }]}>
+                      <Ionicons name="checkmark-circle" size={18} color="#fff" />
+                      <Text style={[styles.finishBtnText, { color: "#fff" }]}>Complete Workout</Text>
+                    </View>
+                  </View>
+                </BounceButton>
+              ) : (
+                <BounceButton onPress={goNext} accessibilityLabel="Next exercise">
+                  <View style={[styles.focusBackWrap, { backgroundColor: ACCT, shadowColor: ACCT, shadowOpacity: 0.5 }]}>
+                    <View style={[styles.focusBackBtn, { backgroundColor: ACCT, borderColor: "rgba(255,255,255,0.3)", shadowColor: "transparent" }]}>
+                      <Ionicons name="chevron-forward" size={22} color="#fff" />
+                    </View>
+                  </View>
+                </BounceButton>
+              )}
+            </View>
+          </View>
+        );
+      })()}
 
       {/* Fixed top bar — workout timer + discard + rest timer */}
       <View style={[styles.topBar, { top: insets.top }]}>
@@ -2608,6 +2775,8 @@ export default function WorkoutScreen() {
         onStartCustom={openCustomWorkoutNaming}
         onChangeDay={() => { setChangeDayOpen(true); setWorkoutOptionsOpen(false); }}
         onClose={() => setWorkoutOptionsOpen(false)}
+        focusMode={focusMode}
+        onToggleFocusMode={(v) => { setFocusMode(v); if (v) setFocusIndex(0); }}
       />
 
       {activeProgram && (
@@ -2775,6 +2944,10 @@ const styles = StyleSheet.create({
   finishBtn:        { borderRadius: 16, backgroundColor: "#8896A7", paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   finishBtnActive:  { backgroundColor: ACCT },
   finishBtnText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
+
+  // Focus mode compact Back button (icon-only circle, matches finish button height)
+  focusBackWrap:    { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowRadius: 8 },
+  focusBackBtn:     { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", borderWidth: 1, shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4 },
 
   checkCircle:      { width: 24, height: 24, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },

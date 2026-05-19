@@ -27,6 +27,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
+import { SENT_PROGRAMS_KEY, SHARED_PROGRAMS_KEY, updateSentProgram, updateSharedProgram, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
@@ -1150,7 +1151,7 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, collapsingIds, onStartCollapse, onInputFocus,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, collapsingIds, onStartCollapse, onInputFocus,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1163,6 +1164,7 @@ function Step2({
   isDark: boolean;
   onFinish: () => void;
   isEditMode: boolean;
+  isReviewMode: boolean;
   collapsingIds: Set<string>;
   onStartCollapse: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
@@ -1284,7 +1286,7 @@ function Step2({
         );
       })}
 
-      {!isEditMode && (
+      {!isEditMode && !isReviewMode && !isSharedEditMode && (
         <BounceButton onPress={onFinish} accessibilityLabel="Create program" accessibilityRole="button">
           <View style={styles.primaryBtnWrap}>
             <View style={styles.primaryBtn}>
@@ -1317,8 +1319,10 @@ export default function NewProgramScreen() {
   const navigation = useNavigation();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { id: editId } = useLocalSearchParams<{ id?: string }>();
+  const { id: editId, reviewId, sharedId } = useLocalSearchParams<{ id?: string; reviewId?: string; sharedId?: string }>();
   const isEditMode = !!editId;
+  const isReviewMode = !!reviewId && !editId;
+  const isSharedEditMode = !!sharedId && !editId && !reviewId;
 
   const [step, setStep] = useState<1 | 2>(1);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -1342,7 +1346,7 @@ export default function NewProgramScreen() {
   const pendingPickerDay = useRef<string | null>(null);
 
   const hasChanges = useMemo(() => {
-    if (!isEditMode) return false;
+    if (!isEditMode && !isReviewMode && !isSharedEditMode) return false;
     const orig = originalEdit.current;
     if (!orig) return false;
     return (
@@ -1353,7 +1357,7 @@ export default function NewProgramScreen() {
       JSON.stringify(cyclePattern) !== JSON.stringify(orig.cyclePattern) ||
       !workoutsEqual(workouts, orig.workouts)
     );
-  }, [isEditMode, name, totalWeeks, cycleDays, isTrainingDay, cyclePattern, workouts]);
+  }, [isEditMode, isReviewMode, isSharedEditMode, name, totalWeeks, cycleDays, isTrainingDay, cyclePattern, workouts]);
 
   const updateBtnScale = useSharedValue(0);
   const updateBtnStyle = useAnimatedStyle(() => ({
@@ -1415,7 +1419,64 @@ export default function NewProgramScreen() {
 
     (async () => {
       try {
-        if (editId) {
+        if (isSharedEditMode && sharedId) {
+          // Shared-edit mode — load the SharedProgram the trainer sent to a client.
+          // Saving will write back to that SharedProgram so the client can re-accept the update.
+          const raw = await AsyncStorage.getItem(SHARED_PROGRAMS_KEY);
+          const list: SharedProgram[] = raw ? JSON.parse(raw) : [];
+          const target = list.find(s => s.id === sharedId);
+          const snap = target?.programSnapshot;
+          if (snap) {
+            const isTraining = snap.cyclePattern.map(d => d !== "Rest");
+            const names = snap.cyclePattern.map(d => d === "Rest" ? "" : d);
+            const canonicalDays = trainingDayKeys(names, isTraining);
+            const canonicalWorkouts: WorkoutMap = {};
+            canonicalDays.forEach(d => { canonicalWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
+            setName(snap.name);
+            setTotalWeeks(snap.totalWeeks);
+            setCycleDays(snap.cycleDays);
+            setIsTrainingDay(isTraining);
+            setCyclePattern(names);
+            setWorkouts(canonicalWorkouts);
+            originalEdit.current = {
+              name: snap.name,
+              totalWeeks: snap.totalWeeks,
+              cycleDays: snap.cycleDays,
+              isTrainingDay: isTraining,
+              cyclePattern: names,
+              workouts: canonicalWorkouts,
+            };
+          }
+        } else if (isReviewMode && reviewId) {
+          // Review mode — load the SentProgram snapshot the gym user sent.
+          // We treat its snapshot as the seed for the builder; saving will
+          // write the edited program back into that same SentProgram entry.
+          const raw = await AsyncStorage.getItem(SENT_PROGRAMS_KEY);
+          const list: SentProgram[] = raw ? JSON.parse(raw) : [];
+          const target = list.find(s => s.id === reviewId);
+          const snap = target?.programSnapshot;
+          if (snap) {
+            const isTraining = snap.cyclePattern.map(d => d !== "Rest");
+            const names = snap.cyclePattern.map(d => d === "Rest" ? "" : d);
+            const canonicalDays = trainingDayKeys(names, isTraining);
+            const canonicalWorkouts: WorkoutMap = {};
+            canonicalDays.forEach(d => { canonicalWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
+            setName(snap.name);
+            setTotalWeeks(snap.totalWeeks);
+            setCycleDays(snap.cycleDays);
+            setIsTrainingDay(isTraining);
+            setCyclePattern(names);
+            setWorkouts(canonicalWorkouts);
+            originalEdit.current = {
+              name: snap.name,
+              totalWeeks: snap.totalWeeks,
+              cycleDays: snap.cycleDays,
+              isTrainingDay: isTraining,
+              cyclePattern: names,
+              workouts: canonicalWorkouts,
+            };
+          }
+        } else if (editId) {
           // Edit mode — check for an in-progress draft first, then fall back to saved program
           const draftRaw = await AsyncStorage.getItem(DRAFT_KEY);
           let loadedFromDraft = false;
@@ -1487,20 +1548,23 @@ export default function NewProgramScreen() {
     })();
   }, []);
 
-  // Auto-save draft on every state change
+  // Auto-save draft on every state change. Review-mode edits don't persist a
+  // create-flow draft — they live in the SentProgram entry and would otherwise
+  // pollute the next plain "New Program" session.
   useEffect(() => {
     if (!isDraftLoaded.current) return;
+    if (isReviewMode || isSharedEditMode) return;
     const draft: ProgramDraft = { step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, ...(editId ? { editId } : {}) };
     AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
       .catch((e) => warnStorage("setItem", DRAFT_KEY, e));
-  }, [step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, editId]);
+  }, [step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, editId, isReviewMode, isSharedEditMode]);
 
   // Intercept back navigation — prompt save or discard
   useEffect(() => {
     const unsubscribe = navigation.addListener("beforeRemove", (e: any) => {
       if (isLeavingIntentionally.current) return;
 
-      if (isEditMode) {
+      if (isEditMode || isReviewMode || isSharedEditMode) {
         const orig = originalEdit.current;
         if (!orig) return;
         // Use workoutsEqual (sorted-keys form) — matches the `hasChanges` useMemo
@@ -1538,8 +1602,40 @@ export default function NewProgramScreen() {
             },
           },
           {
-            text: "Save Draft",
-            onPress: () => {
+            text: isReviewMode ? "Save" : "Save Draft",
+            onPress: async () => {
+              if (isReviewMode && reviewId) {
+                // Review mode has no auto-save draft — persist edits to the
+                // SentProgram snapshot before navigating away.
+                const programName = name.trim() || "My Program";
+                const savedCyclePattern = cyclePattern.map((n, i) => isTrainingDay[i] ? (n.trim() || "Workout") : "Rest");
+                const trainingDays = isTrainingDay.filter(Boolean).length;
+                try {
+                  const raw = await AsyncStorage.getItem(SENT_PROGRAMS_KEY);
+                  const list: SentProgram[] = raw ? JSON.parse(raw) : [];
+                  const target = list.find(s => s.id === reviewId);
+                  const prev = target?.programSnapshot;
+                  const today = new Date();
+                  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                  const startDate = `${String(today.getDate()).padStart(2, "0")} ${months[today.getMonth()]} ${today.getFullYear()}`;
+                  const updatedSnap: SavedProgram = {
+                    id: prev?.id ?? `snap_${Date.now()}`,
+                    name: programName,
+                    totalWeeks,
+                    currentWeek: prev?.currentWeek ?? 0,
+                    status: prev?.status ?? "created",
+                    startDate: prev?.startDate ?? startDate,
+                    trainingDays,
+                    cycleDays,
+                    cyclePattern: savedCyclePattern,
+                    workouts,
+                    extraWorkouts: prev?.extraWorkouts,
+                    cycleOffset: prev?.cycleOffset,
+                    completedDate: prev?.completedDate,
+                  };
+                  await updateSentProgram(reviewId, { programSnapshot: updatedSnap, programName, lastEditedAtISO: new Date().toISOString() });
+                } catch (err) { warnStorage("setItem", SENT_PROGRAMS_KEY, err); }
+              }
               isLeavingIntentionally.current = true;
               navigation.dispatch(e.data.action);
             },
@@ -1548,7 +1644,7 @@ export default function NewProgramScreen() {
       );
     });
     return unsubscribe;
-  }, [navigation, name, step, workouts, isEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern]);
+  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern]);
 
   const handleCycleDaysChange = useCallback((next: number) => {
     const clamped = clamp(next, 2, 14);
@@ -1649,6 +1745,83 @@ export default function NewProgramScreen() {
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const startDate = `${String(today.getDate()).padStart(2, "0")} ${months[today.getMonth()]} ${today.getFullYear()}`;
 
+    if (isSharedEditMode && sharedId) {
+      // Shared-edit mode — write the edited program back into the SharedProgram
+      // snapshot and clear acceptedAtISO so the recipient gets a tick to re-accept the update.
+      const doSharedSave = async () => {
+        try {
+          const raw = await AsyncStorage.getItem(SHARED_PROGRAMS_KEY);
+          const list: SharedProgram[] = raw ? JSON.parse(raw) : [];
+          const target = list.find(s => s.id === sharedId);
+          const prev = target?.programSnapshot;
+          const updatedSnap: SavedProgram = {
+            id: prev?.id ?? `snap_${Date.now()}`,
+            name: programName,
+            totalWeeks,
+            currentWeek: prev?.currentWeek ?? 0,
+            status: prev?.status ?? "created",
+            startDate: prev?.startDate ?? startDate,
+            trainingDays,
+            cycleDays,
+            cyclePattern: savedCyclePattern,
+            workouts,
+            extraWorkouts: prev?.extraWorkouts,
+            cycleOffset: prev?.cycleOffset,
+            completedDate: prev?.completedDate,
+          };
+          await updateSharedProgram(sharedId, {
+            programSnapshot: updatedSnap,
+            programName,
+            lastEditedAtISO: new Date().toISOString(),
+            acceptedAtISO: undefined,
+          });
+        } catch (e) {
+          Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
+          return;
+        }
+        isLeavingIntentionally.current = true;
+        router.back();
+      };
+      doSharedSave();
+      return;
+    }
+
+    if (isReviewMode && reviewId) {
+      // Review mode — write the edited program back into the SentProgram's
+      // snapshot so the trainer's edits are what gets returned on Send Back.
+      const doReview = async () => {
+        try {
+          const raw = await AsyncStorage.getItem(SENT_PROGRAMS_KEY);
+          const list: SentProgram[] = raw ? JSON.parse(raw) : [];
+          const target = list.find(s => s.id === reviewId);
+          const prev = target?.programSnapshot;
+          const updatedSnap: SavedProgram = {
+            id: prev?.id ?? `snap_${Date.now()}`,
+            name: programName,
+            totalWeeks,
+            currentWeek: prev?.currentWeek ?? 0,
+            status: prev?.status ?? "created",
+            startDate: prev?.startDate ?? startDate,
+            trainingDays,
+            cycleDays,
+            cyclePattern: savedCyclePattern,
+            workouts,
+            extraWorkouts: prev?.extraWorkouts,
+            cycleOffset: prev?.cycleOffset,
+            completedDate: prev?.completedDate,
+          };
+          await updateSentProgram(reviewId, { programSnapshot: updatedSnap, programName, lastEditedAtISO: new Date().toISOString() });
+        } catch (e) {
+          Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
+          return;
+        }
+        isLeavingIntentionally.current = true;
+        router.back();
+      };
+      doReview();
+      return;
+    }
+
     if (isEditMode) {
       // Edit mode — update the existing program in place
       const doUpdate = async () => {
@@ -1722,7 +1895,7 @@ export default function NewProgramScreen() {
         { text: "Cancel", style: "cancel" },
       ]
     );
-  }, [name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, router, isEditMode, editId]);
+  }, [name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId]);
 
   const handleBack = () => { if (step === 2) setStep(1); else router.back(); };
 
@@ -1753,7 +1926,7 @@ export default function NewProgramScreen() {
       </TouchableOpacity>
 
 
-      {isEditMode && (
+      {(isEditMode || isReviewMode || isSharedEditMode) && (
         <Reanimated.View style={[{ position: "absolute", top: insets.top + 16, right: 20, zIndex: 10 }, updateBtnStyle]} pointerEvents={hasChanges ? "box-none" : "none"}>
           <BounceButton onPress={handleFinish} accessibilityLabel="Save changes" accessibilityRole="button">
             <View style={[styles.updateBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
@@ -1817,6 +1990,7 @@ export default function NewProgramScreen() {
             isDark={isDark}
             onFinish={handleFinish}
             isEditMode={isEditMode}
+            isReviewMode={isReviewMode}
             collapsingIds={collapsingIds}
             onStartCollapse={startCollapse}
             onInputFocus={handleInputFocus}

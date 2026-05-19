@@ -7,6 +7,7 @@ import { ThemeProvider } from "../contexts/ThemeContext";
 import { StreakProvider } from "../contexts/StreakContext";
 import { WorkoutTimerProvider } from "../contexts/WorkoutTimerContext";
 import { UnitProvider } from "../contexts/UnitContext";
+import { AccountTypeProvider } from "../contexts/AccountTypeContext";
 import { useTheme } from "../contexts/ThemeContext";
 
 SplashScreen.preventAutoHideAsync();
@@ -43,7 +44,9 @@ export default function RootLayout() {
   return (
     <ThemeProvider>
       <UnitProvider>
-        <AppShell />
+        <AccountTypeProvider>
+          <AppShell />
+        </AccountTypeProvider>
       </UnitProvider>
     </ThemeProvider>
   );
