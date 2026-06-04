@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, LinearTransition, FadeIn } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeIn } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
@@ -27,15 +27,18 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
-import { SENT_PROGRAMS_KEY, SHARED_PROGRAMS_KEY, updateSentProgram, updateSharedProgram, type SentProgram, type SharedProgram } from "../utils/trainerStore";
+import { batchKeyOf, SENT_PROGRAMS_KEY, SHARED_PROGRAMS_KEY, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
+import CollapsibleSection from "../components/CollapsibleSection";
 import DumbbellIcon from "../components/DumbbellIcon";
+import ExerciseImage from "../components/ExerciseImage";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
+import { exerciseIdByName } from "../utils/exerciseLookup";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -148,6 +151,7 @@ interface ExerciseRowProps {
 }
 
 function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onOpenReorder, onEdit, onInputFocus }: ExerciseRowProps) {
+  const router = useRouter();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
@@ -238,6 +242,15 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
     onUpdateSets(sets.map((s, i) => i === idx ? { ...s, ...patch } : s));
   }, [sets, onUpdateSets]);
 
+  // Hevy-style "fill down": typing a value into a set applies it to that set and
+  // every set BELOW it (any type — warmup and working alike), leaving sets above
+  // untouched. Lets the user enter one value instead of repeating it per set.
+  // Used for the numeric fields (weight/reps/range), NOT the type toggle — that
+  // stays a single-set edit via patchSet.
+  const fillDown = useCallback((idx: number, patch: Partial<ProgramSet>) => {
+    onUpdateSets(sets.map((s, i) => i >= idx ? { ...s, ...patch } : s));
+  }, [sets, onUpdateSets]);
+
   // Rep mode is a single per-exercise choice driven from the header toggle.
   const currentRepMode: "target" | "range" = sets[0]?.repMode ?? "target";
   const RANGE_EXTENSION_WIDTH = 72;
@@ -260,14 +273,35 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
 
 
   return (
-    <Reanimated.View layout={LinearTransition.duration(250)} style={styles.exRowWrap}>
+    // NOTE: no `layout` animation here. A view with LinearTransition has its frame
+    // managed by Reanimated and will NOT live-reflow when a descendant's animated
+    // height changes — it freezes until the next commit. That froze the card body
+    // during a set's CollapsibleCard collapse/expand, so everything below jumped
+    // only after the animation finished (two-phase). A plain View follows the
+    // collapse live, in one smooth phase (matches the working workout.tsx layout).
+    <View style={styles.exRowWrap}>
       {/* Row 1: thumbnail + name + reorder + delete */}
       <View style={styles.exTopRow}>
-        <NeuCard dark={isDark} radius={12} shadowSize="sm" style={styles.exThumb}>
-          <View style={styles.exThumbInner}>
-            <DumbbellIcon size={22} color={t.ts} />
-          </View>
-        </NeuCard>
+        {/* Tap the thumbnail → that exercise's summary page (with a button on to
+            full history). The name (next to it) still opens the edit panel. */}
+        <TouchableOpacity
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push({ pathname: "/exercise-summary", params: { exerciseName: exercise.name } });
+          }}
+          activeOpacity={0.7}
+          accessibilityLabel={`View ${exercise.name} summary`}
+          accessibilityRole="button"
+        >
+          <ExerciseImage
+            exerciseId={exerciseIdByName(exercise.name) ?? ""}
+            variant="thumb"
+            size={52}
+            radius={12}
+            backgroundColor={t.div}
+            fallbackColor={t.ts}
+          />
+        </TouchableOpacity>
         <TouchableOpacity onPress={onEdit} activeOpacity={0.7} style={styles.exNameBtn}>
           <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
           <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1} ellipsizeMode="tail">{exercise.name}</Text>
@@ -413,7 +447,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
                   ref={r => { weightRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
                   value={set.weightKg ?? ""}
-                  onChangeText={v => patchSet(idx, { weightKg: v })}
+                  onChangeText={v => fillDown(idx, { weightKg: v })}
                   placeholder="—"
                   placeholderTextColor={t.ts}
                   keyboardType="decimal-pad"
@@ -438,7 +472,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
                   ref={r => { repsRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
                   value={repMode === "target" ? (set.reps ?? "") : (set.repsMin ?? "")}
-                  onChangeText={v => patchSet(idx, repMode === "target" ? { reps: v } : { repsMin: v })}
+                  onChangeText={v => fillDown(idx, repMode === "target" ? { reps: v } : { repsMin: v })}
                   placeholder="—"
                   placeholderTextColor={t.ts}
                   keyboardType={exercise.isIsometric ? "number-pad" : "decimal-pad"}
@@ -460,7 +494,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
                       ref={r => { repsMaxRefs.current[idx] = r; }}
                       style={[styles.exSetInputText, { color: t.tp }]}
                       value={set.repsMax ?? ""}
-                      onChangeText={v => patchSet(idx, { repsMax: v })}
+                      onChangeText={v => fillDown(idx, { repsMax: v })}
                       placeholder="—"
                       placeholderTextColor={t.ts}
                       keyboardType="number-pad"
@@ -607,7 +641,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
         </View>
       </Modal>
 
-    </Reanimated.View>
+    </View>
   );
 }
 
@@ -1151,7 +1185,7 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, collapsingIds, onStartCollapse, onInputFocus,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, isSharedEditMode, collapsingIds, onStartCollapse, onInputFocus,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1165,6 +1199,7 @@ function Step2({
   onFinish: () => void;
   isEditMode: boolean;
   isReviewMode: boolean;
+  isSharedEditMode: boolean;
   collapsingIds: Set<string>;
   onStartCollapse: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
@@ -1189,7 +1224,7 @@ function Step2({
         const isCollapsed = collapsedDays.has(day);
         const exercises = workouts[day] ?? [];
         return (
-          <Reanimated.View key={day} style={{ marginBottom: 16 }} layout={LinearTransition.duration(300)}>
+          <View key={day} style={{ marginBottom: 16 }}>
             <NeuCard dark={isDark} radius={16} style={styles.dayHeadingCard} innerStyle={styles.dayHeadingCardInner}>
               <TouchableOpacity
                 onPress={() => toggleDay(day)}
@@ -1213,6 +1248,7 @@ function Step2({
               </TouchableOpacity>
             </NeuCard>
 
+            <CollapsibleSection collapsed={isCollapsed} duration={300}>
             {isCollapsed ? (
               <Reanimated.View key="collapsed" entering={FadeIn.duration(220)}>
                 {exercises.length === 0 ? (
@@ -1282,7 +1318,8 @@ function Step2({
                 </BounceButton>
               </Reanimated.View>
             )}
-          </Reanimated.View>
+            </CollapsibleSection>
+          </View>
         );
       })}
 
@@ -1769,7 +1806,8 @@ export default function NewProgramScreen() {
             cycleOffset: prev?.cycleOffset,
             completedDate: prev?.completedDate,
           };
-          await updateSharedProgram(sharedId, {
+          if (!target) throw new Error("Shared program not found");
+          await updateSharedProgramBatch(batchKeyOf(target), {
             programSnapshot: updatedSnap,
             programName,
             lastEditedAtISO: new Date().toISOString(),
@@ -1991,6 +2029,7 @@ export default function NewProgramScreen() {
             onFinish={handleFinish}
             isEditMode={isEditMode}
             isReviewMode={isReviewMode}
+            isSharedEditMode={isSharedEditMode}
             collapsingIds={collapsingIds}
             onStartCollapse={startCollapse}
             onInputFocus={handleInputFocus}
@@ -2140,8 +2179,6 @@ const styles = StyleSheet.create({
 
   // Exercise row
   exRowWrap:        { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 0 },
-  exThumb:          { width: 52, height: 52 },
-  exThumbInner:     { width: 52, height: 52, alignItems: "center", justifyContent: "center" },
   exTopRow:           { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
   exReorderBtn:       { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   exNameBtn:        { flex: 1, flexDirection: "column", justifyContent: "center", gap: 3 },

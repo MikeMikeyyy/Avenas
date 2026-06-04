@@ -45,6 +45,38 @@ export const METRIC_OPTIONS: MetricOption[] = [
   { key: "duration", label: "Duration" },
 ];
 
+// ─── Strength radar (muscle-group breakdown) ─────────────────────────────────
+//
+// The Strength card plots one value per muscle group on a 6-axis radar. Which
+// value depends on the active metric:
+//   - volume:    Σ tonnage (weight×reps) attributed to the group
+//   - frequency: # of sessions that trained the group
+//   - load:      derived at render time = group volume ÷ total volume × 100
+export type StrengthMetricKey = "volume" | "frequency" | "load";
+
+export type StrengthMetricOption = {
+  key: StrengthMetricKey;
+  label: string;
+};
+
+// The leading icon for each metric is chosen in StrengthRadarChart (it mixes
+// the canonical DumbbellIcon with MaterialCommunityIcons), so it isn't carried
+// here as a plain icon-font name.
+export const STRENGTH_METRIC_OPTIONS: StrengthMetricOption[] = [
+  { key: "volume",    label: "Total Volume"      },
+  { key: "frequency", label: "Workout Frequency" },
+  { key: "load",      label: "Muscular Load"     },
+];
+
+// Per-muscle-group aggregate feeding the radar. `sessions` may be fractional
+// when a multi-muscle custom exercise splits its session credit across groups;
+// callers round for display.
+export type MuscleGroupStat = {
+  volume: number;   // Σ tonnage attributed to this group
+  sessions: number; // # of sessions that trained this group (even-split aware)
+  sets: number;     // # of working sets attributed to this group
+};
+
 // One stacked bar / point of the progress chart. Metric-agnostic: `total` holds
 // whatever aggregate the chart is currently plotting (tonnage / reps / minutes).
 export type VolumeBucket = {

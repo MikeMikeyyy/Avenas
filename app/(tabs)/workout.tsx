@@ -1364,12 +1364,16 @@ export default function WorkoutScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { isRunning, elapsedSeconds, startTimer, stopTimer } = useWorkoutTimer();
+  const { isRunning, isPaused, elapsedSeconds, discardCount, startTimer, pauseTimer, resumeTimer, stopTimer } = useWorkoutTimer();
   const { startRestTimer, dismissRestTimer } = useRestTimer();
 
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const [allPrograms, setAllPrograms] = useState<SavedProgram[]>([]);
-  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[] } | null>(null);
+  // `programId` rides along on workoutInfo so it survives the exercise-mutation
+  // setters (all spread prev) and is persisted/restored with the draft. It's the
+  // program whose day this session is; undefined for a free workout not added to
+  // a program → stamped as "" on the CompletedWorkout (definitively no program).
+  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[]; programId?: string } | null>(null);
   const [log, setLog] = useState<WorkoutLog>({});
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [changingExId, setChangingExId] = useState<string | null>(null);
@@ -1509,7 +1513,8 @@ export default function WorkoutScreen() {
                 workout = { name: override.workoutName, exercises };
               }
             }
-            setWorkoutInfo(workout);
+            // Today's workout (and any change-day override) belongs to the active program.
+            setWorkoutInfo(workout ? { ...workout, programId: found.id } : null);
             if (workout) {
               setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
               setLog(initLog(workout.exercises));
@@ -1517,7 +1522,7 @@ export default function WorkoutScreen() {
           }).catch((e) => {
             warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e);
             const workout = getTodaysWorkout(found);
-            setWorkoutInfo(workout);
+            setWorkoutInfo(workout ? { ...workout, programId: found.id } : null);
             if (workout) {
               setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
               setLog(initLog(workout.exercises));
@@ -1572,6 +1577,19 @@ export default function WorkoutScreen() {
 
   // Pre-load on mount so data is ready before user navigates here
   useEffect(() => { if (draftRestored) loadData(); }, [draftRestored, loadData]);
+
+  // React to discard triggered from the global WorkoutActiveBar (another tab)
+  const prevDiscardCount = useRef(0);
+  useEffect(() => {
+    if (discardCount > 0 && discardCount !== prevDiscardCount.current) {
+      prevDiscardCount.current = discardCount;
+      dismissRestTimer();
+      setIsFreeWorkout(false);
+      setFreeWorkoutAddToProgram(false);
+      draftLockedRef.current = false;
+      loadData(true);
+    }
+  }, [discardCount, dismissRestTimer, loadData]);
 
   useFocusEffect(useCallback(() => {
     if (draftRestored) loadData();
@@ -1762,7 +1780,8 @@ export default function WorkoutScreen() {
   const confirmCustomWorkout = (name: string, addToProgram: boolean) => {
     setFreeWorkoutAddToProgram(addToProgram);
     setIsFreeWorkout(true);
-    setWorkoutInfo({ name, exercises: [] });
+    // A free workout only belongs to a program when the user opts to add it.
+    setWorkoutInfo({ name, exercises: [], programId: addToProgram ? activeProgram?.id : undefined });
     setLog({});
     const todayStr = todayYMD();
     AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: name }))
@@ -1810,6 +1829,9 @@ export default function WorkoutScreen() {
       date: ds,
       completedAt: d.toISOString(),
       workoutName: workoutInfo.name,
+      // "" (not undefined) marks a definitive "no program" so the Progress page
+      // never treats a free workout as a legacy record to attribute by name.
+      programId: workoutInfo.programId ?? "",
       durationSeconds: elapsedSeconds,
       // sessionNotes mirrors log-workout.tsx's behaviour. Stored only when non-empty.
       sessionNotes: trimmedNotes ? notes : undefined,
@@ -2078,7 +2100,7 @@ export default function WorkoutScreen() {
               const dayIndex = src.cyclePattern.indexOf(dayName);
               const workoutKey = `${dayIndex}:${dayName}`;
               const exercises = src.workouts[workoutKey] ?? [];
-              setWorkoutInfo({ name: dayName, exercises });
+              setWorkoutInfo({ name: dayName, exercises, programId: src.id });
               setLog(initLog(exercises));
               setIsFreeWorkout(false);
               setFreeWorkoutAddToProgram(false);
@@ -2426,12 +2448,20 @@ export default function WorkoutScreen() {
                 {todaysCompletedWorkout.durationSeconds > 0 ? fmtTime(todaysCompletedWorkout.durationSeconds) : "Done"}
               </Text>
             </View>
-          ) : isRunning ? (
+          ) : (isRunning || isPaused) ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View style={styles.workoutTimerPill}>
-                <Ionicons name="time-outline" size={14} color={APP_LIGHT.tp} />
+                <View style={[styles.timerActiveDot, isPaused && styles.timerActiveDotPaused]} />
                 <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>{fmtTime(elapsedSeconds)}</Text>
               </View>
+              <BounceButton onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                isPaused ? resumeTimer() : pauseTimer();
+              }}>
+                <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                  <Ionicons name={isPaused ? "play" : "pause"} size={16} color={t.tp} />
+                </View>
+              </BounceButton>
               <BounceButton onPress={handleDiscard}>
                 <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                   <TrashIcon size={18} color={t.ts} />
@@ -2792,7 +2822,7 @@ export default function WorkoutScreen() {
             const dayIndex = src.cyclePattern.indexOf(dayName);
             const workoutKey = `${dayIndex}:${dayName}`;
             const exercises = src.workouts[workoutKey] ?? [];
-            setWorkoutInfo({ name: dayName, exercises });
+            setWorkoutInfo({ name: dayName, exercises, programId: src.id });
             setLog(initLog(exercises));
             setIsFreeWorkout(false);
             setFreeWorkoutAddToProgram(false);
@@ -2868,6 +2898,8 @@ const styles = StyleSheet.create({
   topIconBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   workoutTimerPill: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 100, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   workoutTimerText: { fontFamily: FontFamily.bold, fontSize: 15, letterSpacing: 0.5 },
+  timerActiveDot:       { width: 8, height: 8, borderRadius: 4, backgroundColor: ACCT },
+  timerActiveDotPaused: { backgroundColor: "#F59E0B" },
 
   scroll: { paddingHorizontal: 20 },
 

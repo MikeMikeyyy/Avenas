@@ -38,6 +38,16 @@ export function parseStoredDate(dateStr: string | undefined | null): Date | null
 }
 
 /**
+ * Format a Date as a SavedProgram.startDate string ("DD Mon YYYY", e.g.
+ * "09 Apr 2026") — the inverse of parseStoredDate. Use whenever code needs to
+ * write a program start/completed date so the stored format stays consistent.
+ */
+export function formatStoredDate(d: Date): string {
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${day} ${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/**
  * Format a Date as "YYYY-MM-DD" using local components (no UTC shift).
  */
 export function toYMD(d: Date): string {

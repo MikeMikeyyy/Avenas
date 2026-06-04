@@ -2,24 +2,42 @@ import { Stack } from "expo-router";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
+import { View } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ThemeProvider } from "../contexts/ThemeContext";
 import { StreakProvider } from "../contexts/StreakContext";
 import { WorkoutTimerProvider } from "../contexts/WorkoutTimerContext";
+import { RestTimerProvider } from "../contexts/RestTimerContext";
 import { UnitProvider } from "../contexts/UnitContext";
 import { AccountTypeProvider } from "../contexts/AccountTypeContext";
+import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileContext";
 import { useTheme } from "../contexts/ThemeContext";
+import WorkoutActiveBar from "../components/WorkoutActiveBar";
 
 SplashScreen.preventAutoHideAsync();
 
 function AppShell() {
   const { isDark } = useTheme();
+  const { loaded } = useUserProfile();
+
+  // Hold the native splash until the onboarding flag is read, so app/index.tsx
+  // can redirect to the right first screen without a blank flash or flicker.
+  useEffect(() => {
+    if (loaded) SplashScreen.hideAsync();
+  }, [loaded]);
+
   return (
     <>
       <StatusBar style={isDark ? "light" : "dark"} />
       <StreakProvider>
         <WorkoutTimerProvider>
-          <Stack screenOptions={{ headerShown: false }} />
+          <RestTimerProvider>
+            <View style={{ flex: 1 }}>
+              <Stack screenOptions={{ headerShown: false }} />
+              <WorkoutActiveBar />
+            </View>
+          </RestTimerProvider>
         </WorkoutTimerProvider>
       </StreakProvider>
     </>
@@ -33,21 +51,21 @@ export default function RootLayout() {
     Nunito_700Bold,
   });
 
-  useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
-
+  // Splash stays up until fonts load here, then until the profile context
+  // reports `loaded` (see AppShell) — so the first redirect never flickers.
   if (!loaded) return null;
 
   return (
-    <ThemeProvider>
-      <UnitProvider>
-        <AccountTypeProvider>
-          <AppShell />
-        </AccountTypeProvider>
-      </UnitProvider>
-    </ThemeProvider>
+    <KeyboardProvider>
+      <ThemeProvider>
+        <UnitProvider>
+          <AccountTypeProvider>
+            <UserProfileProvider>
+              <AppShell />
+            </UserProfileProvider>
+          </AccountTypeProvider>
+        </UnitProvider>
+      </ThemeProvider>
+    </KeyboardProvider>
   );
 }

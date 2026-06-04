@@ -47,7 +47,9 @@ All keys, their value shapes, and which screens write them:
 | `@avenas_custom_exercises`                     | `CustomExercise[]`. **Note:** `_` not `/` — historical, do not migrate.                                                         | create-custom-exercise, workout, new-program |
 | `@avenas_journal_entries`                      | `JournalEntry[]`. **Note:** `_` not `/` — historical, do not migrate.                                                           | journal                                    |
 | `@avenas/workout_timer_start`                  | `number` (epoch ms when the current workout timer started).                                                                     | `WorkoutTimerContext`                      |
-| `@avenas/theme` / `@avenas/unit` / `avenas_streak_data` / `avenas_flame_preference` | Small primitives managed by their respective contexts. | respective contexts                        |
+| `@avenas/theme` / `@avenas/unit` / `avenas_streak_data` / `avenas_flame_preference` / `@avenas/account_type` | Small primitives managed by their respective contexts. | respective contexts                        |
+| `@avenas/user_profile` / `@avenas/onboarding_complete` | `{ name, email }` (local profile, drives the Settings avatar) / `boolean` (first-launch onboarding done — set on signup **or** skip). | `UserProfileContext` (signup, onboarding) |
+| `@avenas/terms_accepted` | `number` — the accepted `TERMS_VERSION` (`constants/onboarding.ts`). Recorded on the post-signup Terms step. | accept-terms |
 
 ### Active program → today's workout
 

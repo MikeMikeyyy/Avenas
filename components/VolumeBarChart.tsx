@@ -403,7 +403,7 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
               >
                 {active ? (
                   <View style={styles.metricBtnActive}>
-                    <Text style={[styles.metricBtnLabel, { color: "#0f1a14" }]} numberOfLines={1}>
+                    <Text style={[styles.metricBtnLabel, { color: "#fff" }]} numberOfLines={1}>
                       {opt.label}
                     </Text>
                   </View>

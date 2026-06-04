@@ -5,8 +5,8 @@
 // WorkoutPickerSheet pattern) so the sheet lifts above the keyboard when
 // a child TextInput grabs focus.
 
-import { ReactNode, useCallback, useEffect, useRef } from "react";
-import { Animated, Easing, KeyboardAvoidingView, Modal, PanResponder, Platform, StyleSheet, TouchableOpacity, TouchableWithoutFeedback, View } from "react-native";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Animated, Easing, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, StyleSheet, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { APP_DARK, APP_LIGHT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -23,6 +23,18 @@ export default function SimpleSheet({ visible, onClose, children }: Props) {
   const insets = useSafeAreaInsets();
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  // The home-indicator inset is dead space behind the keyboard — drop it while
+  // the keyboard is up so input rows (e.g. the message composer) sit snug above
+  // the keys. Sheets without text inputs never raise the keyboard, so unaffected.
+  const [kbVisible, setKbVisible] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const show = Keyboard.addListener(showEvt, () => setKbVisible(true));
+    const hide = Keyboard.addListener(hideEvt, () => setKbVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   const dismiss = useCallback(() => {
     Animated.parallel([
@@ -61,7 +73,7 @@ export default function SimpleSheet({ visible, onClose, children }: Props) {
         <View style={{ flex: 1, justifyContent: "flex-end" }}>
           <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOpacity }]} />
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={dismiss} />
-          <Animated.View style={[styles.sheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 12, transform: [{ translateY: slideY }] }]}>
+          <Animated.View style={[styles.sheet, { backgroundColor: t.bg, paddingBottom: kbVisible ? 12 : insets.bottom + 12, transform: [{ translateY: slideY }] }]}>
             <View {...panResponder.panHandlers}>
               <View style={styles.handleArea}><View style={styles.handle} /></View>
             </View>

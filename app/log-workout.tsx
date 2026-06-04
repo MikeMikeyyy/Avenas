@@ -27,6 +27,7 @@ import {
   normaliseSets, type SavedProgram, type CompletedWorkout, type ProgramSet,
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
+import { parseStoredDate, formatStoredDate } from "../utils/dates";
 import { useTheme } from "../contexts/ThemeContext";
 
 const WARMUP_ORANGE = "#ffbf0f";
@@ -1137,11 +1138,17 @@ export default function LogWorkoutScreen() {
   const updateSet = useCallback((exId: string, setIdx: number, field: "weight" | "reps", value: string) => {
     setExercises(prev => prev.map(ex => {
       if (ex.id !== exId) return ex;
-      const updatedSets = ex.sets.map((s, i) => i === setIdx ? { ...s, [field]: value } : s);
-      const set = updatedSets[setIdx];
-      if (set && !set.done && set.weight.trim() && set.reps.trim()) {
-        updatedSets[setIdx] = { ...set, done: true };
-      }
+      // "Fill down" — same as the program builder: the typed value applies to
+      // this set AND every set below it, so identical sets are entered once.
+      // Each affected set that ends up with both weight + reps is auto-marked
+      // done (the existing single-set rule), so e.g. 3 matching sets get logged
+      // in one entry instead of three.
+      const updatedSets = ex.sets.map((s, i) => {
+        if (i < setIdx) return s;
+        const next = { ...s, [field]: value };
+        if (!next.done && next.weight.trim() && next.reps.trim()) next.done = true;
+        return next;
+      });
       return { ...ex, sets: updatedSets };
     }));
   }, []);
@@ -1230,11 +1237,20 @@ export default function LogWorkoutScreen() {
       durationSeconds = computeDurationMins(start, end) * 60;
     }
 
+    // The program this session belongs to: the day's program (`programId`), or
+    // the one a free workout was added to (`addToProgramId`). "" = no program
+    // (definitive — not a legacy record). See workoutBelongsToProgram.
+    const owningProgramId =
+      (programId && programId.length > 0) ? programId
+      : (addToProgramId && addToProgramId.length > 0) ? addToProgramId
+      : "";
+
     const completed: CompletedWorkout = {
       id: `workout_${Date.now()}`,
       date: date ?? "",
       completedAt,
       workoutName: workoutName ?? "",
+      programId: owningProgramId,
       durationSeconds,
       sessionNotes: notes.trim() || undefined,
       exercises: exercises.map(ex => ({
@@ -1255,17 +1271,38 @@ export default function LogWorkoutScreen() {
         await AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify([...dates, date]));
       }
 
-      const addPid = addToProgramId && addToProgramId.length > 0 ? addToProgramId : null;
-      if (addPid && workoutName) {
+      // Update the owning program: record a free workout's name as an extra, and
+      // back-date the program's start when this session predates it. Logging a
+      // session you actually did earlier (e.g. you "started" today but really
+      // began two weeks ago) moves the program's start — and therefore its
+      // current week / progress everywhere — back to that date.
+      if (owningProgramId) {
+        const addPid = addToProgramId && addToProgramId.length > 0 ? addToProgramId : null;
+        const [yy, mm, dd] = (date ?? "").split("-").map(Number);
+        const loggedDate = (Number.isFinite(yy) && Number.isFinite(mm) && Number.isFinite(dd))
+          ? new Date(yy, mm - 1, dd) : null;
+
         const progsRaw = await AsyncStorage.getItem(PROGRAMS_KEY);
         const progs: SavedProgram[] = progsRaw ? JSON.parse(progsRaw) : [];
+        let changed = false;
         const updated = progs.map(p => {
-          if (p.id !== addPid) return p;
-          const extras = p.extraWorkouts ?? [];
-          if (extras.includes(workoutName)) return p;
-          return { ...p, extraWorkouts: [...extras, workoutName] };
+          if (p.id !== owningProgramId) return p;
+          let next = p;
+          // Free workout added to a program → remember its name as an extra.
+          if (addPid === p.id && workoutName && !(p.extraWorkouts ?? []).includes(workoutName)) {
+            next = { ...next, extraWorkouts: [...(next.extraWorkouts ?? []), workoutName] };
+            changed = true;
+          }
+          // Move the start back if this session is earlier than the current start
+          // (only ever earlier — a later session doesn't change when it began).
+          const start = parseStoredDate(next.startDate);
+          if (loggedDate && (!start || loggedDate.getTime() < start.getTime())) {
+            next = { ...next, startDate: formatStoredDate(loggedDate) };
+            changed = true;
+          }
+          return next;
         });
-        await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+        if (changed) await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
       }
 
       // Draft has been committed to history — clear it so reopening this date+workout

@@ -228,10 +228,10 @@ export default function ReviewScreen() {
                     })}
                   </View>
                   <BounceButton style={{ marginTop: 12 }} onPress={() => router.push({ pathname: "/new-program", params: { reviewId: entry.id } })}>
-                    <View style={[styles.editBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}>
+                    <NeuCard dark={isDark} radius={14} innerStyle={styles.editBtnInner}>
                       <Ionicons name="create-outline" size={16} color={t.tp} />
                       <Text style={[styles.editBtnText, { color: t.tp }]}>Open in Program Builder</Text>
-                    </View>
+                    </NeuCard>
                   </BounceButton>
                 </>
               ) : (
@@ -309,7 +309,7 @@ const styles = StyleSheet.create({
   dayName:        { fontFamily: FontFamily.bold, fontSize: 14, marginBottom: 4 },
   exerciseRow:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, paddingLeft: 4 },
   noSnap:         { fontFamily: FontFamily.regular, fontSize: 13, padding: 8 },
-  editBtn:        { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 12, borderRadius: 14 },
+  editBtnInner:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12, minHeight: 44 },
   editBtnText:    { fontFamily: FontFamily.bold, fontSize: 14 },
   sendBtn:        { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 14, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   sendBtnText:    { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },

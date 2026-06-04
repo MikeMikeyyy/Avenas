@@ -12,10 +12,13 @@
 //   - Date math always uses Date objects + toYMD; never string arithmetic.
 
 import { CompletedWorkout, SavedProgram } from "../constants/programs";
-import { MONTH_NAMES, toYMD } from "./dates";
+import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
+import { MONTH_NAMES, toYMD, parseStoredDate } from "./dates";
+import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
 import type {
   ExerciseDataPoint,
   LoggedExerciseRow,
+  MuscleGroupStat,
   PRs,
   ProgramScope,
   RangeKey,
@@ -92,6 +95,74 @@ export function computeWorkoutDurationMinutes(w: CompletedWorkout): number {
   return w.durationSeconds / 60;
 }
 
+// ─── public: muscle-group breakdown (Strength radar) ─────────────────────────
+
+/** Empty per-group accumulator with every radar group present at zero. */
+function emptyMuscleStats(): Record<SelectableMuscle, MuscleGroupStat> {
+  const out = {} as Record<SelectableMuscle, MuscleGroupStat>;
+  for (const g of RADAR_GROUPS) out[g] = { volume: 0, sessions: 0, sets: 0 };
+  return out;
+}
+
+/**
+ * Aggregate volume / session-frequency / set-count per muscle group across the
+ * given workouts. Exercise→group resolution goes through musclesForExercise,
+ * so both bundled (single primaryMuscle) and custom (multi-muscle) exercises
+ * are handled.
+ *
+ * Even-split rule for multi-muscle custom exercises (N listed groups):
+ *   - volume & sets: each exercise's contribution is divided by N across its
+ *     groups, so page-wide volume totals stay correct (no double counting).
+ *   - frequency: per session we take, per group, the *largest* single-exercise
+ *     credit (1 for a bundled/1-muscle exercise, 1/N for an N-muscle custom)
+ *     and sum that across sessions. A bundled exercise therefore yields whole
+ *     session counts; an isolated 2-muscle custom contributes 0.5 to each.
+ *
+ * Uncategorized exercises (no catalogue/custom match) are skipped.
+ */
+export function computeMuscleGroupStats(
+  workouts: CompletedWorkout[],
+  customExercises: CustomExercise[],
+): Record<SelectableMuscle, MuscleGroupStat> {
+  const stats = emptyMuscleStats();
+
+  for (const w of workouts) {
+    // Per-session best frequency credit per group (see rule above).
+    const sessionCredit = {} as Record<SelectableMuscle, number>;
+
+    for (const ex of w.exercises) {
+      const groups = musclesForExercise(ex.name, customExercises);
+      if (groups.length === 0) continue;
+      const share = 1 / groups.length;
+
+      let exVolume = 0;
+      let exSets = 0;
+      for (const s of ex.sets) {
+        if (s.type !== "working" || !s.done) continue;
+        const wt = parsePositive(s.weight);
+        const r = parsePositive(s.reps);
+        exSets += 1; // a completed working set, regardless of weight (e.g. BW)
+        if (wt > 0 && r > 0) exVolume += wt * r;
+      }
+      if (exSets === 0) continue; // no completed working sets → didn't train anything
+
+      for (const g of groups) {
+        stats[g].volume += exVolume * share;
+        stats[g].sets += exSets * share;
+        const prev = sessionCredit[g] ?? 0;
+        if (share > prev) sessionCredit[g] = share;
+      }
+    }
+
+    for (const g of RADAR_GROUPS) {
+      const credit = sessionCredit[g];
+      if (credit) stats[g].sessions += credit;
+    }
+  }
+
+  return stats;
+}
+
 // ─── public: range window resolution ─────────────────────────────────────────
 
 export function getRangeOption(range: RangeKey): RangeOption {
@@ -151,6 +222,19 @@ export function rangeWindow(range: RangeKey, today: Date): { startYMD: string; e
       return { startYMD: toYMD(yearStart), endYMD: toYMD(base) };
     }
   }
+}
+
+/**
+ * Filter workouts to those whose `date` falls within [startYMD, endYMD]
+ * inclusive. "YYYY-MM-DD" strings sort lexicographically in date order, so a
+ * plain string compare is correct and avoids Date construction.
+ */
+export function filterByDateWindow(
+  workouts: CompletedWorkout[],
+  startYMD: string,
+  endYMD: string,
+): CompletedWorkout[] {
+  return workouts.filter(w => w.date >= startYMD && w.date <= endYMD);
 }
 
 // ─── public: metric bucketing ────────────────────────────────────────────────
@@ -487,6 +571,29 @@ export function programIncludes(p: SavedProgram, workoutName: string): boolean {
 }
 
 /**
+ * Does a completed workout belong to program `p`?
+ *
+ *   - New-style record (`programId` is a string, incl. "") → match by id. This
+ *     is exact: a free workout ("") belongs to no program, and two programs that
+ *     reuse the same day names never share sessions.
+ *   - Legacy record (`programId` undefined — written before the field existed)
+ *     → fall back to matching the day name, but ONLY inside `p`'s active date
+ *     window [startDate, completedDate]. Without the date bound, a program
+ *     created later would wrongly inherit an earlier program's same-named days.
+ */
+export function workoutBelongsToProgram(w: CompletedWorkout, p: SavedProgram): boolean {
+  if (w.programId !== undefined) return w.programId === p.id;
+  if (!programIncludes(p, w.workoutName)) return false;
+  const start = parseStoredDate(p.startDate);
+  if (start && w.date < toYMD(start)) return false;
+  if (p.completedDate) {
+    const end = parseStoredDate(p.completedDate);
+    if (end && w.date > toYMD(end)) return false;
+  }
+  return true;
+}
+
+/**
  * Filter the history list by the user's selected program scope.
  *   - current: workouts belonging to the lone active program; [] if none.
  *   - all: identity.
@@ -506,7 +613,7 @@ export function filterByProgramScope(
   }
   if (!target) return [];
   const t = target;
-  return history.filter(w => programIncludes(t, w.workoutName));
+  return history.filter(w => workoutBelongsToProgram(w, t));
 }
 
 // ─── public: programs in scope (for the day drill-down) ──────────────────────

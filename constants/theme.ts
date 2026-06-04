@@ -32,6 +32,10 @@ export type AppTheme = typeof APP_LIGHT;
 // The single source for the app's green accent — import this, never hardcode.
 export const ACCT = "#1deca0";
 
+// ─── Danger ───────────────────────────────────────────────────────────────────
+// Destructive actions (block, delete). Import this, never hardcode a red literal.
+export const DANGER = "#E5484D";
+
 // ─── Slate button ─────────────────────────────────────────────────────────────
 // Dark slate-black for primary non-accent buttons (light mode bg).
 // Off-white counterpart used in dark mode.

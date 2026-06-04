@@ -8,28 +8,39 @@ import {
   type CompletedWorkout,
   type SavedProgram,
 } from "../../constants/programs";
+import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 
 export default function ProgressScreen() {
   const [history, setHistory] = useState<CompletedWorkout[]>([]);
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
+  const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        const [h, p] = await Promise.all([
+        const [h, p, c] = await Promise.all([
           getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []),
           getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+          getJSON<CustomExercise[]>(CUSTOM_KEY, []),
         ]);
         if (cancelled) return;
         setHistory(Array.isArray(h) ? h : []);
         setPrograms(Array.isArray(p) ? p : []);
+        setCustomExercises(Array.isArray(c) ? c : []);
         setLoaded(true);
       })();
       return () => { cancelled = true; };
     }, []),
   );
 
-  return <ProgressView history={history} programs={programs} loaded={loaded} />;
+  return (
+    <ProgressView
+      history={history}
+      programs={programs}
+      customExercises={customExercises}
+      loaded={loaded}
+    />
+  );
 }

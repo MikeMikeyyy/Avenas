@@ -117,7 +117,14 @@ export default function RecipientPickerSheet({ visible, programName, clients, on
                       <Text style={[styles.avatarText, { color: ACCT }]}>{c.initials}</Text>
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
+                      <View style={styles.nameRow}>
+                        <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
+                        {c.isTrainer && (
+                          <View style={[styles.trainerTag, { backgroundColor: `${ACCT}22` }]}>
+                            <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
+                          </View>
+                        )}
+                      </View>
                       {c.note ? <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={1}>{c.note}</Text> : null}
                     </View>
                     <View style={[styles.check, checked
@@ -159,8 +166,11 @@ const styles = StyleSheet.create({
   list:       { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
   empty:      { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
   row:        { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  rowTitle:   { fontFamily: FontFamily.semibold, fontSize: 15 },
+  nameRow:    { flexDirection: "row", alignItems: "center", gap: 6 },
+  rowTitle:   { fontFamily: FontFamily.semibold, fontSize: 15, flexShrink: 1 },
   rowMeta:    { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
+  trainerTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  trainerTagText: { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
   avatar:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 14 },
   allIcon:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },

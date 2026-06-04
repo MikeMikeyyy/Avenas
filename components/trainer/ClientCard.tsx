@@ -30,7 +30,14 @@ export default function ClientCard({ client, activeProgramName, onPress }: { cli
             <Text style={[styles.avatarText, { color: ACCT }]}>{client.initials}</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+            <View style={styles.nameRow}>
+              <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+              {client.isTrainer && (
+                <View style={[styles.trainerTag, { backgroundColor: `${ACCT}22` }]}>
+                  <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
+                </View>
+              )}
+            </View>
             {activeProgramName ? (
               <View style={styles.programRow}>
                 <Text style={[styles.programLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
@@ -54,7 +61,10 @@ const styles = StyleSheet.create({
   row:        { flexDirection: "row", alignItems: "center", gap: 14, padding: 14 },
   avatar:     { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 16 },
-  name:       { fontFamily: FontFamily.bold, fontSize: 16 },
+  nameRow:    { flexDirection: "row", alignItems: "center", gap: 6 },
+  name:       { fontFamily: FontFamily.bold, fontSize: 16, flexShrink: 1 },
+  trainerTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  trainerTagText: { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
   sub:        { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
   programRow: { marginTop: 4 },
   programLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.9 },

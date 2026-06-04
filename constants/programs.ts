@@ -28,6 +28,17 @@ export type CompletedWorkout = {
   durationSeconds: number;
   exercises: CompletedExercise[];
   sessionNotes?: string;
+  /**
+   * The program this session belongs to, set at save time.
+   *   - a program id → logged under that program's day
+   *   - "" (empty)   → a free workout, no program (NOT attributed to any)
+   *   - undefined    → a LEGACY record (written before this field existed);
+   *                    the Progress page attributes these by day name within
+   *                    the program's date window so a newer program that reuses
+   *                    day names can't claim them.
+   * Distinguishing "" from undefined is deliberate — see workoutBelongsToProgram.
+   */
+  programId?: string;
 };
 
 export type ProgramSet = {

@@ -31,6 +31,12 @@ interface Props<T extends string> {
   onChange: (v: T) => void;
   /** Title shown at the top of the sheet (e.g. "Time range"). */
   sheetTitle?: string;
+  /**
+   * When set, the trigger renders as an icon-only NeuCard button using this
+   * Ionicons name (no current-value text). Used by the Strength card's compact
+   * top-right toggle.
+   */
+  triggerIcon?: keyof typeof Ionicons.glyphMap;
 }
 
 /**
@@ -42,6 +48,7 @@ export default function DropdownPicker<T extends string>({
   options,
   onChange,
   sheetTitle = "Select",
+  triggerIcon,
 }: Props<T>) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -100,12 +107,18 @@ export default function DropdownPicker<T extends string>({
         accessibilityLabel={`${sheetTitle}: ${current.label}. Tap to change.`}
       >
         <NeuCard dark={isDark} radius={12} shadowSize="sm">
-          <View style={styles.btn}>
-            <Text style={[styles.btnText, { color: t.tp }]} numberOfLines={1}>
-              {current.shortLabel ?? current.label}
-            </Text>
-            <Ionicons name="chevron-down" size={14} color={t.ts} />
-          </View>
+          {triggerIcon ? (
+            <View style={styles.iconBtn}>
+              <Ionicons name={triggerIcon} size={18} color={t.ts} />
+            </View>
+          ) : (
+            <View style={styles.btn}>
+              <Text style={[styles.btnText, { color: t.tp }]} numberOfLines={1}>
+                {current.shortLabel ?? current.label}
+              </Text>
+              <Ionicons name="chevron-down" size={14} color={t.ts} />
+            </View>
+          )}
         </NeuCard>
       </BounceButton>
 
@@ -198,6 +211,12 @@ const styles = StyleSheet.create({
   btnText: {
     fontFamily: FontFamily.semibold,
     fontSize: 12,
+  },
+  iconBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 9,
+    paddingVertical: 7,
   },
 
   sheetWrap: {

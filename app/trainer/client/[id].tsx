@@ -101,8 +101,10 @@ export default function ClientDetailScreen() {
   const sharedForClient = useMemo(
     // Hide entries the client has deleted from their library — the gym user can
     // still re-accept them from their My Trainer page, but they shouldn't clutter
-    // the trainer's per-client view.
-    () => shared.filter(s => (s.clientId === id || s.clientId === "all") && !s.deletedByRecipientAtISO),
+    // the trainer's per-client view. Also exclude programs a coach sent ME: when
+    // that coach is a connected trainer (and thus in the roster) their incoming
+    // share would otherwise look like one I sent them.
+    () => shared.filter(s => (s.clientId === id || s.clientId === "all") && !s.deletedByRecipientAtISO && !s.receivedFromCoachId),
     [shared, id],
   );
 
@@ -138,7 +140,10 @@ export default function ClientDetailScreen() {
     Alert.alert("Program Sent", `"${program.name}" was sent to ${client?.name ?? "this client"}.`);
   }, [id, client]);
 
-  const openChatStub = () => Alert.alert("Chat", "Chat is coming soon.");
+  const openChat = () => {
+    if (!client) return;
+    router.push({ pathname: "/trainer/chat/[id]", params: { id: client.id, name: client.name, initials: client.initials } });
+  };
 
   if (!loaded) {
     return <View style={{ flex: 1, backgroundColor: t.bg }} />;
@@ -180,7 +185,7 @@ export default function ClientDetailScreen() {
           <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
         </View>
 
-        <TouchableOpacity onPress={openChatStub} activeOpacity={0.8} accessibilityLabel="Chat with client" accessibilityRole="button">
+        <TouchableOpacity onPress={openChat} activeOpacity={0.8} accessibilityLabel="Chat with client" accessibilityRole="button">
           <View style={[styles.chatBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
             <ChatIcon size={18} color={APP_LIGHT.tp} />
           </View>

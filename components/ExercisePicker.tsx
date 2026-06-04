@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Modal, View, Text, StyleSheet, ScrollView, FlatList,
   TextInput, TouchableOpacity, Animated, Easing, PanResponder,
@@ -9,33 +9,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import {
   MUSCLE_GROUPS, MAX_CUSTOM,
-  type MuscleGroup, type SelectableMuscle, type CustomExercise,
+  type SelectableMuscle, type CustomExercise, type Exercise,
 } from "../constants/exercises";
+import { EXERCISES } from "../constants/exerciseData";
+import ExerciseImage from "./ExerciseImage";
 import TrashIcon from "./TrashIcon";
 import BounceButton from "./BounceButton";
-
-// ─── Data ─────────────────────────────────────────────────────────────────────
-
-const PRESET_EXERCISES = [
-  "Barbell Back Squat", "Front Squat", "Romanian Deadlift", "Leg Press",
-  "Leg Curl", "Leg Extension", "Hip Thrust",
-  "Bench Press", "Incline Dumbbell Press", "Cable Fly",
-  "Overhead Press", "Lateral Raise", "Face Pull",
-  "Barbell Row", "Lat Pulldown", "Seated Cable Row", "Pull-Up",
-  "Tricep Pushdown", "Barbell Curl", "Deadlift",
-];
-
-const EXERCISE_MUSCLE: Record<string, MuscleGroup> = {
-  "Barbell Back Squat": "Legs",  "Front Squat": "Legs",
-  "Romanian Deadlift": "Legs",   "Leg Press": "Legs",
-  "Leg Curl": "Legs",            "Leg Extension": "Legs",
-  "Hip Thrust": "Legs",
-  "Bench Press": "Chest",        "Incline Dumbbell Press": "Chest",  "Cable Fly": "Chest",
-  "Overhead Press": "Shoulders", "Lateral Raise": "Shoulders",       "Face Pull": "Shoulders",
-  "Barbell Row": "Back",         "Lat Pulldown": "Back",
-  "Seated Cable Row": "Back",    "Pull-Up": "Back",                  "Deadlift": "Back",
-  "Tricep Pushdown": "Arms",     "Barbell Curl": "Arms",
-};
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +30,18 @@ export interface ExercisePickerProps {
   onClose: () => void;
   isDark: boolean;
 }
+
+// Flat list rows — section headers + the two exercise kinds, mixed into one
+// FlatList so the whole sheet scrolls as a single list.
+type Row =
+  | { type: "header"; key: string; label: string }
+  | { type: "custom"; key: string; exercise: CustomExercise }
+  | { type: "exercise"; key: string; exercise: Exercise };
+
+// Fixed row heights — both the row styles AND getItemLayout depend on these,
+// so the scroll indicator reflects true content height from the first frame.
+const ROW_H = 73;
+const HEADER_H = 36;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -111,20 +102,42 @@ export default function ExercisePicker({
     }
   }, [visible]);
 
-  const filteredPresets = PRESET_EXERCISES.filter(e =>
-    e.toLowerCase().includes(search.toLowerCase()) &&
-    (selectedMuscles.size === 0 || selectedMuscles.has(EXERCISE_MUSCLE[e] as SelectableMuscle))
-  );
-  const filteredCustom = customExercises.filter(e =>
-    e.name.toLowerCase().includes(search.toLowerCase()) &&
-    (selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m)))
-  );
+  // ─── Filtering + list assembly ──────────────────────────────────────────────
+  // Returns both the rows and a precomputed layout (length + offset per row) so
+  // FlatList's getItemLayout is O(1) and the scrollbar is accurate immediately.
+  const { listData, layout } = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const muscleOk = (m: SelectableMuscle) => selectedMuscles.size === 0 || selectedMuscles.has(m);
+
+    const customs = customExercises.filter(e =>
+      (q === "" || e.name.toLowerCase().includes(q)) &&
+      (selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m)))
+    );
+    // EXERCISES is the curated catalogue, already sorted alphabetically.
+    const matched = EXERCISES.filter(e =>
+      (q === "" || e.name.toLowerCase().includes(q) || e.equipment.toLowerCase().includes(q)) &&
+      muscleOk(e.primaryMuscle)
+    );
+
+    const rows: Row[] = [];
+    if (customs.length) {
+      rows.push({ type: "header", key: "h:custom", label: "CUSTOM" });
+      customs.forEach(e => rows.push({ type: "custom", key: `custom:${e.name}`, exercise: e }));
+      rows.push({ type: "header", key: "h:ex", label: "EXERCISES" });
+    }
+    matched.forEach(e => rows.push({ type: "exercise", key: `ex:${e.id}`, exercise: e }));
+
+    let offset = 0;
+    const layout = rows.map(r => {
+      const length = r.type === "header" ? HEADER_H : ROW_H;
+      const entry = { length, offset };
+      offset += length;
+      return entry;
+    });
+    return { listData: rows, layout };
+  }, [search, selectedMuscles, customExercises]);
 
   const canAddCustom = customExercises.length < MAX_CUSTOM;
-  const allFiltered = [
-    ...filteredCustom.map(e => ({ name: e.name, isCustom: true })),
-    ...filteredPresets.map(e => ({ name: e, isCustom: false })),
-  ];
 
   const togglePick = (name: string) => {
     setPickedOrder(prev =>
@@ -137,6 +150,97 @@ export default function ExercisePicker({
     onSelectMultiple(pickedOrder);
     setPickedOrder([]);
     setSearch("");
+  };
+
+  // ─── Row renderers ──────────────────────────────────────────────────────────
+  const renderPickBadge = (name: string) => {
+    const pickIndex = pickedOrder.indexOf(name);
+    const isPicked = pickIndex !== -1;
+    return (
+      <View style={[styles.pickerAddBtn, isPicked
+        ? { backgroundColor: ACCT, borderColor: ACCT }
+        : { backgroundColor: ACCT + "22", borderColor: ACCT }
+      ]}>
+        {isPicked
+          ? <Text style={styles.pickerAddNum}>{pickIndex + 1}</Text>
+          : <Ionicons name="add" size={18} color={ACCT} />}
+      </View>
+    );
+  };
+
+  const renderRow = (item: Row) => {
+    if (item.type === "header") {
+      return (
+        <View style={styles.pickerSectionHeader}>
+          <Text style={[styles.pickerSectionLabel, { color: t.ts }]}>{item.label}</Text>
+        </View>
+      );
+    }
+
+    if (item.type === "custom") {
+      const e = item.exercise;
+      return (
+        <TouchableOpacity
+          onPress={() => togglePick(e.name)}
+          activeOpacity={0.6}
+          style={[styles.pickerRow, { borderBottomColor: t.div }]}
+        >
+          <ExerciseImage exerciseId={`custom:${e.name}`} variant="thumb" size={52} radius={10}
+            backgroundColor={t.div} fallbackColor={t.ts} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.pickerExName, { color: t.tp }]} numberOfLines={1}>{e.name}</Text>
+            <Text style={[styles.pickerExMeta, { color: t.ts }]} numberOfLines={1}>
+              {e.muscles.join(", ") || "Custom"}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={ev => { ev.stopPropagation(); onEditCustom(e.name); }}
+            style={styles.pickerDeleteBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="create-outline" size={16} color={t.ts} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={ev => {
+              ev.stopPropagation();
+              Alert.alert(
+                "Delete Exercise",
+                `Are you sure you want to delete "${e.name}"? This will free up a slot.`,
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Delete", style: "destructive", onPress: () => onDeleteCustom(e.name) },
+                ]
+              );
+            }}
+            style={styles.pickerDeleteBtn}
+            activeOpacity={0.7}
+          >
+            <TrashIcon size={16} color="#FF4D4F" />
+          </TouchableOpacity>
+          {renderPickBadge(e.name)}
+        </TouchableOpacity>
+      );
+    }
+
+    // type === "exercise"
+    const e = item.exercise;
+    return (
+      <TouchableOpacity
+        onPress={() => togglePick(e.name)}
+        activeOpacity={0.6}
+        style={[styles.pickerRow, { borderBottomColor: t.div }]}
+      >
+        <ExerciseImage exerciseId={e.id} variant="thumb" size={52} radius={10}
+          backgroundColor={t.div} fallbackColor={t.ts} />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.pickerExName, { color: t.tp }]} numberOfLines={1}>{e.name}</Text>
+          <Text style={[styles.pickerExMeta, { color: t.ts }]} numberOfLines={1}>
+            {e.equipment} · {e.primaryMuscle}
+          </Text>
+        </View>
+        {renderPickBadge(e.name)}
+      </TouchableOpacity>
+    );
   };
 
   return (
@@ -218,84 +322,28 @@ export default function ExercisePicker({
             )}
           </View>
 
-          {/* Exercise list */}
+          {/* Exercise list. Images are bundled require() assets (synchronous),
+              so FlatList virtualization stays smooth even across 800+ rows. */}
           <FlatList
-            data={allFiltered}
-            keyExtractor={item => item.name}
+            data={listData}
+            keyExtractor={item => item.key}
             keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
+            showsVerticalScrollIndicator={true}
+            indicatorStyle={isDark ? "white" : "black"}
             style={{ flex: 1 }}
-            ListHeaderComponent={
-              filteredCustom.length > 0 && search.length === 0 ? (
-                <Text style={[styles.pickerSectionLabel, { color: t.ts }]}>CUSTOM</Text>
-              ) : null
-            }
-            renderItem={({ item, index }) => {
-              const isLastCustom = item.isCustom && index === filteredCustom.length - 1;
-              const isFirstPreset = !item.isCustom && filteredCustom.length > 0 && index === filteredCustom.length;
-              const pickIndex = pickedOrder.indexOf(item.name);
-              const isPicked = pickIndex !== -1;
-              return (
-                <>
-                  {isFirstPreset && (
-                    <Text style={[styles.pickerSectionLabel, { color: t.ts }]}>EXERCISES</Text>
-                  )}
-                  <TouchableOpacity
-                    onPress={() => togglePick(item.name)}
-                    activeOpacity={0.6}
-                    style={[
-                      styles.pickerRow,
-                      { borderBottomColor: t.div },
-                      isLastCustom && { marginBottom: 8 },
-                    ]}
-                  >
-                    <Text style={[styles.pickerExName, { color: t.tp }]}>{item.name}</Text>
-                    {item.isCustom && (
-                      <>
-                        <TouchableOpacity
-                          onPress={e => { e.stopPropagation(); onEditCustom(item.name); }}
-                          style={styles.pickerDeleteBtn}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons name="create-outline" size={16} color={t.ts} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={e => {
-                            e.stopPropagation();
-                            Alert.alert(
-                              "Delete Exercise",
-                              `Are you sure you want to delete "${item.name}"? This will free up a slot.`,
-                              [
-                                { text: "Cancel", style: "cancel" },
-                                { text: "Delete", style: "destructive", onPress: () => onDeleteCustom(item.name) },
-                              ]
-                            );
-                          }}
-                          style={styles.pickerDeleteBtn}
-                          activeOpacity={0.7}
-                        >
-                          <TrashIcon size={16} color="#FF4D4F" />
-                        </TouchableOpacity>
-                      </>
-                    )}
-                    <View style={[styles.pickerAddBtn, isPicked
-                      ? { backgroundColor: ACCT, borderColor: ACCT }
-                      : { backgroundColor: ACCT + "22", borderColor: ACCT }
-                    ]}>
-                      {isPicked ? (
-                        <Text style={styles.pickerAddNum}>{pickIndex + 1}</Text>
-                      ) : (
-                        <Ionicons name="add" size={18} color={ACCT} />
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                </>
-              );
+            renderItem={({ item }) => renderRow(item)}
+            getItemLayout={(_, index) => {
+              const l = layout[index] ?? { length: ROW_H, offset: index * ROW_H };
+              return { length: l.length, offset: l.offset, index };
             }}
             ListEmptyComponent={
               <Text style={[styles.pickerEmpty, { color: t.ts }]}>No exercises found</Text>
             }
             contentContainerStyle={{ paddingBottom: 8 }}
+            initialNumToRender={14}
+            maxToRenderPerBatch={12}
+            windowSize={11}
+            removeClippedSubviews
           />
 
           {/* Bottom bar — confirm picks OR create custom */}
@@ -349,9 +397,11 @@ const styles = StyleSheet.create({
   muscleChipText:      { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
   searchRow:           { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   searchInput:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 15 },
-  pickerSectionLabel:  { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 1.2, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 },
-  pickerRow:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, gap: 10 },
-  pickerExName:        { flex: 1, fontFamily: FontFamily.regular, fontSize: 15 },
+  pickerSectionHeader: { height: HEADER_H, justifyContent: "flex-end", paddingHorizontal: 16, paddingBottom: 6 },
+  pickerSectionLabel:  { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 1.2 },
+  pickerRow:           { height: ROW_H, flexDirection: "row", alignItems: "center", paddingHorizontal: 16, borderBottomWidth: 1, gap: 12 },
+  pickerExName:        { fontFamily: FontFamily.semibold, fontSize: 15 },
+  pickerExMeta:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
   pickerDeleteBtn:     { padding: 4 },
   pickerAddBtn:        { width: 32, height: 32, borderRadius: 16, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   pickerAddNum:        { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },

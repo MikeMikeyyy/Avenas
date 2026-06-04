@@ -20,6 +20,7 @@ import AddClientSheet from "./AddClientSheet";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import RecipientPickerSheet from "./RecipientPickerSheet";
 import PeopleIcon from "../icons/PeopleIcon";
+import ChatIcon from "../icons/ChatIcon";
 import PlusIcon from "../icons/PlusIcon";
 import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
@@ -28,12 +29,16 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   appendSharedPrograms,
+  batchKeyOf,
   loadClientData,
   loadClients,
   loadSentPrograms,
   loadSharedPrograms,
   makeInitials,
-  removeSharedProgram,
+  migrateBroadcastShares,
+  migrateCoachReceivedShares,
+  removeCoach,
+  removeSharedProgramBatch,
   saveClients,
   type Client,
   type SentProgram,
@@ -62,10 +67,12 @@ function fmtAgo(iso: string): string {
   return `${Math.floor(days / 7)}w ago`;
 }
 
-function ChevronToggle({ expanded, color }: { expanded: boolean; color: string }) {
+function ChevronToggle({ expanded, color, upDown }: { expanded: boolean; color: string; upDown?: boolean }) {
   const sv = useSharedValue(expanded ? 1 : 0);
   useEffect(() => { sv.value = withTiming(expanded ? 1 : 0, { duration: 220 }); }, [expanded, sv]);
-  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${sv.value * 180}deg` }] }));
+  const style = useAnimatedStyle(() => ({
+    transform: [{ rotate: upDown ? `${sv.value * 180}deg` : `${sv.value * 90 - 90}deg` }],
+  }));
   return (
     <Animated.View style={style}>
       <Ionicons name="chevron-down" size={20} color={color} />
@@ -97,6 +104,33 @@ export default function PTHome() {
   const [pendingProgram, setPendingProgram] = useState<SavedProgram | null>(null);
   const [expandedShared, setExpandedShared] = useState<Set<string>>(new Set());
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
+  const [collapsedSharedSection, setCollapsedSharedSection] = useState(false);
+  const [collapsedReviewsSection, setCollapsedReviewsSection] = useState(false);
+  const [collapsedClientsSection, setCollapsedClientsSection] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const toggleSharedSection = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCollapsedSharedSection(v => !v);
+  }, []);
+  const toggleReviewsSection = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCollapsedReviewsSection(v => !v);
+  }, []);
+  const toggleClientsSection = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCollapsedClientsSection(v => !v);
+  }, []);
+  const toggleSearch = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Closing: clear the query and drop the keyboard in the same tap, so the X
+    // removes the search row and dismisses the keyboard together.
+    if (searchOpen) {
+      setSearch("");
+      Keyboard.dismiss();
+    }
+    setSearchOpen(v => !v);
+  }, [searchOpen]);
 
   const toggleShared = useCallback((id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -123,6 +157,8 @@ export default function PTHome() {
       const fresh = seeded.length > 0 ? seeded : await loadClients();
       const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
       const sent = await loadSentPrograms();
+      await migrateBroadcastShares(fresh);
+      await migrateCoachReceivedShares();
       const shared = await loadSharedPrograms();
       const activeMap: Record<string, string> = {};
       await Promise.all(fresh.map(async c => {
@@ -161,32 +197,108 @@ export default function PTHome() {
     await saveClients(next);
   }, [clients]);
 
-  const handleUnshare = useCallback((entry: SharedProgram) => {
-    const recipient = entry.clientId === "all"
-      ? "all clients"
-      : clients.find(c => c.id === entry.clientId)?.name ?? "the client";
+  const handleRemoveClient = useCallback((client: Client) => {
+    const isTrainer = !!client.isTrainer;
     Alert.alert(
-      "Unsend Program",
-      `Unsend "${entry.programName}" from ${recipient}? ${entry.acceptedAtISO ? "They have already accepted it — the program will stay in their library." : "They will no longer see it."}`,
+      isTrainer ? "Remove Trainer" : "Remove Client",
+      isTrainer
+        ? `Remove ${client.name}? This ends your connection, so they'll also be removed from your coaches.`
+        : `Remove ${client.name} from your roster? Their data will be deleted.`,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Unsend",
+          text: "Remove",
           style: "destructive",
           onPress: async () => {
-            await removeSharedProgram(entry.id);
-            setSharedOut(prev => prev.filter(s => s.id !== entry.id));
+            const next = clients.filter(c => c.id !== client.id);
+            setClients(next);
+            await saveClients(next);
+            // A trainer connection is symmetric — drop the coach link too.
+            if (isTrainer) await removeCoach(client.id);
           },
         },
       ]
     );
   }, [clients]);
 
-  const recipientLabel = useCallback((entry: SharedProgram) => {
-    if (entry.clientId === "all") return "Broadcast to all clients";
-    const c = clients.find(cl => cl.id === entry.clientId);
-    return c ? `Sent to ${c.name}` : "Sent to a client";
-  }, [clients]);
+  const openRemovePicker = useCallback(() => {
+    if (clients.length === 0) {
+      Alert.alert("No Clients", "You haven't added any clients yet.");
+      return;
+    }
+    Alert.alert(
+      "Remove a Client",
+      "Pick a client to remove.",
+      [
+        { text: "Cancel", style: "cancel" },
+        ...clients.map(c => ({
+          text: c.name,
+          style: "destructive" as const,
+          onPress: () => handleRemoveClient(c),
+        })),
+      ]
+    );
+  }, [clients, handleRemoveClient]);
+
+  const openManageClients = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Alert.alert(
+      "Manage Clients",
+      undefined,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Add a Client", onPress: () => setAddOpen(true) },
+        { text: "Remove a Client", style: "destructive", onPress: openRemovePicker },
+      ]
+    );
+  }, [openRemovePicker]);
+
+  const batches = useMemo(() => {
+    const byKey = new Map<string, SharedProgram[]>();
+    for (const s of sharedOut) {
+      // Skip programs a coach sent ME — those belong on the My Coaches page,
+      // not in this trainer's "Programs You've Sent" list.
+      if (s.receivedFromCoachId) continue;
+      const k = batchKeyOf(s);
+      const arr = byKey.get(k);
+      if (arr) arr.push(s);
+      else byKey.set(k, [s]);
+    }
+    return Array.from(byKey.entries()).map(([key, entries]) => {
+      const head = entries[0];
+      const acceptedCount = entries.filter(e => !!e.acceptedAtISO).length;
+      return {
+        key,
+        programId: head.programId,
+        programName: head.programName,
+        sentAtISO: head.sentAtISO,
+        programSnapshot: head.programSnapshot,
+        entries,
+        acceptedCount,
+        total: entries.length,
+        allAccepted: entries.length > 0 && acceptedCount === entries.length,
+      };
+    });
+  }, [sharedOut]);
+
+  const handleUnshareBatch = useCallback((batch: typeof batches[number]) => {
+    const anyAccepted = batch.entries.some(e => !!e.acceptedAtISO);
+    Alert.alert(
+      "Unsend Program",
+      `Unsend "${batch.programName}" from ${batch.total} client${batch.total === 1 ? "" : "s"}? ${anyAccepted ? "Clients who already accepted will keep the program in their library." : "They will no longer see it."}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Unsend",
+          style: "destructive",
+          onPress: async () => {
+            await removeSharedProgramBatch(batch.key);
+            setSharedOut(prev => prev.filter(s => batchKeyOf(s) !== batch.key));
+          },
+        },
+      ]
+    );
+  }, []);
 
   const handleProgramPicked = useCallback((program: SavedProgram) => {
     if (clients.length === 0) {
@@ -200,26 +312,22 @@ export default function PTHome() {
     if (!pendingProgram) return;
     const now = new Date().toISOString();
     const base = `share_${Date.now()}`;
-    const entries: SharedProgram[] = recipients === "all"
-      ? [{
-          id: base,
-          clientId: "all",
-          programId: pendingProgram.id,
-          programName: pendingProgram.name,
-          sentAtISO: now,
-          programSnapshot: pendingProgram,
-        }]
-      : recipients.map((cid, i) => ({
-          id: `${base}_${i}`,
-          clientId: cid,
-          programId: pendingProgram.id,
-          programName: pendingProgram.name,
-          sentAtISO: now,
-          programSnapshot: pendingProgram,
-        }));
+    const targets = recipients === "all" ? clients.map(c => c.id) : recipients;
+    if (targets.length === 0) {
+      Alert.alert("No recipients", "Add a client before sending a program.");
+      return;
+    }
+    const entries: SharedProgram[] = targets.map((cid, i) => ({
+      id: `${base}_${i}`,
+      clientId: cid,
+      programId: pendingProgram.id,
+      programName: pendingProgram.name,
+      sentAtISO: now,
+      programSnapshot: pendingProgram,
+    }));
     await appendSharedPrograms(entries);
-    const count = recipients === "all" ? clients.length : recipients.length;
-    Alert.alert("Program Sent", `"${pendingProgram.name}" was sent to ${count} client${count === 1 ? "" : "s"}.`);
+    setSharedOut(prev => [...entries, ...prev]);
+    Alert.alert("Program Sent", `"${pendingProgram.name}" was sent to ${targets.length} client${targets.length === 1 ? "" : "s"}.`);
     setPendingProgram(null);
   }, [pendingProgram, clients]);
 
@@ -239,31 +347,67 @@ export default function PTHome() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
+        // Without this the keyboard eats the first tap on any button (incl. the
+        // search-close X) while the search field is focused, forcing a double tap.
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 140 }}
       >
-        <View style={styles.titleRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.title, { color: t.tp }]}>My Clients</Text>
-            <Text style={[styles.subtitle, { color: t.ts }]}>
-              {clients.length} {clients.length === 1 ? "client" : "clients"}
-            </Text>
-          </View>
-          <BounceButton onPress={() => setAddOpen(true)} accessibilityLabel="Add client">
-            <View style={[styles.addBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-              <PlusIcon size={20} color="#fff" />
+        <View style={styles.coachesRow}>
+          <BounceButton
+            style={styles.coachesBtnWrap}
+            onPress={() => router.push("/trainer/coaches")}
+            accessibilityLabel="Open my coaches"
+          >
+            <NeuCard dark={isDark} radius={12} shadowSize="sm">
+              <View style={styles.coachesBtn}>
+                <Ionicons name="person-outline" size={16} color={ACCT} />
+                <Text style={[styles.coachesBtnText, { color: t.tp }]}>My Coaches</Text>
+                <Ionicons name="chevron-forward" size={14} color={t.ts} />
+              </View>
+            </NeuCard>
+          </BounceButton>
+          <View style={{ flex: 1 }} />
+          <BounceButton onPress={() => router.push("/trainer/messages")} accessibilityLabel="Open messages">
+            <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <ChatIcon size={18} color={t.tp} />
+            </View>
+          </BounceButton>
+          <BounceButton onPress={toggleSearch} accessibilityLabel={searchOpen ? "Close search" : "Search clients"}>
+            <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <Ionicons name={searchOpen ? "close" : "search"} size={18} color={t.tp} />
+            </View>
+          </BounceButton>
+          <BounceButton onPress={openManageClients} accessibilityLabel="Manage clients">
+            <View style={[styles.manageBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <Ionicons name="add" size={24} color={t.tp} />
             </View>
           </BounceButton>
         </View>
 
-        <View style={styles.searchRow}>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search clients"
-            placeholderTextColor={t.ts}
-            style={[styles.search, { color: t.tp, backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}
-          />
+        <View style={styles.titleRow}>
+          <Pressable onPress={toggleClientsSection} style={styles.clientsHeaderLeft} accessibilityRole="button" accessibilityLabel="Toggle clients list">
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={[styles.title, { color: t.tp }]}>My Clients</Text>
+              <ChevronToggle expanded={!collapsedClientsSection} color={t.ts} />
+            </View>
+            <Text style={[styles.subtitle, { color: t.ts }]}>
+              {clients.length} {clients.length === 1 ? "client" : "clients"}
+            </Text>
+          </Pressable>
         </View>
+
+        {searchOpen && (
+          <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(140)} style={styles.searchRow}>
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search clients"
+              placeholderTextColor={t.ts}
+              autoFocus
+              style={[styles.search, { color: t.tp, backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}
+            />
+          </Animated.View>
+        )}
 
         <BounceButton style={{ marginBottom: 18 }} onPress={() => setSendOpen(true)}>
           <View style={[styles.broadcast, { backgroundColor: ACCT, shadowColor: ACCT }]}>
@@ -273,18 +417,42 @@ export default function PTHome() {
         </BounceButton>
 
         {filtered.length === 0 ? (
-          <NeuCard dark={isDark} radius={20}>
-            <View style={styles.emptyInner}>
-              <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
-                <PeopleIcon size={28} color={ACCT} />
+          search ? (
+            <NeuCard dark={isDark} radius={12}>
+              <View style={styles.noMatchRow}>
+                <Ionicons name="search-outline" size={15} color={t.ts} />
+                <Text style={[styles.noMatchText, { color: t.ts }]}>No matches for "{search}"</Text>
               </View>
-              <Text style={[styles.emptyTitle, { color: t.tp }]}>
-                {search ? "No matches" : "No clients yet"}
-              </Text>
-              <Text style={[styles.emptyBody, { color: t.ts }]}>
-                {search ? "Try a different name." : "Tap the + button to add your first client."}
-              </Text>
-            </View>
+            </NeuCard>
+          ) : (
+            <NeuCard dark={isDark} radius={20}>
+              <View style={styles.emptyInner}>
+                <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
+                  <PeopleIcon size={28} color={ACCT} />
+                </View>
+                <Text style={[styles.emptyTitle, { color: t.tp }]}>No clients yet</Text>
+                <Text style={[styles.emptyBody, { color: t.ts }]}>Tap the + button to add your first client.</Text>
+              </View>
+            </NeuCard>
+          )
+        ) : collapsedClientsSection ? (
+          <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+            {filtered.map((c, i) => (
+              <TouchableOpacity
+                key={c.id}
+                onPress={() => router.push({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${c.name}`}
+                style={[styles.summaryRow, { borderBottomColor: t.div, borderBottomWidth: i === filtered.length - 1 ? 0 : 1 }]}
+              >
+                <View style={[styles.summaryAvatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
+                  <Text style={[styles.summaryAvatarText, { color: ACCT }]}>{c.initials}</Text>
+                </View>
+                <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
+                <Ionicons name="chevron-forward" size={16} color={t.ts} />
+              </TouchableOpacity>
+            ))}
           </NeuCard>
         ) : (
           filtered.map(c => (
@@ -297,30 +465,62 @@ export default function PTHome() {
           ))
         )}
 
-        {sharedOut.length > 0 && (
+        {batches.length > 0 && (
           <>
-            <Text style={[styles.sectionHeading, { color: t.tp }]}>Programs You've Sent</Text>
-            {sharedOut.map(s => {
-              const accepted = !!s.acceptedAtISO;
-              const cycle = s.programSnapshot?.cyclePattern ?? [];
-              const isExpanded = expandedShared.has(s.id);
+            <Pressable onPress={toggleSharedSection} style={styles.sectionHeaderRow} accessibilityRole="button">
+              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Programs You've Sent</Text>
+              <ChevronToggle expanded={!collapsedSharedSection} color={t.ts} />
+            </Pressable>
+            {collapsedSharedSection ? (
+              <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+                {batches.map((b, i) => {
+                  const pillLabel = b.allAccepted ? "Accepted" : `${b.acceptedCount}/${b.total} accepted`;
+                  return (
+                    <TouchableOpacity
+                      key={b.key}
+                      onPress={() => router.push({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`View ${b.programName}`}
+                      style={[
+                        styles.summaryRow,
+                        { borderBottomColor: t.div, borderBottomWidth: i === batches.length - 1 ? 0 : 1 },
+                      ]}
+                    >
+                      <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{b.programName}</Text>
+                      <View style={[styles.statusPill, b.allAccepted
+                        ? { backgroundColor: `${ACCT}22` }
+                        : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
+                      ]}>
+                        <Text style={[styles.statusText, { color: b.allAccepted ? ACCT : t.ts }]}>
+                          {pillLabel}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </NeuCard>
+            ) : batches.map(b => {
+              const cycle = b.programSnapshot?.cyclePattern ?? [];
+              const isExpanded = expandedShared.has(b.key);
+              const pillLabel = b.allAccepted ? "Accepted" : `${b.acceptedCount}/${b.total} accepted`;
               return (
-                <Animated.View key={s.id} layout={LinearTransition.duration(220)}>
+                <Animated.View key={b.key} layout={LinearTransition.duration(220)}>
                   <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                    <Pressable onPress={() => toggleShared(s.id)} style={styles.reviewInner}>
+                    <Pressable onPress={() => toggleShared(b.key)} style={styles.reviewInner}>
                       <View style={styles.reviewTop}>
                         <View style={{ flex: 1 }}>
-                          <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
+                          <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{b.programName}</Text>
                           <Text style={[styles.reviewMeta, { color: t.ts }]} numberOfLines={1}>
-                            {recipientLabel(s)} · {fmtAgo(s.sentAtISO)}
+                            Sent {fmtAgo(b.sentAtISO)} · {b.total} client{b.total === 1 ? "" : "s"}
                           </Text>
                         </View>
-                        <View style={[styles.statusPill, accepted
+                        <View style={[styles.statusPill, b.allAccepted
                           ? { backgroundColor: `${ACCT}22` }
                           : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
                         ]}>
-                          <Text style={[styles.statusText, { color: accepted ? ACCT : t.ts }]}>
-                            {accepted ? "Accepted" : "Pending"}
+                          <Text style={[styles.statusText, { color: b.allAccepted ? ACCT : t.ts }]}>
+                            {pillLabel}
                           </Text>
                         </View>
                       </View>
@@ -350,26 +550,61 @@ export default function PTHome() {
                         <Animated.View
                           entering={FadeIn.duration(180)}
                           exiting={FadeOut.duration(140)}
-                          style={styles.sharedActionRow}
+                          style={{ gap: 4 }}
                         >
-                          <BounceButton
-                            style={{ flex: 1 }}
-                            onPress={() => router.push({ pathname: "/new-program", params: { sharedId: s.id } })}
-                          >
-                            <View style={[styles.reviewBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}>
-                              <Ionicons name="create-outline" size={16} color={t.tp} />
-                              <Text style={[styles.reviewBtnText, { color: t.tp }]}>Edit</Text>
-                            </View>
-                          </BounceButton>
-                          <BounceButton style={styles.deleteSharedBtn} onPress={() => handleUnshare(s)}>
-                            <View style={[styles.reviewBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}>
-                              <TrashIcon size={16} color="#E53935" />
-                            </View>
-                          </BounceButton>
+                          <View style={[styles.recipientList, { borderColor: t.div }]}>
+                            {b.entries.map((e, i) => {
+                              const eAccepted = !!e.acceptedAtISO;
+                              const name = clients.find(c => c.id === e.clientId)?.name ?? "Removed client";
+                              return (
+                                <View
+                                  key={e.id}
+                                  style={[
+                                    styles.recipientRow,
+                                    { borderBottomColor: t.div, borderBottomWidth: i === b.entries.length - 1 ? 0 : StyleSheet.hairlineWidth },
+                                  ]}
+                                >
+                                  <View
+                                    style={[
+                                      styles.recipientDot,
+                                      eAccepted
+                                        ? { backgroundColor: ACCT, borderColor: ACCT }
+                                        : { backgroundColor: "transparent", borderColor: t.ts },
+                                    ]}
+                                  />
+                                  <Text style={[styles.recipientName, { color: t.tp }]} numberOfLines={1}>{name}</Text>
+                                  <Text style={[styles.recipientStatus, { color: eAccepted ? ACCT : t.ts }]}>
+                                    {eAccepted ? `Accepted · ${fmtAgo(e.acceptedAtISO!)}` : "Pending"}
+                                  </Text>
+                                </View>
+                              );
+                            })}
+                          </View>
+                          <View style={styles.sharedActionRow}>
+                            <BounceButton
+                              style={{ flex: 2 }}
+                              onPress={() => router.push({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
+                              accessibilityLabel={`View ${b.programName}`}
+                            >
+                              <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
+                                <Text style={[styles.reviewBtnText, { color: t.tp }]}>View Program</Text>
+                              </NeuCard>
+                            </BounceButton>
+                            <BounceButton
+                              style={{ flex: 1 }}
+                              onPress={() => handleUnshareBatch(b)}
+                              accessibilityLabel={`Delete ${b.programName}`}
+                            >
+                              <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
+                                <TrashIcon size={16} color="#E53935" />
+                                <Text style={styles.deleteBtnText}>Delete</Text>
+                              </NeuCard>
+                            </BounceButton>
+                          </View>
                         </Animated.View>
                       )}
                       <View style={styles.chevronRow}>
-                        <ChevronToggle expanded={isExpanded} color={t.ts} />
+                        <ChevronToggle expanded={isExpanded} color={t.ts} upDown />
                       </View>
                     </Pressable>
                   </NeuCard>
@@ -381,8 +616,40 @@ export default function PTHome() {
 
         {reviews.length > 0 && (
           <>
-            <Text style={[styles.sectionHeading, { color: t.tp }]}>Programs Received</Text>
-            {reviews.map(r => {
+            <Pressable onPress={toggleReviewsSection} style={styles.sectionHeaderRow} accessibilityRole="button">
+              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Programs Received</Text>
+              <ChevronToggle expanded={!collapsedReviewsSection} color={t.ts} />
+            </Pressable>
+            {collapsedReviewsSection ? (
+              <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+                {reviews.map((r, i) => {
+                  const returned = r.status === "returned";
+                  return (
+                    <TouchableOpacity
+                      key={r.id}
+                      onPress={() => router.push({ pathname: "/trainer/review/[id]", params: { id: r.id } })}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open review for ${r.programName}`}
+                      style={[
+                        styles.summaryRow,
+                        { borderBottomColor: t.div, borderBottomWidth: i === reviews.length - 1 ? 0 : 1 },
+                      ]}
+                    >
+                      <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
+                      <View style={[styles.statusPill, returned
+                        ? { backgroundColor: `${ACCT}22` }
+                        : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
+                      ]}>
+                        <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+                          {returned ? "Returned" : "Awaiting review"}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </NeuCard>
+            ) : reviews.map(r => {
               const returned = r.status === "returned";
               const cycle = r.programSnapshot?.cyclePattern ?? [];
               const isExpanded = expandedReviews.has(r.id);
@@ -434,16 +701,16 @@ export default function PTHome() {
                           exiting={FadeOut.duration(140)}
                         >
                           <BounceButton onPress={() => router.push({ pathname: "/trainer/review/[id]", params: { id: r.id } })}>
-                            <View style={[styles.reviewBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}>
+                            <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
                               <Text style={[styles.reviewBtnText, { color: t.tp }]}>
                                 {returned ? "View Review" : "Edit & Send Back"}
                               </Text>
-                            </View>
+                            </NeuCard>
                           </BounceButton>
                         </Animated.View>
                       )}
                       <View style={styles.chevronRow}>
-                        <ChevronToggle expanded={isExpanded} color={t.ts} />
+                        <ChevronToggle expanded={isExpanded} color={t.ts} upDown />
                       </View>
                     </Pressable>
                   </NeuCard>
@@ -490,32 +757,51 @@ export default function PTHome() {
 
 const styles = StyleSheet.create({
   topGradient:  { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  titleRow:     { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 18 },
+  coachesRow:    { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 },
+  coachesBtnWrap: { alignSelf: "center" },
+  coachesBtn:   { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, gap: 8 },
+  coachesBtnText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  titleRow:     { flexDirection: "row", alignItems: "flex-start", gap: 12, marginBottom: 18 },
+  clientsHeaderLeft: { flex: 1, flexDirection: "column" },
   title:        { fontFamily: FontFamily.bold, fontSize: 32 },
   subtitle:     { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
   addBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  manageBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  searchBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   searchRow:    { marginBottom: 14 },
   search:       { fontFamily: FontFamily.regular, fontSize: 15, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11 },
+  summaryAvatar:    { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  summaryAvatarText:{ fontFamily: FontFamily.bold, fontSize: 11 },
   broadcast:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 14, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   broadcastText:{ fontFamily: FontFamily.bold, fontSize: 15, color: "#fff", letterSpacing: 0.2 },
   emptyInner:   { padding: 28, alignItems: "center", gap: 10 },
+  noMatchRow:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10 },
+  noMatchText:  { fontFamily: FontFamily.regular, fontSize: 13 },
   emptyIcon:    { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 17 },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 18 },
   sectionHeading:{ fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
+  sectionHeaderRow:{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 12 },
+  summaryRow:    { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 10 },
+  summaryName:   { flex: 1, fontFamily: FontFamily.semibold, fontSize: 14 },
   reviewInner:  { padding: 14, gap: 12 },
   reviewTop:    { flexDirection: "row", alignItems: "center", gap: 12 },
   reviewName:   { fontFamily: FontFamily.semibold, fontSize: 15 },
   reviewMeta:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
   statusPill:   { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   statusText:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3 },
-  reviewBtn:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 12, borderRadius: 14 },
   reviewBtnText:{ fontFamily: FontFamily.bold, fontSize: 14 },
   cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   cycleChip:    { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
   cycleChipText:{ fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
   kbFloatBtn:   { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
-  sharedActionRow:{ flexDirection: "row", gap: 8 },
-  deleteSharedBtn:{ width: 56 },
   chevronRow:    { alignItems: "center", paddingTop: 2 },
+  sharedActionRow:{ flexDirection: "row", gap: 10, marginTop: 4 },
+  sharedActionBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12, minHeight: 44 },
+  deleteBtnText:  { fontFamily: FontFamily.bold, fontSize: 14, color: "#E53935", letterSpacing: 0.2 },
+  recipientList:  { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, marginTop: 2 },
+  recipientRow:   { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  recipientDot:   { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
+  recipientName:  { flex: 1, fontFamily: FontFamily.semibold, fontSize: 13 },
+  recipientStatus:{ fontFamily: FontFamily.regular, fontSize: 11 },
 });

@@ -40,6 +40,10 @@ yarn-error.*
 # example folder
 app-example
 
+# raw exercise-library source (processed into assets/ by the build script)
+scripts/exercise-source/*
+!scripts/exercise-source/README.md
+
 # generated native folders
 /ios
 /android

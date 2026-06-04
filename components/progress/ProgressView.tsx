@@ -13,6 +13,7 @@ import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
 import ProgramScopePicker from "../ProgramScopePicker";
 import VolumeBarChart from "../VolumeBarChart";
+import StrengthRadarChart from "../StrengthRadarChart";
 import DayExerciseList from "../DayExerciseList";
 import ExerciseProgressionChart from "../ExerciseProgressionChart";
 import DumbbellIcon from "../DumbbellIcon";
@@ -21,16 +22,19 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { type CompletedWorkout, type SavedProgram } from "../../constants/programs";
-import type { MetricKey, ProgramScope, RangeKey } from "../../constants/progress";
+import { type CustomExercise } from "../../constants/exercises";
+import type { MetricKey, ProgramScope, RangeKey, StrengthMetricKey } from "../../constants/progress";
 import {
   bucketMetricByDay,
   bucketMetricByMonth,
   bucketMetricByRollingWeeks,
   collectExerciseHistory,
+  computeMuscleGroupStats,
   computePRs,
   computeWorkoutDurationMinutes,
   computeWorkoutReps,
   computeWorkoutTonnage,
+  filterByDateWindow,
   filterByProgramScope,
   getRangeOption,
   rangeWindow,
@@ -40,6 +44,9 @@ import {
 export interface ProgressViewProps {
   history: CompletedWorkout[];
   programs: SavedProgram[];
+  /** Custom exercises, used to resolve muscle groups for the Strength radar.
+   *  Optional so PT-viewed client data (bundled exercises only) can omit it. */
+  customExercises?: CustomExercise[];
   loaded: boolean;
   title?: string;
   /** Wrap content in a FadeScreen with the theme bg. Default true (tab use); false when embedding inside another route. */
@@ -53,6 +60,7 @@ export interface ProgressViewProps {
 export default function ProgressView({
   history,
   programs,
+  customExercises = [],
   loaded,
   title = "Progress",
   asScreen = true,
@@ -68,6 +76,7 @@ export default function ProgressView({
   const [scope, setScope] = useState<ProgramScope>({ kind: "current" });
   const [range, setRange] = useState<RangeKey>("thisWeek");
   const [metric, setMetric] = useState<MetricKey>("volume");
+  const [strengthMetric, setStrengthMetric] = useState<StrengthMetricKey>("volume");
   const [selectedExercise, setSelectedExercise] = useState<string | null>(null);
   const [scopeFallbackNote, setScopeFallbackNote] = useState<string | null>(null);
 
@@ -113,6 +122,20 @@ export default function ProgressView({
       case "month":        return bucketMetricByMonth(scopedWorkouts, startYMD, endYMD, aggregate);
     }
   }, [scopedWorkouts, range, metric]);
+
+  // Strength radar: same program scope + time range as the Volume graph above,
+  // so the whole page stays consistent. Range-window the scoped workouts, then
+  // break them down by muscle group.
+  const muscleStats = useMemo(() => {
+    const { startYMD, endYMD } = rangeWindow(range, new Date());
+    const windowed = filterByDateWindow(scopedWorkouts, startYMD, endYMD);
+    return computeMuscleGroupStats(windowed, customExercises);
+  }, [scopedWorkouts, range, customExercises]);
+
+  const totalMuscleVolume = useMemo(
+    () => Object.values(muscleStats).reduce((s, g) => s + g.volume, 0),
+    [muscleStats],
+  );
 
   const volumeSlotsCount = useMemo(() => {
     switch (range) {
@@ -233,6 +256,16 @@ export default function ProgressView({
               range={range}
               onRangeChange={setRange}
             />
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionHeader, { color: t.tp }]}>Strength</Text>
+            </View>
+            <StrengthRadarChart
+              stats={muscleStats}
+              totalVolume={totalMuscleVolume}
+              unit={unit}
+              metric={strengthMetric}
+              onMetricChange={setStrengthMetric}
+            />
             <DayExerciseList
               days={daysInScope}
               workouts={scopedWorkouts}
@@ -262,6 +295,8 @@ const styles = StyleSheet.create({
   scroll: { paddingTop: 0 },
   titleRow: { paddingHorizontal: 24, marginBottom: 8 },
   title: { fontFamily: FontFamily.bold, fontSize: 32 },
+  sectionHeaderRow: { paddingHorizontal: 24, marginTop: 28 },
+  sectionHeader: { fontFamily: FontFamily.bold, fontSize: 24 },
   note: { fontFamily: FontFamily.semibold, fontSize: 12 },
   hintInner: { padding: 16, alignItems: "center", gap: 8 },
   hintText: { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center" },

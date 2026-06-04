@@ -9,6 +9,9 @@ import * as StoreReview from "expo-store-review";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
+import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
+import { removeKey } from "../utils/storage";
+import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import PeopleIcon from "../components/icons/PeopleIcon";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -71,6 +74,13 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
     ],
   },
   {
+    title: "Safety",
+    items: [
+      { icon: "people-outline", label: "Community Guidelines", route: "/community-guidelines" },
+      { icon: "ban-outline",    label: "Blocked Accounts",     route: "/blocked-accounts"     },
+    ],
+  },
+  {
     title: "Support",
     items: [
       { icon: "document-text-outline", label: "Terms of Service",  route: "/terms-of-service" },
@@ -90,6 +100,19 @@ export default function SettingsScreen() {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg, setIsKg } = useUnit();
   const { accountType, setAccountType } = useAccountType();
+  const { profile, resetOnboarding } = useUserProfile();
+  const initials = initialsFromName(profile.name);
+  const displayName = profile.name.trim() || "Your Profile";
+  const displayEmail = profile.email.trim() || "Set up your profile";
+
+  // Dev-only: wipe the local profile + onboarding/terms flags and replay the
+  // intro deck. Hidden in production via the __DEV__ guard at the render site.
+  const handleResetOnboarding = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    resetOnboarding();
+    removeKey(TERMS_ACCEPTED_KEY);
+    router.replace("/onboarding");
+  };
   const unitOffset        = useSharedValue(isKg ? 0 : 1); // 0 = kg, 1 = lbs
   const userTriggeredRef  = useRef(false);
   useEffect(() => {
@@ -155,11 +178,15 @@ export default function SettingsScreen() {
         <View style={styles.avatarSection}>
           <NeuCard dark={isDark} radius={40} style={styles.avatar}>
             <View style={styles.avatarInner}>
-              <Text style={[styles.avatarText, { color: t.icon }]}>MM</Text>
+              {initials ? (
+                <Text style={[styles.avatarText, { color: t.icon }]}>{initials}</Text>
+              ) : (
+                <Ionicons name="person-outline" size={30} color={t.ts} />
+              )}
             </View>
           </NeuCard>
-          <Text style={[styles.userName, { color: t.tp }]}>Michael</Text>
-          <Text style={[styles.userEmail, { color: t.ts }]}>michael@avenas.com</Text>
+          <Text style={[styles.userName, { color: t.tp }]}>{displayName}</Text>
+          <Text style={[styles.userEmail, { color: t.ts }]}>{displayEmail}</Text>
         </View>
 
         {/* Account Type */}
@@ -301,6 +328,18 @@ export default function SettingsScreen() {
             </View>
           </TouchableOpacity>
         </NeuCard>
+
+        {/* Dev-only: replay the onboarding/signup flow */}
+        {__DEV__ && (
+          <NeuCard dark={isDark} style={styles.signOutCard}>
+            <TouchableOpacity activeOpacity={0.7} style={styles.row} onPress={handleResetOnboarding}>
+              <View style={styles.rowLeft}>
+                <Ionicons name="refresh-outline" size={20} color={t.ts} />
+                <Text style={[styles.rowLabel, { color: t.ts }]}>Reset Onboarding (dev)</Text>
+              </View>
+            </TouchableOpacity>
+          </NeuCard>
+        )}
       </ScrollView>
     </View>
   );

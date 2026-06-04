@@ -54,14 +54,14 @@ const FAQ: { q: string; a: string }[] = [
 
 function FAQItem({ q, a, isFirst, t }: { q: string; a: string; isFirst: boolean; t: ThemeColors }) {
   const [open, setOpen] = useState(false);
-  const rot = useSharedValue(0);
+  const rot = useSharedValue(-90);
 
   const chevronStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${rot.value}deg` }] }));
 
   const toggle = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     LayoutAnimation.configureNext(LayoutAnimation.create(180, "easeInEaseOut", "opacity"));
-    rot.value = withTiming(open ? 0 : 180, { duration: 180 });
+    rot.value = withTiming(open ? -90 : 0, { duration: 180 });
     setOpen(o => !o);
   };
 

@@ -41,6 +41,9 @@ import { programIncludes } from "../utils/progressStats";
 // Day-of-week strings — local format, not from a library to avoid extra deps.
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+// Matches the warmup-row accent used in workout-detail / log-workout / etc.
+const WARMUP_ORANGE = "#ffbf0f";
+
 // "YYYY-MM-DD" → "Mon 7 May"
 function fmtSessionDate(ymd: string): string {
   const [y, m, d] = ymd.split("-").map(Number);
@@ -59,6 +62,7 @@ interface SessionRow {
   date: string;            // YYYY-MM-DD
   completedAt: string;     // ISO
   displayDate: string;     // "Mon 7 May"
+  workoutName: string;     // e.g. "Push" / "Pull A" — the day's workout label
   programName: string;     // program label, or "Free workout"
   sets: CompletedSet[];    // working+done sets for this exercise in this session
 }
@@ -120,17 +124,23 @@ export default function ExerciseHistoryScreen() {
       // Find the matching exercise inside this workout (case-insensitive trim).
       const ex = w.exercises.find(e => key(e.name) === want);
       if (!ex) continue;
-      const workingSets = ex.sets.filter(s => s.type === "working" && s.done);
-      if (workingSets.length === 0) continue;
-      // Resolve program by name (cyclePattern + extraWorkouts via shared util).
-      const owningProgram = programs.find(p => programIncludes(p, w.workoutName));
+      // Include warmup + working — drop only un-done sets. Warmups render
+      // with a neutral chip below so the user can still tell them apart.
+      const doneSets = ex.sets.filter(s => s.done);
+      if (doneSets.length === 0) continue;
+      // Resolve the owning program: by stamped id for new records (""/no match
+      // → "Free workout"), else the legacy day-name match for old records.
+      const owningProgram = w.programId !== undefined
+        ? programs.find(p => p.id === w.programId)
+        : programs.find(p => programIncludes(p, w.workoutName));
       rows.push({
         workoutId: w.id,
         date: w.date,
         completedAt: w.completedAt,
         displayDate: fmtSessionDate(w.date),
+        workoutName: w.workoutName,
         programName: owningProgram?.name ?? "Free workout",
-        sets: workingSets,
+        sets: doneSets,
       });
     }
     // Newest first.
@@ -192,19 +202,24 @@ export default function ExerciseHistoryScreen() {
             used elsewhere on the Progress flow. */}
         <View style={styles.header}>
           <View style={{ width: 44 }} />
-          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>
+          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={2}>
             {exerciseName ?? ""}
           </Text>
           <View style={{ width: 44 }} />
         </View>
 
         {/* Time-range dropdown — identical button + sheet as the ones on the
-            Progress page chart cards. Right-aligned with a session count on
-            the left so the row carries useful context, not just a control. */}
+            Progress page chart cards. Session count is wrapped in a matching
+            NeuCard pill sized to the dropdown trigger so the row reads as
+            two paired controls instead of raw text against the background. */}
         <View style={styles.rangeRow}>
-          <Text style={[styles.rangeCount, { color: t.ts }]} numberOfLines={1}>
-            {sessions.length} session{sessions.length === 1 ? "" : "s"}
-          </Text>
+          <NeuCard dark={isDark} radius={12} shadowSize="sm">
+            <View style={styles.countPill}>
+              <Text style={[styles.countText, { color: t.tp }]} numberOfLines={1}>
+                {sessions.length} session{sessions.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+          </NeuCard>
           <DropdownPicker<ExerciseRangeKey>
             value={range}
             options={EXERCISE_RANGE_OPTIONS}
@@ -254,39 +269,45 @@ function SessionCard({
   unit: string;
   onPress: () => void;
 }) {
-  // Chip background tuned to sit one tier deeper than the NeuCard surface
-  // — subtle in light mode, slightly lighter than the card in dark mode.
-  const chipBg = isDark ? "rgba(255,255,255,0.06)" : "rgba(15,26,20,0.05)";
+  // Working sets get a neutral fill; warmups get the orange accent that the
+  // rest of the app uses to mark warmup rows.
+  const workingBg = isDark ? "rgba(255,255,255,0.06)" : "rgba(15,26,20,0.05)";
+  const warmupBg  = isDark ? `${WARMUP_ORANGE}26` : `${WARMUP_ORANGE}1F`;
 
   return (
-    <BounceButton onPress={onPress} accessibilityRole="button" accessibilityLabel={`${row.displayDate}, ${row.programName}`}>
+    <BounceButton onPress={onPress} accessibilityRole="button" accessibilityLabel={`${row.displayDate}, ${row.workoutName}, ${row.programName}`}>
       <NeuCard dark={isDark} radius={20}>
         <View style={styles.cardInner}>
           <View style={styles.cardTopRow}>
             <Text style={[styles.cardDate, { color: textPrimary }]} numberOfLines={1}>
               {row.displayDate}
             </Text>
-            <Text style={[styles.cardProgram, { color: textSecondary }]} numberOfLines={1}>
-              {row.programName}
-            </Text>
+            <View style={styles.cardMetaGroup}>
+              <Text style={[styles.cardProgram, { color: textSecondary }]} numberOfLines={1}>
+                {row.programName}
+              </Text>
+              <Text style={[styles.cardDot, { color: textSecondary }]}>·</Text>
+              <Text style={[styles.cardWorkout, { color: textSecondary }]} numberOfLines={1}>
+                {row.workoutName}
+              </Text>
+            </View>
           </View>
 
-          {/* Each working set as its own chip — bold weight + lighter reps
-              so the numbers pop and the row scans cleanly. */}
+          {/* Each set as its own chip — single Text in one weight, size,
+              and color so the row scans cleanly. Warmups get a neutral fill,
+              working sets get the ACCT tint. */}
           <View style={styles.setsRow}>
             {row.sets.map((s, i) => {
               const w = (s.weight ?? "").trim() || "—";
               const r = (s.reps ?? "").trim() || "—";
+              const isWarmup = s.type === "warmup";
               return (
-                <View key={i} style={[styles.setChip, { backgroundColor: chipBg }]}>
-                  <Text style={[styles.chipWeight, { color: textPrimary }]} numberOfLines={1}>
-                    {w}
-                  </Text>
-                  <Text style={[styles.chipUnit, { color: textSecondary }]} numberOfLines={1}>
-                    {unit}
-                  </Text>
-                  <Text style={[styles.chipReps, { color: textSecondary }]} numberOfLines={1}>
-                    × {r}
+                <View
+                  key={i}
+                  style={[styles.setChip, { backgroundColor: isWarmup ? warmupBg : workingBg }]}
+                >
+                  <Text style={[styles.chipText, { color: textPrimary }]} numberOfLines={1}>
+                    {`${w} ${unit} × ${r}`}
                   </Text>
                 </View>
               );
@@ -330,9 +351,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 12,
   },
-  rangeCount: {
+  countPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  countText: {
     fontFamily: FontFamily.semibold,
-    fontSize: 13,
+    fontSize: 12,
   },
 
   cardInner: {
@@ -349,9 +376,25 @@ const styles = StyleSheet.create({
     fontSize: 15,
     flex: 1,
   },
+  cardMetaGroup: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 6,
+    flexShrink: 1,
+  },
+  cardDot: {
+    fontFamily: FontFamily.regular,
+    fontSize: 12,
+  },
   cardProgram: {
     fontFamily: FontFamily.regular,
     fontSize: 12,
+    flexShrink: 1,
+  },
+  cardWorkout: {
+    fontFamily: FontFamily.regular,
+    fontSize: 12,
+    flexShrink: 1,
   },
   // Set chips — each working set rendered as a small rounded badge so the
   // numbers pop and the row scans without parsing punctuation.
@@ -362,26 +405,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   setChip: {
-    flexDirection: "row",
-    alignItems: "baseline",
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 10,
-    gap: 3,
   },
-  chipWeight: {
-    fontFamily: FontFamily.bold,
+  chipText: {
+    fontFamily: FontFamily.semibold,
     fontSize: 13,
-  },
-  chipUnit: {
-    fontFamily: FontFamily.regular,
-    fontSize: 11,
-    marginLeft: 1,
-  },
-  chipReps: {
-    fontFamily: FontFamily.bold,
-    fontSize: 13,
-    marginLeft: 2,
   },
 
   empty: {

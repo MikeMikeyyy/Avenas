@@ -12,3 +12,24 @@ export type CustomExercise = {
   videoUri?: string;
   description?: string;
 };
+
+// ─── Bundled exercise library ─────────────────────────────────────────────────
+// The curated catalogue lives in `constants/exerciseData.ts`. Each entry's `id`
+// is a stable slug that also keys the bundled image maps in
+// `assets/exerciseImages.ts` (a static thumbnail + the animated GIF).
+export type Exercise = {
+  /** Stable slug — keys the thumbnail + GIF require-maps. e.g. "barbell-bench-press". */
+  id: string;
+  /** Display name, title-cased. */
+  name: string;
+  /** The muscle group this exercise trains — drives the picker's filter + chip. */
+  primaryMuscle: SelectableMuscle;
+  /** Equipment label, e.g. "Barbell", "Dumbbell", "Cable", "Body weight". */
+  equipment: string;
+  /** Secondary muscles as free-text labels — display only, optional. */
+  secondaryMuscles?: string[];
+  /** Step-by-step instructions — display only, optional. */
+  instructions?: string[];
+  /** True for the curated "main" set — surfaced first in the picker. */
+  featured?: boolean;
+};

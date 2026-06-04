@@ -3,7 +3,7 @@
 // Real backend will replace this — keep the shapes minimal and the API
 // async-only so swapping to fetch() later is a contained change.
 
-import { getJSON, setJSON } from "./storage";
+import { getJSON, removeKey, setJSON } from "./storage";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 
@@ -15,6 +15,16 @@ export const PT_SEEDED_KEY = "@avenas/pt/seeded_v2";
 export const ASSIGNED_PT_KEY = "@avenas/gym/assigned_pt";
 export const SENT_PROGRAMS_KEY = "@avenas/gym/sent_programs";
 
+// Trainers may also receive programs from senior coaches/mentors. Stored
+// separately from ASSIGNED_PT_KEY so the gym user's single-trainer flow in
+// MyPTHome is unaffected.
+export const COACHES_KEY = "@avenas/pt/coaches";
+
+// Gym users can now have additional trainers beyond their primary
+// (ASSIGNED_PT_KEY). The primary stays in the existing single-trainer field
+// so MyPTHome's prominent header is unchanged; this key holds the rest.
+export const OTHER_TRAINERS_KEY = "@avenas/gym/other_trainers";
+
 export type Client = {
   id: string;
   name: string;
@@ -22,6 +32,10 @@ export type Client = {
   note?: string;
   lastActiveISO?: string;
   streak?: number;
+  /** True when this "client" is actually a fellow trainer you've connected with.
+   *  They appear in the roster so you can send them programs, but are also listed
+   *  on the My Coaches page. Removing one severs the whole connection. */
+  isTrainer?: boolean;
 };
 
 export type ClientData = {
@@ -36,6 +50,12 @@ export type SharedProgram = {
   programId: string;
   programName: string;
   sentAtISO: string;
+  /** Set when this is a program a coach sent to ME (incoming → surfaced on the
+   *  My Coaches page). When unset, the entry is an outgoing share I sent to a
+   *  client/trainer (→ PTHome "Programs You've Sent"). This is the source of
+   *  truth for direction; `clientId` is unreliable now that connected trainers
+   *  also appear in the client roster. */
+  receivedFromCoachId?: string;
   /** Full program snapshot at send time so the gym user can materialise it on accept. */
   programSnapshot?: SavedProgram;
   /** Set when the gym user accepts the program — also signals the trainer that it landed. */
@@ -94,6 +114,99 @@ export async function loadSharedPrograms(): Promise<SharedProgram[]> {
 export async function appendSharedPrograms(entries: SharedProgram[]): Promise<void> {
   const existing = await loadSharedPrograms();
   await setJSON(SHARED_PROGRAMS_KEY, [...entries, ...existing]);
+}
+
+/** Stable grouping key — every entry created in a single send call shares the same sentAtISO. */
+export function batchKeyOf(s: SharedProgram): string {
+  return `${s.programId}|${s.sentAtISO}`;
+}
+
+/** Expand legacy `clientId: "all"` entries into one entry per current client.
+ *  Idempotent — does nothing when no broadcast entries are present. */
+export async function migrateBroadcastShares(clients: Client[]): Promise<void> {
+  if (clients.length === 0) return;
+  const list = await loadSharedPrograms();
+  if (!list.some(s => s.clientId === "all")) return;
+  const next: SharedProgram[] = [];
+  for (const s of list) {
+    if (s.clientId !== "all") { next.push(s); continue; }
+    for (const c of clients) {
+      next.push({ ...s, id: `${s.id}_${c.id}`, clientId: c.id });
+    }
+  }
+  await setJSON(SHARED_PROGRAMS_KEY, next);
+}
+
+/** Accept every share entry in a batch as a single unit.
+ *  Materialises the snapshot to @avenas/programs exactly once (re-using an existing
+ *  acceptedProgramId if any batch entry already has one) so all recipients land on
+ *  the same local program. */
+export async function acceptSharedProgramBatch(batchKey: string): Promise<string | null> {
+  const list = await loadSharedPrograms();
+  const targets = list.filter(s => batchKeyOf(s) === batchKey);
+  if (targets.length === 0) return null;
+  const snap = targets.find(t => t.programSnapshot)?.programSnapshot;
+  const acceptedAt = new Date().toISOString();
+
+  if (!snap) {
+    const next = list.map(s => batchKeyOf(s) === batchKey ? { ...s, acceptedAtISO: acceptedAt } : s);
+    await setJSON(SHARED_PROGRAMS_KEY, next);
+    return null;
+  }
+
+  const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+  const priorId = targets.find(t => t.acceptedProgramId)?.acceptedProgramId;
+  const existing = priorId ? programs.find(p => p.id === priorId) : undefined;
+  let importedId: string;
+
+  if (existing) {
+    importedId = existing.id;
+    const updated = programs.map(p => p.id === importedId ? {
+      ...p,
+      name: snap.name,
+      totalWeeks: snap.totalWeeks,
+      trainingDays: snap.trainingDays,
+      cycleDays: snap.cycleDays,
+      cyclePattern: snap.cyclePattern,
+      workouts: snap.workouts,
+    } : p);
+    await setJSON(PROGRAMS_KEY, updated);
+  } else {
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const now = new Date();
+    const todayStr = `${String(now.getDate()).padStart(2, "0")} ${months[now.getMonth()]} ${now.getFullYear()}`;
+    importedId = `program_${Date.now()}`;
+    const imported: SavedProgram = {
+      ...snap,
+      id: importedId,
+      status: "created",
+      currentWeek: 0,
+      startDate: todayStr,
+      cycleOffset: undefined,
+      completedDate: undefined,
+    };
+    await setJSON(PROGRAMS_KEY, [...programs, imported]);
+  }
+
+  const next = list.map(s => batchKeyOf(s) === batchKey
+    ? { ...s, acceptedAtISO: acceptedAt, acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
+    : s
+  );
+  await setJSON(SHARED_PROGRAMS_KEY, next);
+  return importedId;
+}
+
+/** Unsend a whole batch. */
+export async function removeSharedProgramBatch(batchKey: string): Promise<void> {
+  const existing = await loadSharedPrograms();
+  await setJSON(SHARED_PROGRAMS_KEY, existing.filter(s => batchKeyOf(s) !== batchKey));
+}
+
+/** Apply a patch to every entry in the batch. Used by the post-send edit flow. */
+export async function updateSharedProgramBatch(batchKey: string, patch: Partial<SharedProgram>): Promise<void> {
+  const existing = await loadSharedPrograms();
+  const next = existing.map(s => batchKeyOf(s) === batchKey ? { ...s, ...patch } : s);
+  await setJSON(SHARED_PROGRAMS_KEY, next);
 }
 
 /** Accept a shared program. On first accept the snapshot is appended to @avenas/programs.
@@ -161,6 +274,86 @@ export async function loadAssignedPT(): Promise<AssignedPT | null> {
 }
 export async function saveAssignedPT(pt: AssignedPT | null): Promise<void> {
   await setJSON(ASSIGNED_PT_KEY, pt);
+}
+
+export async function loadOtherTrainers(): Promise<AssignedPT[]> {
+  return getJSON<AssignedPT[]>(OTHER_TRAINERS_KEY, []);
+}
+export async function saveOtherTrainers(list: AssignedPT[]): Promise<void> {
+  await setJSON(OTHER_TRAINERS_KEY, list);
+}
+export async function addOtherTrainer(pt: AssignedPT): Promise<void> {
+  const existing = await loadOtherTrainers();
+  if (existing.some(p => p.id === pt.id)) return;
+  await setJSON(OTHER_TRAINERS_KEY, [...existing, pt]);
+}
+export async function removeOtherTrainer(id: string): Promise<void> {
+  const existing = await loadOtherTrainers();
+  await setJSON(OTHER_TRAINERS_KEY, existing.filter(p => p.id !== id));
+}
+
+export async function loadCoaches(): Promise<AssignedPT[]> {
+  return getJSON<AssignedPT[]>(COACHES_KEY, []);
+}
+export async function saveCoaches(list: AssignedPT[]): Promise<void> {
+  await setJSON(COACHES_KEY, list);
+}
+export async function addCoach(coach: AssignedPT): Promise<void> {
+  const existing = await loadCoaches();
+  if (existing.some(c => c.id === coach.id)) return;
+  await setJSON(COACHES_KEY, [...existing, coach]);
+}
+export async function removeCoach(id: string): Promise<void> {
+  const existing = await loadCoaches();
+  await setJSON(COACHES_KEY, existing.filter(c => c.id !== id));
+}
+
+/** Connect with a fellow trainer. The connection is symmetric: they're recorded
+ *  as a coach (so programs they send surface on My Coaches) AND inserted into the
+ *  client roster (so you can send programs to them via the normal Send flow).
+ *  Idempotent — re-connecting the same trainer is a no-op for each list. */
+export async function connectTrainer(pt: AssignedPT): Promise<void> {
+  await addCoach(pt);
+  const clients = await loadClients();
+  if (!clients.some(c => c.id === pt.id)) {
+    const asClient: Client = {
+      id: pt.id,
+      name: pt.name,
+      initials: pt.initials,
+      lastActiveISO: new Date().toISOString(),
+      streak: 0,
+      isTrainer: true,
+    };
+    await setJSON(CLIENTS_KEY, [asClient, ...clients]);
+  }
+}
+
+/** Sever a trainer connection from either side — removes the coach entry, the
+ *  mirrored client entry, and that client's local data. */
+export async function disconnectTrainer(id: string): Promise<void> {
+  await removeCoach(id);
+  const clients = await loadClients();
+  if (clients.some(c => c.id === id)) {
+    await setJSON(CLIENTS_KEY, clients.filter(c => c.id !== id));
+    await removeKey(clientDataKey(id));
+  }
+}
+
+/** Backfill `receivedFromCoachId` on legacy incoming shares. Before the field
+ *  existed, a coach-sent program was identified only by `clientId` carrying the
+ *  coach id. Now that connected trainers also live in the client roster that
+ *  heuristic collides, so stamp the explicit flag once. Idempotent. */
+export async function migrateCoachReceivedShares(): Promise<void> {
+  const [shares, coaches] = await Promise.all([loadSharedPrograms(), loadCoaches()]);
+  if (coaches.length === 0 || shares.length === 0) return;
+  const coachIds = new Set(coaches.map(c => c.id));
+  let mutated = false;
+  const next = shares.map(s => {
+    if (s.receivedFromCoachId || !coachIds.has(s.clientId)) return s;
+    mutated = true;
+    return { ...s, receivedFromCoachId: s.clientId };
+  });
+  if (mutated) await setJSON(SHARED_PROGRAMS_KEY, next);
 }
 
 export async function loadSentPrograms(): Promise<SentProgram[]> {

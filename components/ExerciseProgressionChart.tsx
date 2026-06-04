@@ -391,7 +391,7 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
               >
                 {active ? (
                   <View style={styles.metricBtnActive}>
-                    <Text style={[styles.metricBtnLabel, { color: "#0f1a14" }]} numberOfLines={1}>
+                    <Text style={[styles.metricBtnLabel, { color: "#fff" }]} numberOfLines={1}>
                       {opt.label}
                     </Text>
                   </View>
@@ -480,7 +480,7 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
         <Text style={styles.historyBtnLabel} numberOfLines={1}>
           See Exercise History
         </Text>
-        <Ionicons name="chevron-forward" size={16} color="#0f1a14" />
+        <Ionicons name="chevron-forward" size={16} color="#fff" />
       </View>
     </BounceButton>
     </>
@@ -621,7 +621,7 @@ const styles = StyleSheet.create({
   historyBtnLabel: {
     fontFamily: FontFamily.bold,
     fontSize: 15,
-    color: "#0f1a14",
+    color: "#fff",
     flex: 1,
     textAlign: "center",
   },
