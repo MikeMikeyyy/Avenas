@@ -28,6 +28,7 @@ import {
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate } from "../utils/dates";
+import { buildPrevByName, normalizeExerciseName } from "../utils/workout";
 import { useTheme } from "../contexts/ThemeContext";
 
 const WARMUP_ORANGE = "#ffbf0f";
@@ -88,29 +89,6 @@ function fmtDurationMins(mins: number): string {
   if (h === 0) return `${m}m`;
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
-}
-
-// ─── buildPrevByName ──────────────────────────────────────────────────────────
-
-function buildPrevByName(
-  history: CompletedWorkout[],
-  beforeDate?: string,
-): Record<string, string[]> {
-  const sorted = [...history].sort(
-    (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
-  );
-  const filtered = beforeDate ? sorted.filter(w => w.completedAt < beforeDate) : sorted;
-  const result: Record<string, string[]> = {};
-  for (const workout of filtered) {
-    for (const ex of workout.exercises) {
-      if (result[ex.name]) continue;
-      result[ex.name] = ex.sets.map(s => {
-        if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
-        return s.weight || s.reps || "—";
-      });
-    }
-  }
-  return result;
 }
 
 // ─── WheelPicker ──────────────────────────────────────────────────────────────
@@ -1434,7 +1412,7 @@ export default function LogWorkoutScreen() {
               onToggleIsometric={() => toggleIsometric(ex.id)}
               onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
               onInputFocus={handleInputFocus}
-              prevSets={prevByName[ex.name] ?? []}
+              prevSets={prevByName[normalizeExerciseName(ex.name)] ?? []}
             />
           ))}
 

@@ -12,6 +12,7 @@ import { RestTimerProvider } from "../contexts/RestTimerContext";
 import { UnitProvider } from "../contexts/UnitContext";
 import { AccountTypeProvider } from "../contexts/AccountTypeContext";
 import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileContext";
+import { AuthProvider, useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
 
@@ -19,13 +20,15 @@ SplashScreen.preventAutoHideAsync();
 
 function AppShell() {
   const { isDark } = useTheme();
-  const { loaded } = useUserProfile();
+  const { loaded: profileLoaded } = useUserProfile();
+  const { loaded: authLoaded } = useAuth();
 
-  // Hold the native splash until the onboarding flag is read, so app/index.tsx
-  // can redirect to the right first screen without a blank flash or flicker.
+  // Hold the native splash until both the profile flag and the auth session are
+  // read, so app/index.tsx can redirect to the right first screen (login vs
+  // home) without a blank flash or flicker.
   useEffect(() => {
-    if (loaded) SplashScreen.hideAsync();
-  }, [loaded]);
+    if (profileLoaded && authLoaded) SplashScreen.hideAsync();
+  }, [profileLoaded, authLoaded]);
 
   return (
     <>
@@ -61,7 +64,9 @@ export default function RootLayout() {
         <UnitProvider>
           <AccountTypeProvider>
             <UserProfileProvider>
-              <AppShell />
+              <AuthProvider>
+                <AppShell />
+              </AuthProvider>
             </UserProfileProvider>
           </AccountTypeProvider>
         </UnitProvider>

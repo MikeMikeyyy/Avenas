@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { View, StyleSheet, useWindowDimensions, type NativeSyntheticEvent, type NativeScrollEvent } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, useWindowDimensions, type NativeSyntheticEvent, type NativeScrollEvent } from "react-native";
 import Animated, { useSharedValue, useAnimatedScrollHandler, useAnimatedStyle, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 
 import { useTheme } from "../contexts/ThemeContext";
-import { APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { WELCOME, FEATURE_SLIDES, type FeatureSlideId } from "../constants/onboarding";
 import BounceButton from "../components/BounceButton";
 import FeatureSlide from "../components/onboarding/FeatureSlide";
@@ -129,6 +129,12 @@ export default function OnboardingScreen() {
             </View>
           </View>
         </BounceButton>
+
+        <TouchableOpacity onPress={() => router.push("/login")} accessibilityRole="button" accessibilityLabel="Log in">
+          <Text style={[styles.loginText, { color: t.ts }]}>
+            Already have an account? <Text style={{ color: ACCT, fontFamily: FontFamily.bold }}>Log in</Text>
+          </Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -141,4 +147,5 @@ const styles = StyleSheet.create({
   ctaWrap:  { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   cta:      { borderRadius: 28, paddingVertical: 17, alignItems: "center", justifyContent: "center" },
   ctaText:  { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 0.3 },
+  loginText:{ fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center" },
 });

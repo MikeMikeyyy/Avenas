@@ -26,18 +26,11 @@ import {
   type SavedProgram,
   type CompletedWorkout,
 } from "../constants/programs";
+import { parseStoredDate } from "../utils/dates";
 import { useTheme } from "../contexts/ThemeContext";
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-
-function parseStoredDate(dateStr: string): Date {
-  const parts = dateStr.split(" ");
-  const day = parseInt(parts[0], 10);
-  const month = MONTH_NAMES.indexOf(parts[1]);
-  const year = parseInt(parts[2], 10);
-  return new Date(year, month < 0 ? 0 : month, day);
-}
 
 function formatWorkoutDate(completedIso: string, durationSeconds: number): string {
   const d = new Date(completedIso);
@@ -60,6 +53,7 @@ function workoutsForProgram(prog: SavedProgram, history: CompletedWorkout[]): Co
     prog.cyclePattern.filter(n => n && n.toLowerCase() !== "rest")
   );
   const start = parseStoredDate(prog.startDate);
+  if (!start) return [];
   start.setHours(0, 0, 0, 0);
   const endMs = prog.status === "active"
     ? Date.now()
@@ -111,6 +105,7 @@ export default function ProgramHistoryDetailScreen() {
     if (!program) return { weekSections: [], startDate: new Date() };
 
     const start = parseStoredDate(program.startDate);
+    if (!start) return { weekSections: [], startDate: new Date() };
     start.setHours(0, 0, 0, 0);
 
     const matched = workoutsForProgram(program, history);

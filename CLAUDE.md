@@ -28,6 +28,7 @@ Pure logic lives outside `app/` and `components/`. Reach for these before reinve
 
 - `utils/dates.ts` — `parseStoredDate(s) → Date | null`, `toYMD(d) → "YYYY-MM-DD"`, `todayYMD()`, `fmtDuration(secs)`, `MONTH_NAMES`, `MONTH_FULL`. `parseStoredDate` is **strict** — it returns `null` on unparseable input. Callers MUST treat `null` as "no active program / no workout today" rather than constructing a January-year-0 fallback.
 - `utils/storage.ts` — `getJSON<T>(key, fallback)`, `setJSON<T>(key, value)`, `removeKey(key)`. Use these in any **new** screen. Existing screens still call `AsyncStorage` directly; do not bulk-retrofit — each call site has bespoke ordering / rollback.
+- `utils/workout.ts` — the **single source of truth** for resolving an active program's scheduled workout and for "previous values". `getTodaysWorkout(program)`, `getWorkoutForDate(program, "YYYY-MM-DD")` and `resolveTodayWorkout(program, override)` (honors a same-day change-day override) return `{ dayIndex, name, exercises } | null` via the documented cycle math; `resolveDayIndex(...)` exposes just the index. `buildPrevByName(history, beforeDate?)` builds the last-set-per-exercise map keyed by `normalizeExerciseName(name)` (trim + lowercase). Screens MUST call these instead of re-implementing the cycle math or prev-set lookup inline.
 - `components/DumbbellIcon.tsx` — the canonical workout icon.
 - `constants/programs.ts`, `constants/journal.ts`, `constants/exercises.ts` — storage keys + shared types live here. Do not hardcode storage keys in screens.
 

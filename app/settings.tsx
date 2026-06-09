@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Linking } from "react-native";
+import { Alert, View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -11,6 +11,7 @@ import { useUnit } from "../contexts/UnitContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { removeKey } from "../utils/storage";
+import { supabase } from "../lib/supabase";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import PeopleIcon from "../components/icons/PeopleIcon";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,16 +29,15 @@ type ToggleItem   = BaseItem & { toggle: true };
 type UnitItem     = BaseItem & { unitToggle: true };
 type SettingsItem = NavigateItem | ToggleItem | UnitItem;
 
-// In-app rating prompt (Apple allows max 3 per year; falls back to App Store URL)
-const APP_STORE_URL = "https://apps.apple.com/app/idXXXXXXXXX";
+// In-app rating prompt (Apple allows max 3 per year). Silently no-ops when the
+// native prompt is unavailable (simulator, or after the yearly limit) instead
+// of opening a hardcoded App Store URL.
 const requestAppRating = async () => {
   try {
     if (await StoreReview.isAvailableAsync()) {
       await StoreReview.requestReview();
-      return;
     }
   } catch {}
-  Linking.openURL(APP_STORE_URL).catch(() => {});
 };
 
 // ─── Static values for StyleSheet (dark overrides applied inline) ─────────────
@@ -88,6 +88,7 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
       { icon: "help-circle-outline",   label: "Help & FAQ",        route: "/help-faq"         },
       { icon: "warning-outline",       label: "Report a Bug",      route: "/report-bug"       },
       { icon: "bulb-outline",          label: "Request a Feature", route: "/request-feature"  },
+      { icon: "cloud-outline",         label: "Cloud sync (test)", route: "/cloud-test"       },
       { icon: "star-outline",          label: "Rate Avenas",       onPress: requestAppRating  },
     ],
   },
@@ -112,6 +113,20 @@ export default function SettingsScreen() {
     resetOnboarding();
     removeKey(TERMS_ACCEPTED_KEY);
     router.replace("/onboarding");
+  };
+
+  const handleSignOut = () => {
+    Alert.alert("Sign Out", "You can sign back in anytime. Your data stays in your account.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Sign Out",
+        style: "destructive",
+        onPress: async () => {
+          await supabase.auth.signOut();
+          router.replace("/onboarding");
+        },
+      },
+    ]);
   };
   const unitOffset        = useSharedValue(isKg ? 0 : 1); // 0 = kg, 1 = lbs
   const userTriggeredRef  = useRef(false);
@@ -321,7 +336,7 @@ export default function SettingsScreen() {
 
         {/* Sign out */}
         <NeuCard dark={isDark} style={styles.signOutCard}>
-          <TouchableOpacity activeOpacity={0.7} style={styles.row}>
+          <TouchableOpacity activeOpacity={0.7} style={styles.row} onPress={handleSignOut}>
             <View style={styles.rowLeft}>
               <Ionicons name="log-out-outline" size={20} color={Colors.error} />
               <Text style={[styles.rowLabel, { color: Colors.error }]}>Sign Out</Text>

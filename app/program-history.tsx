@@ -24,17 +24,8 @@ import {
   getCurrentWeek,
   type SavedProgram,
 } from "../constants/programs";
+import { parseStoredDate } from "../utils/dates";
 import { useTheme } from "../contexts/ThemeContext";
-
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-
-function parseStoredDate(dateStr: string): Date {
-  const parts = dateStr.split(" ");
-  const day = parseInt(parts[0], 10);
-  const month = MONTH_NAMES.indexOf(parts[1]);
-  const year = parseInt(parts[2], 10);
-  return new Date(year, month < 0 ? 0 : month, day);
-}
 
 
 function statusLabel(status: SavedProgram["status"]): string {
@@ -72,11 +63,10 @@ export default function ProgramHistoryScreen() {
   const sorted = [...programs].sort((a, b) => {
     if (a.status === "active") return -1;
     if (b.status === "active") return 1;
-    try {
-      return parseStoredDate(b.startDate).getTime() - parseStoredDate(a.startDate).getTime();
-    } catch {
-      return 0;
-    }
+    const bd = parseStoredDate(b.startDate);
+    const ad = parseStoredDate(a.startDate);
+    if (!bd || !ad) return 0;
+    return bd.getTime() - ad.getTime();
   });
 
   return (

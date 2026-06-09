@@ -19,6 +19,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import { useUnit } from "../../contexts/UnitContext";
+import { useUserProfile, initialsFromName } from "../../contexts/UserProfileContext";
 import {
   STREAK_TIERS,
   FLAME_PREF_KEY,
@@ -26,7 +27,8 @@ import {
   getTier,
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
-import { parseStoredDate, toYMD, fmtDuration } from "../../utils/dates";
+import { toYMD, fmtDuration } from "../../utils/dates";
+import { getWorkoutForDate, resolveTodayWorkout } from "../../utils/workout";
 import ActivityCalendar from "../../components/ActivityCalendar";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
@@ -80,36 +82,6 @@ function getOrdinal(n: number): string {
 function formatTodayDate(): string {
   const now = new Date();
   return `${DAY_ABBR[now.getDay()]} ${getOrdinal(now.getDate())} ${FULL_MONTHS[now.getMonth()]}`;
-}
-
-function getTodaysWorkout(program: SavedProgram): { name: string; exerciseCount: number } | null {
-  const start = parseStoredDate(program.startDate);
-  if (!start) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  start.setHours(0, 0, 0, 0);
-  const daysPassed = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  const dayIndex = (((daysPassed + (program.cycleOffset ?? 0)) % program.cycleDays) + program.cycleDays) % program.cycleDays;
-  const dayName = program.cyclePattern[dayIndex];
-  if (!dayName || dayName === "Rest") return null;
-  const workoutKey = `${dayIndex}:${dayName}`;
-  const exercises = program.workouts[workoutKey] ?? [];
-  return { name: dayName, exerciseCount: exercises.length };
-}
-
-
-function getWorkoutForDate(program: SavedProgram, date: Date): string | null {
-  const start = parseStoredDate(program.startDate);
-  if (!start) return null;
-  start.setHours(0, 0, 0, 0);
-  const target = new Date(date);
-  target.setHours(0, 0, 0, 0);
-  const daysPassed = Math.floor((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  if (daysPassed < 0) return null;
-  const dayIndex = (((daysPassed + (program.cycleOffset ?? 0)) % program.cycleDays) + program.cycleDays) % program.cycleDays;
-  const dayName = program.cyclePattern[dayIndex];
-  if (!dayName || dayName === "Rest") return null;
-  return dayName;
 }
 
 // Static colours for StyleSheet (must be literals, not dynamic theme values)
@@ -277,6 +249,9 @@ export default function HomeScreen() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good Morning" : hour < 18 ? "Good Afternoon" : "Good Evening";
 
+  const { profile } = useUserProfile();
+  const avatarInitials = initialsFromName(profile.name) || "?";
+
   const { streakDays } = useStreak();
   const isMax = streakDays >= MAX_TIER_DAYS;
   const { isRunning } = useWorkoutTimer();
@@ -390,7 +365,7 @@ export default function HomeScreen() {
       for (let i = 0; i < 7; i++) {
         const d = new Date(weekStart);
         d.setDate(weekStart.getDate() + i);
-        if (getWorkoutForDate(activeProgram, d) !== null) plannedCount++;
+        if (getWorkoutForDate(activeProgram, toYMD(d)) !== null) plannedCount++;
       }
     }
 
@@ -408,7 +383,7 @@ export default function HomeScreen() {
       for (let i = 0; i < 7; i++) {
         const d = new Date(weekStart);
         d.setDate(weekStart.getDate() + i);
-        const name = getWorkoutForDate(activeProgram, d);
+        const name = getWorkoutForDate(activeProgram, toYMD(d))?.name ?? null;
         const dateStr = toYMD(d);
         weekDays.push({
           date: d,
@@ -463,17 +438,10 @@ export default function HomeScreen() {
         </View>
 
         {(() => {
-          const baseTodaysWorkout = activeProgram ? getTodaysWorkout(activeProgram) : null;
-          const todaysWorkout = (() => {
-            if (!todayOverride) return baseTodaysWorkout;
-            if (activeProgram) {
-              const dayIndex = activeProgram.cyclePattern.indexOf(todayOverride.workoutName);
-              const workoutKey = `${dayIndex}:${todayOverride.workoutName}`;
-              const exercises = activeProgram.workouts[workoutKey] ?? [];
-              return { name: todayOverride.workoutName, exerciseCount: exercises.length };
-            }
-            return { name: todayOverride.workoutName, exerciseCount: 0 };
-          })();
+          const resolved = resolveTodayWorkout(activeProgram, todayOverride);
+          const todaysWorkout = resolved
+            ? { name: resolved.name, exerciseCount: resolved.exercises.length }
+            : null;
           return (
             <NeuCard dark={isDark} style={styles.workoutCard}>
     <View style={styles.workoutCardInner}>
@@ -746,7 +714,7 @@ export default function HomeScreen() {
           <View style={[styles.avatarShadow, { shadowColor: isDark ? "#4d5363" : "#a3afc0" }]}>
             <BlurView intensity={90} tint="extraLight" style={styles.avatarBorder}>
               <View style={styles.avatarInner}>
-                <Text style={styles.avatarText}>MB</Text>
+                <Text style={styles.avatarText}>{avatarInitials}</Text>
               </View>
             </BlurView>
           </View>

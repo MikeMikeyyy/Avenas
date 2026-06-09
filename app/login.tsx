@@ -11,11 +11,10 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { signInWithEmail, signInWithProvider, signUpWithEmail } from "../lib/auth";
+import { signInWithEmail, signInWithProvider } from "../lib/auth";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Social / OAuth sign-in button.
 function SocialButton({
   icon, label, dark, onPress,
 }: { icon: React.ReactNode; label: string; dark: boolean; onPress: () => void }) {
@@ -32,7 +31,7 @@ function SocialButton({
   );
 }
 
-export default function SignupScreen() {
+export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isDark } = useTheme();
@@ -46,11 +45,9 @@ export default function SignupScreen() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const emailOk = EMAIL_RE.test(email.trim());
-  const canSubmit = emailOk && password.length >= 6;
+  const canSubmit = EMAIL_RE.test(email.trim()) && password.length > 0;
 
-  // After auth, the per-account profile step (name + role) takes over; a
-  // returning account skips it automatically and lands on Home.
+  // After auth, the profile step loads this account's saved profile and goes Home.
   const afterAuth = () => router.replace("/complete-profile");
 
   const onSubmit = async () => {
@@ -58,19 +55,11 @@ export default function SignupScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setBusy(true);
     try {
-      try {
-        await signUpWithEmail(email.trim(), password);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (/already registered|already exists|user already/i.test(msg)) {
-          await signInWithEmail(email.trim(), password); // returning user logging back in
-        } else {
-          throw e;
-        }
-      }
+      await signInWithEmail(email.trim(), password);
       afterAuth();
     } catch (e) {
-      Alert.alert("Couldn't sign up", e instanceof Error ? e.message : "Please try again.");
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert("Couldn't log in", /invalid login/i.test(msg) ? "Wrong email or password." : msg);
     } finally {
       setBusy(false);
     }
@@ -113,13 +102,8 @@ export default function SignupScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 90, paddingBottom: insets.bottom + 32 }]}
       >
-        <Text style={[styles.title, { color: t.tp }]}>Create your account</Text>
-        <Text style={[styles.subtitle, { color: t.ts }]}>Sign up to sync your training across devices.</Text>
-
-        <View style={[styles.freeBadge, { backgroundColor: ACCT + "1A" }]}>
-          <Ionicons name="sparkles" size={14} color={ACCT} />
-          <Text style={[styles.freeBadgeText, { color: t.tp }]}>Free to use. No paywall after sign up.</Text>
-        </View>
+        <Text style={[styles.title, { color: t.tp }]}>Welcome back</Text>
+        <Text style={[styles.subtitle, { color: t.ts }]}>Log in to pick up where you left off.</Text>
 
         <Text style={[styles.label, { color: t.ts }]}>EMAIL</Text>
         <NeuCard dark={isDark} radius={16} style={styles.field}>
@@ -141,7 +125,7 @@ export default function SignupScreen() {
         <NeuCard dark={isDark} radius={16} style={styles.field}>
           <TextInput
             style={[styles.input, { color: t.tp }]}
-            placeholder="At least 6 characters"
+            placeholder="Your password"
             placeholderTextColor={t.ts}
             value={password}
             onChangeText={setPassword}
@@ -149,15 +133,15 @@ export default function SignupScreen() {
             autoCorrect={false}
             secureTextEntry
             returnKeyType="done"
-            textContentType="newPassword"
+            textContentType="password"
           />
         </NeuCard>
 
         <View style={styles.ctaSection}>
-          <BounceButton onPress={onSubmit} accessibilityRole="button" accessibilityLabel="Create account">
+          <BounceButton onPress={onSubmit} accessibilityRole="button" accessibilityLabel="Log in">
             <View style={[styles.ctaWrap, { backgroundColor: btnBg, shadowColor: btnShadow }, (!canSubmit || busy) && styles.ctaDisabled]}>
               <View style={[styles.cta, { backgroundColor: btnBg }]}>
-                <Text style={[styles.ctaText, { color: btnContent }]}>{busy ? "Please wait…" : "Continue with email"}</Text>
+                <Text style={[styles.ctaText, { color: btnContent }]}>{busy ? "Please wait…" : "Log in"}</Text>
               </View>
             </View>
           </BounceButton>
@@ -181,15 +165,11 @@ export default function SignupScreen() {
             onPress={onGoogle}
           />
 
-          <TouchableOpacity onPress={() => router.push("/login")} style={styles.switchRow} accessibilityRole="button">
+          <TouchableOpacity onPress={() => router.back()} style={styles.switchRow} accessibilityRole="button">
             <Text style={[styles.switchText, { color: t.ts }]}>
-              Already have an account? <Text style={{ color: ACCT, fontFamily: FontFamily.bold }}>Log in</Text>
+              Don&apos;t have an account? <Text style={{ color: ACCT, fontFamily: FontFamily.bold }}>Sign up</Text>
             </Text>
           </TouchableOpacity>
-
-          <Text style={[styles.fineprint, { color: t.ts }]}>
-            Avenas is free. A Pro plan will add extra features later, but everything here stays free.
-          </Text>
         </View>
       </KeyboardAwareScrollView>
     </View>
@@ -202,8 +182,6 @@ const styles = StyleSheet.create({
   scroll:        { paddingHorizontal: 28 },
   title:         { fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
   subtitle:      { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center", marginTop: 8, marginBottom: 16 },
-  freeBadge:     { flexDirection: "row", alignItems: "center", alignSelf: "center", gap: 7, borderRadius: 999, paddingVertical: 8, paddingHorizontal: 14 },
-  freeBadgeText: { fontFamily: FontFamily.semibold, fontSize: 13 },
   label:         { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4, marginTop: 18 },
   field:         { borderRadius: 16 },
   input:         { fontFamily: FontFamily.regular, fontSize: 16, paddingVertical: 16, paddingHorizontal: 18 },
@@ -221,5 +199,4 @@ const styles = StyleSheet.create({
   socialText:    { fontFamily: FontFamily.bold, fontSize: 16 },
   switchRow:     { alignItems: "center", paddingVertical: 8, marginTop: 4 },
   switchText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
-  fineprint:     { fontFamily: FontFamily.regular, fontSize: 12, textAlign: "center", lineHeight: 17, paddingHorizontal: 12, marginTop: 4 },
 });

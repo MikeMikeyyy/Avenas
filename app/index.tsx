@@ -1,11 +1,12 @@
 import { Redirect } from "expo-router";
-import { useUserProfile } from "../contexts/UserProfileContext";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function Root() {
-  const { loaded, onboardingComplete } = useUserProfile();
+  const { loaded, session } = useAuth();
 
-  // Splash is still covering the screen while the flag loads (see AppShell).
+  // Splash is still covering the screen while the session loads (see AppShell).
   if (!loaded) return null;
 
-  return <Redirect href={onboardingComplete ? "/home" : "/onboarding"} />;
+  // Require sign-in: a session goes to the app, otherwise into onboarding/login.
+  return <Redirect href={session ? "/home" : "/onboarding"} />;
 }

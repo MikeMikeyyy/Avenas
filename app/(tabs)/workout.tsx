@@ -27,7 +27,8 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
-import { parseStoredDate, toYMD, todayYMD } from "../../utils/dates";
+import { toYMD, todayYMD } from "../../utils/dates";
+import { getTodaysWorkout, resolveTodayWorkout, buildPrevByName, normalizeExerciseName } from "../../utils/workout";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../../contexts/RestTimerContext";
 
@@ -54,21 +55,6 @@ function fmtTime(secs: number): string {
     return `${h}:${m}:${s}`;
   }
   return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
-}
-
-function getTodaysWorkout(program: SavedProgram): { name: string; exercises: Exercise[] } | null {
-  const start = parseStoredDate(program.startDate);
-  if (!start) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  start.setHours(0, 0, 0, 0);
-  const daysPassed = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  const dayIndex = (((daysPassed + (program.cycleOffset ?? 0)) % program.cycleDays) + program.cycleDays) % program.cycleDays;
-  const dayName = program.cyclePattern[dayIndex];
-  if (!dayName || dayName === "Rest") return null;
-  const workoutKey = `${dayIndex}:${dayName}`;
-  const exercises = program.workouts[workoutKey] ?? [];
-  return { name: dayName, exercises };
 }
 
 // ─── Log types ─────────────────────────────────────────────────────────────────
@@ -155,29 +141,6 @@ function KeyboardDismissIcon({ color }: { color: string }) {
       <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
     </Svg>
   );
-}
-
-// ─── buildPrevByName ──────────────────────────────────────────────────────────
-
-function buildPrevByName(
-  history: CompletedWorkout[],
-  beforeDate?: string,
-): Record<string, string[]> {
-  const sorted = [...history].sort(
-    (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
-  );
-  const filtered = beforeDate ? sorted.filter(w => w.completedAt < beforeDate) : sorted;
-  const result: Record<string, string[]> = {};
-  for (const workout of filtered) {
-    for (const ex of workout.exercises) {
-      if (result[ex.name]) continue;
-      result[ex.name] = ex.sets.map(s => {
-        if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
-        return s.weight || s.reps || "—";
-      });
-    }
-  }
-  return result;
 }
 
 // ─── DragHandleIcon ────────────────────────────────────────────────────────────
@@ -1501,20 +1464,13 @@ export default function WorkoutScreen() {
         setAllPrograms(programs);
         // Don't overwrite exercises/log if a workout is already in progress (unless forceReload after discard)
         if (found && (!isWorkoutActiveRef.current || forceReload)) {
-          const todayStr = todayYMD();
           AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY).then(overrideRaw => {
-            let workout = getTodaysWorkout(found);
-            if (overrideRaw) {
-              const override: { date: string; workoutName: string } = JSON.parse(overrideRaw);
-              if (override.date === todayStr) {
-                const dayIndex = found.cyclePattern.indexOf(override.workoutName);
-                const workoutKey = `${dayIndex}:${override.workoutName}`;
-                const exercises = found.workouts[workoutKey] ?? [];
-                workout = { name: override.workoutName, exercises };
-              }
-            }
+            const override = overrideRaw
+              ? (JSON.parse(overrideRaw) as { date: string; workoutName: string })
+              : null;
+            const workout = resolveTodayWorkout(found, override);
             // Today's workout (and any change-day override) belongs to the active program.
-            setWorkoutInfo(workout ? { ...workout, programId: found.id } : null);
+            setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: found.id } : null);
             if (workout) {
               setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
               setLog(initLog(workout.exercises));
@@ -1522,7 +1478,7 @@ export default function WorkoutScreen() {
           }).catch((e) => {
             warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e);
             const workout = getTodaysWorkout(found);
-            setWorkoutInfo(workout ? { ...workout, programId: found.id } : null);
+            setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: found.id } : null);
             if (workout) {
               setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
               setLog(initLog(workout.exercises));
@@ -2288,7 +2244,7 @@ export default function WorkoutScreen() {
                   onInputFocus={handleInputFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
-                  prevSets={prevByName[exercise.name] ?? []}
+                  prevSets={prevByName[normalizeExerciseName(exercise.name)] ?? []}
                   hideIndexLabel
                   onToggleIsometric={() => setIsometricExIds(prev => {
                     const next = new Set(prev);
