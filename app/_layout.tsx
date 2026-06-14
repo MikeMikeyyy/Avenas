@@ -12,6 +12,7 @@ import { RestTimerProvider } from "../contexts/RestTimerContext";
 import { UnitProvider } from "../contexts/UnitContext";
 import { AccountTypeProvider } from "../contexts/AccountTypeContext";
 import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileContext";
+import { NotificationPrefsProvider } from "../contexts/NotificationPrefsContext";
 import { AuthProvider, useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
@@ -64,9 +65,11 @@ export default function RootLayout() {
         <UnitProvider>
           <AccountTypeProvider>
             <UserProfileProvider>
-              <AuthProvider>
-                <AppShell />
-              </AuthProvider>
+              <NotificationPrefsProvider>
+                <AuthProvider>
+                  <AppShell />
+                </AuthProvider>
+              </NotificationPrefsProvider>
             </UserProfileProvider>
           </AccountTypeProvider>
         </UnitProvider>

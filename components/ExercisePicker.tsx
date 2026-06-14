@@ -185,7 +185,7 @@ export default function ExercisePicker({
           activeOpacity={0.6}
           style={[styles.pickerRow, { borderBottomColor: t.div }]}
         >
-          <ExerciseImage exerciseId={`custom:${e.name}`} variant="thumb" size={52} radius={10}
+          <ExerciseImage exerciseId={`custom:${e.name}`} overrideUri={e.imageUri} variant="thumb" size={52} radius={10}
             backgroundColor={t.div} fallbackColor={t.ts} />
           <View style={{ flex: 1 }}>
             <Text style={[styles.pickerExName, { color: t.tp }]} numberOfLines={1}>{e.name}</Text>

@@ -28,7 +28,8 @@ import {
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
 import { toYMD, fmtDuration } from "../../utils/dates";
-import { getWorkoutForDate, resolveTodayWorkout } from "../../utils/workout";
+import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday } from "../../utils/workout";
+import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
@@ -264,37 +265,40 @@ export default function HomeScreen() {
   const [todayOverride, setTodayOverride] = useState<{ date: string; workoutName: string } | null>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  // Re-read the preference and active program every time this screen comes into focus
-  useFocusEffect(
-    useCallback(() => {
-      if (isMax) {
-        AsyncStorage.getItem(FLAME_PREF_KEY)
-          .then((saved: string | null) => { if (saved) setFlameName(saved); })
-          .catch((e) => warnStorage("getItem", FLAME_PREF_KEY, e));
-      }
-      AsyncStorage.getItem(PROGRAMS_KEY)
-        .then((raw) => {
-          if (!raw) return;
-          const progs: SavedProgram[] = JSON.parse(raw);
-          setPrograms(progs);
-          setActiveProgram(progs.find((p) => p.status === "active") ?? null);
-        })
-        .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
-      AsyncStorage.getItem(WORKOUT_DATES_KEY)
-        .then((raw) => { if (raw) setWorkoutDates(JSON.parse(raw)); })
-        .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
-      AsyncStorage.getItem(WORKOUT_HISTORY_KEY)
-        .then((raw) => { if (raw) setWorkoutHistory(JSON.parse(raw)); })
-        .catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
-      AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY)
-        .then((raw) => {
-          if (!raw) { setTodayOverride(null); return; }
-          const override: { date: string; workoutName: string } = JSON.parse(raw);
-          setTodayOverride(override.date === toYMD(new Date()) ? override : null);
-        })
-        .catch((e) => warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e));
-    }, [isMax])
-  );
+  // Re-read the preference and active program. Stale-override filtering is left
+  // to resolveWorkoutForDate (which compares against the effective day), so the
+  // override is stored raw here.
+  const loadData = useCallback(() => {
+    if (isMax) {
+      AsyncStorage.getItem(FLAME_PREF_KEY)
+        .then((saved: string | null) => { if (saved) setFlameName(saved); })
+        .catch((e) => warnStorage("getItem", FLAME_PREF_KEY, e));
+    }
+    AsyncStorage.getItem(PROGRAMS_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const progs: SavedProgram[] = JSON.parse(raw);
+        setPrograms(progs);
+        setActiveProgram(progs.find((p) => p.status === "active") ?? null);
+      })
+      .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
+    AsyncStorage.getItem(WORKOUT_DATES_KEY)
+      .then((raw) => { if (raw) setWorkoutDates(JSON.parse(raw)); })
+      .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
+    AsyncStorage.getItem(WORKOUT_HISTORY_KEY)
+      .then((raw) => { if (raw) setWorkoutHistory(JSON.parse(raw)); })
+      .catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
+    AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY)
+      .then((raw) => { setTodayOverride(raw ? JSON.parse(raw) : null); })
+      .catch((e) => warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e));
+  }, [isMax]);
+
+  // Re-read every time this screen comes into focus, and re-resolve when the
+  // training day rolls over (midnight / late-night cutoff / app foreground) so
+  // Home never keeps showing yesterday's schedule. Stays in lockstep with the
+  // Workout screen through the shared getEffectiveToday logic.
+  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
+  useDayRollover(loadData);
 
   const restDayQuote = useMemo(() => {
     const today = new Date();
@@ -341,10 +345,12 @@ export default function HomeScreen() {
       .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
   }, [workoutHistory]);
 
-  const isTodayCompleted = useMemo(() => {
-    const todayStr = toYMD(new Date());
-    return workoutHistory.some(w => w.date === todayStr);
-  }, [workoutHistory]);
+  const effectiveToday = getEffectiveToday(activeProgram, workoutHistory);
+
+  const isTodayCompleted = useMemo(
+    () => workoutHistory.some(w => w.date === effectiveToday),
+    [workoutHistory, effectiveToday],
+  );
 
   const weeklyStats = useMemo(() => {
     const today = new Date();
@@ -438,7 +444,7 @@ export default function HomeScreen() {
         </View>
 
         {(() => {
-          const resolved = resolveTodayWorkout(activeProgram, todayOverride);
+          const resolved = resolveWorkoutForDate(activeProgram, todayOverride, effectiveToday);
           const todaysWorkout = resolved
             ? { name: resolved.name, exerciseCount: resolved.exercises.length }
             : null;

@@ -19,6 +19,8 @@ import ChatIcon from "../icons/ChatIcon";
 import PeopleIcon from "../icons/PeopleIcon";
 import PlusIcon from "../icons/PlusIcon";
 import TrashIcon from "../TrashIcon";
+import UnreadBadge from "../UnreadBadge";
+import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -68,6 +70,7 @@ export default function MyPTHome() {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const unreadMessages = useUnreadMessages();
 
   const [pt, setPT] = useState<AssignedPT | null>(null);
   const [received, setReceived] = useState<SharedProgram[]>([]);
@@ -255,6 +258,7 @@ export default function MyPTHome() {
                 <Text style={[styles.trainersBtnText, { color: t.tp }]}>Messages</Text>
               </View>
             </NeuCard>
+            <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
           </BounceButton>
         </View>
 
@@ -662,6 +666,7 @@ const styles = StyleSheet.create({
   topGradient:  { position: "absolute", left: 0, right: 0, zIndex: 5 },
   topPills: { flexDirection: "row", gap: 10 },
   trainersBtnWrap: { alignSelf: "flex-start", marginBottom: 14 },
+  msgBadge:     { position: "absolute", top: -5, right: -5 },
   trainersBtn:  { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, gap: 8 },
   trainersBtnText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   title:        { fontFamily: FontFamily.bold, fontSize: 32 },

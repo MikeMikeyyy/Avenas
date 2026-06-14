@@ -197,6 +197,19 @@ export async function setCacheOwner(userId: string): Promise<void> {
   await setJSON(CACHE_OWNER_KEY, userId);
 }
 
+/**
+ * Permanently delete the signed-in user's account: the server RPC removes their
+ * auth user (which cascades to all their cloud data), then we wipe the local
+ * cache and sign out.
+ */
+export async function deleteAccount(): Promise<void> {
+  const { error } = await supabase.rpc("delete_own_account");
+  if (error) throw new Error(error.message);
+  await clearLocalUserData();
+  await removeKey(CACHE_OWNER_KEY);
+  await supabase.auth.signOut();
+}
+
 /** Wipe the locally-cached user data + in-progress drafts (not auth/theme/unit). */
 export async function clearLocalUserData(): Promise<void> {
   await Promise.all([
@@ -263,6 +276,35 @@ export async function pushProfile(
     })
     .eq("id", userId);
   if (error) throw new Error(`save profile: ${error.message}`);
+}
+
+/** Update just the display name on this account's profile. */
+export async function updateProfileName(userId: string, name: string): Promise<void> {
+  const { error } = await supabase.from("profiles").update({ name }).eq("id", userId);
+  if (error) throw new Error(error.message);
+}
+
+/** Start an email change. Supabase emails a confirmation link to the new address;
+ *  the change only takes effect once that link is clicked. */
+export async function updateEmail(newEmail: string): Promise<void> {
+  const { error } = await supabase.auth.updateUser({ email: newEmail.trim() });
+  if (error) throw new Error(error.message);
+}
+
+/** Change the signed-in user's password. We re-verify the current password first
+ *  by re-signing in (updateUser trusts the session alone, so this proves the
+ *  person at the keyboard actually knows the old password). On success the user
+ *  stays signed in with a fresh session. */
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  const email = user?.email;
+  if (!email) throw new Error("You need to be signed in to change your password.");
+
+  const { error: reauthError } = await supabase.auth.signInWithPassword({ email, password: currentPassword });
+  if (reauthError) throw new Error("Your current password is incorrect.");
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw new Error(error.message);
 }
 
 export async function pullProfile(userId: string): Promise<CloudProfile | null> {

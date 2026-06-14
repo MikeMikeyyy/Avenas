@@ -10,6 +10,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
+import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { signInWithEmail, signInWithProvider, signUpWithEmail } from "../lib/auth";
 
@@ -44,14 +45,16 @@ export default function SignupScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const emailOk = EMAIL_RE.test(email.trim());
   const canSubmit = emailOk && password.length >= 6;
 
   // After auth, the per-account profile step (name + role) takes over; a
-  // returning account skips it automatically and lands on Home.
-  const afterAuth = () => router.replace("/complete-profile");
+  // returning account skips it automatically and lands on Home. `from` lets that
+  // screen's back button return here (this screen was replaced off the stack).
+  const afterAuth = () => router.replace({ pathname: "/complete-profile", params: { from: "signup" } });
 
   const onSubmit = async () => {
     if (!canSubmit || busy) return;
@@ -139,18 +142,29 @@ export default function SignupScreen() {
 
         <Text style={[styles.label, { color: t.ts }]}>PASSWORD</Text>
         <NeuCard dark={isDark} radius={16} style={styles.field}>
-          <TextInput
-            style={[styles.input, { color: t.tp }]}
-            placeholder="At least 6 characters"
-            placeholderTextColor={t.ts}
-            value={password}
-            onChangeText={setPassword}
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry
-            returnKeyType="done"
-            textContentType="newPassword"
-          />
+          <View style={styles.passwordRow}>
+            <TextInput
+              style={[styles.input, styles.passwordInput, { color: t.tp }]}
+              placeholder="At least 6 characters"
+              placeholderTextColor={t.ts}
+              value={password}
+              onChangeText={setPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={!showPassword}
+              returnKeyType="done"
+              textContentType="newPassword"
+            />
+            <TouchableOpacity
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowPassword(v => !v); }}
+              style={styles.eyeBtn}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+            >
+              <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color={t.ts} />
+            </TouchableOpacity>
+          </View>
         </NeuCard>
 
         <View style={styles.ctaSection}>
@@ -192,6 +206,8 @@ export default function SignupScreen() {
           </Text>
         </View>
       </KeyboardAwareScrollView>
+
+      <KeyboardDismissButton />
     </View>
   );
 }
@@ -207,6 +223,9 @@ const styles = StyleSheet.create({
   label:         { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4, marginTop: 18 },
   field:         { borderRadius: 16 },
   input:         { fontFamily: FontFamily.regular, fontSize: 16, paddingVertical: 16, paddingHorizontal: 18 },
+  passwordRow:   { flexDirection: "row", alignItems: "center" },
+  passwordInput: { flex: 1, paddingRight: 8 },
+  eyeBtn:        { paddingHorizontal: 16, paddingVertical: 16, alignItems: "center", justifyContent: "center" },
   ctaSection:    { marginTop: 28, gap: 16 },
   ctaWrap:       { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   ctaDisabled:   { opacity: 0.4 },

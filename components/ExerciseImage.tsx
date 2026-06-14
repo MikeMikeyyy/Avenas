@@ -18,6 +18,12 @@ interface Props {
   exerciseId: string;
   /** "thumb" = static still (lists), "full" = animated GIF (detail). Default "thumb". */
   variant?: "thumb" | "full";
+  /**
+   * A user-supplied photo URI (e.g. a custom exercise's `imageUri`). When set it
+   * takes precedence over the bundled catalogue lookup — custom exercises aren't
+   * in the bundle, so without this they'd always fall back to the dumbbell tile.
+   */
+  overrideUri?: string;
   /** Square side length in px. */
   size: number;
   /** Corner radius. Default 12. */
@@ -32,16 +38,20 @@ interface Props {
 export default function ExerciseImage({
   exerciseId,
   variant = "thumb",
+  overrideUri,
   size,
   radius = 12,
   backgroundColor,
   fallbackColor,
   style,
 }: Props) {
+  // A custom photo (overrideUri) wins; otherwise resolve a bundled asset.
   // "full" prefers the animated GIF, but falls back to the static photo when
   // no GIF is bundled (the current free-exercise-db set is photos only).
-  const source = (variant === "full" ? EXERCISE_GIFS[exerciseId] : undefined)
-    ?? EXERCISE_THUMBS[exerciseId];
+  const source = overrideUri
+    ? { uri: overrideUri }
+    : (variant === "full" ? EXERCISE_GIFS[exerciseId] : undefined)
+      ?? EXERCISE_THUMBS[exerciseId];
 
   return (
     <View style={[{ width: size, height: size, borderRadius: radius, backgroundColor, overflow: "hidden" }, styles.center, style]}>

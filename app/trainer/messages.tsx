@@ -27,7 +27,8 @@ import MessageComposeSheet from "../../components/trainer/MessageComposeSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
-import { loadChatContacts, ensureSeededContacts, broadcastMessage, loadReads, isThreadUnread } from "../../utils/chatStore";
+import { loadChatContacts, ensureSeededContacts, broadcastMessage, loadReads, countUnreadInThread } from "../../utils/chatStore";
+import UnreadBadge from "../../components/UnreadBadge";
 import { loadBlockedIds, loadHiddenMessageIds } from "../../utils/moderation";
 import type { ChatContact, ChatThreads, ChatReads } from "../../constants/chat";
 
@@ -44,7 +45,7 @@ function fmtAgo(iso: string): string {
   return `${Math.floor(days / 7)}w`;
 }
 
-type Row = ChatContact & { lastText: string; lastAtISO: string; unread: boolean; sortKey: number };
+type Row = ChatContact & { lastText: string; lastAtISO: string; unreadCount: number; unread: boolean; sortKey: number };
 
 export default function MessagesScreen() {
   const router = useRouter();
@@ -63,11 +64,13 @@ export default function MessagesScreen() {
       .map(c => {
         const msgs = (threads[c.id] ?? []).filter(m => !hidden.has(m.id)); // drop reported messages
         const last = msgs[msgs.length - 1];
+        const unreadCount = countUnreadInThread(msgs, reads[c.id]);
         return {
           ...c,
           lastText: last ? (last.mine ? `You: ${last.text}` : last.text) : "Tap to start the conversation",
           lastAtISO: last?.sentAtISO ?? "",
-          unread: isThreadUnread(msgs, reads[c.id]),
+          unreadCount,
+          unread: unreadCount > 0,
           sortKey: last ? new Date(last.sentAtISO).getTime() : 0,
         };
       })
@@ -232,7 +235,7 @@ export default function MessagesScreen() {
                       <Text style={[styles.preview, { color: r.unread ? t.tp : t.ts, fontFamily: r.unread ? FontFamily.semibold : FontFamily.regular }]} numberOfLines={1}>
                         {r.lastText}
                       </Text>
-                      {r.unread ? <View style={[styles.unreadDot, { backgroundColor: ACCT }]} /> : null}
+                      <UnreadBadge count={r.unreadCount} />
                     </View>
                   </View>
                 </View>
@@ -274,7 +277,6 @@ const styles = StyleSheet.create({
   time:        { fontFamily: FontFamily.regular, fontSize: 12 },
   rowBottom:   { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 3 },
   preview:     { flex: 1, fontSize: 13 },
-  unreadDot:   { width: 9, height: 9, borderRadius: 5 },
 
   emptyInner:  { padding: 24, alignItems: "center", gap: 8 },
   emptyIcon:   { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", marginBottom: 4 },

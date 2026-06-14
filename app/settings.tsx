@@ -12,6 +12,7 @@ import { useAccountType } from "../contexts/AccountTypeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { removeKey } from "../utils/storage";
 import { supabase } from "../lib/supabase";
+import { deleteAccount } from "../lib/cloud";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import PeopleIcon from "../components/icons/PeopleIcon";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -50,9 +51,9 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
   {
     title: "Account",
     items: [
-      { icon: "person-outline",        label: "Profile"           },
-      { icon: "notifications-outline", label: "Notifications"     },
-      { icon: "", label: "Privacy & Security", renderIcon: (c: string) => (
+      { icon: "person-outline",        label: "Profile",          route: "/profile" },
+      { icon: "notifications-outline", label: "Notifications",     route: "/notifications" },
+      { icon: "", label: "Privacy & Security", route: "/privacy-security", renderIcon: (c: string) => (
         <View style={{ transform: [{ scaleY: 0.9 }] }}>
           <Ionicons name="lock-closed-outline" size={20} color={c} />
         </View>
@@ -127,6 +128,29 @@ export default function SettingsScreen() {
         },
       },
     ]);
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      "This permanently deletes your account and all your data. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteAccount();
+              resetOnboarding();
+              router.replace("/onboarding");
+            } catch (e) {
+              Alert.alert("Couldn't delete account", e instanceof Error ? e.message : "Please try again.");
+            }
+          },
+        },
+      ],
+    );
   };
   const unitOffset        = useSharedValue(isKg ? 0 : 1); // 0 = kg, 1 = lbs
   const userTriggeredRef  = useRef(false);
@@ -340,6 +364,16 @@ export default function SettingsScreen() {
             <View style={styles.rowLeft}>
               <Ionicons name="log-out-outline" size={20} color={Colors.error} />
               <Text style={[styles.rowLabel, { color: Colors.error }]}>Sign Out</Text>
+            </View>
+          </TouchableOpacity>
+        </NeuCard>
+
+        {/* Delete account */}
+        <NeuCard dark={isDark} style={styles.signOutCard}>
+          <TouchableOpacity activeOpacity={0.7} style={styles.row} onPress={handleDeleteAccount}>
+            <View style={styles.rowLeft}>
+              <Ionicons name="trash-outline" size={20} color={Colors.error} />
+              <Text style={[styles.rowLabel, { color: Colors.error }]}>Delete Account</Text>
             </View>
           </TouchableOpacity>
         </NeuCard>

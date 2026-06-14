@@ -11,6 +11,8 @@ import {
   getWorkoutForDate,
   getTodaysWorkout,
   resolveTodayWorkout,
+  resolveWorkoutForDate,
+  getEffectiveToday,
   buildPrevByName,
   normalizeExerciseName,
 } from "../utils/workout";
@@ -110,6 +112,49 @@ eq(
   "resolveToday free workout, no program",
 );
 eq(resolveTodayWorkout(null, null), null, "resolveToday null program + null override -> null");
+
+// ── resolveWorkoutForDate (explicit-date, override-aware) ───────────────────────
+eq(
+  resolveWorkoutForDate(p, null, "2026-01-01"),
+  { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"] },
+  "resolveForDate no override -> scheduled",
+);
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Pull" }, "2026-01-01"),
+  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"] },
+  "resolveForDate override matching date -> override day",
+);
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-02", workoutName: "Pull" }, "2026-01-01")?.name,
+  "Push",
+  "resolveForDate override for another date ignored",
+);
+eq(resolveWorkoutForDate(p, null, "2026-01-04"), null, "resolveForDate Rest day -> null");
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Rest" }, "2026-01-01"),
+  null,
+  "resolveForDate Rest override on a training day -> null",
+);
+eq(
+  resolveWorkoutForDate(null, { date: "2026-01-01", workoutName: "Free" }, "2026-01-01"),
+  { dayIndex: -1, name: "Free", exercises: [] },
+  "resolveForDate free workout, no program",
+);
+eq(resolveWorkoutForDate(null, null, "2026-01-01"), null, "resolveForDate null program + null override -> null");
+
+// ── getEffectiveToday: late-night grace window ──────────────────────────────────
+// makeProgram cyclePattern (from 01 Jan 2026): Push Pull Legs Rest Push Pull Rest
+const at = (y: number, mo: number, d: number, h: number) => new Date(y, mo - 1, d, h, 0, 0);
+eq(getEffectiveToday(p, [], at(2026, 1, 6, 10)), "2026-01-06", "effectiveToday past cutoff -> calendar day");
+eq(getEffectiveToday(p, [], at(2026, 1, 6, 1)), "2026-01-05", "effectiveToday pre-cutoff, yesterday unfinished -> yesterday");
+eq(getEffectiveToday(p, [], at(2026, 1, 6, 3)), "2026-01-06", "effectiveToday exactly at cutoff -> calendar day");
+eq(
+  getEffectiveToday(p, [makeWorkout("y", "2026-01-05T23:00:00.000Z", "Bench", "100", "5")], at(2026, 1, 6, 1)),
+  "2026-01-06",
+  "effectiveToday pre-cutoff but yesterday already logged -> rolls over",
+);
+eq(getEffectiveToday(p, [], at(2026, 1, 5, 1)), "2026-01-05", "effectiveToday pre-cutoff, yesterday was Rest -> calendar day");
+eq(getEffectiveToday(null, [], at(2026, 1, 6, 1)), "2026-01-06", "effectiveToday no program -> calendar day");
 
 // ── buildPrevByName: newest wins, name-normalized, beforeDate filter ────────────
 const hist = [

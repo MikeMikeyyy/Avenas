@@ -10,6 +10,11 @@ export type CustomExercise = {
   muscles: SelectableMuscle[];
   imageUri?: string;
   videoUri?: string;
+  /** Play the demo clip muted. Controls playback only (the audio track is kept). */
+  muted?: boolean;
+  /** Numbered how-to steps, rendered like the bundled catalogue's `instructions`. */
+  steps?: string[];
+  /** Legacy single-paragraph description. Kept for exercises saved before steps existed. */
   description?: string;
 };
 

@@ -71,7 +71,7 @@ const TAB_LABELS: Record<string, string> = {
   "trainer-hub": "Trainer",
 };
 
-const BAR_HEIGHT = 72;
+const BAR_HEIGHT = 64;
 const PILL_INSET = 4;
 
 function TabItem({ route, focused, onPress, color }: { route: any; focused: boolean; onPress: () => void; color: string }) {

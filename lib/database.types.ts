@@ -70,6 +70,8 @@ export type CustomExerciseRow = {
   image_uri: string | null;
   video_uri: string | null;
   description: string | null;
+  steps: string[] | null;
+  muted: boolean;
   created_at: string;
   updated_at: string;
 };

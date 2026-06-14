@@ -11,6 +11,7 @@ import {
   Keyboard,
   Linking,
   Platform,
+  Switch,
 } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -58,7 +59,8 @@ export default function CreateCustomExerciseScreen() {
   const [selectedMuscles, setSelectedMuscles] = useState<SelectableMuscle[]>([]);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [videoUri, setVideoUri] = useState<string | null>(null);
-  const [description, setDescription] = useState("");
+  const [muted, setMuted] = useState(false);
+  const [steps, setSteps] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [slotCount, setSlotCount] = useState(0);
   const [kbHeight, setKbHeight] = useState(0);
@@ -91,7 +93,16 @@ export default function CreateCustomExerciseScreen() {
       setSelectedMuscles(ex.muscles);
       setImageUri(ex.imageUri ?? null);
       setVideoUri(ex.videoUri ?? null);
-      setDescription(ex.description ?? "");
+      setMuted(ex.muted ?? false);
+      // Prefer saved steps; otherwise seed the editor from a legacy description
+      // (one step per line) so old exercises convert cleanly when re-saved.
+      setSteps(
+        ex.steps && ex.steps.length > 0
+          ? ex.steps
+          : ex.description
+            ? ex.description.split("\n").map(s => s.trim()).filter(Boolean)
+            : []
+      );
     }).catch(() => {});
   }, [editName]);
 
@@ -99,6 +110,14 @@ export default function CreateCustomExerciseScreen() {
     setSelectedMuscles(prev =>
       prev.includes(muscle) ? prev.filter(m => m !== muscle) : [...prev, muscle]
     );
+  }, []);
+
+  const addStep = useCallback(() => setSteps(prev => [...prev, ""]), []);
+  const updateStep = useCallback((i: number, text: string) => {
+    setSteps(prev => prev.map((s, idx) => (idx === i ? text : s)));
+  }, []);
+  const removeStep = useCallback((i: number) => {
+    setSteps(prev => prev.filter((_, idx) => idx !== i));
   }, []);
 
   // Returns true if permission is granted, false otherwise (shows appropriate alert)
@@ -146,6 +165,9 @@ export default function CreateCustomExerciseScreen() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["videos"],
+        // Cap the export at 720p so a 4K source is re-encoded down on pick,
+        // keeping demo clips small. iOS only; Android has no transcode hook here.
+        videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
       });
       if (!result.canceled) {
         const dest = `${FileSystem.documentDirectory}exercise_video_${Date.now()}.mp4`;
@@ -164,12 +186,13 @@ export default function CreateCustomExerciseScreen() {
     try {
       const raw = await AsyncStorage.getItem(CUSTOM_KEY);
       const current: CustomExercise[] = raw ? JSON.parse(raw) : [];
+      const cleanSteps = steps.map(s => s.trim()).filter(Boolean);
       const updated: CustomExercise = {
         name,
         muscles: selectedMuscles,
         ...(imageUri ? { imageUri } : {}),
-        ...(videoUri ? { videoUri } : {}),
-        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(videoUri ? { videoUri, ...(muted ? { muted: true } : {}) } : {}),
+        ...(cleanSteps.length > 0 ? { steps: cleanSteps } : {}),
       };
       if (isEditMode) {
         const idx = current.findIndex(e => e.name === editName);
@@ -337,17 +360,36 @@ export default function CreateCustomExerciseScreen() {
         <Text style={[styles.fieldLabel, { color: t.ts }]}>VIDEO DEMO <Text style={{ fontFamily: FontFamily.regular }}>— optional</Text></Text>
         <NeuCard dark={isDark} style={styles.mediaCard}>
           {videoUri ? (
-            <View style={styles.mediaPreviewRow}>
-              <View style={[styles.videoIcon, { backgroundColor: ACCT + "22" }]}>
-                <Ionicons name="play" size={20} color={ACCT} />
+            <>
+              <View style={styles.mediaPreviewRow}>
+                <View style={[styles.videoIcon, { backgroundColor: ACCT + "22" }]}>
+                  <Ionicons name="play" size={20} color={ACCT} />
+                </View>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={[styles.mediaSetText, { color: t.tp }]}>Video added</Text>
+                  <TouchableOpacity onPress={() => setVideoUri(null)} activeOpacity={0.7}>
+                    <Text style={[styles.mediaRemoveText, { color: t.ts }]}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-              <View style={{ flex: 1, gap: 4 }}>
-                <Text style={[styles.mediaSetText, { color: t.tp }]}>Video added</Text>
-                <TouchableOpacity onPress={() => setVideoUri(null)} activeOpacity={0.7}>
-                  <Text style={[styles.mediaRemoveText, { color: t.ts }]}>Remove</Text>
-                </TouchableOpacity>
+              <View style={[styles.muteRow, { borderTopColor: t.div }]}>
+                <View style={styles.muteLabelRow}>
+                  <Ionicons
+                    name={muted ? "volume-mute-outline" : "volume-high-outline"}
+                    size={18}
+                    color={t.ts}
+                  />
+                  <Text style={[styles.muteLabel, { color: t.tp }]}>Mute audio</Text>
+                </View>
+                <Switch
+                  value={muted}
+                  onValueChange={setMuted}
+                  trackColor={{ true: ACCT, false: t.div }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={t.div}
+                />
               </View>
-            </View>
+            </>
           ) : (
             <TouchableOpacity onPress={pickVideo} activeOpacity={0.7} style={styles.mediaBtn}>
               <Ionicons name="videocam-outline" size={20} color={ACCT} />
@@ -356,21 +398,48 @@ export default function CreateCustomExerciseScreen() {
           )}
         </NeuCard>
 
-        {/* Description */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>DESCRIPTION <Text style={{ fontFamily: FontFamily.regular }}>— optional</Text></Text>
-        <NeuCard dark={isDark} style={styles.inputCard}>
-          <TextInput
-            style={[styles.textInput, styles.descriptionInput, { color: t.tp }]}
-            placeholder="How to perform this exercise..."
-            placeholderTextColor={t.ts}
-            value={description}
-            onChangeText={setDescription}
-            multiline
-            numberOfLines={4}
-            textAlignVertical="top"
-            onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
-          />
-        </NeuCard>
+        {/* Steps — numbered how-to, added one at a time. Renders as green
+            numbered circles on the exercise summary, like bundled exercises. */}
+        <Text style={[styles.fieldLabel, { color: t.ts }]}>STEPS <Text style={{ fontFamily: FontFamily.regular }}>— optional</Text></Text>
+        {steps.map((step, i) => (
+          <NeuCard key={i} dark={isDark} style={styles.stepCard}>
+            <View style={styles.stepEditorRow}>
+              <View style={[styles.stepNum, { backgroundColor: ACCT + "22" }]}>
+                <Text style={[styles.stepNumText, { color: ACCT }]}>{i + 1}</Text>
+              </View>
+              <TextInput
+                style={[styles.stepInput, { color: t.tp }]}
+                placeholder={`Step ${i + 1}`}
+                placeholderTextColor={t.ts}
+                value={step}
+                onChangeText={text => updateStep(i, text)}
+                multiline
+                textAlignVertical="top"
+                onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
+              />
+              <TouchableOpacity
+                onPress={() => removeStep(i)}
+                hitSlop={8}
+                activeOpacity={0.7}
+                style={styles.stepRemoveBtn}
+                accessibilityLabel={`Remove step ${i + 1}`}
+                accessibilityRole="button"
+              >
+                <Ionicons name="close-circle" size={22} color={t.ts} />
+              </TouchableOpacity>
+            </View>
+          </NeuCard>
+        ))}
+        <TouchableOpacity
+          onPress={addStep}
+          activeOpacity={0.7}
+          style={[styles.addStepBtn, { borderColor: t.div }]}
+          accessibilityLabel="Add step"
+          accessibilityRole="button"
+        >
+          <Ionicons name="add-circle-outline" size={20} color={ACCT} />
+          <Text style={[styles.addStepText, { color: ACCT }]}>Add Step</Text>
+        </TouchableOpacity>
 
         {/* Save button — inline in scroll, never moves with keyboard */}
         <BounceButton
@@ -420,7 +489,6 @@ const styles = StyleSheet.create({
   fieldLabel:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 10, marginTop: 4 },
   inputCard:       { marginBottom: 20, borderRadius: 16 },
   textInput:       { fontFamily: FontFamily.regular, fontSize: 16, paddingHorizontal: 18, paddingVertical: 16 },
-  descriptionInput:{ minHeight: 100 },
   muscleGrid:      { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 20 },
   muscleChip:      { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
   muscleChipText:  { fontFamily: FontFamily.semibold, fontSize: 13 },
@@ -432,6 +500,17 @@ const styles = StyleSheet.create({
   videoIcon:       { width: 64, height: 64, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   mediaSetText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
   mediaRemoveText: { fontFamily: FontFamily.regular, fontSize: 13 },
+  muteRow:         { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  muteLabelRow:    { flexDirection: "row", alignItems: "center", gap: 8 },
+  muteLabel:       { fontFamily: FontFamily.semibold, fontSize: 14 },
+  stepCard:        { marginBottom: 10, borderRadius: 16 },
+  stepEditorRow:   { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  stepNum:         { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", marginTop: 6 },
+  stepNumText:     { fontFamily: FontFamily.bold, fontSize: 13 },
+  stepInput:       { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21, paddingTop: 6, paddingBottom: 6, minHeight: 38 },
+  stepRemoveBtn:   { marginTop: 6 },
+  addStepBtn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderWidth: 1, borderStyle: "dashed", borderRadius: 16, paddingVertical: 15, marginBottom: 20 },
+  addStepText:     { fontFamily: FontFamily.semibold, fontSize: 15 },
   saveBtn:         { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: ACCT, borderRadius: 16, paddingVertical: 16 },
   saveBtnText:     { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
 });

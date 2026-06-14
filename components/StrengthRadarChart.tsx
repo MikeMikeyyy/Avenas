@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { View, Text, StyleSheet, useWindowDimensions } from "react-native";
-import Svg, { Path, Polygon, Circle } from "react-native-svg";
+import Svg, { Path } from "react-native-svg";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 
 import NeuCard from "./NeuCard";
@@ -156,29 +156,54 @@ export default function StrengthRadarChart({
     });
   }, [stats, totalVolume, metric, unit]);
 
-  const maxRaw = useMemo(
-    () => points.reduce((m, p) => (p.raw > m ? p.raw : m), 0),
-    [points],
-  );
-  const hasData = maxRaw > 0;
+  // Total across groups — the basis for each group's distribution share.
+  const totalRaw = useMemo(() => points.reduce((s, p) => s + p.raw, 0), [points]);
+  const hasData = totalRaw > 0;
 
-  // Decorative petal base: 6 wedges × 3 concentric ring segments.
-  // The side-gap between adjacent wedges is a constant *width* (≈2·g px) at
-  // every radius: the angular trim per edge = g / r, so larger radii trim a
-  // smaller angle. Clamped so the innermost ring can't over-trim past 0°.
-  const petals = useMemo(() => {
+  // "Smart" fill radius. A group fills relative to how its share of the total
+  // compares to an EVEN split across all axes — not relative to the strongest
+  // group (which would always pin one petal to full, so the radar "stayed
+  // filled out" no matter how you trained). A group at exactly its fair share
+  // (1/6 of the total) fills halfway; a group carrying FOCUS_FULL× its fair
+  // share (or more) fills completely; neglected groups stay near empty. So the
+  // radar spreads to reflect the actual distribution of training across the six
+  // muscle groups, consistently for whichever metric (volume / frequency /
+  // load) is active.
+  const radiusForRaw = useMemo(() => {
+    const evenShare = 1 / RADAR_GROUPS.length;
+    const FOCUS_FULL = 2; // a group at 2× its even share fills the petal
+    return (raw: number) => {
+      if (totalRaw <= 0) return 0;
+      const focus = raw / totalRaw / evenShare; // 1 = fair share, >1 = emphasized
+      return Math.min(focus / FOCUS_FULL, 1) * R;
+    };
+  }, [totalRaw, R]);
+
+  // Shared petal geometry: 6 wedges × 3 concentric ring "bars". The side-gap
+  // between adjacent wedges is a constant *width* (≈2·g px) at every radius:
+  // the angular trim per edge = g / r, so larger radii trim a smaller angle.
+  // Clamped so the innermost ring can't over-trim past 0°.
+  const petalGeom = useMemo(() => {
     const hole = R * 0.16; // small center hole
     const ringGap = R * 0.04;
     const g = S * 0.009; // half-gap, in px (constant across radii)
     const band = (R - hole - 2 * ringGap) / 3;
     const cr = Math.min(band * 0.4, S * 0.014); // corner radius — a little curve
     const halfGapDeg = (r: number) => Math.min(24, (g / r) * RAD2DEG);
+    const rings = [0, 1, 2].map(k => {
+      const ri = hole + k * (band + ringGap);
+      return { ri, ro: ri + band };
+    });
+    return { cr, halfGapDeg, rings };
+  }, [R, S]);
+
+  // Faint base "bars" — the empty shells each muscle group's fill grows into.
+  const basePetals = useMemo(() => {
+    const { cr, halfGapDeg, rings } = petalGeom;
     const paths: string[] = [];
     for (let i = 0; i < 6; i++) {
       const c = axisAngle(i);
-      for (let k = 0; k < 3; k++) {
-        const ri = hole + k * (band + ringGap);
-        const ro = ri + band;
+      for (const { ri, ro } of rings) {
         const to = halfGapDeg(ro);
         const ti = halfGapDeg(ri);
         paths.push(
@@ -187,19 +212,35 @@ export default function StrengthRadarChart({
       }
     }
     return paths;
-  }, [cx, cy, R, S]);
+  }, [cx, cy, petalGeom]);
 
-  // Data polygon vertices (normalized to the strongest group).
-  const polygonPts = useMemo(() => {
-    if (!hasData) return "";
-    return points
-      .map(p => {
-        const r = (p.raw / maxRaw) * R;
-        const { x, y } = polar(cx, cy, r, p.angle);
-        return `${x},${y}`;
-      })
-      .join(" ");
-  }, [points, maxRaw, hasData, cx, cy, R]);
+  // Per-group fill: each muscle group's wedge fills radially from the center
+  // outward, sized by `radiusForRaw` so it reflects that group's share of the
+  // training distribution (see above). The fill is drawn ring-by-ring so it
+  // lands inside the same 3 "bars" as the base (ring gaps preserved), and the
+  // topmost reached ring is clipped to a partial height when the value lands
+  // mid-bar. This replaces the old connected radar polygon (a single line
+  // through the bars) with bars that spread to match how you trained.
+  const fillPetals = useMemo(() => {
+    if (!hasData) return [];
+    const { cr, halfGapDeg, rings } = petalGeom;
+    const paths: string[] = [];
+    points.forEach((p, i) => {
+      const c = axisAngle(i);
+      const rFill = radiusForRaw(p.raw);
+      for (const { ri, ro } of rings) {
+        const top = Math.min(ro, rFill);
+        if (top <= ri + 0.5) continue; // bar not (meaningfully) reached
+        const to = halfGapDeg(top);
+        const ti = halfGapDeg(ri);
+        const segCr = Math.min(cr, (top - ri) * 0.4); // shrink corners for thin partials
+        paths.push(
+          annularSector(cx, cy, ri, top, c - 30 + to, c + 30 - to, c - 30 + ti, c + 30 - ti, segCr),
+        );
+      }
+    });
+    return paths;
+  }, [points, radiusForRaw, hasData, cx, cy, petalGeom]);
 
   // Labels are placed on a ring (labelR) radially aligned with each axis, so
   // each one sits just outside the petal it describes. Boxes are centered on
@@ -241,26 +282,12 @@ export default function StrengthRadarChart({
 
         <View style={[styles.chartWrap, { width: S, height: S }]}>
           <Svg width={S} height={S}>
-            {petals.map((d, idx) => (
+            {basePetals.map((d, idx) => (
               <Path key={`petal-${idx}`} d={d} fill={t.ts} fillOpacity={0.1} />
             ))}
-            {hasData ? (
-              <>
-                <Polygon
-                  points={polygonPts}
-                  fill={ACCT}
-                  fillOpacity={0.18}
-                  stroke={ACCT}
-                  strokeWidth={2}
-                  strokeLinejoin="round"
-                />
-                {points.map(p => {
-                  const r = (p.raw / maxRaw) * R;
-                  const { x, y } = polar(cx, cy, r, p.angle);
-                  return <Circle key={`dot-${p.group}`} cx={x} cy={y} r={3.5} fill={ACCT} />;
-                })}
-              </>
-            ) : null}
+            {fillPetals.map((d, idx) => (
+              <Path key={`fill-${idx}`} d={d} fill={ACCT} fillOpacity={0.9} />
+            ))}
           </Svg>
 
           {/* Labels sit OUTSIDE the petals, each radially aligned to its axis. */}

@@ -10,8 +10,11 @@ import { useTheme } from "../contexts/ThemeContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
+import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { signInWithEmail, signInWithProvider } from "../lib/auth";
+import { signInWithEmail, signInWithProvider, signOut } from "../lib/auth";
+import { supabase } from "../lib/supabase";
+import { pullProfile } from "../lib/cloud";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -43,12 +46,15 @@ export default function LoginScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const canSubmit = EMAIL_RE.test(email.trim()) && password.length > 0;
 
   // After auth, the profile step loads this account's saved profile and goes Home.
-  const afterAuth = () => router.replace("/complete-profile");
+  // `from` lets that screen's back button return here (this screen was replaced,
+  // so it's no longer on the back stack).
+  const afterAuth = () => router.replace({ pathname: "/complete-profile", params: { from: "login" } });
 
   const onSubmit = async () => {
     if (!canSubmit || busy) return;
@@ -59,7 +65,18 @@ export default function LoginScreen() {
       afterAuth();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert("Couldn't log in", /invalid login/i.test(msg) ? "Wrong email or password." : msg);
+      if (/invalid login/i.test(msg)) {
+        Alert.alert(
+          "Account not found",
+          "We couldn't log you in with that email and password. If you're new to Avenas, sign up to create an account.",
+          [
+            { text: "Try again", style: "cancel" },
+            { text: "Sign up", onPress: () => router.replace("/signup") },
+          ],
+        );
+      } else {
+        Alert.alert("Couldn't log in", msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -71,7 +88,23 @@ export default function LoginScreen() {
     setBusy(true);
     try {
       await signInWithProvider("google");
-      afterAuth();
+      const { data } = await supabase.auth.getSession();
+      const uid = data.session?.user.id;
+      const profile = uid ? await pullProfile(uid) : null;
+      if (profile && !profile.complete) {
+        // No finished account exists for this Google account yet — treat as sign-up.
+        // Cancelling must sign out the half-created session so the user isn't stuck signed in.
+        Alert.alert(
+          "New here?",
+          "There's no Avenas account for that Google account yet — let's get you set up.",
+          [
+            { text: "Cancel", style: "cancel", onPress: () => { void signOut(); } },
+            { text: "Continue", onPress: afterAuth },
+          ],
+        );
+      } else {
+        afterAuth();
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!/cancel/i.test(msg)) Alert.alert("Google sign-in failed", msg);
@@ -123,18 +156,29 @@ export default function LoginScreen() {
 
         <Text style={[styles.label, { color: t.ts }]}>PASSWORD</Text>
         <NeuCard dark={isDark} radius={16} style={styles.field}>
-          <TextInput
-            style={[styles.input, { color: t.tp }]}
-            placeholder="Your password"
-            placeholderTextColor={t.ts}
-            value={password}
-            onChangeText={setPassword}
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry
-            returnKeyType="done"
-            textContentType="password"
-          />
+          <View style={styles.passwordRow}>
+            <TextInput
+              style={[styles.input, styles.passwordInput, { color: t.tp }]}
+              placeholder="Your password"
+              placeholderTextColor={t.ts}
+              value={password}
+              onChangeText={setPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={!showPassword}
+              returnKeyType="done"
+              textContentType="password"
+            />
+            <TouchableOpacity
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowPassword(v => !v); }}
+              style={styles.eyeBtn}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+            >
+              <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color={t.ts} />
+            </TouchableOpacity>
+          </View>
         </NeuCard>
 
         <View style={styles.ctaSection}>
@@ -172,6 +216,8 @@ export default function LoginScreen() {
           </TouchableOpacity>
         </View>
       </KeyboardAwareScrollView>
+
+      <KeyboardDismissButton />
     </View>
   );
 }
@@ -185,6 +231,9 @@ const styles = StyleSheet.create({
   label:         { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4, marginTop: 18 },
   field:         { borderRadius: 16 },
   input:         { fontFamily: FontFamily.regular, fontSize: 16, paddingVertical: 16, paddingHorizontal: 18 },
+  passwordRow:   { flexDirection: "row", alignItems: "center" },
+  passwordInput: { flex: 1, paddingRight: 8 },
+  eyeBtn:        { paddingHorizontal: 16, paddingVertical: 16, alignItems: "center", justifyContent: "center" },
   ctaSection:    { marginTop: 28, gap: 16 },
   ctaWrap:       { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   ctaDisabled:   { opacity: 0.4 },

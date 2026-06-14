@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, memo } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeIn } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
@@ -148,9 +148,11 @@ interface ExerciseRowProps {
   onOpenReorder: () => void;
   onEdit: () => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
+  /** Lowercased exercise name → custom photo URI, for custom exercises. */
+  customImageByName: Record<string, string>;
 }
 
-function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onOpenReorder, onEdit, onInputFocus }: ExerciseRowProps) {
+function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onOpenReorder, onEdit, onInputFocus, customImageByName }: ExerciseRowProps) {
   const router = useRouter();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
@@ -295,6 +297,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
         >
           <ExerciseImage
             exerciseId={exerciseIdByName(exercise.name) ?? ""}
+            overrideUri={customImageByName[exercise.name.trim().toLowerCase()]}
             variant="thumb"
             size={52}
             radius={12}
@@ -547,8 +550,12 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
         </BounceButton>
       </View>
 
-      {/* Rest picker modal */}
-      <Modal visible={showRestPicker} transparent animationType="none" onRequestClose={closeRestPicker}>
+      {/* Rest picker modal — only built once opened. Mounting the two 61-row
+          animated wheels for every exercise up front was a large chunk of the
+          Step 2 mount cost; gating on showRestPicker keeps Step 2 light and the
+          open animation still plays (slideY starts offscreen before mount). */}
+      {showRestPicker && (
+      <Modal visible transparent animationType="none" onRequestClose={closeRestPicker}>
         <View style={styles.restBackdrop}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.restOverlay, { opacity: backdropOpacity }]} />
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeRestPicker} />
@@ -640,6 +647,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
           </Animated.View>
         </View>
       </Modal>
+      )}
 
     </View>
   );
@@ -655,7 +663,7 @@ function Stepper({
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   return (
-    <NeuCard dark={isDark} style={styles.stepperCard}>
+    <NeuCard dark={isDark} radius={16} style={styles.stepperCard}>
       <View style={styles.stepperInner}>
         <Text style={[styles.fieldLabel, { color: t.ts }]}>{label}</Text>
         <View style={styles.stepperControls}>
@@ -771,7 +779,7 @@ function Step1({
   return (
     <>
       <Text style={[styles.fieldLabel, { color: t.ts }]}>PROGRAM NAME</Text>
-      <NeuCard dark={isDark} style={styles.inputCard}>
+      <NeuCard dark={isDark} radius={16} style={styles.inputCard}>
         <TextInput
           style={[styles.textInput, { color: t.tp }]}
           placeholder="e.g. Push Pull Legs (PPL)"
@@ -805,7 +813,7 @@ function Step1({
       </View>
 
       <Text style={[styles.fieldLabel, { color: t.ts }]}>CYCLE PATTERN</Text>
-      <NeuCard dark={isDark} style={styles.cycleCard}>
+      <NeuCard dark={isDark} radius={16} style={styles.cycleCard}>
         <View style={styles.cycleCardInner}>
           {cyclePattern.map((day, i) => {
             const isTraining = isTrainingDay[i];
@@ -1184,8 +1192,133 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
 
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
+interface DayCardProps {
+  day: string;
+  exercises: Exercise[];
+  isCollapsed: boolean;
+  isDark: boolean;
+  collapsingIds: Set<string>;
+  customImageByName: Record<string, string>;
+  onToggle: (day: string) => void;
+  onOpenPicker: (day: string) => void;
+  onEditExercise: (day: string, id: string) => void;
+  onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number | boolean) => void;
+  onUpdateExerciseSets: (day: string, id: string, sets: ProgramSet[]) => void;
+  onRemoveExercise: (day: string, id: string) => void;
+  onStartCollapse: (day: string, id: string) => void;
+  onReorderExercises: (day: string, exercises: Exercise[]) => void;
+  onDragStateChange: (dragging: boolean) => void;
+  onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
+  onOpenReorder: (day: string) => void;
+}
+
+// One day's heading + collapsible body. Memoized so toggling a single day only
+// re-renders that day — re-rendering every day's exercise rows on each toggle was
+// the JS work that delayed the collapse/expand animation. Every prop is kept
+// referentially stable by the parent (callbacks via useCallback, a per-day
+// `isCollapsed` boolean instead of the whole Set), so untouched days bail out.
+const DayCard = memo(function DayCard({
+  day, exercises, isCollapsed, isDark, collapsingIds, customImageByName,
+  onToggle, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets,
+  onRemoveExercise, onStartCollapse, onReorderExercises, onDragStateChange,
+  onInputFocus, onOpenReorder,
+}: DayCardProps) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <View style={{ marginBottom: 16 }}>
+      <NeuCard dark={isDark} radius={16} style={styles.dayHeadingCard} innerStyle={styles.dayHeadingCardInner}>
+        <TouchableOpacity onPress={() => onToggle(day)} activeOpacity={0.8} style={styles.dayHeadingRow}>
+          <View style={styles.dayHeadingLeft}>
+            <View style={[styles.dayAccentBar, { backgroundColor: ACCT }]} />
+            <Text style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(day).toUpperCase()}</Text>
+            {exercises.length > 0 && (
+              <NeuCard dark={isDark} radius={14} style={styles.dayExBadge} innerStyle={styles.dayExBadgeInner}>
+                <Text style={[styles.dayExBadgeText, { color: ACCT }]}>{exercises.length}</Text>
+              </NeuCard>
+            )}
+          </View>
+          <Ionicons name={isCollapsed ? "chevron-forward" : "chevron-down"} size={16} color={t.ts} />
+        </TouchableOpacity>
+      </NeuCard>
+
+      <CollapsibleSection collapsed={isCollapsed} duration={300}>
+      {isCollapsed ? (
+        <Reanimated.View key="collapsed" entering={FadeIn.duration(220)}>
+          {exercises.length === 0 ? (
+            <NeuCard dark={isDark} radius={16} style={styles.emptyCard}>
+              <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
+            </NeuCard>
+          ) : (
+            <NeuCard dark={isDark} radius={16} style={styles.daySummaryCard} innerStyle={styles.daySummaryCardInner}>
+              <DraggableExerciseList
+                exercises={exercises}
+                day={day}
+                isDark={isDark}
+                t={t}
+                onReorderExercises={onReorderExercises}
+                onDragStateChange={onDragStateChange}
+                onRemoveExercise={onRemoveExercise}
+                onEditExercise={onEditExercise}
+              />
+            </NeuCard>
+          )}
+          <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
+            <View style={styles.addExBtnWrap}>
+              <View style={styles.addExBtn}>
+                <Ionicons name="add" size={18} color="#fff" />
+                <Text style={styles.addExText}>Add Exercise</Text>
+              </View>
+            </View>
+          </BounceButton>
+        </Reanimated.View>
+      ) : (
+        <Reanimated.View key="expanded" entering={FadeIn.duration(220)}>
+          {exercises.length === 0 && (
+            <NeuCard dark={isDark} radius={16} style={styles.emptyCard}>
+              <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
+            </NeuCard>
+          )}
+          {exercises.map((ex, i) => (
+            <CollapsibleCard
+              key={ex.id}
+              isCollapsing={collapsingIds.has(ex.id)}
+              onCollapsed={() => onRemoveExercise(day, ex.id)}
+            >
+              <NeuCard dark={isDark} radius={16} style={styles.exerciseCard}>
+                <ExerciseRow
+                  exercise={ex}
+                  exIndex={i}
+                  totalExercises={exercises.length}
+                  isDark={isDark}
+                  onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
+                  onUpdateSets={sets => onUpdateExerciseSets(day, ex.id, sets)}
+                  onSetRemoved={sets => onUpdateExerciseSets(day, ex.id, sets)}
+                  onRemove={() => onStartCollapse(day, ex.id)}
+                  onOpenReorder={() => onOpenReorder(day)}
+                  onEdit={() => onEditExercise(day, ex.id)}
+                  onInputFocus={onInputFocus}
+                  customImageByName={customImageByName}
+                />
+              </NeuCard>
+            </CollapsibleCard>
+          ))}
+          <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
+            <View style={styles.addExBtnWrap}>
+              <View style={styles.addExBtn}>
+                <Ionicons name="add" size={18} color="#fff" />
+                <Text style={styles.addExText}>Add Exercise</Text>
+              </View>
+            </View>
+          </BounceButton>
+        </Reanimated.View>
+      )}
+      </CollapsibleSection>
+    </View>
+  );
+});
+
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, isSharedEditMode, collapsingIds, onStartCollapse, onInputFocus,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, isSharedEditMode, collapsingIds, onStartCollapse, onInputFocus, customImageByName,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1203,125 +1336,52 @@ function Step2({
   collapsingIds: Set<string>;
   onStartCollapse: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
+  customImageByName: Record<string, string>;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const days = Object.keys(workouts);
-  const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set());
+  // Land on Step 2 with every day collapsed. The collapsed summary rows are
+  // light, so they mount instantly in the first commit (no header-then-pop
+  // two-phase). A day's heavy editable rows mount only when it's expanded,
+  // where the expand animation makes the mount read as intentional.
+  const [collapsedDays, setCollapsedDays] = useState<Set<string>>(() => new Set(days));
   const [reorderDay, setReorderDay] = useState<string | null>(null);
 
-  const toggleDay = (day: string) => {
+  const toggleDay = useCallback((day: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCollapsedDays(prev => {
       const next = new Set(prev);
       next.has(day) ? next.delete(day) : next.add(day);
       return next;
     });
-  };
+  }, []);
+
+  const openReorder = useCallback((day: string) => setReorderDay(day), []);
 
   return (
     <>
-      {days.map((day) => {
-        const isCollapsed = collapsedDays.has(day);
-        const exercises = workouts[day] ?? [];
-        return (
-          <View key={day} style={{ marginBottom: 16 }}>
-            <NeuCard dark={isDark} radius={16} style={styles.dayHeadingCard} innerStyle={styles.dayHeadingCardInner}>
-              <TouchableOpacity
-                onPress={() => toggleDay(day)}
-                activeOpacity={0.8}
-                style={styles.dayHeadingRow}
-              >
-                <View style={styles.dayHeadingLeft}>
-                  <View style={[styles.dayAccentBar, { backgroundColor: ACCT }]} />
-                  <Text style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(day).toUpperCase()}</Text>
-                  {exercises.length > 0 && (
-                    <View style={[styles.dayExBadge, { backgroundColor: ACCT + "22", borderColor: ACCT }]}>
-                      <Text style={[styles.dayExBadgeText, { color: ACCT }]}>{exercises.length}</Text>
-                    </View>
-                  )}
-                </View>
-                <Ionicons
-                  name={isCollapsed ? "chevron-forward" : "chevron-down"}
-                  size={16}
-                  color={t.ts}
-                />
-              </TouchableOpacity>
-            </NeuCard>
-
-            <CollapsibleSection collapsed={isCollapsed} duration={300}>
-            {isCollapsed ? (
-              <Reanimated.View key="collapsed" entering={FadeIn.duration(220)}>
-                {exercises.length === 0 ? (
-                  <NeuCard dark={isDark} style={styles.emptyCard}>
-                    <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
-                  </NeuCard>
-                ) : (
-                  <NeuCard dark={isDark} style={styles.daySummaryCard} innerStyle={styles.daySummaryCardInner}>
-                    <DraggableExerciseList
-                      exercises={exercises}
-                      day={day}
-                      isDark={isDark}
-                      t={t}
-                      onReorderExercises={onReorderExercises}
-                      onDragStateChange={onDragStateChange}
-                      onRemoveExercise={onRemoveExercise}
-                      onEditExercise={onEditExercise}
-                    />
-                  </NeuCard>
-                )}
-                <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
-                  <View style={styles.addExBtnWrap}>
-                    <View style={styles.addExBtn}>
-                      <Ionicons name="add" size={18} color="#fff" />
-                      <Text style={styles.addExText}>Add Exercise</Text>
-                    </View>
-                  </View>
-                </BounceButton>
-              </Reanimated.View>
-            ) : (
-              <Reanimated.View key="expanded" entering={FadeIn.duration(220)}>
-                {exercises.length === 0 && (
-                  <NeuCard dark={isDark} style={styles.emptyCard}>
-                    <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
-                  </NeuCard>
-                )}
-                {exercises.map((ex, i) => (
-                  <CollapsibleCard
-                    key={ex.id}
-                    isCollapsing={collapsingIds.has(ex.id)}
-                    onCollapsed={() => onRemoveExercise(day, ex.id)}
-                  >
-                    <NeuCard dark={isDark} style={styles.exerciseCard}>
-                      <ExerciseRow
-                        exercise={ex}
-                        exIndex={i}
-                        totalExercises={exercises.length}
-                        isDark={isDark}
-                        onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
-                        onUpdateSets={sets => onUpdateExerciseSets(day, ex.id, sets)}
-                        onSetRemoved={sets => onUpdateExerciseSets(day, ex.id, sets)}
-                        onRemove={() => onStartCollapse(day, ex.id)}
-                        onOpenReorder={() => setReorderDay(day)}
-                        onEdit={() => onEditExercise(day, ex.id)}
-                        onInputFocus={onInputFocus}
-                      />
-                    </NeuCard>
-                  </CollapsibleCard>
-                ))}
-                <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
-                  <View style={styles.addExBtnWrap}>
-                    <View style={styles.addExBtn}>
-                      <Ionicons name="add" size={18} color="#fff" />
-                      <Text style={styles.addExText}>Add Exercise</Text>
-                    </View>
-                  </View>
-                </BounceButton>
-              </Reanimated.View>
-            )}
-            </CollapsibleSection>
-          </View>
-        );
-      })}
+      {days.map((day) => (
+        <DayCard
+          key={day}
+          day={day}
+          exercises={workouts[day] ?? []}
+          isCollapsed={collapsedDays.has(day)}
+          isDark={isDark}
+          collapsingIds={collapsingIds}
+          customImageByName={customImageByName}
+          onToggle={toggleDay}
+          onOpenPicker={onOpenPicker}
+          onEditExercise={onEditExercise}
+          onUpdateExercise={onUpdateExercise}
+          onUpdateExerciseSets={onUpdateExerciseSets}
+          onRemoveExercise={onRemoveExercise}
+          onStartCollapse={onStartCollapse}
+          onReorderExercises={onReorderExercises}
+          onDragStateChange={onDragStateChange}
+          onInputFocus={onInputFocus}
+          onOpenReorder={openReorder}
+        />
+      ))}
 
       {!isEditMode && !isReviewMode && !isSharedEditMode && (
         <BounceButton onPress={onFinish} accessibilityLabel="Create program" accessibilityRole="button">
@@ -1370,6 +1430,15 @@ export default function NewProgramScreen() {
   const [isTrainingDay, setIsTrainingDay] = useState<boolean[]>([true, true, true, false, false, false, false]);
   const [workouts, setWorkouts] = useState<WorkoutMap>({});
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
+  // Lowercased name → custom photo URI, so the builder's exercise rows can show
+  // the user's photo (custom exercises aren't in the bundled image maps).
+  const customImageByName = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of customExercises) {
+      if (c.imageUri) map[c.name.trim().toLowerCase()] = c.imageUri;
+    }
+    return map;
+  }, [customExercises]);
   const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
   const [pickerState, setPickerState] = useState<{ day: string; replaceId?: string } | null>(null);
 
@@ -2033,6 +2102,7 @@ export default function NewProgramScreen() {
             collapsingIds={collapsingIds}
             onStartCollapse={startCollapse}
             onInputFocus={handleInputFocus}
+            customImageByName={customImageByName}
           />
         )}
       </Reanimated.ScrollView>
@@ -2157,8 +2227,9 @@ const styles = StyleSheet.create({
   dayHeadingLeft:       { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
   dayAccentBar:         { width: 3, height: 18, borderRadius: 2 },
   dayHeading:           { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 1.2 },
-  dayExBadge:           { borderRadius: 20, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 },
-  dayExBadgeText:       { fontFamily: FontFamily.semibold, fontSize: 12 },
+  dayExBadge:           { width: 28, height: 28 },
+  dayExBadgeInner:      { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
+  dayExBadgeText:       { fontFamily: FontFamily.bold, fontSize: 13 },
   daySummaryCard:       { borderRadius: 16, marginBottom: 14 },
   daySummaryCardInner:  { paddingVertical: 4, paddingHorizontal: 0 },
   daySummaryEmpty:      { fontFamily: FontFamily.regular, fontSize: 13, fontStyle: "italic", paddingVertical: 14, paddingHorizontal: 16 },

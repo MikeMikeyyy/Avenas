@@ -115,7 +115,9 @@ create table public.custom_exercises (
   muscles     text[] not null default '{}',
   image_uri   text,
   video_uri   text,
-  description text,
+  description text,                       -- legacy single-paragraph how-to (pre-steps)
+  steps       text[],                     -- numbered how-to steps (see 0003)
+  muted       boolean not null default false,  -- play the demo clip without sound
   created_at  timestamptz not null default now()
 );
 ```

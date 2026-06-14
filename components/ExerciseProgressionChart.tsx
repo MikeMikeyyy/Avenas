@@ -214,6 +214,7 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
   // Layout constants — kept in sync with the LineChart props below so we can
   // compute the available data area where the dots actually live.
   const Y_AXIS_LABEL_WIDTH = 32;
+  const CHART_HEIGHT = 170;
   const CHART_WIDTH = cardWidth - 80;
   const DATA_AREA_WIDTH = CHART_WIDTH - Y_AXIS_LABEL_WIDTH;
   // NeuCard inner content area = cardWidth minus the card's 16px horizontal
@@ -299,7 +300,7 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
             </Text>
           </View>
         ) : (
-            <View style={{ marginTop: 10, alignSelf: "stretch" }}>
+            <View style={{ marginTop: 10, alignSelf: "stretch", position: "relative" }}>
               <LineChart
                 data={data}
                 color={ACCT}
@@ -337,7 +338,7 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
                 // the LineChart's right edge in line with the BarChart above.
                 yAxisLabelWidth={Y_AXIS_LABEL_WIDTH}
                 width={CHART_WIDTH}
-                height={170}
+                height={CHART_HEIGHT}
                 initialSpacing={initialSpacing}
                 endSpacing={endSpacing}
                 spacing={spacing}
@@ -348,6 +349,42 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
                 dataPointsColor={ACCT}
                 dataPointsRadius={3}
               />
+
+              {/*
+                Touch overlay. The visible dots are tiny (radius 3), so relying
+                on gifted-charts' per-point hit area makes them very hard to
+                tap. Instead we tile transparent full-height columns across the
+                plot — one per point, centered on the same dot x the custom
+                x-labels use — so a tap anywhere in a point's vertical band
+                focuses it. The dots/line below stay visible; these are tap-only
+                targets so vertical scrolling still passes through to the
+                ScrollView.
+              */}
+              <View
+                pointerEvents="box-none"
+                style={[styles.hitOverlay, { height: CHART_HEIGHT }]}
+              >
+                {data.map((_, i) => {
+                  const dotX = Y_AXIS_LABEL_WIDTH + initialSpacing + i * spacing;
+                  const left = i === 0 ? 0 : dotX - spacing / 2;
+                  const right = i === data.length - 1 ? CHART_WIDTH : dotX + spacing / 2;
+                  const width = Math.max(0, right - left);
+                  const p = filteredHistory[i];
+                  return (
+                    <TouchableOpacity
+                      key={`hit-${i}`}
+                      activeOpacity={1}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setFocusedIndex(prev => (prev === i ? null : i));
+                      }}
+                      style={{ position: "absolute", top: 0, height: CHART_HEIGHT, left, width }}
+                      accessibilityRole="button"
+                      accessibilityLabel={p ? `Show ${exerciseName} on ${fmtShortDate(p.date)}` : undefined}
+                    />
+                  );
+                })}
+              </View>
 
               {/*
                 Custom x-axis labels. gifted-charts' built-in LineChart label
@@ -630,6 +667,15 @@ const styles = StyleSheet.create({
   // label absolutely positioned at its data point's x coordinate. marginTop
   // matches the horizontal gap gifted-charts puts between the y-axis line
   // and its y-axis labels, so the two axes feel visually consistent.
+  // Transparent tap-target layer sized to the LineChart's plot. Columns are
+  // absolutely positioned children, so this just needs to pin to the top-left
+  // of the chart; its height is set inline to CHART_HEIGHT.
+  hitOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+  },
   xLabelsRow: {
     position: "relative",
     height: 14,

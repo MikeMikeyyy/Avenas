@@ -8,7 +8,7 @@
 // react-native-keyboard-controller, so they track the interactive drag-to-dismiss
 // frame-by-frame instead of snapping the way KeyboardAvoidingView did.
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Pressable, Platform, Alert,
 } from "react-native";
@@ -30,7 +30,15 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
 import { ensureSeededContacts, loadThread, appendMessage, markThreadRead } from "../../../utils/chatStore";
 import { loadHiddenMessageIds, blockUser, unaddContact, reportUser, reportMessage } from "../../../utils/moderation";
+import { toYMD, relativeDayLabel } from "../../../utils/dates";
 import type { ChatMessage, ReportReason } from "../../../constants/chat";
+
+// Render rows for the inverted thread: a message, or a day divider. The divider
+// is emitted right after a day's OLDEST message in this newest-first array, which
+// (once inverted) places it visually ABOVE that day's first message.
+type ChatItem =
+  | { type: "msg"; msg: ChatMessage }
+  | { type: "day"; key: string; label: string };
 
 export default function ChatThreadScreen() {
   const router = useRouter();
@@ -133,6 +141,25 @@ export default function ChatThreadScreen() {
 
   const canSend = input.trim().length > 0;
 
+  // Interleave day dividers. messages is newest-first; we append a divider after
+  // a message whenever the next (older) message falls on a different calendar day
+  // (or there is none), so each day's group gets one "Today / Yesterday / date"
+  // header above its first message once the list is inverted.
+  const items = useMemo<ChatItem[]>(() => {
+    const out: ChatItem[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      out.push({ type: "msg", msg: m });
+      const curYMD = toYMD(new Date(m.sentAtISO));
+      const older = messages[i + 1];
+      const olderYMD = older ? toYMD(new Date(older.sentAtISO)) : null;
+      if (olderYMD !== curYMD) {
+        out.push({ type: "day", key: `day_${curYMD}_${m.id}`, label: relativeDayLabel(new Date(m.sentAtISO)) });
+      }
+    }
+    return out;
+  }, [messages]);
+
   // height.value is 0 closed, -keyboardHeight open — updated frame-by-frame
   // through the interactive drag. -height.value is the live keyboard height we
   // reserve at the bottom, lifting the list + input bar in lock-step with the keys.
@@ -182,7 +209,7 @@ export default function ChatThreadScreen() {
           {/* Messages */}
           <View style={{ flex: 1 }}>
             <FlatList
-              data={messages}
+              data={items}
               inverted
               // flex:1 makes the scroll surface fill the whole page; without it the
               // list collapses to its content height, so with one message only the
@@ -190,12 +217,20 @@ export default function ChatThreadScreen() {
               // interactive keyboard dismiss) register even when content doesn't fill.
               style={{ flex: 1 }}
               alwaysBounceVertical
-              keyExtractor={m => m.id}
-              renderItem={({ item }) => (
-                <Pressable onLongPress={() => onLongPressMessage(item)} delayLongPress={250}>
-                  <ChatBubble msg={item} />
-                </Pressable>
-              )}
+              keyExtractor={it => (it.type === "msg" ? it.msg.id : it.key)}
+              renderItem={({ item }) =>
+                item.type === "day" ? (
+                  <View style={styles.dayWrap}>
+                    <View style={[styles.dayPill, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}>
+                      <Text style={[styles.dayText, { color: t.ts }]}>{item.label}</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <Pressable onLongPress={() => onLongPressMessage(item.msg)} delayLongPress={250}>
+                    <ChatBubble msg={item.msg} />
+                  </Pressable>
+                )
+              }
               keyboardShouldPersistTaps="handled"
               // Instagram/iMessage-style: drag the list down and the keyboard
               // follows your finger (iOS). Android falls back to dismiss-on-drag.
@@ -269,6 +304,10 @@ const styles = StyleSheet.create({
 
   empty:      { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
   emptyText:  { fontFamily: FontFamily.regular, fontSize: 14 },
+
+  dayWrap:    { alignItems: "center", marginVertical: 10 },
+  dayPill:    { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+  dayText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   inputBar:   { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1 },
   inputBox:   { flex: 1, borderRadius: 22, borderWidth: 1, paddingHorizontal: 16, paddingVertical: Platform.OS === "ios" ? 10 : 4, maxHeight: 120, justifyContent: "center" },

@@ -125,6 +125,8 @@ export function customToRow(c: CustomExercise, userId: string): CustomExerciseIn
     image_uri: c.imageUri ?? null,
     video_uri: c.videoUri ?? null,
     description: c.description ?? null,
+    steps: c.steps && c.steps.length > 0 ? c.steps : null,
+    muted: c.muted ?? false,
   };
 }
 
@@ -135,5 +137,7 @@ export function customFromRow(r: CustomExerciseRow): CustomExercise {
     imageUri: r.image_uri ?? undefined,
     videoUri: r.video_uri ?? undefined,
     description: r.description ?? undefined,
+    steps: r.steps && r.steps.length > 0 ? r.steps : undefined,
+    muted: r.muted ? true : undefined,
   };
 }

@@ -28,6 +28,7 @@ const SOURCE = path.join(ROOT, "scripts/exercise-source/free-exercise-db-main");
 const SRC_JSON = path.join(SOURCE, "dist/exercises.json");
 const SRC_IMAGES = path.join(SOURCE, "exercises");
 const CURATED_JSON = path.join(ROOT, "scripts/curated-exercises.json");
+const OVERRIDES_JSON = path.join(ROOT, "scripts/curated-image-overrides.json");
 const OUT_IMAGES = path.join(ROOT, "assets/exercises");
 const OUT_IMAGE_MAP = path.join(ROOT, "assets/exerciseImages.ts");
 const OUT_DATA = path.join(ROOT, "constants/exerciseData.ts");
@@ -90,6 +91,13 @@ function main() {
     secondaryMuscles: e.secondaryMuscles || [],
   }));
 
+  // Hand-curated photo picks for exercises the token matcher misses or would
+  // mismatch (keyed by curated slug → exact free-exercise-db name). The leading
+  // `_comment` key is documentation, not a mapping. fdbByName resolves a pick to
+  // its photo/metadata; an unresolved pick is a hard error (bad name in the JSON).
+  const overrides = JSON.parse(fs.readFileSync(OVERRIDES_JSON, "utf8"));
+  const fdbByName = new Map(fdb.map((f) => [f.name, f]));
+
   fs.rmSync(OUT_IMAGES, { recursive: true, force: true });
   fs.mkdirSync(OUT_IMAGES, { recursive: true });
 
@@ -107,23 +115,32 @@ function main() {
     }
     usedSlugs.add(slug);
 
-    // Pick the closest free-exercise-db photo: it must cover every curated
-    // movement token (≤ 2 extra tokens to stay relevant), then rank by
-    // equipment match → fewest extras → shortest name.
+    // A hand-curated override wins outright. Otherwise pick the closest
+    // free-exercise-db photo: it must cover every curated movement token
+    // (≤ 2 extra tokens to stay relevant), then rank by equipment match →
+    // fewest extras → shortest name.
     const ct = tokens(ex.name);
     const want = equipGroup(ex.equipment);
     let match = null, matchScore = null;
-    for (const f of fdb) {
-      if (!f.image) continue;
-      const extras = matchExtras(ct, f.tokens);
-      if (extras === null || extras > 2) continue;
-      const score = [f.equipGroup === want ? 0 : 1, extras, f.name.length];
-      if (!matchScore ||
-          score[0] < matchScore[0] ||
-          (score[0] === matchScore[0] && score[1] < matchScore[1]) ||
-          (score[0] === matchScore[0] && score[1] === matchScore[1] && score[2] < matchScore[2])) {
-        match = f;
-        matchScore = score;
+    if (overrides[slug] !== undefined) {
+      match = fdbByName.get(overrides[slug]) ?? null;
+      if (!match) {
+        console.error(`✗ override for "${slug}" points at unknown free-exercise-db entry: "${overrides[slug]}"`);
+        process.exit(1);
+      }
+    } else {
+      for (const f of fdb) {
+        if (!f.image) continue;
+        const extras = matchExtras(ct, f.tokens);
+        if (extras === null || extras > 2) continue;
+        const score = [f.equipGroup === want ? 0 : 1, extras, f.name.length];
+        if (!matchScore ||
+            score[0] < matchScore[0] ||
+            (score[0] === matchScore[0] && score[1] < matchScore[1]) ||
+            (score[0] === matchScore[0] && score[1] === matchScore[1] && score[2] < matchScore[2])) {
+          match = f;
+          matchScore = score;
+        }
       }
     }
 

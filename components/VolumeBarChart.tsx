@@ -140,6 +140,17 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
   // the new state triggers the actual animation to its real height.
   const pendingFrom = useRef<number | null>(null);
 
+  // Drive bodyHeight from `from` to `to` over the glow-bar duration (350ms) so
+  // the wrapper expansion finishes in lock-step with the bars growing.
+  const startBodyHeightAnim = (from: number, to: number) => {
+    animating.current = true;
+    bodyHeight.value = from;
+    bodyHeight.value = withTiming(to, { duration: 350 }, finished => {
+      "worklet";
+      if (finished) runOnJS(clearAnimating)();
+    });
+  };
+
   useEffect(() => {
     if (prevHasData.current === hasData) return;
     const from = prevHasData.current ? measured.current.data : measured.current.empty;
@@ -157,6 +168,22 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
     // onMeasureBody will pick up from here and animate to the real height.
     bodyHeight.value = from;
     pendingFrom.current = from;
+    // Fallback for the onLayout/useEffect race: onMeasureBody for the new state
+    // can fire BEFORE this passive effect runs (notably on the first async data
+    // load, where empty → data happens fast). In that case onMeasureBody saw
+    // pendingFrom == null and bailed to its steady-state branch, so no further
+    // onLayout will fire to consume the pendingFrom we just set — leaving the
+    // wrapper stranded at the empty height (chart clipped). On the next frame,
+    // if it's still pending, drive the animation from the height onMeasureBody
+    // already recorded for this state.
+    const raf = requestAnimationFrame(() => {
+      if (pendingFrom.current == null) return; // onMeasureBody handled it
+      const to = hasData ? measured.current.data : measured.current.empty;
+      if (to <= 0) return; // not measured yet — a later onLayout will handle it
+      pendingFrom.current = null;
+      startBodyHeightAnim(from, to);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [hasData, bodyHeight]);
 
   const animatedBodyStyle = useAnimatedStyle(() => {
@@ -179,12 +206,7 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
     if (pendingFrom.current != null) {
       const from = pendingFrom.current;
       pendingFrom.current = null;
-      animating.current = true;
-      bodyHeight.value = from;
-      bodyHeight.value = withTiming(h, { duration: 350 }, finished => {
-        "worklet";
-        if (finished) runOnJS(clearAnimating)();
-      });
+      startBodyHeightAnim(from, h);
       return;
     }
     // First-ever measurement on initial mount.

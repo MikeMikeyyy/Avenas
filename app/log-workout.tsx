@@ -21,6 +21,7 @@ import CollapsibleCard from "../components/CollapsibleCard";
 import FadeScreen from "../components/FadeScreen";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
+import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type TimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
@@ -63,145 +64,10 @@ function defaultSet(type: "warmup" | "working" = "working"): WorkingSet {
   return { type, weight: "", reps: "", done: true };
 }
 
-// ─── Time helpers ──────────────────────────────────────────────────────────────
-
-type TimeVal = { hour: number; minute: number; period: "AM" | "PM" };
-type WorkoutTime = { start: TimeVal; end: TimeVal };
-
-function toTotalMins(tv: TimeVal): number {
-  const h24 = tv.hour % 12 + (tv.period === "PM" ? 12 : 0);
-  return h24 * 60 + tv.minute;
-}
-
-function computeDurationMins(start: TimeVal, end: TimeVal): number {
-  const s = toTotalMins(start);
-  const e = toTotalMins(end);
-  return e >= s ? e - s : 24 * 60 - s + e;
-}
-
-function fmtTimeVal(tv: TimeVal): string {
-  return `${tv.hour}:${String(tv.minute).padStart(2, "0")} ${tv.period}`;
-}
-
-function fmtDurationMins(mins: number): string {
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
-}
-
-// ─── WheelPicker ──────────────────────────────────────────────────────────────
-// IMPORTANT: Must be a module-level component (not defined inside another
-// component). Defining it inside a render function creates a new type on every
-// parent re-render, causing React to unmount/remount and losing scroll position.
-
-const WHEEL_H = 46;
-const HOURS   = ["1","2","3","4","5","6","7","8","9","10","11","12"];
-const MINUTES = ["00","05","10","15","20","25","30","35","40","45","50","55"];
-const PERIODS = ["AM","PM"];
-
-function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColor }: {
-  items: string[]; initialIdx: number; onSelect: (idx: number) => void;
-  isDark: boolean; width: number; bgColor: string;
-}) {
-  const t = isDark ? APP_DARK : APP_LIGHT;
-  const scrollRef = useRef<ScrollView>(null);
-  // Keep latest onSelect in a ref so the commit closure is never stale
-  const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
-
-  // Scroll to initial position after layout settles
-  useEffect(() => {
-    const id = setTimeout(() => {
-      scrollRef.current?.scrollTo({ y: initialIdx * WHEEL_H, animated: false });
-    }, 60);
-    return () => clearTimeout(id);
-  }, []); // intentionally runs only on mount
-
-  const commit = (y: number) => {
-    const idx = Math.min(items.length - 1, Math.max(0, Math.round(y / WHEEL_H)));
-    onSelectRef.current(idx);
-  };
-
-  const fadeColor = bgColor;
-
-  return (
-    <View style={{ width, height: WHEEL_H * 3 }}>
-      <ScrollView
-        ref={scrollRef}
-        snapToInterval={WHEEL_H}
-        decelerationRate="fast"
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingVertical: WHEEL_H }}
-        onMomentumScrollEnd={e => commit(e.nativeEvent.contentOffset.y)}
-        onScrollEndDrag={e => commit(e.nativeEvent.contentOffset.y)}
-      >
-        {items.map((item, i) => (
-          <View key={i} style={{ height: WHEEL_H, width, alignItems: "center", justifyContent: "center" }}>
-            <Text style={{ fontFamily: FontFamily.semibold, fontSize: 20, color: t.tp }}>
-              {item}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-
-      {/* Top and bottom gradient fades — no overflow:hidden needed */}
-      <LinearGradient
-        pointerEvents="none"
-        colors={[fadeColor, fadeColor + "00"]}
-        style={{ position: "absolute", top: 0, left: 0, right: 0, height: WHEEL_H + 6 }}
-      />
-      <LinearGradient
-        pointerEvents="none"
-        colors={[fadeColor + "00", fadeColor]}
-        style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: WHEEL_H + 6 }}
-      />
-
-      {/* Center selection band */}
-      <View pointerEvents="none" style={{
-        position: "absolute", top: WHEEL_H, left: 0, right: 0, height: WHEEL_H,
-        borderTopWidth: 1, borderBottomWidth: 1,
-        borderColor: isDark ? "rgba(255,255,255,0.13)" : "rgba(0,0,0,0.09)",
-      }} />
-    </View>
-  );
-}
-
-// ─── TimeRow ───────────────────────────────────────────────────────────────────
-// Also module-level — must not be defined inside TimePickerSheet.
-
-function TimeRow({ label, val, onChange, isDark, bgColor }: {
-  label: string; val: TimeVal; onChange: (v: TimeVal) => void;
-  isDark: boolean; bgColor: string;
-}) {
-  const t = isDark ? APP_DARK : APP_LIGHT;
-  return (
-    <View style={s.timeRow}>
-      <Text style={[s.timeRowLabel, { color: t.ts }]}>{label}</Text>
-      <View style={s.wheelGroup}>
-        <WheelPicker
-          items={HOURS} isDark={isDark} width={52} bgColor={bgColor}
-          initialIdx={val.hour - 1}
-          onSelect={idx => onChange({ ...val, hour: idx + 1 })}
-        />
-        <Text style={[s.wheelColon, { color: t.tp }]}>:</Text>
-        <WheelPicker
-          items={MINUTES} isDark={isDark} width={52} bgColor={bgColor}
-          initialIdx={val.minute / 5}
-          onSelect={idx => onChange({ ...val, minute: idx * 5 })}
-        />
-        <WheelPicker
-          items={PERIODS} isDark={isDark} width={52} bgColor={bgColor}
-          initialIdx={val.period === "AM" ? 0 : 1}
-          onSelect={idx => onChange({ ...val, period: idx === 0 ? "AM" : "PM" })}
-        />
-      </View>
-      {/* phantom matches label width so wheels land at true center */}
-      <View style={{ width: 48 }} />
-    </View>
-  );
-}
+// ─── Time helpers + wheel ────────────────────────────────────────────────────────
+// WheelPicker / TimeRow and the time-math helpers live in the shared
+// components/TimeWheelPicker so the journal picker and the workout-complete sheet
+// stay visually identical. Imported at the top of this file.
 
 // ─── TimePickerSheet ───────────────────────────────────────────────────────────
 
@@ -702,7 +568,7 @@ function ExerciseCard({
         <View style={s.exHeader}>
           <View style={{ flex: 1 }}>
             <Text style={[s.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
-            <Text style={[s.exName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
+            <Text style={[s.exName, { color: t.tp }]}>{ex.name}</Text>
           </View>
           <TouchableOpacity
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setEditing(e => !e); }}

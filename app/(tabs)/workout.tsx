@@ -4,7 +4,7 @@ import * as Haptics from "expo-haptics";
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
-  Alert, Animated, Keyboard, Modal, AppState, LayoutAnimation,
+  Alert, Animated, Keyboard, Modal, LayoutAnimation,
   PanResponder, Easing, Switch,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,13 +22,17 @@ import BounceButton from "../../components/BounceButton";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
 import DumbbellIcon from "../../components/DumbbellIcon";
+import TimeEditSheet from "../../components/TimeEditSheet";
+import { computeDurationMins, completedAtISO } from "../../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
-import { toYMD, todayYMD } from "../../utils/dates";
-import { getTodaysWorkout, resolveTodayWorkout, buildPrevByName, normalizeExerciseName } from "../../utils/workout";
+import { todayYMD } from "../../utils/dates";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, normalizeExerciseName } from "../../utils/workout";
+import { useDayRollover } from "../../hooks/useDayRollover";
+import IntervalTimerModal from "../../components/IntervalTimerModal";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../../contexts/RestTimerContext";
 
@@ -586,24 +590,42 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
     else setStep("others");
   };
 
+  const renderOptionCard = (key: string, label: string, icon: React.ReactNode, isActive: boolean, onPress: () => void) => (
+    <BounceButton key={key} style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(onPress); }}>
+      <NeuCard dark={isDark} radius={14}>
+        <View style={styles.woPickerOptionInner}>
+          {icon}
+          <Text style={[styles.woPickerOptionText, { color: isActive ? ACCT : t.tp }]}>{label}</Text>
+          {isActive ? (
+            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 }}>
+              <Ionicons name="checkmark" size={14} color="#fff" />
+            </View>
+          ) : (
+            <Ionicons name="chevron-forward" size={16} color={t.ts} />
+          )}
+        </View>
+      </NeuCard>
+    </BounceButton>
+  );
+
   const renderDayCard = (dayName: string, prog: SavedProgram) => {
     const isActive = prog.id === activeProgram.id && dayName === currentWorkoutName;
-    return (
-      <BounceButton key={dayName} style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(() => onSelectDay(dayName, prog.id !== activeProgram.id ? prog : undefined)); }}>
-        <NeuCard dark={isDark} radius={14}>
-          <View style={styles.woPickerOptionInner}>
-            <DumbbellIcon size={18} color={isActive ? ACCT : t.tp} />
-            <Text style={[styles.woPickerOptionText, { color: isActive ? ACCT : t.tp }]}>{dayName}</Text>
-            {isActive ? (
-              <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 }}>
-                <Ionicons name="checkmark" size={14} color="#fff" />
-              </View>
-            ) : (
-              <Ionicons name="chevron-forward" size={16} color={t.ts} />
-            )}
-          </View>
-        </NeuCard>
-      </BounceButton>
+    return renderOptionCard(
+      dayName, dayName,
+      <DumbbellIcon size={18} color={isActive ? ACCT : t.tp} />,
+      isActive,
+      () => onSelectDay(dayName, prog.id !== activeProgram.id ? prog : undefined),
+    );
+  };
+
+  // Rest is program-independent: one option that overrides today onto recovery.
+  const renderRestCard = () => {
+    const isActive = currentWorkoutName === "Rest";
+    return renderOptionCard(
+      "Rest", "Rest Day",
+      <Ionicons name="moon-outline" size={18} color={isActive ? ACCT : t.tp} />,
+      isActive,
+      () => onSelectDay("Rest"),
     );
   };
 
@@ -630,6 +652,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
             {step === "menu" && (
               <>
                 {workoutDays.map(dayName => renderDayCard(dayName, activeProgram))}
+                {renderRestCard()}
                 {otherPrograms.length > 0 && (
                   <BounceButton style={{ marginBottom: 16 }} onPress={() => setStep("others")}>
                     <NeuCard dark={isDark} radius={14}>
@@ -944,9 +967,10 @@ interface ExerciseCardProps {
   isLocked?: boolean;
   prevSets?: string[];
   hideIndexLabel?: boolean;
+  numberBadge?: number;
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, hideIndexLabel = false }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, hideIndexLabel = false, numberBadge }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
@@ -977,11 +1001,16 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
         {/* ── Header ── */}
         <View style={styles.exHeader}>
+          {numberBadge != null && (
+            <NeuCard dark={isDark} radius={16} style={styles.exNumBadge} innerStyle={styles.exNumInner}>
+              <Text style={[styles.exNumText, { color: ACCT }]}>{numberBadge}</Text>
+            </NeuCard>
+          )}
           <View style={styles.exTitleBlock}>
             {!hideIndexLabel && (
               <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
             )}
-            <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1}>{exercise.name}</Text>
+            <Text style={[styles.exName, { color: t.tp }]}>{exercise.name}</Text>
           </View>
           {!isLocked && (
             <TouchableOpacity
@@ -1332,6 +1361,14 @@ export default function WorkoutScreen() {
 
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const [allPrograms, setAllPrograms] = useState<SavedProgram[]>([]);
+  // The training day this screen is showing. Usually the calendar date, but the
+  // late-night grace window (getEffectiveToday) can keep it on the previous day
+  // until the early hours. Everything day-scoped here — the completed-workout
+  // lookup, the scheduled template, the override/draft keys, and the date a new
+  // session is stamped with — keys off this, not raw todayYMD(), so the screen
+  // rolls over consistently with Home and late sessions attribute correctly.
+  const [effectiveToday, setEffectiveToday] = useState<string>(() => todayYMD());
+  const effectiveTodayRef = useRef(effectiveToday);
   // `programId` rides along on workoutInfo so it survives the exercise-mutation
   // setters (all spread prev) and is persisted/restored with the draft. It's the
   // program whose day this session is; undefined for a free workout not added to
@@ -1350,6 +1387,11 @@ export default function WorkoutScreen() {
   const [workoutOptionsOpen, setWorkoutOptionsOpen] = useState(false);
   const [changeDayOpen, setChangeDayOpen] = useState(false);
   const [customWorkoutNamingOpen, setCustomWorkoutNamingOpen] = useState(false);
+  // Workout-complete confirmation sheet (replaces the native finish alert).
+  // `pendingComplete` is the in-memory CompletedWorkout captured at Finish; the
+  // sheet lets the user adjust its start/end times before it's persisted.
+  const [completeSheetOpen, setCompleteSheetOpen] = useState(false);
+  const [pendingComplete, setPendingComplete] = useState<CompletedWorkout | null>(null);
   const [focusMode, setFocusModeState] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
   const setFocusMode = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
@@ -1382,35 +1424,11 @@ export default function WorkoutScreen() {
   }, [todaysCompletedWorkout]);
 
   // ── Timer modal ──────────────────────────────────────────────────────────────
+  // The interval Timer / Stopwatch and all its state live in <IntervalTimerModal/>;
+  // this screen only owns whether it's open.
   const [showTimerModal, setShowTimerModal] = useState(false);
-  const [timerMode, setTimerMode] = useState<"timer" | "stopwatch">("timer");
-  const tabOffset = useSharedValue(0); // 0 = timer, 1 = stopwatch
-  const tabTrackWidth = useSharedValue(0);
   const notesBtnOpacity = useSharedValue(1);
   const notesBtnStyle   = useAnimatedStyle(() => ({ opacity: notesBtnOpacity.value }));
-  const pillAnimStyle = useAnimatedStyle(() => ({
-    width: tabTrackWidth.value / 2,
-    transform: [{ translateX: tabOffset.value * (tabTrackWidth.value / 2) }],
-  }));
-  const timerLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(tabOffset.value, [0, 1], ["#ffffff", isDark ? "#8896A7" : "#8896A7"]),
-  }));
-  const stopwatchLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(tabOffset.value, [0, 1], [isDark ? "#8896A7" : "#8896A7", "#ffffff"]),
-  }));
-  // Countdown
-  const [countdownDuration, setCountdownDuration] = useState(60);
-  const [countdownRemaining, setCountdownRemaining] = useState(60);
-  const [countdownActive, setCountdownActive] = useState(false);
-  const [editingDuration, setEditingDuration] = useState(false);
-  const [editMins, setEditMins] = useState("01");
-  const [editSecs, setEditSecs] = useState("00");
-  const countdownEndRef = useRef<number | null>(null);
-  // Stopwatch
-  const [swElapsed, setSwElapsed] = useState(0);
-  const [swRunning, setSwRunning] = useState(false);
-  const swStartRef = useRef<number | null>(null);
-  const swOffsetRef = useRef(0);
 
   const pendingChangingExId = useRef<string | null>(null);
   const isWorkoutActiveRef = useRef(false);
@@ -1423,93 +1441,76 @@ export default function WorkoutScreen() {
     isWorkoutActiveRef.current = draftLockedRef.current || isRunning || hasWorkoutProgress(log);
   }, [isRunning, log]);
 
-  // Countdown — wall-clock based to avoid drift
-  useEffect(() => {
-    if (!countdownActive) return;
-    countdownEndRef.current = Date.now() + countdownRemaining * 1000;
-    const tick = () => {
-      if (!countdownEndRef.current) return;
-      const remaining = Math.ceil((countdownEndRef.current - Date.now()) / 1000);
-      if (remaining <= 0) {
-        setCountdownActive(false);
-        setCountdownRemaining(0);
-      } else {
-        setCountdownRemaining(remaining);
-      }
-    };
-    const id = setInterval(tick, 500);
-    const sub = AppState.addEventListener("change", s => { if (s === "active") tick(); });
-    return () => { clearInterval(id); sub.remove(); };
-  }, [countdownActive]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Stopwatch
-  useEffect(() => {
-    if (!swRunning) return;
-    swStartRef.current = Date.now();
-    const tick = () => {
-      if (swStartRef.current)
-        setSwElapsed(swOffsetRef.current + Math.floor((Date.now() - swStartRef.current) / 1000));
-    };
-    const id = setInterval(tick, 500);
-    const sub = AppState.addEventListener("change", s => { if (s === "active") tick(); });
-    return () => { clearInterval(id); sub.remove(); };
-  }, [swRunning]);
-
   const loadData = useCallback((forceReload = false) => {
-    AsyncStorage.getItem(PROGRAMS_KEY)
-      .then(raw => {
-        const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
-        const found = programs.find(p => p.status === "active") ?? null;
-        setActiveProgram(found);
-        setAllPrograms(programs);
-        // Don't overwrite exercises/log if a workout is already in progress (unless forceReload after discard)
-        if (found && (!isWorkoutActiveRef.current || forceReload)) {
-          AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY).then(overrideRaw => {
-            const override = overrideRaw
-              ? (JSON.parse(overrideRaw) as { date: string; workoutName: string })
-              : null;
-            const workout = resolveTodayWorkout(found, override);
-            // Today's workout (and any change-day override) belongs to the active program.
-            setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: found.id } : null);
-            if (workout) {
-              setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
-              setLog(initLog(workout.exercises));
-            }
-          }).catch((e) => {
-            warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e);
-            const workout = getTodaysWorkout(found);
-            setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: found.id } : null);
-            if (workout) {
-              setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
-              setLog(initLog(workout.exercises));
-            }
-          });
+    // Program, history and override are read together so the effective training
+    // day (which depends on all three) is computed from one consistent snapshot.
+    Promise.all([
+      AsyncStorage.getItem(PROGRAMS_KEY),
+      AsyncStorage.getItem(WORKOUT_HISTORY_KEY),
+      AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY),
+    ]).then(([progRaw, histRaw, overrideRaw]) => {
+      const programs: SavedProgram[] = progRaw ? JSON.parse(progRaw) : [];
+      const found = programs.find(p => p.status === "active") ?? null;
+      const history: CompletedWorkout[] = histRaw ? JSON.parse(histRaw) : [];
+      const override = overrideRaw
+        ? (JSON.parse(overrideRaw) as { date: string; workoutName: string })
+        : null;
+
+      const effective = getEffectiveToday(found, history);
+      effectiveTodayRef.current = effective;
+      setEffectiveToday(effective);
+      setActiveProgram(found);
+      setAllPrograms(programs);
+
+      // Completed-workout lookup always refreshes (this is what was going stale
+      // across midnight): a session counts as "today's" only if it's dated the
+      // current effective day.
+      setTodaysCompletedWorkout(history.find(w => w.date === effective) ?? null);
+      setPrevByName(buildPrevByName(history));
+
+      // Re-resolve the scheduled template unless a live session is in progress
+      // (don't clobber a workout the user is mid-way through). A just-finished
+      // session is no longer "in progress" — finalizeComplete clears the log —
+      // so this correctly advances to the new day after a completion.
+      if (found && (!isWorkoutActiveRef.current || forceReload)) {
+        const workout = resolveWorkoutForDate(found, override, effective);
+        // Today's workout (and any change-day override) belongs to the active program.
+        setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: found.id } : null);
+        if (workout) {
+          setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
+          setLog(initLog(workout.exercises));
         }
-      })
-      .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
+      }
+    }).catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
 
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
       if (!v) return;
       const parsed: unknown = JSON.parse(v);
       if (Array.isArray(parsed)) setCustomExercises(parsed as CustomExercise[]);
     }).catch((e) => warnStorage("getItem", CUSTOM_KEY, e));
-
-    const todayStr = todayYMD();
-    AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
-      const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
-      setTodaysCompletedWorkout(history.find(w => w.date === todayStr) ?? null);
-      setPrevByName(buildPrevByName(history));
-    }).catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
   }, []);
 
   // Restore an in-progress workout draft (if any) before loadData runs, so the
   // template loader doesn't clobber a workout the user was mid-way through.
   useEffect(() => {
-    AsyncStorage.getItem(WORKOUT_DRAFT_KEY).then(raw => {
+    // Program + history are read alongside the draft so the draft's day can be
+    // matched against the *effective* training day, not the raw calendar date —
+    // otherwise an in-progress late-night session's draft would be discarded the
+    // moment the clock ticks past midnight.
+    Promise.all([
+      AsyncStorage.getItem(WORKOUT_DRAFT_KEY),
+      AsyncStorage.getItem(PROGRAMS_KEY),
+      AsyncStorage.getItem(WORKOUT_HISTORY_KEY),
+    ]).then(([raw, progRaw, histRaw]) => {
       if (raw) {
         try {
           const draft = JSON.parse(raw);
-          if (draft?.date === todayYMD() && draft.workoutInfo && draft.log) {
+          const programs: SavedProgram[] = progRaw ? JSON.parse(progRaw) : [];
+          const found = programs.find(p => p.status === "active") ?? null;
+          const history: CompletedWorkout[] = histRaw ? JSON.parse(histRaw) : [];
+          const effective = getEffectiveToday(found, history);
+          effectiveTodayRef.current = effective;
+          if (draft?.date === effective && draft.workoutInfo && draft.log) {
             setWorkoutInfo(draft.workoutInfo);
             setLog(draft.log);
             setIsometricExIds(new Set(draft.isometricExIds ?? []));
@@ -1556,6 +1557,12 @@ export default function WorkoutScreen() {
     }
   }, [loadData, draftRestored]));
 
+  // Re-resolve when the training day rolls over while this screen is mounted
+  // (midnight / 3am grace cutoff) or when the app returns from the background —
+  // neither fires useFocusEffect, so without this the completed-workout view and
+  // scheduled day stay frozen on yesterday.
+  useDayRollover(useCallback(() => { if (draftRestored) loadData(); }, [loadData, draftRestored]));
+
   // Autosave draft on any change after restoration. Skip while a completed workout
   // is shown (nothing to save), and skip the empty pre-start baseline (saving only
   // when the user has actually engaged: running timer, real progress, or notes).
@@ -1571,7 +1578,7 @@ export default function WorkoutScreen() {
     AsyncStorage.setItem(
       WORKOUT_DRAFT_KEY,
       JSON.stringify({
-        date: todayYMD(),
+        date: effectiveTodayRef.current,
         workoutInfo,
         log,
         isometricExIds: Array.from(isometricExIds),
@@ -1739,12 +1746,32 @@ export default function WorkoutScreen() {
     // A free workout only belongs to a program when the user opts to add it.
     setWorkoutInfo({ name, exercises: [], programId: addToProgram ? activeProgram?.id : undefined });
     setLog({});
-    const todayStr = todayYMD();
-    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: name }))
+    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: effectiveTodayRef.current, workoutName: name }))
       .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setCustomWorkoutNamingOpen(false);
   };
+
+  // Change-day picker selection (shared by the rest-day and active-workout
+  // renders). A "Rest" selection clears the workout so the rest screen shows;
+  // resolveWorkoutForDate maps the stored "Rest" override back to null on reload.
+  const handleSelectDay = useCallback((dayName: string, fromProgram?: SavedProgram) => {
+    setIsFreeWorkout(false);
+    setFreeWorkoutAddToProgram(false);
+    if (dayName === "Rest") {
+      setWorkoutInfo(null);
+      setLog({});
+    } else {
+      const src = fromProgram ?? activeProgram;
+      const dayIndex = src?.cyclePattern.indexOf(dayName) ?? -1;
+      const exercises = src?.workouts[`${dayIndex}:${dayName}`] ?? [];
+      setWorkoutInfo({ name: dayName, exercises, programId: src?.id });
+      setLog(initLog(exercises));
+    }
+    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: effectiveTodayRef.current, workoutName: dayName }))
+      .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
+    setChangeDayOpen(false);
+  }, [activeProgram]);
 
   const addExercise = (name: string, idOffset = 0) => {
     const id = `session_${Date.now() + idOffset}`;
@@ -1778,7 +1805,10 @@ export default function WorkoutScreen() {
   const buildCompletedWorkout = (): CompletedWorkout | null => {
     if (!workoutInfo) return null;
     const d = new Date();
-    const ds = toYMD(d);
+    // Stamp the effective training day, not the raw calendar date, so a session
+    // finished in the small hours attributes to the day it belongs to (and stays
+    // consistent with the schedule the user was shown).
+    const ds = effectiveTodayRef.current;
     const trimmedNotes = notes.trim();
     return {
       id: `workout_${Date.now()}`,
@@ -1827,37 +1857,51 @@ export default function WorkoutScreen() {
     }
   };
 
+  // Commit a (time-adjusted) completed workout: flip to the locked view, persist
+  // in the background, optionally attach a free workout to the active program,
+  // then tear down the live session. Mirrors the old finish-alert "Done" path.
+  const finalizeComplete = (completed: CompletedWorkout) => {
+    // Show the locked completed view synchronously so the UI flips on the same
+    // tick — persistence runs in the background.
+    setTodaysCompletedWorkout(completed);
+    void persistCompletedWorkout(completed);
+    if (isFreeWorkout && freeWorkoutAddToProgram && activeProgram && workoutInfo) {
+      AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
+        const progs: SavedProgram[] = raw ? JSON.parse(raw) : [];
+        const updated = progs.map(p => {
+          if (p.id !== activeProgram.id) return p;
+          const extras = p.extraWorkouts ?? [];
+          if (extras.includes(workoutInfo.name)) return p;
+          return { ...p, extraWorkouts: [...extras, workoutInfo.name] };
+        });
+        AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated))
+          .catch((e) => warnStorage("setItem", PROGRAMS_KEY, e));
+      }).catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
+    }
+    stopTimer();
+    setIsFreeWorkout(false);
+    setFreeWorkoutAddToProgram(false);
+    // Tear down the live session so it's no longer counted as "in progress"
+    // (the locked view renders from todaysCompletedWorkout, not from `log`).
+    // Without this the leftover log keeps isWorkoutActiveRef true, which would
+    // stop loadData from advancing to the next day after the date rolls over.
+    setLog({});
+    setNotes("");
+    setIsometricExIds(new Set());
+    isWorkoutActiveRef.current = false;
+    clearDraft();
+  };
+
   const handleFinish = () => {
-    const doFinish = () => Alert.alert(
-      "Workout Complete!",
-      "Great session. Rest up and come back stronger.",
-      [{ text: "Done", onPress: () => {
-        const c = buildCompletedWorkout();
-        if (c) {
-          // Show the locked completed view synchronously so the UI flips on the
-          // same tick — persistence runs in the background.
-          setTodaysCompletedWorkout(c);
-          void persistCompletedWorkout(c);
-        }
-        if (isFreeWorkout && freeWorkoutAddToProgram && activeProgram && workoutInfo) {
-          AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
-            const progs: SavedProgram[] = raw ? JSON.parse(raw) : [];
-            const updated = progs.map(p => {
-              if (p.id !== activeProgram.id) return p;
-              const extras = p.extraWorkouts ?? [];
-              if (extras.includes(workoutInfo.name)) return p;
-              return { ...p, extraWorkouts: [...extras, workoutInfo.name] };
-            });
-            AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated))
-              .catch((e) => warnStorage("setItem", PROGRAMS_KEY, e));
-          }).catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
-        }
-        stopTimer();
-        setIsFreeWorkout(false);
-        setFreeWorkoutAddToProgram(false);
-        clearDraft();
-      } }]
-    );
+    // Capture the session in memory (end = now, duration = live timer) and open
+    // our completion sheet so the user can confirm / adjust the times.
+    const doFinish = () => {
+      const c = buildCompletedWorkout();
+      if (!c) return;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setPendingComplete(c);
+      setCompleteSheetOpen(true);
+    };
 
     if (!allDone) {
       Alert.alert(
@@ -1901,17 +1945,19 @@ export default function WorkoutScreen() {
           text: "Delete & Redo", style: "destructive",
           onPress: () => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            const todayStr = todayYMD();
             const targetId = todaysCompletedWorkout?.id;
+            // Clean up workout_dates for the deleted session's own day, not for
+            // "now" — they can differ for a late-night session.
+            const targetDate = todaysCompletedWorkout?.date ?? effectiveTodayRef.current;
             AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
               const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
               const updated = history.filter(w => w.id !== targetId);
               AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(updated))
                 .catch((e) => warnStorage("setItem", WORKOUT_HISTORY_KEY, e));
-              if (!updated.some(w => w.date === todayStr)) {
+              if (!updated.some(w => w.date === targetDate)) {
                 AsyncStorage.getItem(WORKOUT_DATES_KEY).then(raw2 => {
                   const dates: string[] = raw2 ? JSON.parse(raw2) : [];
-                  AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== todayStr)))
+                  AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== targetDate)))
                     .catch((e) => warnStorage("setItem", WORKOUT_DATES_KEY, e));
                 }).catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
               }
@@ -2029,8 +2075,16 @@ export default function WorkoutScreen() {
                 </View>
               </BounceButton>
             </View>
+            {/* Rest days keep the timer/stopwatch available (top-right), same as an active workout. */}
+            <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
+              <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <Ionicons name="timer-outline" size={22} color={APP_LIGHT.tp} />
+              </View>
+            </TouchableOpacity>
           </View>
         )}
+
+        <IntervalTimerModal visible={showTimerModal} onClose={() => setShowTimerModal(false)} isDark={isDark} t={t} />
 
         <WorkoutOptionsSheet
           visible={workoutOptionsOpen}
@@ -2050,21 +2104,8 @@ export default function WorkoutScreen() {
             t={t}
             activeProgram={activeProgram}
             programs={allPrograms}
-            currentWorkoutName=""
-            onSelectDay={(dayName, fromProgram) => {
-              const src = fromProgram ?? activeProgram;
-              const dayIndex = src.cyclePattern.indexOf(dayName);
-              const workoutKey = `${dayIndex}:${dayName}`;
-              const exercises = src.workouts[workoutKey] ?? [];
-              setWorkoutInfo({ name: dayName, exercises, programId: src.id });
-              setLog(initLog(exercises));
-              setIsFreeWorkout(false);
-              setFreeWorkoutAddToProgram(false);
-              const todayStr = todayYMD();
-              AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: dayName }))
-                .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
-              setChangeDayOpen(false);
-            }}
+            currentWorkoutName="Rest"
+            onSelectDay={handleSelectDay}
             onClose={() => { setChangeDayOpen(false); setWorkoutOptionsOpen(true); }}
             onDismiss={() => setChangeDayOpen(false)}
           />
@@ -2161,11 +2202,11 @@ export default function WorkoutScreen() {
 
             {/* Edit in Journal + Discard row */}
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 16 }}>
-              <BounceButton onPress={() => router.push("/journal")} style={{ flex: 1 }}>
+              <BounceButton onPress={() => router.push({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id } })} style={{ flex: 1 }}>
                 <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
                   <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
-                    <Ionicons name="book-outline" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
-                    <Text style={[styles.finishBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Edit in Journal</Text>
+                    <Ionicons name="create-outline" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
+                    <Text style={[styles.finishBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Edit Workout</Text>
                   </View>
                 </View>
               </BounceButton>
@@ -2246,6 +2287,7 @@ export default function WorkoutScreen() {
                   activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
                   prevSets={prevByName[normalizeExerciseName(exercise.name)] ?? []}
                   hideIndexLabel
+                  numberBadge={focusMode ? undefined : i + 1}
                   onToggleIsometric={() => setIsometricExIds(prev => {
                     const next = new Set(prev);
                     next.has(exercise.id) ? next.delete(exercise.id) : next.add(exercise.id);
@@ -2448,255 +2490,8 @@ export default function WorkoutScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ── Timer Modal ── */}
-      <Modal visible={showTimerModal} transparent animationType="fade" onRequestClose={() => setShowTimerModal(false)}>
-        <TouchableOpacity style={styles.timerBackdrop} activeOpacity={1} onPress={() => { Keyboard.dismiss(); setShowTimerModal(false); }}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ width: "100%" }}>
-            <View style={[styles.timerCard, {
-              backgroundColor: isDark ? "#1B1E2C" : "#e8ecf3",
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: isDark ? 0.35 : 0.1,
-              shadowRadius: 8,
-              elevation: 4,
-            }]}>
-
-              {/* Header */}
-              <View style={[styles.timerCardHeader, { justifyContent: "flex-end" }]}>
-                <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowTimerModal(false); }}>
-                  <View style={{ padding: 10 }}>
-                    <Ionicons name="close" size={22} color={t.ts} />
-                  </View>
-                </BounceButton>
-              </View>
-
-              {/* Tabs */}
-              <View
-                style={[styles.timerTabs, { backgroundColor: t.div }]}
-                onLayout={e => { const w = e.nativeEvent?.layout?.width; if (w != null) tabTrackWidth.value = w - 6; }}
-              >
-                {/* Sliding pill */}
-                <Reanimated.View style={[styles.timerPill, pillAnimStyle]} />
-                {/* Timer label */}
-                <TouchableOpacity
-                  style={styles.timerTab}
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setTimerMode("timer");
-                    tabOffset.value = withSpring(0, { damping: 22, stiffness: 300, mass: 0.9 });
-                  }}
-                >
-                  <Reanimated.Text style={[styles.timerTabText, timerLabelColor]}>Timer</Reanimated.Text>
-                </TouchableOpacity>
-                {/* Stopwatch label */}
-                <TouchableOpacity
-                  style={styles.timerTab}
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setTimerMode("stopwatch");
-                    tabOffset.value = withSpring(1, { damping: 22, stiffness: 300, mass: 0.9 });
-                  }}
-                >
-                  <Reanimated.Text style={[styles.timerTabText, stopwatchLabelColor]}>Stopwatch</Reanimated.Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Display */}
-              <View style={styles.timerDisplay}>
-                {/* Single persistent wrapper — prevents layout shift when toggling edit mode */}
-                <View style={{ alignItems: "center", alignSelf: "stretch" }}>
-                {timerMode === "timer" && editingDuration && !countdownActive ? (
-                  <>
-                    <View style={styles.timerEditRow}>
-                      <View style={{ width: 36 }} />
-                      <TextInput
-                        style={[styles.timerEditInput, { color: t.tp, backgroundColor: t.div }]}
-                        value={editMins}
-                        onChangeText={v => setEditMins(v.replace(/[^0-9]/g, "").slice(0, 2))}
-                        keyboardType="number-pad" maxLength={2} selectTextOnFocus
-                      />
-                      <Text style={[styles.timerTime, { color: t.tp, fontSize: 36 }]}>:</Text>
-                      <TextInput
-                        style={[styles.timerEditInput, { color: t.tp, backgroundColor: t.div }]}
-                        value={editSecs}
-                        onChangeText={v => setEditSecs(v.replace(/[^0-9]/g, "").slice(0, 2))}
-                        keyboardType="number-pad" maxLength={2} selectTextOnFocus
-                      />
-                      <TouchableOpacity
-                        style={styles.timerEditConfirm}
-                        activeOpacity={0.8}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          const m = Math.min(99, Math.max(0, parseInt(editMins) || 0));
-                          const s = Math.min(59, Math.max(0, parseInt(editSecs) || 0));
-                          const total = Math.max(5, m * 60 + s);
-                          setCountdownDuration(total); setCountdownRemaining(total);
-                          setEditMins(String(Math.floor(total / 60)).padStart(2, "0"));
-                          setEditSecs(String(total % 60).padStart(2, "0"));
-                          setEditingDuration(false); Keyboard.dismiss();
-                        }}
-                      >
-                        <Ionicons name="checkmark" size={20} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                    <View style={{ height: 24 }} />
-                  </>
-                ) : (
-                  <>
-                    {/* Time row — buttons always rendered (opacity 0 when hidden) so time never shifts */}
-                    {(() => {
-                      const showAdj = timerMode === "timer" && !countdownActive && countdownRemaining === countdownDuration;
-                      return (
-                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 16 }}>
-                          <BounceButton
-                            style={[styles.timerAdjust, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div, opacity: showAdj ? 1 : 0 }]}
-                            onPress={showAdj ? () => {
-                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                              const v = Math.max(5, countdownDuration - 15);
-                              setCountdownDuration(v); setCountdownRemaining(v);
-                              setEditMins(String(Math.floor(v / 60)).padStart(2, "0"));
-                              setEditSecs(String(v % 60).padStart(2, "0"));
-                            } : () => {}}
-                          >
-                            <Text style={[styles.timerAdjustText, { color: t.ts }]}>-15s</Text>
-                          </BounceButton>
-
-                          <BounceButton
-                            onPress={() => {
-                              if (showAdj) {
-                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                setEditMins(String(Math.floor(countdownRemaining / 60)).padStart(2, "0"));
-                                setEditSecs(String(countdownRemaining % 60).padStart(2, "0"));
-                                setEditingDuration(true);
-                              }
-                            }}
-                          >
-                            <Text style={[styles.timerTime, { color: isDark ? "#FFFFFF" : "#1C2030" }]}>
-                              {timerMode === "timer" ? fmtTime(countdownRemaining) : fmtTime(swElapsed)}
-                            </Text>
-                          </BounceButton>
-
-                          <BounceButton
-                            style={[styles.timerAdjust, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div, opacity: showAdj ? 1 : 0 }]}
-                            onPress={showAdj ? () => {
-                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                              const v = countdownDuration + 15;
-                              setCountdownDuration(v); setCountdownRemaining(v);
-                              setEditMins(String(Math.floor(v / 60)).padStart(2, "0"));
-                              setEditSecs(String(v % 60).padStart(2, "0"));
-                            } : () => {}}
-                          >
-                            <Text style={[styles.timerAdjustText, { color: t.ts }]}>+15s</Text>
-                          </BounceButton>
-                        </View>
-                      );
-                    })()}
-
-                    {/* Hint row — always rendered, fades with same condition as ±15s buttons */}
-                    <View style={{ height: 20, justifyContent: "center", alignItems: "center", marginTop: 4 }}>
-                      <View style={[styles.timerEditHint, { opacity: timerMode === "timer" && !countdownActive && countdownRemaining === countdownDuration ? 1 : 0 }]}>
-                        <Ionicons name="create-outline" size={11} color={t.ts} />
-                        <Text style={[styles.timerEditHintText, { color: t.ts }]}>tap to edit</Text>
-                      </View>
-                    </View>
-                  </>
-                )}
-                </View>
-              </View>
-
-              {/* Action buttons */}
-              {timerMode === "timer" ? (
-                countdownRemaining === 0 ? (
-                  <View style={[styles.timerActionGlow, { marginHorizontal: 20, marginBottom: 20 }]}>
-                    <BounceButton style={[styles.timerAction, { backgroundColor: ACCT }]}
-                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setCountdownRemaining(countdownDuration); }}>
-                      <View style={styles.timerActionInner}>
-                        <Ionicons name="refresh" size={20} color="#fff" />
-                        <Text style={[styles.timerActionText, { color: "#fff" }]}>Reset</Text>
-                      </View>
-                    </BounceButton>
-                  </View>
-                ) : countdownActive ? (
-                  <BounceButton style={[styles.timerAction, { backgroundColor: t.div, marginHorizontal: 20, marginBottom: 20 }]}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCountdownActive(false); }}>
-                    <View style={styles.timerActionInner}>
-                      <Ionicons name="pause" size={20} color={t.tp} />
-                      <Text style={[styles.timerActionText, { color: t.tp }]}>Pause</Text>
-                    </View>
-                  </BounceButton>
-                ) : countdownRemaining < countdownDuration ? (
-                  <View style={styles.timerButtonRow}>
-                    <BounceButton style={[styles.timerAction, { backgroundColor: t.div, flex: 1 }]}
-                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCountdownRemaining(countdownDuration); }}>
-                      <View style={styles.timerActionInner}>
-                        <Ionicons name="refresh" size={20} color={t.tp} />
-                        <Text style={[styles.timerActionText, { color: t.tp }]}>Reset</Text>
-                      </View>
-                    </BounceButton>
-                    <View style={[styles.timerActionGlow, { flex: 1, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
-                      <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}
-                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setCountdownActive(true); setEditingDuration(false); Keyboard.dismiss(); }}>
-                        <View style={styles.timerActionInner}>
-                          <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
-                          <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Continue</Text>
-                        </View>
-                      </BounceButton>
-                    </View>
-                  </View>
-                ) : (
-                  <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, marginHorizontal: 20, marginBottom: 20, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 }]}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setCountdownActive(true); setEditingDuration(false); Keyboard.dismiss(); }}>
-                    <View style={styles.timerActionInner}>
-                      <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
-                      <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Start</Text>
-                    </View>
-                  </BounceButton>
-                )
-              ) : (
-                swRunning ? (
-                  <BounceButton style={[styles.timerAction, { backgroundColor: t.div, marginHorizontal: 20, marginBottom: 20 }]}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); swOffsetRef.current = swElapsed; setSwRunning(false); }}>
-                    <View style={styles.timerActionInner}>
-                      <Ionicons name="stop" size={20} color={t.tp} />
-                      <Text style={[styles.timerActionText, { color: t.tp }]}>Stop</Text>
-                    </View>
-                  </BounceButton>
-                ) : swElapsed === 0 ? (
-                  <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, marginHorizontal: 20, marginBottom: 20, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 }]}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setSwRunning(true); }}>
-                    <View style={styles.timerActionInner}>
-                      <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
-                      <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Start</Text>
-                    </View>
-                  </BounceButton>
-                ) : (
-                  <View style={styles.timerButtonRow}>
-                    <BounceButton style={[styles.timerAction, { backgroundColor: t.div, flex: 1 }]}
-                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSwElapsed(0); swOffsetRef.current = 0; swStartRef.current = null; }}>
-                      <View style={styles.timerActionInner}>
-                        <Ionicons name="refresh" size={20} color={t.tp} />
-                        <Text style={[styles.timerActionText, { color: t.tp }]}>Reset</Text>
-                      </View>
-                    </BounceButton>
-                    <View style={[styles.timerActionGlow, { flex: 1, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
-                      <BounceButton style={[styles.timerAction, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}
-                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setSwRunning(true); }}>
-                        <View style={styles.timerActionInner}>
-                          <Ionicons name="play" size={20} color={isDark ? APP_DARK.bg : "#fff"} />
-                          <Text style={[styles.timerActionText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Continue</Text>
-                        </View>
-                      </BounceButton>
-                    </View>
-                  </View>
-                )
-              )}
-
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      {/* ── Timer / Stopwatch Modal ── */}
+      <IntervalTimerModal visible={showTimerModal} onClose={() => setShowTimerModal(false)} isDark={isDark} t={t} />
 
 
       {/* Exercise picker — change exercise for current session */}
@@ -2773,20 +2568,7 @@ export default function WorkoutScreen() {
           activeProgram={activeProgram}
           programs={allPrograms}
           currentWorkoutName={workoutInfo?.name ?? ""}
-          onSelectDay={(dayName, fromProgram) => {
-            const src = fromProgram ?? activeProgram;
-            const dayIndex = src.cyclePattern.indexOf(dayName);
-            const workoutKey = `${dayIndex}:${dayName}`;
-            const exercises = src.workouts[workoutKey] ?? [];
-            setWorkoutInfo({ name: dayName, exercises, programId: src.id });
-            setLog(initLog(exercises));
-            setIsFreeWorkout(false);
-            setFreeWorkoutAddToProgram(false);
-            const todayStr = todayYMD();
-            AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: todayStr, workoutName: dayName }))
-              .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
-            setChangeDayOpen(false);
-          }}
+          onSelectDay={handleSelectDay}
           onClose={() => { setChangeDayOpen(false); setWorkoutOptionsOpen(true); }}
           onDismiss={() => setChangeDayOpen(false)}
         />
@@ -2801,6 +2583,27 @@ export default function WorkoutScreen() {
         onClose={() => setCustomWorkoutNamingOpen(false)}
         onBack={activeProgram ? () => { setCustomWorkoutNamingOpen(false); setWorkoutOptionsOpen(true); } : undefined}
       />
+
+      {pendingComplete && (
+        <TimeEditSheet
+          visible={completeSheetOpen}
+          isDark={isDark}
+          title={pendingComplete.workoutName}
+          subtitle="Completed"
+          withCheck
+          confirmLabel="Complete Workout"
+          startDate={new Date(new Date(pendingComplete.completedAt).getTime() - pendingComplete.durationSeconds * 1000)}
+          endDate={new Date(pendingComplete.completedAt)}
+          onConfirm={(start, end) => {
+            const completedAt = completedAtISO(pendingComplete.date, end);
+            const durationSeconds = computeDurationMins(start, end) * 60;
+            finalizeComplete({ ...pendingComplete, completedAt, durationSeconds });
+            setCompleteSheetOpen(false);
+            setPendingComplete(null);
+          }}
+          onClose={() => { setCompleteSheetOpen(false); setPendingComplete(null); }}
+        />
+      )}
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
       <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
@@ -3009,29 +2812,5 @@ const styles = StyleSheet.create({
   emptySub:       { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center", lineHeight: 22 },
   emptyBtn:       { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, paddingHorizontal: 28, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   emptyBtnText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-
-  // Timer modal
-  timerBackdrop:    { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", paddingHorizontal: 20, paddingVertical: 24 },
-  timerCard:        { borderRadius: 24, width: "100%" },
-  timerCardHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 18, paddingBottom: 12 },
-  timerCardTitle:   { fontFamily: FontFamily.bold, fontSize: 18 },
-  timerTabs:        { flexDirection: "row", borderRadius: 12, marginHorizontal: 20, marginBottom: 20, padding: 3, alignSelf: "stretch" },
-  timerPill:        { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 10, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
-  timerTab:         { flex: 1, borderRadius: 10, paddingVertical: 8, alignItems: "center" },
-  timerTabText:     { fontFamily: FontFamily.semibold, fontSize: 14 },
-  timerDisplay:     { alignItems: "center", justifyContent: "center", minHeight: 120 },
-  timerAdjust:      { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
-  timerAdjustText:  { fontFamily: FontFamily.semibold, fontSize: 14 },
-  timerTime:        { fontFamily: FontFamily.bold, fontSize: 56, letterSpacing: 2 },
-  timerEditRow:     { flexDirection: "row", alignItems: "center", gap: 8 },
-  timerEditInput:   { fontFamily: FontFamily.bold, fontSize: 40, width: 72, borderRadius: 10, paddingVertical: 4, paddingHorizontal: 8, textAlign: "center" },
-  timerEditConfirm: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  timerEditHint:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 },
-  timerEditHintText:{ fontFamily: FontFamily.regular, fontSize: 11 },
-  timerAction:      { borderRadius: 14, paddingVertical: 14 },
-  timerActionInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  timerActionGlow:  { borderRadius: 14, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 },
-  timerActionText:  { fontFamily: FontFamily.semibold, fontSize: 16 },
-  timerButtonRow:   { flexDirection: "row", gap: 10, marginHorizontal: 20, marginBottom: 20 },
-
+  // Interval Timer / Stopwatch modal styles now live in components/IntervalTimerModal.tsx.
 });

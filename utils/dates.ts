@@ -65,6 +65,25 @@ export function todayYMD(): string {
 }
 
 /**
+ * Calendar-day label for chat date separators and similar groupings:
+ *   - today    -> "Today"
+ *   - yesterday-> "Yesterday"
+ *   - this year-> "June 10"
+ *   - older    -> "June 10, 2024"
+ * Compares on local calendar day (via toYMD), so time-of-day never matters.
+ */
+export function relativeDayLabel(d: Date): string {
+  const today = new Date();
+  const ymd = toYMD(d);
+  if (ymd === toYMD(today)) return "Today";
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (ymd === toYMD(yesterday)) return "Yesterday";
+  const base = `${MONTH_FULL[d.getMonth()]} ${d.getDate()}`;
+  return d.getFullYear() === today.getFullYear() ? base : `${base}, ${d.getFullYear()}`;
+}
+
+/**
  * Format an elapsed duration in seconds.
  * Matches the shipped semantics shared by home / workout / journal / workout-detail:
  *   45    -> "45s"

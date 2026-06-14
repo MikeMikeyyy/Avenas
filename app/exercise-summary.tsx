@@ -21,6 +21,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import ExerciseImage from "../components/ExerciseImage";
+import VideoDemo from "../components/VideoDemo";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { useTheme } from "../contexts/ThemeContext";
@@ -67,7 +68,9 @@ export default function ExerciseSummaryScreen() {
   const otherCustomMuscles = !bundled ? (custom?.muscles ?? []).slice(1) : [];
   const equipment = bundled?.equipment;
   const secondary = bundled?.secondaryMuscles ?? [];
-  const instructions = bundled?.instructions ?? [];
+  // Numbered how-to: catalogue instructions for bundled exercises, the user's
+  // own steps for custom ones. Both render through the same numbered-circle list.
+  const instructions = bundled?.instructions ?? custom?.steps ?? [];
   const description = custom?.description?.trim();
   const imageId = exerciseIdByName(name) ?? `custom:${name}`;
 
@@ -112,7 +115,9 @@ export default function ExerciseSummaryScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingTop: insets.top + 16,
+          // Back button spans insets.top+14 → insets.top+54 (40px tall); start the
+          // hero image a little below it so the button never sits on the photo.
+          paddingTop: insets.top + 66,
           paddingBottom: insets.bottom + 40,
           alignItems: "center",
         }}
@@ -176,6 +181,16 @@ export default function ExerciseSummaryScreen() {
             <Ionicons name="chevron-forward" size={16} color="#fff" />
           </View>
         </BounceButton>
+
+        {/* Video demo — custom exercises only. Tap the play button to watch. */}
+        {custom?.videoUri ? (
+          <View style={styles.section}>
+            <Text style={[styles.sectionLabel, { color: t.ts }]}>VIDEO DEMO</Text>
+            <View style={{ alignItems: "center" }}>
+              <VideoDemo uri={custom.videoUri} size={imgSize} radius={16} muted={custom.muted ?? false} />
+            </View>
+          </View>
+        ) : null}
 
         {/* Secondary muscles */}
         {secondary.length > 0 && (

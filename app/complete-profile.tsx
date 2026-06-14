@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -17,8 +17,10 @@ import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext
 import { useAuth } from "../contexts/AuthContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { pullProfile, pushProfile } from "../lib/cloud";
+import { signOut } from "../lib/auth";
 
 function Choice({ label, selected, onPress, dark }: { label: string; selected: boolean; onPress: () => void; dark: boolean }) {
   const t = dark ? APP_DARK : APP_LIGHT;
@@ -37,6 +39,7 @@ function Choice({ label, selected, onPress, dark }: { label: string; selected: b
 export default function CompleteProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { from } = useLocalSearchParams<{ from?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
@@ -72,7 +75,7 @@ export default function CompleteProfileScreen() {
           router.replace("/home");
           return;
         }
-        if (profile?.name) setName(profile.name); // prefill (e.g. Google name)
+        // New account: leave the name blank for the user to enter their own.
       } catch {
         /* fall through to the form */
       }
@@ -80,6 +83,20 @@ export default function CompleteProfileScreen() {
     })();
     return () => { cancelled = true; };
   }, [userId]);
+
+  // Top-right escape hatch back to the login/signup screen the user came from
+  // (before they picked an email). Picking an account already created a Supabase
+  // session, so sign out first — otherwise re-picking wouldn't re-prompt and this
+  // half-set-up account would be sent straight to Home (no profile) on next launch.
+  const onBack = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try { await signOut(); } catch { /* navigate back regardless */ }
+    if (from === "signup") { router.replace("/signup"); return; }
+    if (from === "login") { router.replace("/login"); return; }
+    // No recorded origin (e.g. deep link): fall back to the start page.
+    if (router.canDismiss()) router.dismissAll();
+    router.replace("/onboarding");
+  };
 
   const onContinue = async () => {
     const trimmed = name.trim();
@@ -111,6 +128,16 @@ export default function CompleteProfileScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
+      <TouchableOpacity
+        onPress={onBack}
+        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: isDark ? t.div : "#ffffff" }]}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
+      >
+        <Ionicons name="chevron-back" size={22} color={t.tp} />
+      </TouchableOpacity>
+
       <KeyboardAwareScrollView
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
@@ -165,6 +192,8 @@ export default function CompleteProfileScreen() {
           </View>
         </BounceButton>
       </KeyboardAwareScrollView>
+
+      <KeyboardDismissButton />
     </View>
   );
 }
@@ -172,6 +201,7 @@ export default function CompleteProfileScreen() {
 const styles = StyleSheet.create({
   root:          { flex: 1 },
   center:        { alignItems: "center", justifyContent: "center" },
+  backBtn:       { position: "absolute", right: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:        { paddingHorizontal: 28 },
   avatarSection: { alignItems: "center", marginBottom: 24 },
   avatar:        { width: 88, height: 88, borderRadius: 44 },

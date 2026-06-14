@@ -194,7 +194,7 @@ export default function ExerciseHistoryScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingTop: insets.top + 16,
+          paddingTop: insets.top + 14,
           paddingBottom: insets.bottom + 40,
         }}
       >
@@ -334,7 +334,11 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 28,
+    // Match the back button's 40px box (pinned at insets.top + 14) so the
+    // centered title lines up vertically with the back chevron rather than
+    // sitting a few px above it.
+    minHeight: 40,
+    marginBottom: 18,
   },
   screenTitle: {
     fontFamily: FontFamily.bold,

@@ -63,12 +63,20 @@ export async function markThreadRead(contactId: string): Promise<void> {
   await setJSON(CHAT_READS_KEY, reads);
 }
 
-/** True when a thread's newest message is inbound and newer than its read stamp. */
-export function isThreadUnread(msgs: ChatMessage[], lastReadISO?: string): boolean {
-  const last = msgs[msgs.length - 1];
-  if (!last || last.mine) return false;
-  if (!lastReadISO) return true;
-  return new Date(last.sentAtISO).getTime() > new Date(lastReadISO).getTime();
+/**
+ * Number of inbound messages newer than the thread's read stamp. Opening the
+ * thread (markThreadRead) advances the stamp to now, so this drops to 0 — which
+ * is what makes the unread badge disappear once messages are read. With no read
+ * stamp yet, every inbound message counts.
+ */
+export function countUnreadInThread(msgs: ChatMessage[], lastReadISO?: string): number {
+  const readMs = lastReadISO ? new Date(lastReadISO).getTime() : 0;
+  let n = 0;
+  for (const m of msgs) {
+    if (m.mine) continue;
+    if (new Date(m.sentAtISO).getTime() > readMs) n++;
+  }
+  return n;
 }
 
 // Collision-proof even within the same millisecond (broadcast loops).

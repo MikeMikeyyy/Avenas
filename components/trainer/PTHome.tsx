@@ -24,6 +24,8 @@ import ChatIcon from "../icons/ChatIcon";
 import PlusIcon from "../icons/PlusIcon";
 import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
+import UnreadBadge from "../UnreadBadge";
+import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -85,6 +87,7 @@ export default function PTHome() {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const unreadMessages = useUnreadMessages();
 
   const [clients, setClients] = useState<Client[]>([]);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
@@ -368,8 +371,11 @@ export default function PTHome() {
           </BounceButton>
           <View style={{ flex: 1 }} />
           <BounceButton onPress={() => router.push("/trainer/messages")} accessibilityLabel="Open messages">
-            <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
-              <ChatIcon size={18} color={t.tp} />
+            <View>
+              <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+                <ChatIcon size={18} color={t.tp} />
+              </View>
+              <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
             </View>
           </BounceButton>
           <BounceButton onPress={toggleSearch} accessibilityLabel={searchOpen ? "Close search" : "Search clients"}>
@@ -768,6 +774,7 @@ const styles = StyleSheet.create({
   addBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   manageBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   searchBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  msgBadge:     { position: "absolute", top: -5, right: -5 },
   searchRow:    { marginBottom: 14 },
   search:       { fontFamily: FontFamily.regular, fontSize: 15, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11 },
   summaryAvatar:    { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },

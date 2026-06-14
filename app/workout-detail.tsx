@@ -33,6 +33,8 @@ import CollapsibleCard from "../components/CollapsibleCard";
 import ExercisePicker from "../components/ExercisePicker";
 import FadeScreen from "../components/FadeScreen";
 import TrashIcon from "../components/TrashIcon";
+import TimeEditSheet from "../components/TimeEditSheet";
+import { computeDurationMins, completedAtISO } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import {
   WORKOUT_HISTORY_KEY,
@@ -380,6 +382,10 @@ export default function WorkoutDetailScreen() {
   const [isEditing, setIsEditing]           = useState(false);
   const [editedExercises, setEditedExercises] = useState<CompletedExercise[]>([]);
   const [editedIsIsometric, setEditedIsIsometric] = useState<boolean[]>([]);
+  // Editable session time (start = completedAt - duration; end = completedAt).
+  const [editedCompletedAt, setEditedCompletedAt] = useState("");
+  const [editedDurationSeconds, setEditedDurationSeconds] = useState(0);
+  const [timeSheetOpen, setTimeSheetOpen]   = useState(false);
   const [reorderOpen, setReorderOpen]       = useState(false);
   const [changingExIdx, setChangingExIdx]   = useState<number | null>(null);
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
@@ -420,6 +426,8 @@ export default function WorkoutDetailScreen() {
       if (found) {
         setEditedExercises(JSON.parse(JSON.stringify(found.exercises)));
         setEditedIsIsometric(found.exercises.map(() => false));
+        setEditedCompletedAt(found.completedAt);
+        setEditedDurationSeconds(found.durationSeconds);
       }
     }).catch(() => {});
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
@@ -435,7 +443,12 @@ export default function WorkoutDetailScreen() {
 
   const handleSave = async () => {
     if (!workout) return;
-    const updated = { ...workout, exercises: editedExercises };
+    const updated = {
+      ...workout,
+      exercises: editedExercises,
+      completedAt: editedCompletedAt || workout.completedAt,
+      durationSeconds: editedDurationSeconds,
+    };
     const raw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
     const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
     await AsyncStorage.setItem(
@@ -450,6 +463,8 @@ export default function WorkoutDetailScreen() {
     if (workout) {
       setEditedExercises(JSON.parse(JSON.stringify(workout.exercises)));
       setEditedIsIsometric(workout.exercises.map(() => false));
+      setEditedCompletedAt(workout.completedAt);
+      setEditedDurationSeconds(workout.durationSeconds);
     }
     setIsEditing(false);
   };
@@ -644,7 +659,18 @@ export default function WorkoutDetailScreen() {
             {/* Header */}
             <View style={{ marginBottom: 24 }}>
               <Text style={[styles.title, { color: t.tp }]}>{workout.workoutName}</Text>
-              <Text style={[styles.meta, { color: t.ts }]}>{formatWorkoutDate(workout.completedAt, workout.durationSeconds)}</Text>
+              {isEditing ? (
+                <TouchableOpacity
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTimeSheetOpen(true); }}
+                  activeOpacity={0.7}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start" }}
+                >
+                  <Text style={[styles.meta, { color: ACCT }]}>{formatWorkoutDate(editedCompletedAt || workout.completedAt, editedDurationSeconds)}</Text>
+                  <Ionicons name="pencil" size={13} color={ACCT} />
+                </TouchableOpacity>
+              ) : (
+                <Text style={[styles.meta, { color: t.ts }]}>{formatWorkoutDate(workout.completedAt, workout.durationSeconds)}</Text>
+              )}
             </View>
 
             {/* Exercises */}
@@ -664,13 +690,19 @@ export default function WorkoutDetailScreen() {
                   <View style={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: 14 }}>
 
                     {/* Exercise name */}
-                    <TextInput
-                      style={[styles.exName, { color: t.tp, marginBottom: 12, padding: 0 }]}
-                      value={ex.name}
-                      onChangeText={name => updateExName(ei, name)}
-                      returnKeyType="default"
-                      editable={isEditing}
-                    />
+                    <View style={styles.exHeader}>
+                      <NeuCard dark={isDark} radius={16} style={styles.exNumBadge} innerStyle={styles.exNumInner}>
+                        <Text style={[styles.exNumText, { color: ACCT }]}>{ei + 1}</Text>
+                      </NeuCard>
+                      <TextInput
+                        style={[styles.exName, { color: t.tp, flex: 1, padding: 0 }]}
+                        value={ex.name}
+                        onChangeText={name => updateExName(ei, name.replace(/\n/g, ""))}
+                        returnKeyType="default"
+                        editable={isEditing}
+                        multiline
+                      />
+                    </View>
 
                     {/* Column headers */}
                     <View style={[styles.colHeaderRow, { borderBottomColor: divider }]}>
@@ -924,6 +956,23 @@ export default function WorkoutDetailScreen() {
         onReorder={handleReorder}
         onClose={() => setReorderOpen(false)}
       />
+      {workout && editedCompletedAt !== "" && (
+        <TimeEditSheet
+          visible={timeSheetOpen}
+          isDark={isDark}
+          title={workout.workoutName}
+          subtitle="Start & End Time"
+          confirmLabel="Save Time"
+          startDate={new Date(new Date(editedCompletedAt).getTime() - editedDurationSeconds * 1000)}
+          endDate={new Date(editedCompletedAt)}
+          onConfirm={(start, end) => {
+            setEditedCompletedAt(completedAtISO(workout.date, end));
+            setEditedDurationSeconds(computeDurationMins(start, end) * 60);
+            setTimeSheetOpen(false);
+          }}
+          onClose={() => setTimeSheetOpen(false)}
+        />
+      )}
       {kbHeight > 0 && Platform.OS === "ios" && (
         <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
           <TouchableOpacity onPress={() => prevFnRef.current?.()} activeOpacity={hasPrev ? 0.75 : 1} disabled={!hasPrev} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}>
@@ -948,7 +997,11 @@ const styles = StyleSheet.create({
   title: { fontFamily: FontFamily.bold, fontSize: 26, marginBottom: 4 },
   meta:  { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
 
-  exName: { fontFamily: FontFamily.semibold, fontSize: 15 },
+  exHeader:    { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 },
+  exNumBadge:  { width: 32, height: 32 },
+  exNumInner:  { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
+  exNumText:   { fontFamily: FontFamily.bold, fontSize: 13 },
+  exName: { fontFamily: FontFamily.bold, fontSize: 22 },
 
   colHeaderRow: { flexDirection: "row", alignItems: "center", paddingBottom: 6, paddingHorizontal: 4, borderBottomWidth: 1 },
   colText:      { fontFamily: FontFamily.semibold, fontSize: 11, textAlign: "center", letterSpacing: 0.4 },
