@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,6 +16,7 @@ import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import ClientCard from "./ClientCard";
+import Avatar from "../Avatar";
 import AddClientSheet from "./AddClientSheet";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import RecipientPickerSheet from "./RecipientPickerSheet";
@@ -47,7 +48,9 @@ import {
   type SharedProgram,
 } from "../../utils/trainerStore";
 import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
+import { loadBlockedIds } from "../../utils/moderation";
 import { getJSON } from "../../utils/storage";
+import { getMyConnections, disconnect as disconnectConnection } from "../../lib/connections";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 
 // Same SVG used by workout.tsx / new-program.tsx / review screen.
@@ -95,6 +98,11 @@ export default function PTHome() {
   const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
   const [sharedOut, setSharedOut] = useState<SharedProgram[]>([]);
   const [kbHeight, setKbHeight] = useState(0);
+  // Count of incoming connection requests (powers the Connect button badge) and a
+  // lookup from a real connection's account id → its connection row id (so removing
+  // such a roster entry severs the real connection rather than a local-only delete).
+  const [pendingIncoming, setPendingIncoming] = useState(0);
+  const connByOtherId = useRef<Record<string, string>>({});
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
@@ -160,17 +168,53 @@ export default function PTHome() {
       const fresh = seeded.length > 0 ? seeded : await loadClients();
       const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
       const sent = await loadSentPrograms();
+
+      // Real accepted connections join the roster with their real name + photo.
+      // They take precedence over any same-id local entry; pending incoming
+      // requests drive the Connect badge. Offline / signed-out → keep local only.
+      let merged = fresh;
+      try {
+        const conns = await getMyConnections();
+        const map: Record<string, string> = {};
+        const realClients: Client[] = conns
+          .filter(c => c.status === "accepted")
+          .map(c => {
+            map[c.otherId] = c.connectionId;
+            return {
+              id: c.otherId,
+              name: c.name || "User",
+              initials: makeInitials(c.name || "User"),
+              photoUri: c.photoUri,
+              isTrainer: c.accountType === "pt",
+              lastActiveISO: c.lastActiveAt,
+              streak: 0,
+            };
+          });
+        connByOtherId.current = map;
+        const realIds = new Set(realClients.map(c => c.id));
+        merged = [...realClients, ...fresh.filter(f => !realIds.has(f.id))];
+        if (!cancelled) setPendingIncoming(conns.filter(c => c.status === "pending" && c.direction === "incoming").length);
+      } catch { /* keep the local roster */ }
+
+      // Hide anyone the user has blocked, in case blockContact's server-side
+      // disconnect failed (offline) and the lingering accepted connection came
+      // back through getMyConnections — the local block takes precedence.
+      try {
+        const blocked = await loadBlockedIds();
+        if (blocked.size > 0) merged = merged.filter(c => !blocked.has(c.id));
+      } catch { /* defense-in-depth — leave as-is on storage error */ }
+
       await migrateBroadcastShares(fresh);
       await migrateCoachReceivedShares();
       const shared = await loadSharedPrograms();
       const activeMap: Record<string, string> = {};
-      await Promise.all(fresh.map(async c => {
+      await Promise.all(merged.map(async c => {
         const data = await loadClientData(c.id);
         const active = data.programs.find(p => p.status === "active");
         if (active) activeMap[c.id] = active.name;
       }));
       if (!cancelled) {
-        setClients(fresh);
+        setClients(merged);
         setMyPrograms(Array.isArray(progs) ? progs : []);
         setReviews(sent);
         setSharedOut(shared);
@@ -201,18 +245,28 @@ export default function PTHome() {
   }, [clients]);
 
   const handleRemoveClient = useCallback((client: Client) => {
+    const connId = connByOtherId.current[client.id];
     const isTrainer = !!client.isTrainer;
     Alert.alert(
-      isTrainer ? "Remove Trainer" : "Remove Client",
-      isTrainer
-        ? `Remove ${client.name}? This ends your connection, so they'll also be removed from your coaches.`
-        : `Remove ${client.name} from your roster? Their data will be deleted.`,
+      connId ? "Disconnect" : isTrainer ? "Remove Trainer" : "Remove Client",
+      connId
+        ? `Disconnect from ${client.name}? You'll stop seeing each other.`
+        : isTrainer
+          ? `Remove ${client.name}? This ends your connection, so they'll also be removed from your coaches.`
+          : `Remove ${client.name} from your roster? Their data will be deleted.`,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Remove",
+          text: connId ? "Disconnect" : "Remove",
           style: "destructive",
           onPress: async () => {
+            // Real connection → sever it server-side; the roster refreshes on focus.
+            if (connId) {
+              setClients(prev => prev.filter(c => c.id !== client.id));
+              delete connByOtherId.current[client.id];
+              try { await disconnectConnection(connId); } catch { /* keep UI responsive */ }
+              return;
+            }
             const next = clients.filter(c => c.id !== client.id);
             setClients(next);
             await saveClients(next);
@@ -250,7 +304,7 @@ export default function PTHome() {
       undefined,
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Add a Client", onPress: () => setAddOpen(true) },
+        { text: "Connect Someone", onPress: () => router.push("/connect") },
         { text: "Remove a Client", style: "destructive", onPress: openRemovePicker },
       ]
     );
@@ -359,15 +413,12 @@ export default function PTHome() {
           <BounceButton
             style={styles.coachesBtnWrap}
             onPress={() => router.push("/trainer/coaches")}
-            accessibilityLabel="Open my coaches"
+            accessibilityLabel="Open my trainers"
           >
-            <NeuCard dark={isDark} radius={12} shadowSize="sm">
-              <View style={styles.coachesBtn}>
-                <Ionicons name="person-outline" size={16} color={ACCT} />
-                <Text style={[styles.coachesBtnText, { color: t.tp }]}>My Coaches</Text>
-                <Ionicons name="chevron-forward" size={14} color={t.ts} />
-              </View>
-            </NeuCard>
+            <View style={[styles.coachesBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <Ionicons name="person-outline" size={16} color={ACCT} />
+              <Text style={[styles.coachesBtnText, { color: t.tp }]}>My Trainers</Text>
+            </View>
           </BounceButton>
           <View style={{ flex: 1 }} />
           <BounceButton onPress={() => router.push("/trainer/messages")} accessibilityLabel="Open messages">
@@ -383,9 +434,12 @@ export default function PTHome() {
               <Ionicons name={searchOpen ? "close" : "search"} size={18} color={t.tp} />
             </View>
           </BounceButton>
-          <BounceButton onPress={openManageClients} accessibilityLabel="Manage clients">
-            <View style={[styles.manageBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
-              <Ionicons name="add" size={24} color={t.tp} />
+          <BounceButton onPress={() => router.push("/connect")} accessibilityLabel="Connect with someone">
+            <View>
+              <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+                <Ionicons name="add" size={24} color={t.tp} />
+              </View>
+              <UnreadBadge count={pendingIncoming} style={styles.msgBadge} />
             </View>
           </BounceButton>
         </View>
@@ -437,7 +491,7 @@ export default function PTHome() {
                   <PeopleIcon size={28} color={ACCT} />
                 </View>
                 <Text style={[styles.emptyTitle, { color: t.tp }]}>No clients yet</Text>
-                <Text style={[styles.emptyBody, { color: t.ts }]}>Tap the + button to add your first client.</Text>
+                <Text style={[styles.emptyBody, { color: t.ts }]}>Tap the + button to connect with someone by code or QR.</Text>
               </View>
             </NeuCard>
           )
@@ -452,9 +506,14 @@ export default function PTHome() {
                 accessibilityLabel={`Open ${c.name}`}
                 style={[styles.summaryRow, { borderBottomColor: t.div, borderBottomWidth: i === filtered.length - 1 ? 0 : 1 }]}
               >
-                <View style={[styles.summaryAvatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                  <Text style={[styles.summaryAvatarText, { color: ACCT }]}>{c.initials}</Text>
-                </View>
+                <Avatar
+                  uri={c.photoUri}
+                  initials={c.initials}
+                  size={28}
+                  backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                  textColor={ACCT}
+                  textStyle={[styles.summaryAvatarText, { color: ACCT }]}
+                />
                 <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
                 <Ionicons name="chevron-forward" size={16} color={t.ts} />
               </TouchableOpacity>
@@ -765,8 +824,8 @@ const styles = StyleSheet.create({
   topGradient:  { position: "absolute", left: 0, right: 0, zIndex: 5 },
   coachesRow:    { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 },
   coachesBtnWrap: { alignSelf: "center" },
-  coachesBtn:   { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, gap: 8 },
-  coachesBtnText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  coachesBtn:   { flexDirection: "row", alignItems: "center", gap: 8, height: 40, borderRadius: 20, paddingHorizontal: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  coachesBtnText: { fontFamily: FontFamily.semibold, fontSize: 13 },
   titleRow:     { flexDirection: "row", alignItems: "flex-start", gap: 12, marginBottom: 18 },
   clientsHeaderLeft: { flex: 1, flexDirection: "column" },
   title:        { fontFamily: FontFamily.bold, fontSize: 32 },

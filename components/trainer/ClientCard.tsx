@@ -1,9 +1,19 @@
 import { View, Text, StyleSheet } from "react-native";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import Avatar from "../Avatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { Client } from "../../utils/trainerStore";
+
+// Treat activity within the last few minutes as "on the app right now". The
+// presence heartbeat (app/_layout.tsx) refreshes last_active_at every 2 min while
+// foregrounded, so this window comfortably covers an actively-used session.
+const ACTIVE_NOW_MS = 3 * 60 * 1000;
+
+function isActiveNow(iso: string | undefined): boolean {
+  return !!iso && Date.now() - new Date(iso).getTime() < ACTIVE_NOW_MS;
+}
 
 function timeAgo(iso: string | undefined): string {
   if (!iso) return "—";
@@ -26,9 +36,14 @@ export default function ClientCard({ client, activeProgramName, onPress }: { cli
     <BounceButton style={{ marginBottom: 12 }} onPress={onPress} accessibilityRole="button" accessibilityLabel={`Open ${client.name}`}>
       <NeuCard dark={isDark} radius={18}>
         <View style={styles.row}>
-          <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-            <Text style={[styles.avatarText, { color: ACCT }]}>{client.initials}</Text>
-          </View>
+          <Avatar
+            uri={client.photoUri}
+            initials={client.initials}
+            size={48}
+            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+            textColor={ACCT}
+            textStyle={[styles.avatarText, { color: ACCT }]}
+          />
           <View style={{ flex: 1 }}>
             <View style={styles.nameRow}>
               <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
@@ -47,8 +62,12 @@ export default function ClientCard({ client, activeProgramName, onPress }: { cli
               <Text style={[styles.sub, { color: t.ts }]} numberOfLines={1}>No active program</Text>
             )}
             <View style={styles.metaRow}>
-              <View style={[styles.dot, { backgroundColor: ACCT }]} />
-              <Text style={[styles.meta, { color: t.ts }]}>Last active {timeAgo(client.lastActiveISO)}</Text>
+              <View style={[styles.dot, { backgroundColor: isActiveNow(client.lastActiveISO) ? ACCT : t.ts }]} />
+              <Text style={[styles.meta, { color: t.ts }]}>
+                {isActiveNow(client.lastActiveISO)
+                  ? "Active now"
+                  : client.lastActiveISO ? `Last active ${timeAgo(client.lastActiveISO)}` : "Not active yet"}
+              </Text>
             </View>
           </View>
         </View>

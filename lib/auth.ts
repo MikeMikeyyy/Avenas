@@ -5,6 +5,7 @@
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { supabase } from "./supabase";
+import { flushCloudPushNow } from "./syncManager";
 
 // Lets the in-app browser close cleanly when auth returns.
 WebBrowser.maybeCompleteAuthSession();
@@ -30,6 +31,14 @@ export async function signInWithProvider(provider: OAuthProvider): Promise<void>
     throw new Error(result.type === "cancel" || result.type === "dismiss" ? "Sign-in cancelled." : "Sign-in failed.");
   }
 
+  // Defence-in-depth: the PKCE code from result.url is about to be exchanged
+  // for a session, so the URL must come from OUR configured callback. The
+  // in-app browser already restricts navigation, but a hostile or stale return
+  // URL would otherwise be parsed and forwarded to Supabase without checks.
+  if (!result.url.startsWith(oauthRedirectTo)) {
+    throw new Error("Sign-in callback URL did not match the expected redirect.");
+  }
+
   const params = new URL(result.url).searchParams;
   const code = params.get("code");
   if (!code) {
@@ -50,5 +59,9 @@ export async function signInWithEmail(email: string, password: string): Promise<
 }
 
 export async function signOut(): Promise<void> {
+  // Save the current account's latest local data to the cloud while we're still
+  // authenticated, so nothing logged just before sign-out is lost when the next
+  // account's sign-in clears the local cache.
+  try { await flushCloudPushNow(); } catch { /* sign out regardless */ }
   await supabase.auth.signOut();
 }

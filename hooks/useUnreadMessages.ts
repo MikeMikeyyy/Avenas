@@ -9,7 +9,10 @@ import { useCallback, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import { loadChatContacts, ensureSeededContacts, loadReads, countUnreadInThread } from "../utils/chatStore";
+import { makeInitials } from "../utils/trainerStore";
+import { getMyConnections } from "../lib/connections";
 import { loadBlockedIds, loadHiddenMessageIds } from "../utils/moderation";
+import type { ChatContact } from "../constants/chat";
 
 export function useUnreadMessages(): number {
   const { accountType } = useAccountType();
@@ -19,7 +22,26 @@ export function useUnreadMessages(): number {
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        const contacts = await loadChatContacts(accountType);
+        // Mirror app/trainer/messages.tsx:gatherContacts so the badge counts the
+        // same set of threads as the list — local roster merged with every real
+        // accepted connection. Without this merge, unreads from a real connected
+        // trainer (who has no local entry) would never reach the header badge.
+        const local = await loadChatContacts(accountType);
+        let contacts: ChatContact[] = local;
+        try {
+          const conns = await getMyConnections();
+          const real: ChatContact[] = conns
+            .filter(c => c.status === "accepted")
+            .map(c => ({
+              id: c.otherId,
+              name: c.name || "User",
+              initials: makeInitials(c.name || "User"),
+              subtitle: accountType === "pt" ? (c.accountType === "pt" ? "Coach" : "Client") : "Trainer",
+            }));
+          const realIds = new Set(real.map(c => c.id));
+          contacts = [...real, ...local.filter(l => !realIds.has(l.id))];
+        } catch { /* offline → fall back to local roster */ }
+
         const [threads, reads, blocked, hidden] = await Promise.all([
           ensureSeededContacts(contacts),
           loadReads(),

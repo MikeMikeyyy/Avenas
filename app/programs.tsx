@@ -9,6 +9,7 @@ import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
+import { scheduleCloudPush } from "../lib/syncManager";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import NeuCard from "../components/NeuCard";
@@ -551,6 +552,7 @@ export default function ProgramsScreen() {
     setPrograms(updated);
     setExpandedId(null);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    scheduleCloudPush();
   };
 
   const handleCompleteProgram = () => {
@@ -574,6 +576,7 @@ export default function ProgramsScreen() {
           setPrograms(updated);
           setExpandedId(null);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+          scheduleCloudPush();
         },
       },
     ]);
@@ -594,6 +597,7 @@ export default function ProgramsScreen() {
     setPrograms(updated);
     setExpandedId(null);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    scheduleCloudPush();
     Alert.alert("Program Duplicated", `"${program.name}" has been duplicated. Find it in your program list to start or edit.`);
   };
 
@@ -611,6 +615,7 @@ export default function ProgramsScreen() {
             setPrograms(updated);
             setExpandedId(null);
             await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+            scheduleCloudPush();
             // Clear any SharedProgram entries that pointed at this local program
             // so the gym user's My Trainer page doesn't keep stale "received" cards.
             await removeSharedProgramByLocalId(program.id);
@@ -635,6 +640,7 @@ export default function ProgramsScreen() {
     );
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    scheduleCloudPush();
   };
 
   // DEV SEED — remove after testing

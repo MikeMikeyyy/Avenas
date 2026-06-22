@@ -68,10 +68,11 @@ export default function CompleteProfileScreen() {
         const profile = await pullProfile(userId);
         if (cancelled) return;
         if (profile?.complete) {
-          setProfile({ name: profile.name, email });
+          const photoUri = profile.avatarUrl ?? undefined;
+          setProfile({ name: profile.name, email, photoUri });
           setAccountType(profile.accountType);
           setIsKg(profile.unit === "kg");
-          completeOnboarding({ name: profile.name, email });
+          completeOnboarding({ name: profile.name, email, photoUri });
           router.replace("/home");
           return;
         }

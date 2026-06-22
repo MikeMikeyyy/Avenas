@@ -18,10 +18,16 @@ import {
 } from "../utils/workout";
 import { parseStoredDate, formatStoredDate, todayYMD } from "../utils/dates";
 import {
+  formatWeightForDisplay, parseWeightToKg, migrateWeightLbToKg, trimNumber,
+  KG_PER_LB,
+} from "../utils/units";
+import { migrateHistoryWeights, migrateProgramWeights } from "../utils/weightMigration";
+import {
   programToRow, programFromRow,
   workoutToRow, workoutFromRow,
   journalToRow, journalFromRow,
   customToRow, customFromRow,
+  toReplaceUserDataPayload,
 } from "../lib/mappers";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import type { ProgramRow, WorkoutRow, JournalRow, CustomExerciseRow } from "../lib/database.types";
@@ -165,6 +171,17 @@ eq(buildPrevByName(hist)["bench press"], ["100×5"], "prev: newest wins + name n
 eq(buildPrevByName(hist, "2026-02-02")["bench press"], ["90×5"], "prev beforeDate: excludes same-day, keeps earlier");
 eq(buildPrevByName(hist, "2026-02-01"), {}, "prev beforeDate: excludes all at/after -> empty");
 
+// Timezone edge: a session logged on the morning of the 10th in a +UTC zone has
+// completedAt rolled back to the 9th in UTC. Filtering must use the local `date`
+// (10th), so logging for the 10th excludes it — not the UTC timestamp prefix.
+const tzHist: CompletedWorkout[] = [{
+  id: "tz", date: "2026-05-10", completedAt: "2026-05-09T23:00:00.000Z",
+  workoutName: "Push", durationSeconds: 0,
+  exercises: [{ name: "Bench", notes: "", sets: [{ type: "working", weight: "100", reps: "5", done: true }] }],
+}];
+eq(buildPrevByName(tzHist, "2026-05-10"), {}, "prev beforeDate: same-local-day session (completedAt rolled to prev UTC day) is excluded");
+eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate: that session is included for the next day");
+
 const fmtHist: CompletedWorkout[] = [{
   id: "w", date: "2026-03-01", completedAt: "2026-03-01T10:00:00.000Z", workoutName: "X", durationSeconds: 0,
   exercises: [{
@@ -215,6 +232,102 @@ eq(normalizeExerciseName("  Bench Press  "), "bench press", "normalizeExerciseNa
   const c: CustomExercise = { name: "My Curl", muscles: ["Arms"], imageUri: "file://x", videoUri: undefined, description: "desc" };
   const cRow: CustomExerciseRow = { ...customToRow(c, "user-1"), id: "uuid-c", created_at: "t", updated_at: "t" };
   eq(customFromRow(cRow), c, "custom exercise row round-trip");
+}
+
+// ── toReplaceUserDataPayload: program_index linkage for the atomic push RPC ─────
+{
+  const progs: SavedProgram[] = [
+    { id: "local-A", name: "A", totalWeeks: 8, currentWeek: 1, status: "active",
+      startDate: "01 Jan 2026", trainingDays: 3, cycleDays: 7,
+      cyclePattern: ["Push", "Rest"], workouts: {} },
+    { id: "local-B", name: "B", totalWeeks: 8, currentWeek: 1, status: "completed",
+      startDate: "01 Feb 2026", trainingDays: 3, cycleDays: 7,
+      cyclePattern: ["Pull", "Rest"], workouts: {} },
+  ];
+  const mkW = (id: string, programId: string | undefined): CompletedWorkout => ({
+    id, date: "2026-02-02", completedAt: "2026-02-02T10:00:00.000Z",
+    workoutName: "Push", durationSeconds: 0,
+    exercises: [{ name: "Bench", notes: "", sets: [{ type: "working", weight: "100", reps: "5", done: true }] }],
+    ...(programId !== undefined ? { programId } : {}),
+  });
+  const history: CompletedWorkout[] = [
+    mkW("w-A", "local-A"),   // -> index 0
+    mkW("w-B", "local-B"),   // -> index 1
+    mkW("w-free", ""),       // free workout -> null
+    mkW("w-legacy", undefined), // legacy (no programId) -> null
+    mkW("w-ghost", "gone"),  // references a program not in the list -> null
+  ];
+  const payload = toReplaceUserDataPayload(progs, history, [], [], "user-1");
+  eq(payload.p_programs.length, 2, "replacePayload: program count");
+  eq(payload.p_programs[0].start_date, "2026-01-01", "replacePayload: start_date converted to YMD");
+  eq(payload.p_workouts.map(w => w.program_index), [0, 1, null, null, null], "replacePayload: program_index resolves by array position; free/legacy/missing -> null");
+  // The uuid-only program_id must NOT leak into the payload (server uses program_index).
+  check(!("program_id" in (payload.p_workouts[0] as object)), "replacePayload: program_id stripped from workout payload");
+}
+
+// ── units: kg-canonical display / input conversion ─────────────────────────────
+eq(trimNumber(100, 1), "100", "trimNumber: whole");
+eq(trimNumber(100.5, 1), "100.5", "trimNumber: 1dp");
+eq(trimNumber(99.999999, 1), "100", "trimNumber: rounds up");
+eq(trimNumber(0, 1), "0", "trimNumber: zero");
+
+// kg mode is a passthrough lens (no value change for kg loggers).
+eq(formatWeightForDisplay("100", true), "100", "display kg: as-is");
+eq(parseWeightToKg("100", true), "100", "input kg: as-is");
+
+// lb mode: stored kg shows as lb, typed lb stores as kg.
+eq(formatWeightForDisplay("100", false), "220.5", "display lb: 100kg -> 220.5lb");
+eq(parseWeightToKg("225", false), trimNumber(225 * KG_PER_LB, 3), "input lb: 225lb -> kg");
+
+// The property that prevents drift: typing a clean lb value and showing it back
+// must round-trip to the same number.
+for (const lb of ["45", "100", "135", "225", "315", "100.5"]) {
+  const storedKg = parseWeightToKg(lb, false);
+  eq(formatWeightForDisplay(storedKg, false), trimNumber(parseFloat(lb), 1), `lb round-trip: ${lb} -> kg -> ${lb}`);
+}
+
+// Bodyweight / empty pass through untouched in every direction.
+for (const bw of ["BW", "", "—"]) {
+  eq(formatWeightForDisplay(bw, false), bw, `display passthrough: "${bw}"`);
+  eq(parseWeightToKg(bw, false), bw, `input passthrough: "${bw}"`);
+  eq(migrateWeightLbToKg(bw), bw, `migrate passthrough: "${bw}"`);
+}
+
+// Migration: a lb-mode user's stored "225" (really lb) becomes canonical kg,
+// and then displays back as 225 lb — their numbers look identical post-migration.
+{
+  const migrated = migrateWeightLbToKg("225");
+  eq(migrated, trimNumber(225 * KG_PER_LB, 3), "migrate: 225 (lb) -> kg");
+  eq(formatWeightForDisplay(migrated, false), "225", "migrate then display in lb: unchanged to the user");
+}
+
+// ── weight migration transformers (lb → kg) ────────────────────────────────────
+{
+  const hist: CompletedWorkout[] = [{
+    id: "m", date: "2026-05-01", completedAt: "2026-05-01T10:00:00.000Z",
+    workoutName: "Push", durationSeconds: 0,
+    exercises: [{ name: "Bench", notes: "", sets: [
+      { type: "working", weight: "225", reps: "5", done: true },  // lb -> kg
+      { type: "working", weight: "BW", reps: "10", done: true },  // passthrough
+    ] }],
+  }];
+  const out = migrateHistoryWeights(hist);
+  eq(out[0].exercises[0].sets[0].weight, trimNumber(225 * KG_PER_LB, 3), "migrate history: 225lb -> kg");
+  eq(out[0].exercises[0].sets[1].weight, "BW", "migrate history: BW untouched");
+  eq(out[0].exercises[0].sets[0].reps, "5", "migrate history: reps untouched");
+
+  const progs: SavedProgram[] = [{
+    id: "p", name: "P", totalWeeks: 8, currentWeek: 1, status: "active",
+    startDate: "01 Jan 2026", trainingDays: 3, cycleDays: 7,
+    cyclePattern: ["Push", "Rest"],
+    workouts: { "0:Push": [{ id: "e1", name: "Bench", sets: [
+      { type: "working", weightKg: "135", reps: "5" },
+      { type: "working" },  // no weightKg -> untouched
+    ] }] },
+  }];
+  const pOut = migrateProgramWeights(progs);
+  eq(pOut[0].workouts["0:Push"][0].sets[0].weightKg, trimNumber(135 * KG_PER_LB, 3), "migrate program: 135lb -> kg");
+  eq(pOut[0].workouts["0:Push"][0].sets[1].weightKg, undefined, "migrate program: missing weightKg untouched");
 }
 
 // ── report ─────────────────────────────────────────────────────────────────────

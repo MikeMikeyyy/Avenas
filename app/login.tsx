@@ -209,7 +209,7 @@ export default function LoginScreen() {
             onPress={onGoogle}
           />
 
-          <TouchableOpacity onPress={() => router.back()} style={styles.switchRow} accessibilityRole="button">
+          <TouchableOpacity onPress={() => router.replace("/signup")} style={styles.switchRow} accessibilityRole="button">
             <Text style={[styles.switchText, { color: t.ts }]}>
               Don&apos;t have an account? <Text style={{ color: ACCT, fontFamily: FontFamily.bold }}>Sign up</Text>
             </Text>

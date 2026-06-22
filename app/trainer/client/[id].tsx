@@ -25,11 +25,14 @@ import {
   loadClientData,
   loadClients,
   loadSharedPrograms,
+  makeInitials,
   removeSharedProgram,
   type Client,
   type ClientData,
   type SharedProgram,
 } from "../../../utils/trainerStore";
+import { getMyConnections } from "../../../lib/connections";
+import Avatar from "../../../components/Avatar";
 import { getJSON } from "../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
 
@@ -88,8 +91,29 @@ export default function ClientDetailScreen() {
         getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
         loadSharedPrograms(),
       ]);
+      let found: Client | null = list.find(c => c.id === id) ?? null;
+      if (!found && id) {
+        // Real connected account (not in the local roster) — build a lightweight
+        // client from the connection's safe profile (real name + photo). Their
+        // training data isn't shared cross-account yet, so the data tabs stay
+        // empty for now.
+        try {
+          const conns = await getMyConnections();
+          const conn = conns.find(c => c.status === "accepted" && c.otherId === id);
+          if (conn) {
+            found = {
+              id: conn.otherId,
+              name: conn.name || "Client",
+              initials: makeInitials(conn.name || "Client"),
+              photoUri: conn.photoUri,
+              isTrainer: conn.accountType === "pt",
+              lastActiveISO: conn.lastActiveAt,
+            };
+          }
+        } catch { /* leave as not-found */ }
+      }
       if (cancelled) return;
-      setClient(list.find(c => c.id === id) ?? null);
+      setClient(found);
       setData(d);
       setMyPrograms(Array.isArray(progs) ? progs : []);
       setShared(sharedAll);
@@ -179,9 +203,14 @@ export default function ClientDetailScreen() {
         </TouchableOpacity>
 
         <View style={styles.headerCenter}>
-          <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-            <Text style={[styles.avatarText, { color: ACCT }]}>{client.initials}</Text>
-          </View>
+          <Avatar
+            uri={client.photoUri}
+            initials={client.initials}
+            size={36}
+            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+            textColor={ACCT}
+            textStyle={[styles.avatarText, { color: ACCT }]}
+          />
           <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
         </View>
 

@@ -21,7 +21,6 @@ import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgram,
   appendSharedPrograms,
-  connectTrainer,
   disconnectTrainer,
   loadCoaches,
   loadSharedPrograms,
@@ -43,44 +42,6 @@ function fmtAgo(iso: string): string {
   if (days === 1) return "yesterday";
   if (days < 7) return `${days}d ago`;
   return `${Math.floor(days / 7)}w ago`;
-}
-
-// A short, fixed list of mock coaches the trainer can connect to. Real backend
-// will replace this with a search/invite flow; for now we cycle through names
-// so a trainer can add a few distinct coaches in the demo.
-const MOCK_COACHES: AssignedPT[] = [
-  { id: "mock_coach_1", name: "Coach Alex Reyes",   initials: "AR" },
-  { id: "mock_coach_2", name: "Coach Jordan Park",  initials: "JP" },
-  { id: "mock_coach_3", name: "Coach Morgan Singh", initials: "MS" },
-];
-
-// A small mock program the very first coach "sends" to the trainer so the
-// accept + pass-down flow has something to demo. Only seeded once, on the
-// first coach connection, and only if the trainer has no coach-received
-// programs yet.
-function makeSeedSharedProgram(coachId: string): SharedProgram {
-  const now = new Date().toISOString();
-  const snapshot: SavedProgram = {
-    id: `coach_seed_${Date.now()}`,
-    name: "Upper/Lower Split",
-    status: "created",
-    currentWeek: 0,
-    totalWeeks: 8,
-    trainingDays: 4,
-    cycleDays: 7,
-    cyclePattern: ["Upper A", "Lower A", "Rest", "Upper B", "Lower B", "Rest", "Rest"],
-    workouts: {},
-    startDate: "",
-  };
-  return {
-    id: `coach_share_${Date.now()}`,
-    clientId: coachId,
-    receivedFromCoachId: coachId,
-    programId: snapshot.id,
-    programName: snapshot.name,
-    sentAtISO: now,
-    programSnapshot: snapshot,
-  };
 }
 
 interface Props {
@@ -114,25 +75,10 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
 
   useEffect(() => { void reload(); }, [reload]);
 
-  const handleConnectCoach = useCallback(async () => {
+  const handleConnectCoach = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const next = MOCK_COACHES.find(m => !coaches.some(c => c.id === m.id));
-    if (!next) {
-      Alert.alert("All mock coaches added", "You've already connected the available demo coaches.");
-      return;
-    }
-    // A trainer connection is symmetric: record them as a coach AND add them to
-    // the client roster so programs can be sent their way via the normal flow.
-    await connectTrainer(next);
-    // First coach? Seed a single example shared program so the accept +
-    // pass-down flow is demoable without devtools.
-    const existingShares = await loadSharedPrograms();
-    const hasCoachShare = existingShares.some(s => !!s.receivedFromCoachId);
-    if (coaches.length === 0 && !hasCoachShare) {
-      await appendSharedPrograms([makeSeedSharedProgram(next.id)]);
-    }
-    await reload();
-  }, [coaches, reload]);
+    router.push("/connect");
+  }, [router]);
 
   const handleRemoveCoach = useCallback((coach: AssignedPT) => {
     Alert.alert(
@@ -291,7 +237,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
             </Text>
             <BounceButton style={{ marginTop: 8 }} onPress={handleConnectCoach}>
               <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                <Text style={styles.ctaText}>Connect a Coach</Text>
+                <Text style={styles.ctaText}>Connect to a Trainer</Text>
               </View>
             </BounceButton>
           </View>

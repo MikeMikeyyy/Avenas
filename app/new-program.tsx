@@ -27,6 +27,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
+import { scheduleCloudPush } from "../lib/syncManager";
 import { batchKeyOf, SENT_PROGRAMS_KEY, SHARED_PROGRAMS_KEY, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
@@ -38,6 +39,7 @@ import DumbbellIcon from "../components/DumbbellIcon";
 import ExerciseImage from "../components/ExerciseImage";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
+import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -150,6 +152,52 @@ interface ExerciseRowProps {
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   /** Lowercased exercise name → custom photo URI, for custom exercises. */
   customImageByName: Record<string, string>;
+}
+
+/**
+ * Prescribed-weight input. Storage is canonical kg; the user edits in their
+ * display unit. To avoid mangling decimals (converting "2." per keystroke would
+ * drop the dot), it keeps a local display-text buffer and only commits the
+ * kg value on blur (onEndEditing). The buffer re-syncs whenever the stored kg
+ * changes from outside the field (fill-down from an earlier set, program load,
+ * unit toggle) — which never happens mid-edit, since weightKg only changes on
+ * our own commit.
+ */
+function WeightSetInput({
+  valueKg, isKg, onCommitKg, inputRef, onFocus, style, placeholderColor,
+}: {
+  valueKg: string | undefined;
+  isKg: boolean;
+  onCommitKg: (kg: string) => void;
+  inputRef: (r: TextInput | null) => void;
+  onFocus: () => void;
+  style: any;
+  placeholderColor: string;
+}) {
+  const [text, setText] = useState(() => formatWeightForDisplay(valueKg ?? "", isKg));
+  useEffect(() => {
+    setText(formatWeightForDisplay(valueKg ?? "", isKg));
+  }, [valueKg, isKg]);
+  return (
+    <TextInput
+      ref={inputRef}
+      style={style}
+      value={text}
+      onChangeText={setText}
+      onEndEditing={() => {
+        // Skip no-op commits: a focus+blur with no edit must not re-commit, or
+        // lb display-rounding would nudge a fractional-kg value and trigger a
+        // phantom "unsaved change".
+        if (text === formatWeightForDisplay(valueKg ?? "", isKg)) return;
+        onCommitKg(parseWeightToKg(text, isKg));
+      }}
+      placeholder="—"
+      placeholderTextColor={placeholderColor}
+      keyboardType="decimal-pad"
+      selectTextOnFocus
+      onFocus={onFocus}
+    />
+  );
 }
 
 function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onOpenReorder, onEdit, onInputFocus, customImageByName }: ExerciseRowProps) {
@@ -446,15 +494,13 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
             {/* Weight column */}
             <View style={styles.exSetValueCol}>
               <View style={[styles.exSetInputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
-                <TextInput
-                  ref={r => { weightRefs.current[idx] = r; }}
+                <WeightSetInput
+                  inputRef={r => { weightRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
-                  value={set.weightKg ?? ""}
-                  onChangeText={v => fillDown(idx, { weightKg: v })}
-                  placeholder="—"
-                  placeholderTextColor={t.ts}
-                  keyboardType="decimal-pad"
-                  selectTextOnFocus
+                  placeholderColor={t.ts}
+                  valueKg={set.weightKg}
+                  isKg={isKg}
+                  onCommitKg={kg => fillDown(idx, { weightKg: kg })}
                   onFocus={() => {
                     const next = () => repsRefs.current[idx]?.focus();
                     const prev = idx > 0
@@ -1946,6 +1992,7 @@ export default function NewProgramScreen() {
           } : p);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
           await AsyncStorage.removeItem(DRAFT_KEY);
+          scheduleCloudPush();
         } catch (e) {
           Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
           return;
@@ -1984,6 +2031,7 @@ export default function NewProgramScreen() {
           })) as SavedProgram[];
         }
         await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+        scheduleCloudPush();
       } catch (e) {
         Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
         return;

@@ -1,8 +1,8 @@
 import { Stack } from "expo-router";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect } from "react";
-import { View } from "react-native";
+import { useEffect, useState } from "react";
+import { View, AppState } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ThemeProvider } from "../contexts/ThemeContext";
@@ -16,8 +16,15 @@ import { NotificationPrefsProvider } from "../contexts/NotificationPrefsContext"
 import { AuthProvider, useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
+import { flushCloudPush } from "../lib/syncManager";
+import { touchLastActive } from "../lib/connections";
+import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
 
 SplashScreen.preventAutoHideAsync();
+
+// How often to refresh "last active" while the app is foregrounded, so connected
+// accounts can show "active now". Cleared on background.
+const HEARTBEAT_MS = 120000;
 
 function AppShell() {
   const { isDark } = useTheme();
@@ -30,6 +37,27 @@ function AppShell() {
   useEffect(() => {
     if (profileLoaded && authLoaded) SplashScreen.hideAsync();
   }, [profileLoaded, authLoaded]);
+
+  // Two foreground/background jobs:
+  //  - Cloud-backup safety net: on leaving the foreground, push any changes from
+  //    the last debounce window (flushCloudPush no-ops when signed out / wrong owner).
+  //  - Presence heartbeat: refresh "last active" on mount, on every foreground,
+  //    and on a light interval while foregrounded (touchLastActive no-ops when
+  //    signed out), so connected accounts can show "active now".
+  useEffect(() => {
+    void touchLastActive();
+    let beat: ReturnType<typeof setInterval> | null = setInterval(() => void touchLastActive(), HEARTBEAT_MS);
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background" || state === "inactive") {
+        flushCloudPush();
+        if (beat) { clearInterval(beat); beat = null; }
+      } else if (state === "active") {
+        void touchLastActive();
+        if (!beat) beat = setInterval(() => void touchLastActive(), HEARTBEAT_MS);
+      }
+    });
+    return () => { sub.remove(); if (beat) clearInterval(beat); };
+  }, []);
 
   return (
     <>
@@ -55,9 +83,16 @@ export default function RootLayout() {
     Nunito_700Bold,
   });
 
+  // One-shot lb→kg weight migration. Gate the whole app on it so no screen ever
+  // renders pre-migration data through the new kg-canonical display lens.
+  const [migrated, setMigrated] = useState(false);
+  useEffect(() => {
+    runWeightUnitMigrationIfNeeded().finally(() => setMigrated(true));
+  }, []);
+
   // Splash stays up until fonts load here, then until the profile context
   // reports `loaded` (see AppShell) — so the first redirect never flickers.
-  if (!loaded) return null;
+  if (!loaded || !migrated) return null;
 
   return (
     <KeyboardProvider>

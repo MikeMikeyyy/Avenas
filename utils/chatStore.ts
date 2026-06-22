@@ -5,7 +5,7 @@
 // one CHATS_KEY blob (contactId → messages); few contacts/messages, so a single
 // read/write is the simplest robust store and swaps cleanly to a backend later.
 
-import { getJSON, setJSON } from "./storage";
+import { getJSON, setJSON, removeKey } from "./storage";
 import { loadClients, loadCoaches, loadAssignedPT, loadOtherTrainers } from "./trainerStore";
 import { CHATS_KEY, CHAT_READS_KEY, type ChatMessage, type ChatThreads, type ChatReads, type ChatContact } from "../constants/chat";
 import type { AccountType } from "../contexts/AccountTypeContext";
@@ -37,6 +37,12 @@ export async function loadChatContacts(accountType: AccountType): Promise<ChatCo
 
 export async function loadAllChats(): Promise<ChatThreads> {
   return getJSON<ChatThreads>(CHATS_KEY, {});
+}
+
+/** Wipe local chat threads + read state. Called on account delete / switch so
+ *  one account's conversations don't leak into the next (see clearLocalUserData). */
+export async function clearChatData(): Promise<void> {
+  await Promise.all([removeKey(CHATS_KEY), removeKey(CHAT_READS_KEY)]);
 }
 
 /** Messages for one contact, oldest → newest ([] if none). */
@@ -109,34 +115,34 @@ export async function broadcastMessage(contactIds: string[], text: string): Prom
   await setJSON(CHATS_KEY, all);
 }
 
-// ─── seeding (demo realism) ──────────────────────────────────────────────────
-
-const SEED_LINES = [
-  "Hey! How's your training going? 💪",
-  "Let me know if you want me to tweak anything in your program.",
-];
+// ─── threads map (with legacy demo-seed cleanup) ─────────────────────────────
 
 /**
- * Give any contact that has no thread yet a couple of inbound demo messages so
- * conversations look alive (there's no backend to deliver real ones). Idempotent
- * and per-contact: only seeds threads that don't exist, so contacts added later
- * still get seeded, and real/sent messages are never clobbered. Returns the
- * (possibly updated) full threads map so callers can render previews in one read.
+ * Returns the full chat-threads map, stripping any legacy demo-seed messages.
+ *
+ * Earlier builds injected a couple of synthetic "inbound" messages for any
+ * contact that had no thread yet, to make conversations look alive. Those
+ * carried a seed-time (Date.now()-relative) timestamp, so they always rendered
+ * as "Today" and — worse — were regenerated whenever a contact appeared under a
+ * new id (e.g. a real connection merged into the messages list), fabricating
+ * fresh "Today" messages from real people. We no longer seed: a thread only ever
+ * holds messages that were actually sent (which carry an accurate sentAtISO).
+ * Any leftover `seed_*` messages from older builds are pruned here on load, so
+ * the bogus "Today" trial messages clean themselves up.
+ *
+ * `_contacts` is unused now but kept so callers can keep passing the list they
+ * are about to render.
  */
-export async function ensureSeededContacts(contacts: ChatContact[]): Promise<ChatThreads> {
+export async function ensureSeededContacts(_contacts: ChatContact[]): Promise<ChatThreads> {
   const all = await loadAllChats();
   let changed = false;
-  const base = Date.now() - 3 * 60 * 60 * 1000; // a few hours ago
-  contacts.forEach((c, ci) => {
-    if (all[c.id]) return; // already has a thread (seeded, sent, or received)
-    all[c.id] = SEED_LINES.map((line, li) => ({
-      id: `seed_${c.id}_${li}`,
-      mine: false,
-      text: line,
-      sentAtISO: new Date(base + (ci * 2 + li) * 60000).toISOString(),
-    }));
-    changed = true;
-  });
+  for (const id of Object.keys(all)) {
+    const pruned = all[id].filter(m => !m.id.startsWith("seed_"));
+    if (pruned.length !== all[id].length) {
+      all[id] = pruned;
+      changed = true;
+    }
+  }
   if (changed) await setJSON(CHATS_KEY, all);
   return all;
 }

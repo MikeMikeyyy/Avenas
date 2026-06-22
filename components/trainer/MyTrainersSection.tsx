@@ -14,7 +14,6 @@ import PeopleIcon from "../icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
-  addOtherTrainer,
   loadAssignedPT,
   loadOtherTrainers,
   removeOtherTrainer,
@@ -26,15 +25,6 @@ import {
 export interface MyTrainersSectionRef {
   openMenu: () => void;
 }
-
-// A short, fixed list of mock trainers the gym user can connect to. Real
-// backend will replace this with a search/invite flow.
-const MOCK_TRAINERS: AssignedPT[] = [
-  { id: "mock_pt_1",       name: "Sam Rivera",      initials: "SR" },
-  { id: "mock_trainer_2",  name: "Trainer Casey Wu", initials: "CW" },
-  { id: "mock_trainer_3",  name: "Trainer Dana Lee", initials: "DL" },
-  { id: "mock_trainer_4",  name: "Trainer Iris Cohen", initials: "IC" },
-];
 
 const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTrainersSection(_props, ref) {
   const { isDark } = useTheme();
@@ -62,27 +52,10 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
     return () => { cancelled = true; };
   }, [reload]));
 
-  const handleConnect = useCallback(async () => {
+  const handleConnect = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Skip any mock already in use as primary or among the others.
-    const taken = new Set<string>([
-      ...(primary ? [primary.id] : []),
-      ...others.map(o => o.id),
-    ]);
-    const next = MOCK_TRAINERS.find(m => !taken.has(m.id));
-    if (!next) {
-      Alert.alert("All mock trainers added", "You've already connected the available demo trainers.");
-      return;
-    }
-    if (!primary) {
-      // First trainer becomes the primary so MyPTHome's main header has
-      // something to display.
-      await saveAssignedPT(next);
-    } else {
-      await addOtherTrainer(next);
-    }
-    await reload();
-  }, [primary, others, reload]);
+    router.push("/connect");
+  }, [router]);
 
   // Tapping a trainer makes them the active (primary) one and returns to
   // MyPTHome so the user immediately sees that trainer's header + programs.

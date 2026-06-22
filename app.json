@@ -11,8 +11,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Avenas uses your photo library to add an image or video to your custom exercises.",
-        "NSCameraUsageDescription": "Avenas uses your camera to take a photo for your custom exercise."
+        "NSPhotoLibraryUsageDescription": "Avenas uses your photo library to set your profile photo and to add an image or video to your custom exercises.",
+        "NSCameraUsageDescription": "Avenas uses your camera to scan a connect code and to take a photo for your custom exercise."
       }
     },
     "android": {

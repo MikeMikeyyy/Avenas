@@ -29,7 +29,7 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constant
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
 import { ensureSeededContacts, loadThread, appendMessage, markThreadRead } from "../../../utils/chatStore";
-import { loadHiddenMessageIds, blockUser, unaddContact, reportUser, reportMessage } from "../../../utils/moderation";
+import { loadHiddenMessageIds, loadBlockedIds, blockContact, unaddContact, reportUser, reportMessage } from "../../../utils/moderation";
 import { toYMD, relativeDayLabel } from "../../../utils/dates";
 import type { ChatMessage, ReportReason } from "../../../constants/chat";
 
@@ -63,6 +63,18 @@ export default function ChatThreadScreen() {
     useCallback(() => {
       let cancelled = false;
       (async () => {
+        // Defence-in-depth: every UI path filters blocked users out of the lists
+        // that link here, but a stale router history or a deep-link could still
+        // land on a blocked contact's thread. Bail out before we read their
+        // messages so a block can't be bypassed by navigation.
+        if (contactId) {
+          const blocked = await loadBlockedIds();
+          if (cancelled) return;
+          if (blocked.has(contactId)) {
+            router.back();
+            return;
+          }
+        }
         if (contactId) {
           await ensureSeededContacts([{ id: contactId, name: displayName, initials: displayInitials }]);
         }
@@ -83,10 +95,14 @@ export default function ChatThreadScreen() {
     setMenuOpen(false);
     Alert.alert(
       `Block ${displayName}?`,
-      "They'll be removed from your conversations and can no longer message you. You can unblock them later in Settings.",
+      "They'll be removed from your connections and can no longer message you. You can unblock them later in Settings.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Block", style: "destructive", onPress: async () => { await blockUser(contact); router.back(); } },
+        { text: "Block", style: "destructive", onPress: async () => {
+          const { severed } = await blockContact(contact, accountType);
+          router.back();
+          if (!severed) Alert.alert(`${displayName} is blocked`, "We couldn't reach the server to sever the connection. It will finish when you're back online.");
+        } },
       ],
     );
   };
@@ -124,7 +140,11 @@ export default function ChatThreadScreen() {
         `Thanks — we review reports within 24 hours. Would you also like to block ${displayName}?`,
         [
           { text: "Not now", style: "cancel" },
-          { text: "Block", style: "destructive", onPress: async () => { await blockUser(contact); router.back(); } },
+          { text: "Block", style: "destructive", onPress: async () => {
+            const { severed } = await blockContact(contact, accountType);
+            router.back();
+            if (!severed) Alert.alert(`${displayName} is blocked`, "We couldn't reach the server to sever the connection. It will finish when you're back online.");
+          } },
         ],
       );
     }
@@ -274,10 +294,12 @@ export default function ChatThreadScreen() {
             <Ionicons name="flag-outline" size={20} color={t.tp} />
             <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>
           </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
           <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onBlock} accessibilityRole="button" accessibilityLabel={`Block ${displayName}`}>
             <Ionicons name="ban-outline" size={20} color={DANGER} />
             <Text style={[styles.menuText, { color: DANGER }]}>Block</Text>
           </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
           <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onUnadd} accessibilityRole="button" accessibilityLabel={`Remove ${displayName}`}>
             <Ionicons name="person-remove-outline" size={20} color={t.tp} />
             <Text style={[styles.menuText, { color: t.tp }]}>Remove connection</Text>
@@ -317,5 +339,6 @@ const styles = StyleSheet.create({
   menuName:   { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
   menu:       { paddingHorizontal: 16, paddingTop: 4 },
   menuRow:    { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
+  menuDivider:{ height: 1, marginHorizontal: 8 },
   menuText:   { fontFamily: FontFamily.semibold, fontSize: 16 },
 });

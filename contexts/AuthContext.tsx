@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 import { reconcileOnSignIn } from "../lib/cloud";
+import { touchLastActive } from "../lib/connections";
 
 interface AuthContextValue {
   /** True once the initial session check has finished (gate waits on this). */
@@ -24,6 +25,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setLoaded(true);
+      if (data.session) void touchLastActive();
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
@@ -34,6 +36,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           reconcileOnSignIn(s.user.id).catch((e) => {
             if (__DEV__) console.warn("[avenas] reconcileOnSignIn", e);
           });
+          void touchLastActive();
         }, 0);
       }
     });

@@ -30,6 +30,9 @@ import {
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate } from "../utils/dates";
 import { buildPrevByName, normalizeExerciseName } from "../utils/workout";
+import { formatWeightForDisplay, parseWeightToKg, formatPrevHint } from "../utils/units";
+import { useUnit } from "../contexts/UnitContext";
+import { scheduleCloudPush } from "../lib/syncManager";
 import { useTheme } from "../contexts/ThemeContext";
 
 const WARMUP_ORANGE = "#ffbf0f";
@@ -545,6 +548,7 @@ function ExerciseCard({
   onRemoveExercise, onOpenReorder, onChangeExercise, onToggleIsometric, onUpdateNotes,
   onInputFocus, prevSets,
 }: ExerciseCardProps) {
+  const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.1)" : t.div;
   const [editing, setEditing] = useState(false);
@@ -662,7 +666,7 @@ function ExerciseCard({
                         () => repsRefs.current[idx]?.focus(),
                         idx > 0 ? () => repsRefs.current[idx - 1]?.focus() : null,
                       )}
-                      placeholder={set.programSet?.weightKg || "—"}
+                      placeholder={set.programSet?.weightKg ? formatWeightForDisplay(set.programSet.weightKg, isKg) : "—"}
                       placeholderTextColor={`${t.tp}66`}
                       selectTextOnFocus
                     />
@@ -848,6 +852,7 @@ export default function LogWorkoutScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { isDark } = useTheme();
+  const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
   const [exercises, setExercises] = useState<LogExercise[]>([]);
@@ -1099,7 +1104,8 @@ export default function LogWorkoutScreen() {
       sessionNotes: notes.trim() || undefined,
       exercises: exercises.map(ex => ({
         name: ex.name,
-        sets: ex.sets.map(s => ({ type: s.type, weight: s.weight, reps: s.reps, done: s.done })),
+        // Inputs are in the user's display unit → store canonical kg.
+        sets: ex.sets.map(s => ({ type: s.type, weight: parseWeightToKg(s.weight, isKg), reps: s.reps, done: s.done })),
         notes: ex.notes,
       })),
     };
@@ -1155,6 +1161,7 @@ export default function LogWorkoutScreen() {
         draftLockedRef.current = false;
         await AsyncStorage.removeItem(draftKey);
       }
+      scheduleCloudPush();
     } catch (_) {}
 
     router.back();
@@ -1278,7 +1285,7 @@ export default function LogWorkoutScreen() {
               onToggleIsometric={() => toggleIsometric(ex.id)}
               onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
               onInputFocus={handleInputFocus}
-              prevSets={prevByName[normalizeExerciseName(ex.name)] ?? []}
+              prevSets={(prevByName[normalizeExerciseName(ex.name)] ?? []).map(p => formatPrevHint(p, isKg))}
             />
           ))}
 

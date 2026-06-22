@@ -40,6 +40,7 @@ import {
   rangeWindow,
   uniqueDaysInScope,
 } from "../../utils/progressStats";
+import { toDisplayWeight } from "../../utils/units";
 
 export interface ProgressViewProps {
   history: CompletedWorkout[];
@@ -166,6 +167,47 @@ export default function ProgressView({
     return { exerciseHistory: eh, prs: p };
   }, [scopedWorkouts, selectedExercise]);
 
+  // ── kg → display-unit conversion for the charts ──────────────────────────────
+  // All stats are computed in canonical kg; convert the weight/volume-valued
+  // outputs to the active unit before plotting. Reps/duration/frequency are not
+  // weights and pass through. (Muscle "volume" is converted unconditionally:
+  // it's harmless for the frequency metric, and the "load" % is a ratio that's
+  // unit-invariant.)
+  const dw = (n: number) => toDisplayWeight(n, isKg);
+  const displayBuckets = useMemo(
+    () => (metric === "volume" ? buckets.map((b) => ({ ...b, total: dw(b.total) })) : buckets),
+    [buckets, metric, isKg],
+  );
+  const displayMuscleStats = useMemo(() => {
+    const out = { ...muscleStats };
+    for (const k of Object.keys(out) as (keyof typeof out)[]) {
+      out[k] = { ...out[k], volume: dw(out[k].volume) };
+    }
+    return out;
+  }, [muscleStats, isKg]);
+  const displayTotalMuscleVolume = useMemo(() => dw(totalMuscleVolume), [totalMuscleVolume, isKg]);
+  const displayExerciseHistory = useMemo(
+    () => exerciseHistory.map((p) => ({
+      ...p,
+      topWeight: dw(p.topWeight),
+      bestSetVolume: dw(p.bestSetVolume),
+      bestSetWeight: dw(p.bestSetWeight),
+      sessionVolume: dw(p.sessionVolume),
+    })),
+    [exerciseHistory, isKg],
+  );
+  const displayPrs = useMemo(() => {
+    if (!prs) return null;
+    const c = <T extends { value: number; weight?: number } | null>(pr: T): T =>
+      pr ? ({ ...pr, value: dw(pr.value), ...(pr.weight != null ? { weight: dw(pr.weight) } : {}) }) : pr;
+    return {
+      heaviest: c(prs.heaviest),
+      bestSetVolume: c(prs.bestSetVolume),
+      bestSessionVolume: c(prs.bestSessionVolume),
+      oneRepMax: c(prs.oneRepMax),
+    };
+  }, [prs, isKg]);
+
   useEffect(() => {
     if (!selectedExercise) return;
     const id = requestAnimationFrame(() => {
@@ -247,7 +289,7 @@ export default function ProgressView({
         ) : (
           <>
             <VolumeBarChart
-              buckets={buckets}
+              buckets={displayBuckets}
               unit={unit}
               slotsCount={volumeSlotsCount}
               rangeText={volumeRangeText}
@@ -260,8 +302,8 @@ export default function ProgressView({
               <Text style={[styles.sectionHeader, { color: t.tp }]}>Strength</Text>
             </View>
             <StrengthRadarChart
-              stats={muscleStats}
-              totalVolume={totalMuscleVolume}
+              stats={displayMuscleStats}
+              totalVolume={displayTotalMuscleVolume}
               unit={unit}
               metric={strengthMetric}
               onMetricChange={setStrengthMetric}
@@ -275,12 +317,12 @@ export default function ProgressView({
           </>
         )}
 
-        {selectedExercise && prs ? (
+        {selectedExercise && displayPrs ? (
           <View onLayout={e => { exerciseSectionY.current = e.nativeEvent.layout.y; }}>
             <ExerciseProgressionChart
               exerciseName={selectedExercise}
-              history={exerciseHistory}
-              prs={prs}
+              history={displayExerciseHistory}
+              prs={displayPrs}
               unit={unit}
             />
           </View>

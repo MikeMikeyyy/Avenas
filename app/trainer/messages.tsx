@@ -28,6 +28,8 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
 import { loadChatContacts, ensureSeededContacts, broadcastMessage, loadReads, countUnreadInThread } from "../../utils/chatStore";
+import { makeInitials } from "../../utils/trainerStore";
+import { getMyConnections } from "../../lib/connections";
 import UnreadBadge from "../../components/UnreadBadge";
 import { loadBlockedIds, loadHiddenMessageIds } from "../../utils/moderation";
 import type { ChatContact, ChatThreads, ChatReads } from "../../constants/chat";
@@ -77,19 +79,42 @@ export default function MessagesScreen() {
       .sort((a, b) => b.sortKey - a.sortKey);
   }, []);
 
+  // Contacts to list = the local roster (mock clients/coaches/trainers) merged
+  // with every real accepted connection, so people you're connected to but have
+  // no local entry for (e.g. a gym user's connected trainers) still get a thread.
+  // Real connections win on an id clash; offline / signed out → local only.
+  const gatherContacts = useCallback(async (): Promise<ChatContact[]> => {
+    const local = await loadChatContacts(accountType);
+    try {
+      const conns = await getMyConnections();
+      const real: ChatContact[] = conns
+        .filter(c => c.status === "accepted")
+        .map(c => ({
+          id: c.otherId,
+          name: c.name || "User",
+          initials: makeInitials(c.name || "User"),
+          subtitle: accountType === "pt" ? (c.accountType === "pt" ? "Coach" : "Client") : "Trainer",
+        }));
+      const realIds = new Set(real.map(c => c.id));
+      return [...real, ...local.filter(l => !realIds.has(l.id))];
+    } catch {
+      return local;
+    }
+  }, [accountType]);
+
   const load = useCallback(async () => {
-    const all = await loadChatContacts(accountType);
+    const all = await gatherContacts();
     const [threads, reads, blocked, hidden] = await Promise.all([ensureSeededContacts(all), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
     const people = all.filter(p => !blocked.has(p.id)); // blocked users disappear from chat
     setContacts(people);
     setRows(buildRows(people, threads, reads, hidden));
-  }, [accountType, buildRows]);
+  }, [gatherContacts, buildRows]);
 
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        const all = await loadChatContacts(accountType);
+        const all = await gatherContacts();
         const [threads, reads, blocked, hidden] = await Promise.all([ensureSeededContacts(all), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
         if (cancelled) return;
         const people = all.filter(p => !blocked.has(p.id));
@@ -97,7 +122,7 @@ export default function MessagesScreen() {
         setRows(buildRows(people, threads, reads, hidden));
       })();
       return () => { cancelled = true; };
-    }, [accountType, buildRows]),
+    }, [gatherContacts, buildRows]),
   );
 
   const openThread = (c: ChatContact) => {

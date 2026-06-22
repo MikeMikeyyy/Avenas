@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -31,16 +31,19 @@ import {
   backfillAcceptedProgramIds,
   batchKeyOf,
   loadAssignedPT,
+  saveAssignedPT,
   loadClients,
   loadSentPrograms,
   loadSharedPrograms,
+  makeInitials,
   migrateBroadcastShares,
   removeSentProgram,
-  saveAssignedPT,
   type AssignedPT,
   type SentProgram,
   type SharedProgram,
 } from "../../utils/trainerStore";
+import { getMyConnections, disconnect as disconnectConnection } from "../../lib/connections";
+import Avatar from "../Avatar";
 import { getJSON } from "../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 
@@ -73,6 +76,11 @@ export default function MyPTHome() {
   const unreadMessages = useUnreadMessages();
 
   const [pt, setPT] = useState<AssignedPT | null>(null);
+  // Count of incoming connection requests (manage-button badge) and a lookup from
+  // a real connection's account id → its connection row id, so removing the shown
+  // trainer severs the real connection rather than only a local entry.
+  const [pendingIncoming, setPendingIncoming] = useState(0);
+  const connByOtherId = useRef<Record<string, string>>({});
   const [received, setReceived] = useState<SharedProgram[]>([]);
   const [sent, setSent] = useState<SentProgram[]>([]);
   const [expandedReceived, setExpandedReceived] = useState<Set<string>>(new Set());
@@ -139,7 +147,28 @@ export default function MyPTHome() {
         seen.add(k);
         dedupedReceived.push(entry);
       }
-      setPT(p);
+      // A real accepted connection whose counterpart is a trainer (PT) takes
+      // over the displayed trainer with their real name + photo. Only PT-typed
+      // connections fill this slot — a non-PT accepted connection used to be
+      // accepted as a fallback "in case account_type was stale," but that
+      // surfaced gym-user friends under the "YOUR TRAINER" label. Better to
+      // keep the empty state than mislabel the relationship; account_type is
+      // set during onboarding and should be fixed at source if stale.
+      let trainer: AssignedPT | null = p;
+      try {
+        const conns = await getMyConnections();
+        const map: Record<string, string> = {};
+        const accepted = conns.filter(c => c.status === "accepted");
+        for (const c of accepted) map[c.otherId] = c.connectionId;
+        connByOtherId.current = map;
+        const trainerConn = accepted.find(c => c.accountType === "pt");
+        if (trainerConn) {
+          trainer = { id: trainerConn.otherId, name: trainerConn.name || "Trainer", initials: makeInitials(trainerConn.name || "Trainer"), photoUri: trainerConn.photoUri };
+        }
+        if (!cancelled) setPendingIncoming(conns.filter(c => c.status === "pending" && c.direction === "incoming").length);
+      } catch { /* keep the local trainer */ }
+      if (cancelled) return;
+      setPT(trainer);
       setReceived(dedupedReceived);
       setSent(s);
       setMyPrograms(Array.isArray(progs) ? progs : []);
@@ -147,16 +176,49 @@ export default function MyPTHome() {
     return () => { cancelled = true; };
   }, []));
 
-  const assignMockPT = useCallback(async () => {
-    const mock: AssignedPT = { id: "mock_pt_1", name: "Sam Rivera", initials: "SR" };
-    await saveAssignedPT(mock);
-    setPT(mock);
-  }, []);
-
   const openChat = () => {
     if (!pt) return;
     router.push({ pathname: "/trainer/chat/[id]", params: { id: pt.id, name: pt.name, initials: pt.initials } });
   };
+
+  const removeTrainer = useCallback(() => {
+    if (!pt) {
+      Alert.alert("No trainer", "You haven't connected a trainer yet.");
+      return;
+    }
+    const connId = connByOtherId.current[pt.id];
+    Alert.alert(
+      connId ? "Disconnect" : "Remove Trainer",
+      connId ? `Disconnect from ${pt.name}? You'll stop seeing each other.` : `Remove ${pt.name}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: connId ? "Disconnect" : "Remove",
+          style: "destructive",
+          onPress: async () => {
+            if (connId) {
+              delete connByOtherId.current[pt.id];
+              try { await disconnectConnection(connId); } catch { /* keep UI responsive */ }
+            } else {
+              await saveAssignedPT(null);
+            }
+            setPT(null);
+          },
+        },
+      ],
+    );
+  }, [pt]);
+
+  // "+" entry point — mirrors the trainer view: connect someone new, or remove
+  // a person you're connected with.
+  const openManage = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Alert.alert("Manage", undefined, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Connect Someone", onPress: () => router.push("/connect") },
+      { text: "Remove a Trainer", style: "destructive", onPress: removeTrainer },
+    ]);
+  }, [router, removeTrainer]);
 
   const handleApplyReturned = useCallback(async (entry: SentProgram) => {
     if (entry.appliedAtISO) return;
@@ -239,26 +301,27 @@ export default function MyPTHome() {
             onPress={() => router.push("/my-trainers")}
             accessibilityLabel="Open my trainers"
           >
-            <NeuCard dark={isDark} radius={12} shadowSize="sm">
-              <View style={styles.trainersBtn}>
-                <Ionicons name="person-outline" size={16} color={ACCT} />
-                <Text style={[styles.trainersBtnText, { color: t.tp }]}>My Trainers</Text>
-                <Ionicons name="chevron-forward" size={14} color={t.ts} />
-              </View>
-            </NeuCard>
+            <View style={[styles.trainersBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <Ionicons name="person-outline" size={16} color={ACCT} />
+              <Text style={[styles.trainersBtnText, { color: t.tp }]}>My Trainers</Text>
+            </View>
           </BounceButton>
-          <BounceButton
-            style={styles.trainersBtnWrap}
-            onPress={() => router.push("/trainer/messages")}
-            accessibilityLabel="Open messages"
-          >
-            <NeuCard dark={isDark} radius={12} shadowSize="sm">
-              <View style={styles.trainersBtn}>
-                <ChatIcon size={15} color={ACCT} />
-                <Text style={[styles.trainersBtnText, { color: t.tp }]}>Messages</Text>
+          <View style={{ flex: 1 }} />
+          <BounceButton onPress={() => router.push("/trainer/messages")} accessibilityLabel="Open messages">
+            <View>
+              <View style={[styles.circleBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+                <ChatIcon size={18} color={t.tp} />
               </View>
-            </NeuCard>
-            <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
+              <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
+            </View>
+          </BounceButton>
+          <BounceButton onPress={() => router.push("/connect")} accessibilityLabel="Connect with someone">
+            <View>
+              <View style={[styles.circleBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+                <Ionicons name="add" size={24} color={t.tp} />
+              </View>
+              <UnreadBadge count={pendingIncoming} style={styles.msgBadge} />
+            </View>
           </BounceButton>
         </View>
 
@@ -274,9 +337,9 @@ export default function MyPTHome() {
               <Text style={[styles.emptyBody, { color: t.ts }]}>
                 Connect with a personal trainer to share programs and get feedback on your progress.
               </Text>
-              <BounceButton style={{ marginTop: 8 }} onPress={assignMockPT}>
+              <BounceButton style={{ marginTop: 8 }} onPress={() => router.push("/connect")}>
                 <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                  <Text style={styles.ctaText}>Connect a Mock Trainer</Text>
+                  <Text style={styles.ctaText}>Connect a Trainer</Text>
                 </View>
               </BounceButton>
             </View>
@@ -284,15 +347,20 @@ export default function MyPTHome() {
         ) : (
           <NeuCard dark={isDark} radius={20} style={{ marginTop: 16 }}>
             <View style={styles.ptCard}>
-              <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                <Text style={[styles.avatarText, { color: ACCT }]}>{pt.initials}</Text>
-              </View>
+              <Avatar
+                uri={pt.photoUri}
+                initials={pt.initials}
+                size={56}
+                backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                textColor={ACCT}
+                textStyle={[styles.avatarText, { color: ACCT }]}
+              />
               <View style={{ flex: 1 }}>
                 <Text style={[styles.ptLabel, { color: t.ts }]}>YOUR TRAINER</Text>
                 <Text style={[styles.ptName, { color: t.tp }]}>{pt.name}</Text>
               </View>
               <BounceButton onPress={openChat} accessibilityLabel="Chat with trainer">
-                <View style={[styles.chatBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}>
+                <View style={[styles.chatBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
                   <ChatIcon size={18} color={t.tp} />
                 </View>
               </BounceButton>
@@ -664,11 +732,12 @@ export default function MyPTHome() {
 
 const styles = StyleSheet.create({
   topGradient:  { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  topPills: { flexDirection: "row", gap: 10 },
-  trainersBtnWrap: { alignSelf: "flex-start", marginBottom: 14 },
+  topPills: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 },
+  trainersBtnWrap: { alignSelf: "center" },
   msgBadge:     { position: "absolute", top: -5, right: -5 },
-  trainersBtn:  { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, gap: 8 },
-  trainersBtnText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  trainersBtn:  { flexDirection: "row", alignItems: "center", gap: 8, height: 40, borderRadius: 20, paddingHorizontal: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  trainersBtnText: { fontFamily: FontFamily.semibold, fontSize: 13 },
+  circleBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   title:        { fontFamily: FontFamily.bold, fontSize: 32 },
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
   emptyInner:   { padding: 28, alignItems: "center", gap: 12 },
@@ -682,7 +751,7 @@ const styles = StyleSheet.create({
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 18 },
   ptLabel:      { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 1 },
   ptName:       { fontFamily: FontFamily.bold, fontSize: 18, marginTop: 2 },
-  chatBtn:      { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
+  chatBtn:      { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   itemRow:      { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   itemName:     { fontFamily: FontFamily.semibold, fontSize: 14 },
   itemMeta:     { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },

@@ -107,6 +107,46 @@ export function workoutFromRow(r: WorkoutRow): CompletedWorkout {
   };
 }
 
+// ── replace_user_data RPC payload (atomic full-snapshot push) ─────────────────
+// Mirrors workoutToRow but swaps program_id (a uuid we don't have client-side)
+// for program_index — the owning program's position in the programs array. The
+// server (migration 0004) resolves that index to the program's freshly-minted
+// uuid. null = free / legacy workout (no program).
+export type WorkoutReplaceRow = Omit<WorkoutInsert, "program_id"> & { program_index: number | null };
+
+export type ReplaceUserDataPayload = {
+  p_programs: ProgramInsert[];
+  p_workouts: WorkoutReplaceRow[];
+  p_journal: JournalInsert[];
+  p_custom: CustomExerciseInsert[];
+};
+
+/**
+ * Build the jsonb payload for the replace_user_data RPC from the local snapshot.
+ * Pure (no network) so it can be unit-tested. user_id fields are carried for
+ * faithfulness but the server ignores them and writes auth.uid() instead.
+ */
+export function toReplaceUserDataPayload(
+  programs: SavedProgram[],
+  history: CompletedWorkout[],
+  journal: JournalEntry[],
+  custom: CustomExercise[],
+  userId: string,
+): ReplaceUserDataPayload {
+  const indexById = new Map<string, number>();
+  programs.forEach((p, i) => indexById.set(p.id, i));
+  return {
+    p_programs: programs.map((p) => programToRow(p, userId)),
+    p_workouts: history.map((w) => {
+      const { program_id: _ignored, ...rest } = workoutToRow(w, userId, null);
+      const program_index = w.programId && indexById.has(w.programId) ? indexById.get(w.programId)! : null;
+      return { ...rest, program_index };
+    }),
+    p_journal: journal.map((j) => journalToRow(j, userId)),
+    p_custom: custom.map((c) => customToRow(c, userId)),
+  };
+}
+
 // ── journal ───────────────────────────────────────────────────────────────────
 export function journalToRow(j: JournalEntry, userId: string): JournalInsert {
   return { user_id: userId, title: j.title, body: j.body, created_at: j.createdAt };

@@ -7,7 +7,7 @@
 // is pointed to Support for human follow-up; blocking and hiding take effect
 // immediately and persist locally.
 
-import { getJSON, setJSON } from "./storage";
+import { getJSON, setJSON, removeKey } from "./storage";
 import {
   loadClients, saveClients,
   loadCoaches, removeCoach,
@@ -21,6 +21,7 @@ import {
 import {
   COMMUNITY_TERMS_KEY, COMMUNITY_TERMS_VERSION, type CommunityTermsAcceptance,
 } from "../constants/community";
+import { disconnectByOtherId } from "../lib/connections";
 import type { AccountType } from "../contexts/AccountTypeContext";
 
 function newId(prefix: string): string {
@@ -31,6 +32,17 @@ function newId(prefix: string): string {
 
 export async function loadBlocked(): Promise<BlockedUser[]> {
   return getJSON<BlockedUser[]>(BLOCKED_USERS_KEY, []);
+}
+
+/** Wipe local block list / reports / hidden messages on account delete / switch.
+ *  The community-terms acceptance gate is intentionally left intact (it's a legal
+ *  gate, re-prompted only when COMMUNITY_TERMS_VERSION bumps). */
+export async function clearModerationData(): Promise<void> {
+  await Promise.all([
+    removeKey(BLOCKED_USERS_KEY),
+    removeKey(REPORTS_KEY),
+    removeKey(HIDDEN_MESSAGES_KEY),
+  ]);
 }
 
 /** Set of blocked ids — handy for filtering the conversation list. */
@@ -50,6 +62,36 @@ export async function blockUser(user: { id: string; name: string; initials: stri
 export async function unblockUser(id: string): Promise<void> {
   const list = await loadBlocked();
   await setJSON(BLOCKED_USERS_KEY, list.filter(b => b.id !== id));
+}
+
+/**
+ * Block a person everywhere, in one call. This is the entry point every "Block"
+ * button should use (chat, Connect, etc.) so blocking is consistent no matter
+ * where it's triggered:
+ *   1. record the block locally (so they can't be silently re-added),
+ *   2. drop any local trainer-hub link (clients / coaches / assigned trainer),
+ *   3. sever the live account-to-account connection server-side.
+ *
+ * Returns `{ severed }` so callers can tell the user when the server-side step
+ * couldn't run (offline / signed out). The local block always succeeds; the
+ * surrounding UI (rosters, lists, the chat-thread guard) filters the blocked
+ * contact out on the next focus regardless, so a `false` here means "they're
+ * blocked locally but the cloud connection row is still up — it'll sever next
+ * time the device is online and the list refreshes."
+ */
+export async function blockContact(
+  contact: { id: string; name: string; initials: string },
+  accountType: AccountType,
+): Promise<{ severed: boolean }> {
+  await blockUser(contact);
+  await unaddContact(contact.id, accountType);
+  try {
+    await disconnectByOtherId(contact.id);
+    return { severed: true };
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] blockContact disconnect", contact.id, e);
+    return { severed: false };
+  }
 }
 
 // ─── reporting ─────────────────────────────────────────────────────────────────

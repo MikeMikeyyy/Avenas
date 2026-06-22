@@ -1,4 +1,5 @@
 import { Alert, View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
+import { Image as ExpoImage } from "expo-image";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -12,6 +13,7 @@ import { useAccountType } from "../contexts/AccountTypeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { removeKey } from "../utils/storage";
 import { supabase } from "../lib/supabase";
+import { signOut } from "../lib/auth";
 import { deleteAccount } from "../lib/cloud";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import PeopleIcon from "../components/icons/PeopleIcon";
@@ -123,7 +125,7 @@ export default function SettingsScreen() {
         text: "Sign Out",
         style: "destructive",
         onPress: async () => {
-          await supabase.auth.signOut();
+          await signOut();
           router.replace("/onboarding");
         },
       },
@@ -217,7 +219,9 @@ export default function SettingsScreen() {
         <View style={styles.avatarSection}>
           <NeuCard dark={isDark} radius={40} style={styles.avatar}>
             <View style={styles.avatarInner}>
-              {initials ? (
+              {profile.photoUri ? (
+                <ExpoImage source={{ uri: profile.photoUri }} style={styles.avatarImage} contentFit="cover" transition={150} />
+              ) : initials ? (
                 <Text style={[styles.avatarText, { color: t.icon }]}>{initials}</Text>
               ) : (
                 <Ionicons name="person-outline" size={30} color={t.ts} />
@@ -403,7 +407,8 @@ const styles = StyleSheet.create({
   title:             { fontFamily: FontFamily.bold, fontSize: 18, color: TP },
   avatarSection:     { alignItems: "center", marginBottom: 36, gap: 8 },
   avatar:            { width: 80, height: 80, borderRadius: 40 },
-  avatarInner:       { width: 80, height: 80, alignItems: "center", justifyContent: "center" },
+  avatarInner:       { width: 80, height: 80, alignItems: "center", justifyContent: "center", borderRadius: 40, overflow: "hidden" },
+  avatarImage:       { width: 80, height: 80, borderRadius: 40 },
   avatarText:        { fontFamily: FontFamily.bold, fontSize: 26, color: ICON },
   userName:          { fontFamily: FontFamily.bold, fontSize: 20, color: TP },
   userEmail:         { fontFamily: FontFamily.regular, fontSize: 14, color: TS },

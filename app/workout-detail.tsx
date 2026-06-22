@@ -43,6 +43,9 @@ import {
   type CompletedExercise,
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
+import { scheduleCloudPush } from "../lib/syncManager";
+import { useUnit } from "../contexts/UnitContext";
+import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
 import { useTheme } from "../contexts/ThemeContext";
 
 const WARMUP_ORANGE = "#ffbf0f";
@@ -374,9 +377,18 @@ export default function WorkoutDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { isDark } = useTheme();
+  const { isKg } = useUnit();
 
   const insets = useSafeAreaInsets();
   const t = isDark ? APP_DARK : APP_LIGHT;
+
+  // Stored weights are canonical kg. The edit buffer + on-screen rows work in the
+  // user's display unit; convert kg→display when loading into the buffer / for
+  // the read-only view, and display→kg when saving back.
+  const exToDisplay = (exs: CompletedExercise[]): CompletedExercise[] =>
+    exs.map(ex => ({ ...ex, sets: ex.sets.map(s => ({ ...s, weight: formatWeightForDisplay(s.weight, isKg) })) }));
+  const exToKg = (exs: CompletedExercise[]): CompletedExercise[] =>
+    exs.map(ex => ({ ...ex, sets: ex.sets.map(s => ({ ...s, weight: parseWeightToKg(s.weight, isKg) })) }));
 
   const [workout, setWorkout]               = useState<CompletedWorkout | null>(null);
   const [isEditing, setIsEditing]           = useState(false);
@@ -424,7 +436,7 @@ export default function WorkoutDetailScreen() {
       const found = history.find(w => w.id === id) ?? null;
       setWorkout(found);
       if (found) {
-        setEditedExercises(JSON.parse(JSON.stringify(found.exercises)));
+        setEditedExercises(exToDisplay(found.exercises));
         setEditedIsIsometric(found.exercises.map(() => false));
         setEditedCompletedAt(found.completedAt);
         setEditedDurationSeconds(found.durationSeconds);
@@ -445,7 +457,7 @@ export default function WorkoutDetailScreen() {
     if (!workout) return;
     const updated = {
       ...workout,
-      exercises: editedExercises,
+      exercises: exToKg(editedExercises),  // display units → canonical kg
       completedAt: editedCompletedAt || workout.completedAt,
       durationSeconds: editedDurationSeconds,
     };
@@ -455,13 +467,14 @@ export default function WorkoutDetailScreen() {
       WORKOUT_HISTORY_KEY,
       JSON.stringify(history.map(w => w.id === updated.id ? updated : w))
     );
+    scheduleCloudPush();
     setWorkout(updated);
     setIsEditing(false);
   };
 
   const handleCancel = () => {
     if (workout) {
-      setEditedExercises(JSON.parse(JSON.stringify(workout.exercises)));
+      setEditedExercises(exToDisplay(workout.exercises));
       setEditedIsIsometric(workout.exercises.map(() => false));
       setEditedCompletedAt(workout.completedAt);
       setEditedDurationSeconds(workout.durationSeconds);
@@ -489,6 +502,7 @@ export default function WorkoutDetailScreen() {
               const dates: string[] = dRaw ? JSON.parse(dRaw) : [];
               await AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== workout.date)));
             }
+            scheduleCloudPush();
             router.back();
           },
         },
@@ -554,7 +568,7 @@ export default function WorkoutDetailScreen() {
     }));
   };
 
-  const exercises = workout ? (isEditing ? editedExercises : workout.exercises) : [];
+  const exercises = workout ? (isEditing ? editedExercises : exToDisplay(workout.exercises)) : [];
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -701,6 +715,7 @@ export default function WorkoutDetailScreen() {
                         returnKeyType="default"
                         editable={isEditing}
                         multiline
+                        scrollEnabled={false}
                       />
                     </View>
 

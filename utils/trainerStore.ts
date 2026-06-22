@@ -3,6 +3,7 @@
 // Real backend will replace this — keep the shapes minimal and the API
 // async-only so swapping to fetch() later is a contained change.
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getJSON, removeKey, setJSON } from "./storage";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
@@ -36,6 +37,9 @@ export type Client = {
    *  They appear in the roster so you can send them programs, but are also listed
    *  on the My Coaches page. Removing one severs the whole connection. */
   isTrainer?: boolean;
+  /** Profile photo URL for real connected accounts (migration 0006). Absent for
+   *  local/mock clients, which fall back to initials. */
+  photoUri?: string;
 };
 
 export type ClientData = {
@@ -72,6 +76,8 @@ export type AssignedPT = {
   id: string;
   name: string;
   initials: string;
+  /** Profile photo URL for real connected trainers/coaches (migration 0006). */
+  photoUri?: string;
 };
 
 export type SentProgramStatus = "sent" | "returned";
@@ -467,6 +473,29 @@ export async function updateSharedProgram(id: string, patch: Partial<SharedProgr
   const existing = await loadSharedPrograms();
   const next = existing.map(s => s.id === id ? { ...s, ...patch } : s);
   await setJSON(SHARED_PROGRAMS_KEY, next);
+}
+
+/**
+ * Wipe ALL local trainer-hub data: the client roster + each client's data, the
+ * assigned/other trainers, coaches, sent/shared programs, and the demo-seed flag.
+ * Called on account delete / account switch (see lib/cloud.clearLocalUserData) so
+ * one account's local data never leaks into the next account on this device. The
+ * seed flag is cleared too, so a fresh account re-seeds its own demo clients
+ * rather than inheriting the previous account's roster.
+ */
+export async function clearTrainerData(): Promise<void> {
+  const keys = await AsyncStorage.getAllKeys();
+  const clientData = keys.filter(k => k.startsWith(CLIENT_DATA_PREFIX));
+  await AsyncStorage.multiRemove([
+    CLIENTS_KEY,
+    SHARED_PROGRAMS_KEY,
+    PT_SEEDED_KEY,
+    ASSIGNED_PT_KEY,
+    SENT_PROGRAMS_KEY,
+    COACHES_KEY,
+    OTHER_TRAINERS_KEY,
+    ...clientData,
+  ]);
 }
 
 export function makeInitials(name: string): string {

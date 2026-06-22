@@ -31,6 +31,8 @@ import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERR
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
 import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, normalizeExerciseName } from "../../utils/workout";
+import { formatWeightForDisplay, parseWeightToKg, formatPrevHint } from "../../utils/units";
+import { scheduleCloudPush } from "../../lib/syncManager";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import IntervalTimerModal from "../../components/IntervalTimerModal";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
@@ -1127,7 +1129,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     ref={r => { weightRefs.current[flatIdx] = r; }}
                     style={[styles.inputBoxText, { color: isDark ? "#ffffff" : t.tp }]}
                     keyboardType="decimal-pad"
-                    placeholder={set.programSet?.weightKg || "—"}
+                    placeholder={set.programSet?.weightKg ? formatWeightForDisplay(set.programSet.weightKg, isKg) : "—"}
                     placeholderTextColor={`${t.tp}66`}
                     value={set.weight}
                     editable={!isLocked}
@@ -1355,6 +1357,7 @@ export default function WorkoutScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isDark } = useTheme();
+  const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isRunning, isPaused, elapsedSeconds, discardCount, startTimer, pauseTimer, resumeTimer, stopTimer } = useWorkoutTimer();
   const { startRestTimer, dismissRestTimer } = useRestTimer();
@@ -1413,15 +1416,16 @@ export default function WorkoutScreen() {
       sets: [] as ProgramSet[],
     }));
     const lockedLog: WorkoutLog = {};
+    // Stored weights are canonical kg → show them in the user's unit.
     todaysCompletedWorkout.exercises.forEach((ex, i) => {
       lockedLog[`locked_${i}`] = {
-        warmup: ex.sets.filter(s => s.type === "warmup").map(s => ({ weight: s.weight, reps: s.reps, done: s.done, fillKey: 0 })),
-        working: ex.sets.filter(s => s.type === "working").map(s => ({ weight: s.weight, reps: s.reps, done: s.done, fillKey: 0 })),
+        warmup: ex.sets.filter(s => s.type === "warmup").map(s => ({ weight: formatWeightForDisplay(s.weight, isKg), reps: s.reps, done: s.done, fillKey: 0 })),
+        working: ex.sets.filter(s => s.type === "working").map(s => ({ weight: formatWeightForDisplay(s.weight, isKg), reps: s.reps, done: s.done, fillKey: 0 })),
         notes: ex.notes,
       };
     });
     return { exercises, log: lockedLog };
-  }, [todaysCompletedWorkout]);
+  }, [todaysCompletedWorkout, isKg]);
 
   // ── Timer modal ──────────────────────────────────────────────────────────────
   // The interval Timer / Stopwatch and all its state live in <IntervalTimerModal/>;
@@ -1604,6 +1608,30 @@ export default function WorkoutScreen() {
     });
   };
 
+  // True if marking this one set done would complete the whole workout (every
+  // set of every exercise done). Used to suppress the post-set rest timer on the
+  // final set — the workout is over, so there's nothing left to rest for.
+  const wouldCompleteWorkout = (exId: string, type: "warmup" | "working", idx: number): boolean => {
+    if (!workoutInfo || workoutInfo.exercises.length === 0) return false;
+    return workoutInfo.exercises.every((ex: Exercise) => {
+      const exLog = log[ex.id];
+      if (!exLog) return false;
+      const warmupDone = exLog.warmup.every((s, i) => (ex.id === exId && type === "warmup" && i === idx) || s.done);
+      const workingDone = exLog.working.every((s, i) => (ex.id === exId && type === "working" && i === idx) || s.done);
+      return warmupDone && workingDone;
+    });
+  };
+
+  // Start the rest timer after completing a set — unless that set completed the
+  // whole workout, in which case clear any running timer instead.
+  const startRestAfterSet = (exId: string, type: "warmup" | "working", idx: number) => {
+    if (wouldCompleteWorkout(exId, type, idx)) {
+      dismissRestTimer();
+      return;
+    }
+    startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
+  };
+
   const autoTickIfComplete = (exId: string, type: "warmup" | "working", idx: number) => {
     const cur = log[exId]?.[type]?.[idx];
     const willTick = !!cur && !cur.done && !!cur.weight.trim() && !!cur.reps.trim();
@@ -1621,7 +1649,7 @@ export default function WorkoutScreen() {
     });
     if (willTick) {
       startTimer();
-      startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
+      startRestAfterSet(exId, type, idx);
     }
   };
 
@@ -1635,7 +1663,7 @@ export default function WorkoutScreen() {
       return { ...prev, [exId]: { ...exLog, [type]: sets } };
     });
     startTimer();
-    if (becomingDone) startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
+    if (becomingDone) startRestAfterSet(exId, type, idx);
   };
 
   const addSet = (exId: string) => {
@@ -1825,9 +1853,10 @@ export default function WorkoutScreen() {
         const exLog = log[ex.id];
         return {
           name: ex.name,
+          // Live log holds the user's typed display units → store canonical kg.
           sets: [
-            ...(exLog?.warmup  ?? []).map(s => ({ type: "warmup"  as const, weight: s.weight, reps: s.reps, done: s.done })),
-            ...(exLog?.working ?? []).map(s => ({ type: "working" as const, weight: s.weight, reps: s.reps, done: s.done })),
+            ...(exLog?.warmup  ?? []).map(s => ({ type: "warmup"  as const, weight: parseWeightToKg(s.weight, isKg), reps: s.reps, done: s.done })),
+            ...(exLog?.working ?? []).map(s => ({ type: "working" as const, weight: parseWeightToKg(s.weight, isKg), reps: s.reps, done: s.done })),
           ],
           notes: exLog?.notes ?? "",
         };
@@ -1852,6 +1881,7 @@ export default function WorkoutScreen() {
       await AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(newHistory));
       // Keep prev-set suggestions correct for any same-session discard → restart.
       setPrevByName(buildPrevByName(newHistory));
+      scheduleCloudPush();
     } catch (e) {
       warnStorage("persistCompletedWorkout", WORKOUT_HISTORY_KEY, e);
     }
@@ -1949,19 +1979,30 @@ export default function WorkoutScreen() {
             // Clean up workout_dates for the deleted session's own day, not for
             // "now" — they can differ for a late-night session.
             const targetDate = todaysCompletedWorkout?.date ?? effectiveTodayRef.current;
-            AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
-              const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
-              const updated = history.filter(w => w.id !== targetId);
-              AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(updated))
-                .catch((e) => warnStorage("setItem", WORKOUT_HISTORY_KEY, e));
-              if (!updated.some(w => w.date === targetDate)) {
-                AsyncStorage.getItem(WORKOUT_DATES_KEY).then(raw2 => {
+            // Serialize the read→write pairs with sequential awaits (the contract
+            // for mutating shared keys — mirrors persistCompletedWorkout and the
+            // workout-detail delete). The UI teardown below stays synchronous so
+            // the view flips instantly while this commits in the background.
+            void (async () => {
+              try {
+                const raw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
+                const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
+                const updated = history.filter(w => w.id !== targetId);
+                await AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(updated));
+                if (!updated.some(w => w.date === targetDate)) {
+                  const raw2 = await AsyncStorage.getItem(WORKOUT_DATES_KEY);
                   const dates: string[] = raw2 ? JSON.parse(raw2) : [];
-                  AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== targetDate)))
-                    .catch((e) => warnStorage("setItem", WORKOUT_DATES_KEY, e));
-                }).catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
+                  await AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== targetDate)));
+                }
+                // Rebuild prev-set suggestions from the post-delete history so the
+                // fresh log doesn't keep surfacing the deleted session's numbers as
+                // "previous" (persistCompletedWorkout had set them on finish).
+                setPrevByName(buildPrevByName(updated));
+                scheduleCloudPush();
+              } catch (e) {
+                warnStorage("handleDiscardCompleted", WORKOUT_HISTORY_KEY, e);
               }
-            }).catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
+            })();
             setTodaysCompletedWorkout(null);
             if (workoutInfo) setLog(initLog(workoutInfo.exercises));
             stopTimer();
@@ -2230,6 +2271,8 @@ export default function WorkoutScreen() {
                 exLog={lockedData.log[exercise.id] ?? { warmup: [], working: [], notes: "" }}
                 isDark={isDark}
                 isLocked
+                hideIndexLabel
+                numberBadge={i + 1}
                 onUpdateSet={() => {}} onToggleDone={() => {}} onAutoTick={() => {}}
                 exNotes={lockedData.log[exercise.id]?.notes ?? ""}
                 onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
@@ -2285,7 +2328,7 @@ export default function WorkoutScreen() {
                   onInputFocus={handleInputFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
-                  prevSets={prevByName[normalizeExerciseName(exercise.name)] ?? []}
+                  prevSets={(prevByName[normalizeExerciseName(exercise.name)] ?? []).map(p => formatPrevHint(p, isKg))}
                   hideIndexLabel
                   numberBadge={focusMode ? undefined : i + 1}
                   onToggleIsometric={() => setIsometricExIds(prev => {

@@ -12,12 +12,38 @@ export type ProfileRow = {
   account_type: "user" | "pt";
   unit: "kg" | "lb";
   theme: string;
+  avatar_url: string | null;
+  connect_code: string | null;
+  last_active_at: string | null;
   flame_preference: string | null;
   streak: Record<string, unknown>;
   onboarding_complete: boolean;
   terms_accepted: number | null;
   created_at: string;
   updated_at: string;
+};
+
+// ── connections (account-to-account; migration 0006) ──────────────────────────
+export type ConnectionRow = {
+  id: string;
+  requester_id: string;
+  addressee_id: string;
+  status: "pending" | "accepted" | "declined";
+  created_at: string;
+  responded_at: string | null;
+};
+
+// Row shape returned by the get_my_connections() RPC — the counterpart's SAFE
+// profile fields plus the relationship direction (see 0006).
+export type ConnectionWithProfile = {
+  connection_id: string;
+  other_id: string;
+  name: string | null;
+  avatar_url: string | null;
+  account_type: "user" | "pt";
+  last_active_at: string | null;
+  status: "pending" | "accepted" | "declined";
+  direction: "accepted" | "incoming" | "outgoing";
 };
 
 export type ProgramRow = {

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useMemo, Fragment } from "react";
 import { View, Text, StyleSheet, Image, Animated } from "react-native";
+import { Image as ExpoImage } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 
@@ -28,6 +29,7 @@ import {
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
 import { toYMD, fmtDuration } from "../../utils/dates";
+import { toDisplayWeight } from "../../utils/units";
 import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday } from "../../utils/workout";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
@@ -653,7 +655,7 @@ export default function HomeScreen() {
                 </View>
                 <View style={[styles.weekStatVDivider, { backgroundColor: t.div }]} />
                 <View style={styles.weekStatItem}>
-                  <Text style={[styles.weekStatValue, { color: t.tp }]}>{formatVolume(weeklyStats.totalVolumeKg)}</Text>
+                  <Text style={[styles.weekStatValue, { color: t.tp }]}>{formatVolume(toDisplayWeight(weeklyStats.totalVolumeKg, isKg))}</Text>
                   <Text style={[styles.weekStatLabel, { color: t.ts }]}>{isKg ? "kg Lifted" : "Lbs Lifted"}</Text>
                 </View>
               </View>
@@ -720,7 +722,9 @@ export default function HomeScreen() {
           <View style={[styles.avatarShadow, { shadowColor: isDark ? "#4d5363" : "#a3afc0" }]}>
             <BlurView intensity={90} tint="extraLight" style={styles.avatarBorder}>
               <View style={styles.avatarInner}>
-                <Text style={styles.avatarText}>{avatarInitials}</Text>
+                {profile.photoUri
+                  ? <ExpoImage source={{ uri: profile.photoUri }} style={styles.avatarImage} contentFit="cover" transition={150} />
+                  : <Text style={styles.avatarText}>{avatarInitials}</Text>}
               </View>
             </BlurView>
           </View>
@@ -741,7 +745,8 @@ const styles = StyleSheet.create({
   avatarHighlight: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: "#FFFFFF", shadowOffset: { width: -3, height: -3 }, shadowOpacity: 0.9, shadowRadius: 6 },
   avatarShadow: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: "#a3afc0", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.7, shadowRadius: 7 },
   avatarBorder: { width: 48, height: 48, borderRadius: 24, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  avatarInner: { width: 44, height: 44, borderRadius: 22, backgroundColor: AVATAR_BG, alignItems: "center", justifyContent: "center" },
+  avatarInner: { width: 44, height: 44, borderRadius: 22, backgroundColor: AVATAR_BG, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  avatarImage: { width: 44, height: 44, borderRadius: 22 },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 16, color: ICON },
   topSolid:    { position: "absolute", top: 0, left: 0, right: 0, zIndex: 5 },
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },

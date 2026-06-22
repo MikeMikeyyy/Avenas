@@ -21,6 +21,7 @@ import DropdownPicker from "../components/DropdownPicker";
 import FadeScreen from "../components/FadeScreen";
 import DumbbellIcon from "../components/DumbbellIcon";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
+import { formatWeightForDisplay } from "../utils/units";
 import {
   PROGRAMS_KEY,
   WORKOUT_HISTORY_KEY,
@@ -298,7 +299,8 @@ function SessionCard({
               working sets get the ACCT tint. */}
           <View style={styles.setsRow}>
             {row.sets.map((s, i) => {
-              const w = (s.weight ?? "").trim() || "—";
+              // Stored weight is canonical kg; show it in the active unit.
+              const w = formatWeightForDisplay((s.weight ?? "").trim(), unit === "kg") || "—";
               const r = (s.reps ?? "").trim() || "—";
               const isWarmup = s.type === "warmup";
               return (

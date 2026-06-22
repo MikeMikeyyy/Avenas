@@ -24,6 +24,8 @@ import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
+import { useUnit } from "../contexts/UnitContext";
+import { formatWeightForDisplay } from "../utils/units";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import {
   acceptSharedProgram,
@@ -69,6 +71,7 @@ export default function ProgramViewScreen() {
   const router = useRouter();
   const { sharedId, sentId } = useLocalSearchParams<{ sharedId?: string; sentId?: string }>();
   const { isDark } = useTheme();
+  const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { accountType } = useAccountType();
   const insets = useSafeAreaInsets();
@@ -490,7 +493,7 @@ export default function ProgramViewScreen() {
                                         </Text>
                                       </View>
                                       <Text style={[styles.setText, { color: t.tp }]} numberOfLines={1}>
-                                        {weight ? `${weight} kg · ` : ""}{setsSummary(set)}
+                                        {weight ? `${formatWeightForDisplay(weight, isKg)} ${isKg ? "kg" : "lbs"} · ` : ""}{setsSummary(set)}
                                       </Text>
                                     </View>
                                   );

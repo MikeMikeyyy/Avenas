@@ -13,13 +13,17 @@ import {
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import {
-  customFromRow, customToRow,
-  journalFromRow, journalToRow,
-  programFromRow, programToRow,
-  workoutFromRow, workoutToRow,
+  customFromRow,
+  journalFromRow,
+  programFromRow,
+  workoutFromRow,
+  toReplaceUserDataPayload,
 } from "./mappers";
 import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./database.types";
 import type { AccountType } from "../contexts/AccountTypeContext";
+import { clearTrainerData } from "../utils/trainerStore";
+import { clearChatData } from "../utils/chatStore";
+import { clearModerationData } from "../utils/moderation";
 
 export type SyncCounts = {
   programs: number;
@@ -31,8 +35,12 @@ export type SyncCounts = {
 /**
  * Replace this user's cloud data with whatever is currently in local storage —
  * an idempotent "push" (safe to run repeatedly; re-running just re-uploads).
- * Programs are inserted first so each one's new uuid can be mapped onto the
- * workouts that reference it.
+ *
+ * Delegates to the replace_user_data RPC (migration 0004) so the whole replace
+ * is ONE atomic transaction server-side: a network/insert failure rolls back
+ * instead of leaving the cloud wiped or partial. The program → workout linkage
+ * is carried as program_index (the program's position in the array) and the
+ * server resolves it to the freshly-minted uuid — no client-side id remap.
  */
 export async function pushAllLocalDataToCloud(userId: string): Promise<SyncCounts> {
   const [programs, history, journal, custom] = await Promise.all([
@@ -42,43 +50,23 @@ export async function pushAllLocalDataToCloud(userId: string): Promise<SyncCount
     getJSON<CustomExercise[]>(CUSTOM_KEY, []),
   ]);
 
-  // Clear existing rows for this user (workouts first — they FK to programs).
-  for (const table of ["workouts", "programs", "journal_entries", "custom_exercises"] as const) {
-    const { error } = await supabase.from(table).delete().eq("user_id", userId);
-    if (error) throw new Error(`clear ${table}: ${error.message}`);
+  // Safety net against data loss: never let an empty local cache overwrite a
+  // non-empty cloud. An empty local almost always means "not loaded yet" or
+  // "just cleared on an account switch" — NOT "the user deleted everything".
+  // replace_user_data wipes-then-writes, so pushing empty over real cloud data
+  // would destroy it. If local is empty but the cloud has data, skip the push.
+  const localTotal = programs.length + history.length + journal.length + custom.length;
+  if (localTotal === 0) {
+    const cloud = await cloudCounts(userId);
+    if (total(cloud) > 0) {
+      if (__DEV__) console.warn("[avenas] skipped empty push over non-empty cloud");
+      return cloud;
+    }
   }
 
-  // Programs — insert and capture local-id -> new-uuid mapping (PostgREST returns
-  // inserted rows in input order).
-  const idMap = new Map<string, string>();
-  if (programs.length > 0) {
-    const { data, error } = await supabase
-      .from("programs")
-      .insert(programs.map((p) => programToRow(p, userId)))
-      .select("id");
-    if (error) throw new Error(`programs: ${error.message}`);
-    (data ?? []).forEach((row: { id: string }, i: number) => idMap.set(programs[i].id, row.id));
-  }
-
-  // Workouts — resolve each workout's local programId to the new program uuid
-  // (free / legacy workouts have no program -> null).
-  if (history.length > 0) {
-    const rows = history.map((w) =>
-      workoutToRow(w, userId, w.programId ? idMap.get(w.programId) ?? null : null),
-    );
-    const { error } = await supabase.from("workouts").insert(rows);
-    if (error) throw new Error(`workouts: ${error.message}`);
-  }
-
-  if (journal.length > 0) {
-    const { error } = await supabase.from("journal_entries").insert(journal.map((j) => journalToRow(j, userId)));
-    if (error) throw new Error(`journal: ${error.message}`);
-  }
-
-  if (custom.length > 0) {
-    const { error } = await supabase.from("custom_exercises").insert(custom.map((c) => customToRow(c, userId)));
-    if (error) throw new Error(`custom exercises: ${error.message}`);
-  }
+  const payload = toReplaceUserDataPayload(programs, history, journal, custom, userId);
+  const { error } = await supabase.rpc("replace_user_data", payload);
+  if (error) throw new Error(`replace_user_data: ${error.message}`);
 
   return {
     programs: programs.length,
@@ -210,7 +198,10 @@ export async function deleteAccount(): Promise<void> {
   await supabase.auth.signOut();
 }
 
-/** Wipe the locally-cached user data + in-progress drafts (not auth/theme/unit). */
+/** Wipe the locally-cached user data + in-progress drafts (not auth/theme/unit).
+ *  Includes the local-only trainer-hub data (roster, coaches, trainers, shared/
+ *  sent programs, chat threads, block list) so one account's data never leaks
+ *  into the next account on this device when deleting or switching accounts. */
 export async function clearLocalUserData(): Promise<void> {
   await Promise.all([
     removeKey(PROGRAMS_KEY),
@@ -220,6 +211,9 @@ export async function clearLocalUserData(): Promise<void> {
     removeKey(CUSTOM_KEY),
     removeKey(WORKOUT_DRAFT_KEY),
     removeKey(WORKOUT_DAY_OVERRIDE_KEY),
+    clearTrainerData(),
+    clearChatData(),
+    clearModerationData(),
   ]);
 }
 
@@ -253,6 +247,8 @@ export type CloudProfile = {
   name: string;
   accountType: AccountType;
   unit: "kg" | "lb";
+  /** Public URL of the profile photo, or null when none is set. */
+  avatarUrl: string | null;
   /** True once the user has finished the name/role step for this account. */
   complete: boolean;
 };
@@ -310,7 +306,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
 export async function pullProfile(userId: string): Promise<CloudProfile | null> {
   const { data, error } = await supabase
     .from("profiles")
-    .select("name, account_type, unit, onboarding_complete")
+    .select("name, account_type, unit, avatar_url, onboarding_complete")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw new Error(`load profile: ${error.message}`);
@@ -319,6 +315,33 @@ export async function pullProfile(userId: string): Promise<CloudProfile | null> 
     name: (data.name as string | null) ?? "",
     accountType: toAppAccountType(data.account_type as string | null),
     unit: (data.unit as string) === "lb" ? "lb" : "kg",
+    avatarUrl: (data.avatar_url as string | null) ?? null,
     complete: data.onboarding_complete === true,
   };
+}
+
+/**
+ * Upload (or replace) the signed-in user's profile photo and return its public
+ * URL. The object lives at "<userId>/avatar" so each upload overwrites the last
+ * one (upsert) — no orphaned files. A cache-busting query param is appended so
+ * expo-image refetches after a replace instead of showing the stale cached copy.
+ *
+ * `fetch(localUri).then(r => r.arrayBuffer())` is the dependency-free way to read
+ * a local file into bytes in Expo/React Native (the Supabase RN guide's pattern).
+ */
+export async function uploadAvatar(userId: string, localUri: string, mimeType?: string): Promise<string> {
+  const bytes = await fetch(localUri).then((r) => r.arrayBuffer());
+  const path = `${userId}/avatar`;
+  const { error } = await supabase.storage
+    .from("avatars")
+    .upload(path, bytes, { contentType: mimeType ?? "image/jpeg", upsert: true });
+  if (error) throw new Error(`upload avatar: ${error.message}`);
+  const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+  return `${data.publicUrl}?t=${Date.now()}`;
+}
+
+/** Persist (or clear) the avatar URL on this account's profile row. */
+export async function updateAvatarUrl(userId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", userId);
+  if (error) throw new Error(error.message);
 }

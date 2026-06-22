@@ -157,9 +157,11 @@ export function normalizeExerciseName(name: string): string {
  * recent prior session, formatted as "weight×reps" (or weight/reps/"—").
  * History is sorted newest-first, so the first time a name is seen wins.
  * When `beforeDate` (a "YYYY-MM-DD") is given, only sessions strictly before it
- * are considered — used when logging a past workout. (completedAt is an ISO
- * timestamp; since the bare date is a lexicographic prefix, same-day and later
- * sessions correctly sort as not-less-than `beforeDate`.)
+ * are considered — used when logging a past workout. We compare on the workout's
+ * local `date` (also "YYYY-MM-DD"), NOT the ISO `completedAt` timestamp: in a
+ * positive-UTC timezone a session's completedAt can roll back to the previous
+ * UTC day, so a string compare against the local `beforeDate` would wrongly
+ * include a same-day session. Comparing local date to local date is exact.
  */
 export function buildPrevByName(
   history: CompletedWorkout[],
@@ -168,7 +170,7 @@ export function buildPrevByName(
   const sorted = [...history].sort(
     (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
   );
-  const filtered = beforeDate ? sorted.filter(w => w.completedAt < beforeDate) : sorted;
+  const filtered = beforeDate ? sorted.filter(w => w.date < beforeDate) : sorted;
   const result: Record<string, string[]> = {};
   for (const workout of filtered) {
     for (const ex of workout.exercises) {

@@ -59,6 +59,19 @@ function addDays(d: Date, n: number): Date {
   return out;
 }
 
+/**
+ * Whole calendar days from local-midnight `a` to local-midnight `b`, DST-safe.
+ * Comparing getTime() directly and dividing by 86_400_000 is wrong across a
+ * daylight-saving boundary (a local day there is 23h/25h, not 24h), which can
+ * misbucket a workout by a day. Projecting the y/m/d components onto UTC removes
+ * the DST offset so the difference is always an exact multiple of a day.
+ */
+function calendarDaysBetween(a: Date, b: Date): number {
+  const au = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const bu = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((bu - au) / 86400000);
+}
+
 // ─── public: per-workout metric aggregators ──────────────────────────────────
 
 export function computeWorkoutTonnage(w: CompletedWorkout): number {
@@ -342,12 +355,14 @@ export function bucketMetricByRollingWeeks(
     });
   }
 
-  // Bucket workouts by week index.
+  // Bucket workouts by week index. Use a DST-safe calendar-day delta — dividing
+  // raw getTime() ms by 86_400_000 misbuckets workouts that straddle a daylight-
+  // saving change (the local day there isn't 24h long).
   const startMs = start.getTime();
   for (const w of workouts) {
     const wDate = ymdToDate(w.date);
     if (wDate.getTime() < startMs || wDate.getTime() > today.getTime()) continue;
-    const dayDelta = Math.floor((wDate.getTime() - startMs) / 86400000);
+    const dayDelta = calendarDaysBetween(start, wDate);
     const idx = Math.floor(dayDelta / 7);
     const b = buckets[idx];
     if (!b) continue;

@@ -13,6 +13,9 @@ export const ONBOARDING_COMPLETE_KEY = "@avenas/onboarding_complete";
 export interface UserProfile {
   name: string;
   email: string;
+  /** Public URL of the profile photo (synced via the cloud profile). Undefined
+   *  when none is set — callers fall back to initials. */
+  photoUri?: string;
 }
 
 const EMPTY_PROFILE: UserProfile = { name: "", email: "" };
