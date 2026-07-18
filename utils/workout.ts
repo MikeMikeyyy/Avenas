@@ -18,9 +18,20 @@ export type ResolvedWorkout = {
   dayIndex: number;
   name: string;
   exercises: Exercise[];
+  /** Id of the program the exercises came from. Undefined when the workout
+   *  matched no program (free-workout override, or its source program is gone). */
+  programId?: string;
 };
 
-export type DayOverride = { date: string; workoutName: string };
+export type DayOverride = {
+  date: string;
+  workoutName: string;
+  /** The program the chosen day belongs to. Set by change-day when the user
+   *  picks a day (possibly from a NON-active program); absent on free-workout
+   *  overrides and on overrides written before this field existed — those
+   *  resolve against the active program, as before. */
+  programId?: string;
+};
 
 /** Parse a "YYYY-MM-DD" string to a local Date at midnight, or null. */
 function ymdToLocalDate(ymd: string): Date | null {
@@ -54,7 +65,7 @@ export function getWorkoutForDate(program: SavedProgram, dateYMD: string): Resol
   const name = program.cyclePattern[dayIndex];
   if (!name || name === "Rest") return null;
   const exercises = program.workouts[`${dayIndex}:${name}`] ?? [];
-  return { dayIndex, name, exercises };
+  return { dayIndex, name, exercises, programId: program.id };
 }
 
 /** The program's scheduled workout for today (local date). */
@@ -66,9 +77,14 @@ export function getTodaysWorkout(program: SavedProgram): ResolvedWorkout | null 
  * The workout scheduled for `dateYMD`, taking a change-day / free-workout
  * override into account. The override is honored only when its date matches
  * `dateYMD` (stale overrides from another day are ignored). A `"Rest"` override
- * resolves to null (the user explicitly changed today onto a rest day). When the
- * override names a day in the program its exercises are used; otherwise (free
- * workout, no program) the name is surfaced with no exercises.
+ * resolves to null (the user explicitly changed today onto a rest day).
+ *
+ * The override's day is resolved against its SOURCE program: `override.programId`
+ * looked up in `allPrograms` when it names a non-active program (change-day can
+ * pick a day from any program), else the active `program`. When the source
+ * program can't be found — free-workout override, no programId, deleted program,
+ * or `allPrograms` not supplied — the name is surfaced with no exercises (or
+ * against the active program's same-named day, matching pre-programId behavior).
  *
  * Callers should pass the effective training date (see getEffectiveToday) as
  * `dateYMD`, not the raw calendar date, so late-night sessions resolve to the
@@ -78,14 +94,19 @@ export function resolveWorkoutForDate(
   program: SavedProgram | null,
   override: DayOverride | null,
   dateYMD: string,
+  allPrograms?: SavedProgram[],
 ): ResolvedWorkout | null {
   if (override && override.date === dateYMD) {
     const name = override.workoutName;
     if (name === "Rest") return null;
-    if (program) {
-      const dayIndex = program.cyclePattern.indexOf(name);
-      const exercises = dayIndex >= 0 ? (program.workouts[`${dayIndex}:${name}`] ?? []) : [];
-      return { dayIndex, name, exercises };
+    const src =
+      override.programId && override.programId !== program?.id
+        ? allPrograms?.find(p => p.id === override.programId) ?? null
+        : program;
+    if (src) {
+      const dayIndex = src.cyclePattern.indexOf(name);
+      const exercises = dayIndex >= 0 ? (src.workouts[`${dayIndex}:${name}`] ?? []) : [];
+      return { dayIndex, name, exercises, programId: dayIndex >= 0 ? src.id : undefined };
     }
     return { dayIndex: -1, name, exercises: [] };
   }
@@ -101,8 +122,9 @@ export function resolveWorkoutForDate(
 export function resolveTodayWorkout(
   program: SavedProgram | null,
   override: DayOverride | null,
+  allPrograms?: SavedProgram[],
 ): ResolvedWorkout | null {
-  return resolveWorkoutForDate(program, override, todayYMD());
+  return resolveWorkoutForDate(program, override, todayYMD(), allPrograms);
 }
 
 /**
@@ -162,25 +184,42 @@ export function normalizeExerciseName(name: string): string {
  * positive-UTC timezone a session's completedAt can roll back to the previous
  * UTC day, so a string compare against the local `beforeDate` would wrongly
  * include a same-day session. Comparing local date to local date is exact.
+ *
+ * When `dayName` (the workout day being logged, e.g. "Push") is given, sessions
+ * of that day take priority: an exercise programmed on two days (Lateral Raise
+ * on both Push and Arms, trained at different weights) gets its previous values
+ * from the last session of THIS day, not from wherever it last appeared. The
+ * most recent appearance on any day is kept as a fallback for exercises never
+ * done on this day (first time running the day, exercise swapped in, free
+ * workout) so they still show a reference instead of nothing. Day names match
+ * trimmed + case-insensitive, like exercise names.
  */
 export function buildPrevByName(
   history: CompletedWorkout[],
   beforeDate?: string,
+  dayName?: string,
 ): Record<string, string[]> {
   const sorted = [...history].sort(
     (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
   );
   const filtered = beforeDate ? sorted.filter(w => w.date < beforeDate) : sorted;
-  const result: Record<string, string[]> = {};
+  const dayKey = dayName ? dayName.trim().toLowerCase() : null;
+  const anyDay: Record<string, string[]> = {};
+  const sameDay: Record<string, string[]> = {};
   for (const workout of filtered) {
+    const matchesDay = dayKey !== null && (workout.workoutName ?? "").trim().toLowerCase() === dayKey;
     for (const ex of workout.exercises) {
       const key = normalizeExerciseName(ex.name);
-      if (result[key]) continue;
-      result[key] = ex.sets.map(s => {
+      const wantAny = !anyDay[key];
+      const wantSame = matchesDay && !sameDay[key];
+      if (!wantAny && !wantSame) continue;
+      const sets = ex.sets.map(s => {
         if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
         return s.weight || s.reps || "—";
       });
+      if (wantAny) anyDay[key] = sets;
+      if (wantSame) sameDay[key] = sets;
     }
   }
-  return result;
+  return dayKey === null ? anyDay : { ...anyDay, ...sameDay };
 }

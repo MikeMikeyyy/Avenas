@@ -9,6 +9,7 @@ import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
+import { scheduleCloudPush } from "../../lib/syncManager";
 
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
@@ -31,6 +32,8 @@ import {
   type SharedProgram,
 } from "../../utils/trainerStore";
 import { getJSON } from "../../utils/storage";
+import { isActiveNow, presenceLabel } from "../../utils/presence";
+import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 
 // Destructive red, matching the inline value used in PTHome / program-view.
@@ -63,6 +66,10 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   const [coaches, setCoaches] = useState<AssignedPT[]>([]);
   const [received, setReceived] = useState<SharedProgram[]>([]);
   const [passDownTarget, setPassDownTarget] = useState<SavedProgram | null>(null);
+  // Coach entries are local snapshots; live "last active" comes from the
+  // connection presence poll. Coaches without a real connection (legacy/mock)
+  // aren't in the map and show no presence row.
+  const { presenceById } = useConnectionPresence();
 
   const reload = useCallback(async () => {
     // Backfill the direction flag on any legacy incoming shares before reading.
@@ -139,6 +146,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     if (share.acceptedAtISO) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const importedId = await acceptSharedProgram(share.id);
+    scheduleCloudPush(); // the accept materialised/updated @avenas/programs (a synced key)
     const acceptedAt = new Date().toISOString();
     setReceived(prev => prev.map(r => r.id === share.id
       ? { ...r, acceptedAtISO: acceptedAt, acceptedProgramId: importedId ?? undefined }
@@ -253,6 +261,16 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.coachLabel, { color: t.ts }]}>COACH</Text>
                   <Text style={[styles.coachName, { color: t.tp }]}>{coach.name}</Text>
+                  {(() => {
+                    const lastActive = presenceById.get(coach.id);
+                    if (!lastActive) return null; // not connected, never active, or sharing off
+                    return (
+                      <View style={styles.presenceRow}>
+                        <View style={[styles.presenceDot, { backgroundColor: isActiveNow(lastActive) ? ACCT : t.ts }]} />
+                        <Text style={[styles.presenceText, { color: t.ts }]}>{presenceLabel(lastActive)}</Text>
+                      </View>
+                    );
+                  })()}
                 </View>
               </View>
             </NeuCard>
@@ -391,6 +409,9 @@ const styles = StyleSheet.create({
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 16 },
   coachLabel:   { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 1 },
   coachName:    { fontFamily: FontFamily.bold, fontSize: 16, marginTop: 2 },
+  presenceRow:  { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  presenceDot:  { width: 6, height: 6, borderRadius: 3 },
+  presenceText: { fontFamily: FontFamily.regular, fontSize: 12 },
 
 
   receivedInner:{ padding: 14, gap: 10 },

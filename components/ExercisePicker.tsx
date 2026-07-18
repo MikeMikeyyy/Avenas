@@ -6,7 +6,10 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { DEFAULT_SET_COUNT_KEY } from "../constants/programs";
+import { getJSON, setJSON } from "../utils/storage";
 import {
   MUSCLE_GROUPS, MAX_CUSTOM,
   type SelectableMuscle, type CustomExercise, type Exercise,
@@ -23,7 +26,19 @@ export interface ExercisePickerProps {
   /** Short string shown below the title, e.g. "PUSH DAY" or "CHANGE EXERCISE" */
   subtitle: string;
   customExercises: CustomExercise[];
-  onSelectMultiple: (names: string[]) => void;
+  /**
+   * `setCount` is the picker's "sets per exercise" stepper value — only
+   * meaningful when `withSetCount` is on; callers that don't show the stepper
+   * can ignore it.
+   */
+  onSelectMultiple: (names: string[], setCount: number) => void;
+  /**
+   * Show the "sets per exercise" stepper next to the confirm button. The value
+   * is a device-local preference (DEFAULT_SET_COUNT_KEY) remembered across
+   * sessions. Off by default so add/change flows outside the program builder
+   * keep their current behavior.
+   */
+  withSetCount?: boolean;
   onDeleteCustom: (name: string) => void;
   onEditCustom: (name: string) => void;
   onCreateCustom: () => void;
@@ -45,14 +60,19 @@ const HEADER_H = 36;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+const MIN_SET_COUNT = 1;
+const MAX_SET_COUNT = 10;
+const FALLBACK_SET_COUNT = 3;
+
 export default function ExercisePicker({
-  visible, subtitle, customExercises, onSelectMultiple, onDeleteCustom, onEditCustom, onCreateCustom, onClose, isDark,
+  visible, subtitle, customExercises, onSelectMultiple, withSetCount, onDeleteCustom, onEditCustom, onCreateCustom, onClose, isDark,
 }: ExercisePickerProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
   const [search, setSearch] = useState("");
   const [selectedMuscles, setSelectedMuscles] = useState<Set<SelectableMuscle>>(new Set());
   const [pickedOrder, setPickedOrder] = useState<string[]>([]);
+  const [setCount, setSetCount] = useState(FALLBACK_SET_COUNT);
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
 
@@ -83,10 +103,35 @@ export default function ExercisePicker({
   ).current;
 
   const dismiss = () => {
+    // Only call onClose here — do NOT reset slideY/backdropOpacity first. Resetting
+    // slideY to 600 (above the off-screen 800) flashes the sheet back up for a frame
+    // before it unmounts. The open effect (useEffect([visible])) already re-inits
+    // these on reopen, so the reset is redundant. (Matches the drag-to-dismiss path.)
     Animated.parallel([
       Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setPickedOrder([]); onClose(); });
+    ]).start(() => { onClose(); });
+  };
+
+  // Load the remembered "sets per exercise" preference once. Only relevant
+  // when the stepper is shown, but loading is harmless either way.
+  useEffect(() => {
+    if (!withSetCount) return;
+    let cancelled = false;
+    getJSON<number>(DEFAULT_SET_COUNT_KEY, FALLBACK_SET_COUNT).then(v => {
+      if (cancelled) return;
+      const n = Math.round(Number(v));
+      if (Number.isFinite(n)) setSetCount(Math.max(MIN_SET_COUNT, Math.min(MAX_SET_COUNT, n)));
+    });
+    return () => { cancelled = true; };
+  }, [withSetCount]);
+
+  const changeSetCount = (delta: number) => {
+    const next = Math.max(MIN_SET_COUNT, Math.min(MAX_SET_COUNT, setCount + delta));
+    if (next === setCount) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSetCount(next);
+    setJSON(DEFAULT_SET_COUNT_KEY, next);
   };
 
   useEffect(() => {
@@ -147,7 +192,7 @@ export default function ExercisePicker({
 
   const confirmPicks = () => {
     if (pickedOrder.length === 0) return;
-    onSelectMultiple(pickedOrder);
+    onSelectMultiple(pickedOrder, setCount);
     setPickedOrder([]);
     setSearch("");
   };
@@ -243,8 +288,19 @@ export default function ExercisePicker({
     );
   };
 
+  // presentationStyle="overFullScreen" presents over the current screen WITHOUT
+  // detaching it. Without this, iOS removes the screen behind the modal while it's up
+  // and re-attaches it on dismiss, flashing the nav bar / bottom buttons for a frame
+  // as the sheet finishes sliding down. statusBarTranslucent does the same on Android.
   return (
-    <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
+    <Modal
+      visible={visible}
+      animationType="none"
+      transparent
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      onRequestClose={dismiss}
+    >
       <View style={styles.pickerBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.pickerOverlay, { opacity: backdropOpacity }]} />
         <Animated.View style={[styles.pickerRoot, { backgroundColor: t.bg, transform: [{ translateY: slideY }] }]}>
@@ -283,7 +339,8 @@ export default function ExercisePicker({
                     } else {
                       setSelectedMuscles(prev => {
                         const next = new Set(prev);
-                        next.has(group as SelectableMuscle) ? next.delete(group as SelectableMuscle) : next.add(group as SelectableMuscle);
+                        if (next.has(group as SelectableMuscle)) next.delete(group as SelectableMuscle);
+                        else next.add(group as SelectableMuscle);
                         return next;
                       });
                     }
@@ -316,8 +373,8 @@ export default function ExercisePicker({
               returnKeyType="search"
             />
             {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch("")} activeOpacity={0.7}>
-                <Ionicons name="close-circle" size={16} color={t.ts} />
+              <TouchableOpacity onPress={() => setSearch("")} activeOpacity={0.7} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
+                <Ionicons name="close-circle" size={20} color={t.ts} />
               </TouchableOpacity>
             )}
           </View>
@@ -349,16 +406,46 @@ export default function ExercisePicker({
           {/* Bottom bar — confirm picks OR create custom */}
           <View style={[styles.customSection, { borderTopColor: t.div, paddingBottom: insets.bottom + 16 }]}>
             {pickedOrder.length > 0 ? (
-              <BounceButton onPress={confirmPicks} accessibilityLabel={`Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`} accessibilityRole="button">
-                <View style={styles.createCustomBtnWrap}>
-                  <View style={styles.createCustomBtn}>
-                    <Ionicons name="checkmark" size={18} color="#fff" />
-                    <Text style={styles.createCustomBtnText}>
-                      Add {pickedOrder.length} Exercise{pickedOrder.length > 1 ? "s" : ""}
-                    </Text>
+              <View style={styles.confirmRow}>
+                {withSetCount && (
+                  <View style={[styles.setCountBox, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}>
+                    <TouchableOpacity
+                      onPress={() => changeSetCount(-1)}
+                      style={styles.setCountBtn}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+                      accessibilityLabel="Fewer sets per exercise"
+                      accessibilityRole="button"
+                    >
+                      <Ionicons name="remove" size={16} color={setCount <= MIN_SET_COUNT ? t.ts : t.tp} />
+                    </TouchableOpacity>
+                    <View style={styles.setCountMid}>
+                      <Text style={[styles.setCountNum, { color: t.tp }]}>{setCount}</Text>
+                      <Text style={[styles.setCountLabel, { color: t.ts }]}>{setCount === 1 ? "set" : "sets"}</Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => changeSetCount(1)}
+                      style={styles.setCountBtn}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                      accessibilityLabel="More sets per exercise"
+                      accessibilityRole="button"
+                    >
+                      <Ionicons name="add" size={16} color={setCount >= MAX_SET_COUNT ? t.ts : t.tp} />
+                    </TouchableOpacity>
                   </View>
-                </View>
-              </BounceButton>
+                )}
+                <BounceButton style={{ flex: 1 }} onPress={confirmPicks} accessibilityLabel={`Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`} accessibilityRole="button">
+                  <View style={styles.createCustomBtnWrap}>
+                    <View style={styles.createCustomBtn}>
+                      <Ionicons name="checkmark" size={18} color="#fff" />
+                      <Text style={styles.createCustomBtnText}>
+                        Add {pickedOrder.length} Exercise{pickedOrder.length > 1 ? "s" : ""}
+                      </Text>
+                    </View>
+                  </View>
+                </BounceButton>
+              </View>
             ) : canAddCustom ? (
               <BounceButton onPress={onCreateCustom} accessibilityLabel="Create custom exercise" accessibilityRole="button">
                 <View style={styles.createCustomBtnWrap}>
@@ -408,6 +495,12 @@ const styles = StyleSheet.create({
   pickerEmpty:         { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 40 },
   customSection:       { paddingHorizontal: 16, paddingTop: 14, borderTopWidth: 1, gap: 10 },
   customSlots:         { fontFamily: FontFamily.regular, fontSize: 12 },
+  confirmRow:          { flexDirection: "row", alignItems: "stretch", gap: 10 },
+  setCountBox:         { flexDirection: "row", alignItems: "center", borderRadius: 14, paddingHorizontal: 4 },
+  setCountBtn:         { paddingHorizontal: 9, alignSelf: "stretch", justifyContent: "center" },
+  setCountMid:         { alignItems: "center", minWidth: 32 },
+  setCountNum:         { fontFamily: FontFamily.bold, fontSize: 16, lineHeight: 19 },
+  setCountLabel:       { fontFamily: FontFamily.semibold, fontSize: 9, letterSpacing: 0.6, textTransform: "uppercase" },
   createCustomBtnWrap: { borderRadius: 14, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   createCustomBtn:     { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   createCustomBtnText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },

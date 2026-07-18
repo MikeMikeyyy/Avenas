@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { View, Text, StyleSheet, useWindowDimensions, LayoutChangeEvent } from "react-native";
+import { View, Text, StyleSheet, useWindowDimensions, LayoutChangeEvent, ScrollView } from "react-native";
 import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS, SharedValue } from "react-native-reanimated";
 import { BarChart } from "react-native-gifted-charts";
 import * as Haptics from "expo-haptics";
@@ -106,6 +106,7 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { width: screenWidth } = useWindowDimensions();
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
   // Reset focused index if the bucket count changes (range / scope switch).
   useEffect(() => {
@@ -264,12 +265,25 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
   // Render slots: actual bars first, then transparent placeholders out to
   // slotsCount so the chart reserves the full range's horizontal space.
   const renderedN = Math.max(1, slotsCount ?? buckets.length);
+  // Two layout modes:
+  //   - fit (≤7 slots): bars spread to fill the visible plot exactly, as before.
+  //   - scroll (>7 slots, i.e. Last Year's 12 months): squeezing 12 slots into
+  //     one screen crushed the month labels together, so instead each slot
+  //     keeps a comfortable fixed pitch and the plot scrolls horizontally,
+  //     starting at the right edge (the current month).
+  const scrollable = renderedN > 7;
   // Bar-width sizing is driven by the slot count, not the actual bar count,
   // so 2-of-4 weeks and 4-of-4 weeks use the same bar width.
-  const barWidth = renderedN <= 3 ? 48 : renderedN <= 4 ? 40 : renderedN <= 7 ? 26 : 14;
-  // Evenly distribute remaining horizontal space across slots.
+  const barWidth = renderedN <= 3 ? 48 : renderedN <= 4 ? 40 : 26;
+  // Fit: evenly distribute remaining horizontal space across slots.
+  // Scroll: fixed 18px gap → 44px pitch, room for a full "Aug"-style label.
   const gapSpace = plotWidth - INITIAL_SPACING - END_SPACING - barWidth * renderedN;
-  const spacing = renderedN > 1 ? Math.max(6, gapSpace / (renderedN - 1)) : 0;
+  const spacing = scrollable ? 18 : renderedN > 1 ? Math.max(6, gapSpace / (renderedN - 1)) : 0;
+  // The plot width handed to gifted-charts: the visible plot in fit mode, the
+  // full slot run (wider than the viewport → scrollable) in scroll mode.
+  const contentWidth = scrollable
+    ? INITIAL_SPACING + renderedN * barWidth + (renderedN - 1) * spacing + END_SPACING
+    : plotWidth;
 
   // Build the data with the focused bar painted in ACCT and the rest in
   // ACCT @ ~65% alpha. We re-render whenever focusedIndex changes — `key` on
@@ -339,7 +353,71 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
         <Reanimated.View style={[styles.bodyWrap, animatedBodyStyle]}>
           <View onLayout={onMeasureBody}>
           {hasData ? (
-            <View style={{ marginTop: 25, alignSelf: "stretch", position: "relative" }}>
+            <View style={{ marginTop: 25, alignSelf: "stretch", flexDirection: "row" }}>
+            {/*
+              Pinned y-axis column. The plot (and the glow overlay, which must
+              scroll WITH the bars) lives inside the horizontal ScrollView to
+              the right, so gifted-charts' own y-axis would scroll away with
+              it — instead the chart hides its axis (yAxisLabelWidth 0 +
+              hideYAxisText) and this fixed column re-renders the same tick
+              labels centered on the same gridline heights, plus the 1px axis
+              line the chart no longer draws (yAxisThickness 0). Bars sliding
+              past are clipped at the ScrollView's left edge, right at this
+              line.
+            */}
+            <View style={{ width: Y_AXIS_LABEL_WIDTH }}>
+              {axis.labels.map((lab, k) => (
+                <View
+                  key={k}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    height: PLOT_SECTION_H,
+                    bottom: PLOT_BOTTOM + k * PLOT_SECTION_H - PLOT_SECTION_H / 2,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: t.ts, fontFamily: FontFamily.regular, fontSize: 11 }}>
+                    {lab}
+                  </Text>
+                </View>
+              ))}
+              <View
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  bottom: PLOT_BOTTOM,
+                  width: 1,
+                  height: PLOT_HEIGHT,
+                  backgroundColor: t.div,
+                }}
+              />
+            </View>
+            {/* key={chartKey} remounts the ScrollView on every range/scope
+                switch so onContentSizeChange re-fires and re-anchors the
+                scroll position at the right edge (the current month). In fit
+                mode the content matches the viewport and nothing moves. */}
+            <ScrollView
+              key={`scroll|${chartKey}`}
+              ref={scrollRef}
+              horizontal
+              scrollEnabled={scrollable}
+              showsHorizontalScrollIndicator={false}
+              onContentSizeChange={() => {
+                if (scrollable) scrollRef.current?.scrollToEnd({ animated: false });
+              }}
+              style={{ flex: 1, height: CHART_CONTENT_H }}
+            >
+            {/* Explicit size: gifted-charts' root container is width:'100%',
+                which collapses inside a horizontal ScrollView's auto-sized
+                content — so this wrapper must define the content width itself
+                (plot + the endSpacing tail the rules extend into). Height is
+                pinned too (see CHART_CONTENT_H) so the ScrollView's frame
+                can't clip the x-axis labels; gifted's bottom overshoot below
+                the label band is clipped instead, which is empty space. */}
+            <View style={{ position: "relative", width: contentWidth + END_SPACING, height: CHART_CONTENT_H }}>
             <BarChart
               key={chartKey}
               data={data}
@@ -347,15 +425,14 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
               spacing={spacing}
               initialSpacing={INITIAL_SPACING}
               endSpacing={END_SPACING}
-              yAxisLabelWidth={Y_AXIS_LABEL_WIDTH}
+              yAxisLabelWidth={0}
+              hideYAxisText
               barBorderRadius={4}
               noOfSections={4}
               maxValue={axis.max}
               stepValue={axis.stepValue}
-              yAxisLabelTexts={axis.labels}
-              yAxisThickness={1}
+              yAxisThickness={0}
               xAxisThickness={1}
-              yAxisColor={t.div}
               xAxisColor={t.div}
               rulesType="dashed"
               rulesColor={t.div}
@@ -363,15 +440,14 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
               dashWidth={3}
               dashGap={4}
               xAxisLabelTextStyle={{ color: t.ts, fontFamily: FontFamily.regular, fontSize: 11 }}
-              yAxisTextStyle={{ color: t.ts, fontFamily: FontFamily.regular, fontSize: 11 }}
               // `isAnimated` left off: gifted-charts' bar animation also fades
               // in the x-axis labels (Mon/Tue/...) along with the bars. Our
               // glow overlay handles the visible bar grow-in independently,
               // so dropping the chart's own animation lets labels appear
               // instantly without changing the visual bar behavior.
-              width={CHART_WIDTH}
+              width={contentWidth}
               height={180}
-              disableScroll={buckets.length <= 12}
+              disableScroll
             />
             {/*
               Glow bars — rendered ON TOP of the BarChart and ARE the visible bars.
@@ -392,10 +468,12 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
               axisMax={axis.max}
               barWidth={barWidth}
               spacing={spacing}
-              yAxisLabelWidth={Y_AXIS_LABEL_WIDTH}
+              yAxisLabelWidth={0}
               initialSpacing={INITIAL_SPACING}
               focusedIndex={focusedIndex}
             />
+            </View>
+            </ScrollView>
             </View>
           ) : (
             <View style={styles.empty}>
@@ -452,6 +530,21 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
 // wrapper bottom up to the plot's baseline (top of the x-axis labels band).
 const PLOT_BOTTOM = 24;
 const PLOT_HEIGHT = 180;
+// Gridline pitch for the chart's 4 sections (noOfSections) — the pinned
+// y-axis column centers each tick label on these heights, mirroring where
+// gifted-charts draws its rules.
+const PLOT_SECTION_H = PLOT_HEIGHT / 4;
+// Explicit height for the scrollable chart area. gifted-charts sizes its root
+// container with a tall bottom overshoot and then pulls following content up
+// with a NEGATIVE bottom margin; a plain View simply let the overshoot spill
+// (invisibly), but a ScrollView clips at its frame — and its frame comes from
+// the margin-reduced content height, which cut off the x-axis labels. Pinning
+// the height sidesteps gifted's margin math entirely:
+//   top headroom (gifted's yAxisExtraHeight = height/20 = 9)
+// + plot (180)
+// + x-label band (24 = PLOT_BOTTOM, keeping the glow overlay's bottom-anchored
+//   geometry exactly as before: baseline sits PLOT_BOTTOM above the bottom).
+const CHART_CONTENT_H = PLOT_HEIGHT / 20 + PLOT_HEIGHT + PLOT_BOTTOM;
 
 // Glow overlay layer. Owns a single Reanimated shared value that all bars
 // read; running on the UI thread (worklet) avoids the end-of-animation JS↔UI

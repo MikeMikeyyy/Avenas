@@ -27,6 +27,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
+import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
@@ -36,6 +37,7 @@ import {
 } from "../constants/programs";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { fmtDuration } from "../utils/dates";
+import { workoutBelongsToProgram } from "../utils/progressStats";
 import { useTheme } from "../contexts/ThemeContext";
 
 // Dev-only warning helper. Compiled out of release builds via `__DEV__`.
@@ -614,41 +616,49 @@ export default function JournalScreen() {
     });
   }, [router, selectedDate]);
 
-  // workoutName → { programName, totalSessions }
-  const programLookup = useMemo(() => {
-    const map: Record<string, { programName: string; totalSessions: number }> = {};
-    const sorted = [...programs].sort((a, b) =>
+  // workoutId → owning program (or null). Attribution goes through the canonical
+  // workoutBelongsToProgram (utils/progressStats): exact programId match for
+  // new-style records ("" = free workout, owned by nothing), day-name within the
+  // program's date window for legacy ones — the same rules the Progress page
+  // applies, so the two pages can't disagree. Active program wins legacy ties.
+  const owningProgramByWorkoutId = useMemo(() => {
+    const activeFirst = [...programs].sort((a, b) =>
       a.status === "active" ? -1 : b.status === "active" ? 1 : 0
     );
-    for (const prog of sorted) {
-      for (const name of prog.cyclePattern) {
-        if (!name || name.toLowerCase() === "rest" || map[name]) continue;
-        const perCycle = prog.cyclePattern.filter(n => n === name).length;
-        const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
-        map[name] = { programName: prog.name, totalSessions: perCycle * totalCycles };
-      }
-      for (const name of (prog.extraWorkouts ?? [])) {
-        if (map[name]) continue;
-        map[name] = { programName: prog.name, totalSessions: 0 };
-      }
+    const map: Record<string, SavedProgram | null> = {};
+    for (const w of workoutHistory) {
+      map[w.id] = activeFirst.find(p => workoutBelongsToProgram(w, p)) ?? null;
     }
     return map;
-  }, [programs]);
+  }, [workoutHistory, programs]);
 
-  // workoutId → session number (1-based, ordered by completedAt)
+  // The program row under a workout card: name + how many sessions of this day
+  // the program schedules in total (0 for extras → the track is hidden).
+  const progInfoOf = (w: CompletedWorkout) => {
+    const prog = owningProgramByWorkoutId[w.id];
+    if (!prog) return null;
+    const perCycle = prog.cyclePattern.filter(n => n === w.workoutName).length;
+    const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
+    return { programName: prog.name, totalSessions: perCycle * totalCycles };
+  };
+
+  // workoutId → session number (1-based, ordered by completedAt). Numbered
+  // within the owning program, so two programs reusing a day name don't share
+  // a counter.
   const sessionNumbers = useMemo(() => {
     const result: Record<string, number> = {};
-    const byName: Record<string, CompletedWorkout[]> = {};
+    const byKey: Record<string, CompletedWorkout[]> = {};
     for (const w of workoutHistory) {
-      if (!byName[w.workoutName]) byName[w.workoutName] = [];
-      byName[w.workoutName].push(w);
+      const k = `${owningProgramByWorkoutId[w.id]?.id ?? ""}:${w.workoutName}`;
+      if (!byKey[k]) byKey[k] = [];
+      byKey[k].push(w);
     }
-    for (const group of Object.values(byName)) {
+    for (const group of Object.values(byKey)) {
       group.sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
       group.forEach((w, i) => { result[w.id] = i + 1; });
     }
     return result;
-  }, [workoutHistory]);
+  }, [workoutHistory, owningProgramByWorkoutId]);
 
   // Merge journal entries and workout history newest-first
   const timeline = useMemo(() => {
@@ -664,6 +674,9 @@ export default function JournalScreen() {
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
+      {/* Pastel glow matching the blush Journal orb on Home */}
+      <AuroraBackdrop dark={isDark} tint="blush" />
+
       {/* Top gradient blur */}
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView
@@ -799,7 +812,7 @@ export default function JournalScreen() {
         {timeline.map(item => {
           if (item.kind === "workout") {
             const w = item.data;
-            const progInfo   = programLookup[w.workoutName] ?? null;
+            const progInfo   = progInfoOf(w);
             const sessionNum = sessionNumbers[w.id] ?? 1;
             return (
               <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.push({ pathname: "/workout-detail", params: { id: w.id } })}>
@@ -935,7 +948,6 @@ const styles = StyleSheet.create({
   // Workout summary card
   workoutCardInner: { padding: 18, gap: 10 },
   workoutTopRow:    { flexDirection: "row", alignItems: "center", gap: 12 },
-  workoutIconBg:    { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   workoutName:      { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
   workoutDate:      { fontFamily: FontFamily.regular, fontSize: 12, color: TS, marginTop: 2 },
   workoutProgRow:    { paddingTop: 10 },
@@ -961,7 +973,6 @@ const styles = StyleSheet.create({
   pickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, color: TP, paddingHorizontal: 24, paddingBottom: 12, textAlign: "center" },
   pickerContent:     { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 },
   pickerSection:     { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.8, color: TS, marginTop: 8, marginBottom: 12 },
-  pickerOption:      {},
   pickerOptionInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
   pickerOptionText:  { fontFamily: FontFamily.semibold, fontSize: 15, color: TP, flex: 1 },
   pickerOptionSub:   { fontFamily: FontFamily.regular, fontSize: 12, color: TS, marginTop: 2 },

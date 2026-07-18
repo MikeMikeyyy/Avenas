@@ -21,14 +21,14 @@ import CollapsibleCard from "../components/CollapsibleCard";
 import FadeScreen from "../components/FadeScreen";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
-import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type TimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
+import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
   normaliseSets, type SavedProgram, type CompletedWorkout, type ProgramSet,
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
-import { parseStoredDate, formatStoredDate } from "../utils/dates";
+import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
 import { buildPrevByName, normalizeExerciseName } from "../utils/workout";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
@@ -37,10 +37,6 @@ import { useTheme } from "../contexts/ThemeContext";
 
 const WARMUP_ORANGE = "#ffbf0f";
 
-const MONTH_FULL = [
-  "January","February","March","April","May","June",
-  "July","August","September","October","November","December",
-];
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
 function formatDate(ymd: string): string {
@@ -124,7 +120,7 @@ function TimePickerSheet({ visible, isDark, initialTime, onConfirm, onClear, onC
   const bgColor = t.bg;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={dismiss}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={dismiss}>
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.45)", opacity: backdropOp }]} />
       <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={dismiss} />
       <Animated.View style={[s.timeSheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 16, transform: [{ translateY: slideY }] }]}>
@@ -486,7 +482,7 @@ function LogReorderSheet({ visible, exercises, isDark, workoutName, onReorder, o
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={closeSheet}>
       <View style={s.sheetBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, s.sheetOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
@@ -528,7 +524,8 @@ interface ExerciseCardProps {
   exIndex: number;
   totalExercises: number;
   isDark: boolean;
-  onUpdateSet: (setIdx: number, field: "weight" | "reps", value: string) => void;
+  /** `cascade` marks typed input, which fills down to the sets below. */
+  onUpdateSet: (setIdx: number, field: "weight" | "reps", value: string, cascade?: boolean) => void;
   onToggleDone: (setIdx: number) => void;
   onToggleType: (setIdx: number) => void;
   onAddSet: () => void;
@@ -661,7 +658,7 @@ function ExerciseCard({
                       style={[s.inputText, { color: isDark ? "#fff" : t.tp }]}
                       keyboardType="decimal-pad"
                       value={set.weight}
-                      onChangeText={v => onUpdateSet(idx, "weight", v)}
+                      onChangeText={v => onUpdateSet(idx, "weight", v, true)}
                       onFocus={() => onInputFocus(
                         () => repsRefs.current[idx]?.focus(),
                         idx > 0 ? () => repsRefs.current[idx - 1]?.focus() : null,
@@ -679,7 +676,7 @@ function ExerciseCard({
                       style={[s.inputText, { color: isDark ? "#fff" : t.tp }]}
                       keyboardType="decimal-pad"
                       value={set.reps}
-                      onChangeText={v => onUpdateSet(idx, "reps", v)}
+                      onChangeText={v => onUpdateSet(idx, "reps", v, true)}
                       onFocus={() => {
                         if (idx < ex.sets.length - 1) {
                           onInputFocus(() => weightRefs.current[idx + 1]?.focus(), () => weightRefs.current[idx]?.focus());
@@ -719,6 +716,9 @@ function ExerciseCard({
                               const parts = prev.split("×");
                               onUpdateSet(idx, "weight", parts[0] ?? "");
                               onUpdateSet(idx, "reps", parts[1] ?? "");
+                              // updateSet auto-marks the set done once both fields
+                              // are filled; toggling here too would untick it again.
+                              if ((parts[0] ?? "").trim() && (parts[1] ?? "").trim()) return;
                             }
                           }
                           onToggleDone(idx);
@@ -851,6 +851,12 @@ export default function LogWorkoutScreen() {
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  // Latch the bottom inset to its stable max so pinned bottom UI (notes cluster,
+  // floating card, Save button) doesn't jump when the exercise-picker modal
+  // presents/dismisses and safe-area-context momentarily re-emits a smaller value.
+  const safeBottomRef = useRef(insets.bottom);
+  if (insets.bottom > safeBottomRef.current) safeBottomRef.current = insets.bottom;
+  const safeBottom = safeBottomRef.current;
   const { isDark } = useTheme();
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -862,6 +868,27 @@ export default function LogWorkoutScreen() {
   const [reorderOpen, setReorderOpen] = useState(false);
   const [notes, setNotes] = useState("");
   const [showNotes, setShowNotes] = useState(false);
+  // Mount the full-screen notes overlay only while it's open (kept briefly for the
+  // close animation) — an always-mounted absoluteFill overlay makes the bottom UI
+  // recomposite/stutter when the exercise-picker modal dismisses over it.
+  const [notesMounted, setNotesMounted] = useState(false);
+  // Floating Session Notes card animation — matches the workout screen (scales out
+  // of / sucks back into the Session Notes button; notesKbShift lifts it above the
+  // keyboard as a separate animated offset so closing never jumps).
+  const sessionNotesInputRef = useRef<TextInput | null>(null);
+  const notesAnim = useSharedValue(0);
+  const notesKbShift = useSharedValue(0);
+  const notesCardStyle = useAnimatedStyle(() => {
+    const v = notesAnim.value;
+    return {
+      opacity: Math.min(1, v * 1.6),
+      transform: [
+        { translateY: notesKbShift.value + (1 - v) * 48 },
+        { scale: 0.3 + v * 0.7 },
+      ],
+    };
+  });
+  const notesBackdropStyle = useAnimatedStyle(() => ({ opacity: notesAnim.value * 0.5 }));
   const [saving, setSaving] = useState(false);
   const [workoutTime, setWorkoutTime] = useState<WorkoutTime | null>(null);
   const [timePickerVisible, setTimePickerVisible] = useState(false);
@@ -882,6 +909,30 @@ export default function LogWorkoutScreen() {
     setHasNext(fn !== null);
     setHasPrev(prevFn !== null);
   }, []);
+
+  // Session notes (floating card, same as the workout screen). The note text always
+  // persists in `notes` (saved on Save Workout), so opening/closing never discards.
+  const openNotes = () => {
+    setShowNotes(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setTimeout(() => sessionNotesInputRef.current?.focus(), 70);
+  };
+  const closeNotes = () => {
+    Keyboard.dismiss();
+    setShowNotes(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+  useEffect(() => {
+    notesAnim.value = withTiming(showNotes ? 1 : 0, {
+      duration: showNotes ? 320 : 240,
+      easing: showNotes ? ReEasing.out(ReEasing.cubic) : ReEasing.in(ReEasing.cubic),
+    });
+  }, [showNotes]);
+  useEffect(() => {
+    if (showNotes) { setNotesMounted(true); return; }
+    const id = setTimeout(() => setNotesMounted(false), 300);
+    return () => clearTimeout(id);
+  }, [showNotes]);
 
   // Restore an in-progress log draft (if any) before the program-template loader runs.
   useEffect(() => {
@@ -963,15 +1014,25 @@ export default function LogWorkoutScreen() {
   useEffect(() => {
     AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
       if (!raw) return;
-      setPrevByName(buildPrevByName(JSON.parse(raw), date));
+      // Scope previous values to the day being logged (same-day sessions win,
+      // any-day is only a fallback) — see buildPrevByName.
+      setPrevByName(buildPrevByName(JSON.parse(raw), date, workoutName));
     }).catch(() => {});
   }, []);
 
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null; });
+    const show = Keyboard.addListener("keyboardWillShow", e => {
+      setKbHeight(e.endCoordinates.height);
+      // Lift the floating notes card above the keyboard (animated → no jump).
+      const base = safeBottom + 140;
+      notesKbShift.value = withTiming(Math.min(0, base - (e.endCoordinates.height + 12)), { duration: e.duration || 250, easing: ReEasing.out(ReEasing.cubic) });
+    });
+    const hide = Keyboard.addListener("keyboardWillHide", e => {
+      setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null;
+      notesKbShift.value = withTiming(0, { duration: (e && e.duration) || 250, easing: ReEasing.out(ReEasing.cubic) });
+    });
     return () => { show.remove(); hide.remove(); };
-  }, []);
+  }, [safeBottom]);
 
   // Load custom exercises
   useEffect(() => {
@@ -984,16 +1045,18 @@ export default function LogWorkoutScreen() {
 
   // ── Mutations ──
 
-  const updateSet = useCallback((exId: string, setIdx: number, field: "weight" | "reps", value: string) => {
+  // "Fill down" — same as the program builder: a TYPED value (cascade=true)
+  // applies to this set AND every set below it, so identical sets are entered
+  // once. Programmatic fills (the checkbox's copy-from-prev) pass cascade=false
+  // and stay single-set — otherwise ticking one empty set would overwrite the
+  // sets below with that set's prev values. Each affected set that ends up with
+  // both weight + reps is auto-marked done (the existing single-set rule), so
+  // e.g. 3 matching sets get logged in one entry instead of three.
+  const updateSet = useCallback((exId: string, setIdx: number, field: "weight" | "reps", value: string, cascade = false) => {
     setExercises(prev => prev.map(ex => {
       if (ex.id !== exId) return ex;
-      // "Fill down" — same as the program builder: the typed value applies to
-      // this set AND every set below it, so identical sets are entered once.
-      // Each affected set that ends up with both weight + reps is auto-marked
-      // done (the existing single-set rule), so e.g. 3 matching sets get logged
-      // in one entry instead of three.
       const updatedSets = ex.sets.map((s, i) => {
-        if (i < setIdx) return s;
+        if (i < setIdx || (i > setIdx && !cascade)) return s;
         const next = { ...s, [field]: value };
         if (!next.done && next.weight.trim() && next.reps.trim()) next.done = true;
         return next;
@@ -1162,7 +1225,7 @@ export default function LogWorkoutScreen() {
         await AsyncStorage.removeItem(draftKey);
       }
       scheduleCloudPush();
-    } catch (_) {}
+    } catch {}
 
     router.back();
   };
@@ -1243,7 +1306,7 @@ export default function LogWorkoutScreen() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[s.scroll, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 100 }]}
+          contentContainerStyle={[s.scroll, { paddingTop: insets.top + 14, paddingBottom: safeBottom + 150 }]}
         >
           {/* Nav title — scrolls with content like journal page */}
           <View style={s.scrollTitleRow}>
@@ -1274,7 +1337,7 @@ export default function LogWorkoutScreen() {
               exIndex={idx}
               totalExercises={exercises.length}
               isDark={isDark}
-              onUpdateSet={(setIdx, field, value) => updateSet(ex.id, setIdx, field, value)}
+              onUpdateSet={(setIdx, field, value, cascade) => updateSet(ex.id, setIdx, field, value, cascade)}
               onToggleDone={setIdx => toggleDone(ex.id, setIdx)}
               onToggleType={setIdx => toggleType(ex.id, setIdx)}
               onAddSet={() => addSet(ex.id)}
@@ -1289,61 +1352,76 @@ export default function LogWorkoutScreen() {
             />
           ))}
 
-          {/* Bottom action row: notes toggle + add exercise */}
-          <View style={s.bottomActionRow}>
-            {exercises.length > 0 && (
-              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowNotes(n => !n); }}>
-                <View style={s.notesToggleWrap}>
-                  <NeuCard dark={isDark} style={s.notesToggleBtn}>
-                    <View style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
-                      <Ionicons name="document-text-outline" size={20} color={t.tp} />
-                    </View>
-                  </NeuCard>
-                  <View style={s.notesTogglePlus}>
-                    <Text style={s.notesTogglePlusText}>+</Text>
-                  </View>
-                </View>
-              </BounceButton>
-            )}
-            <View style={{ flex: 1, alignItems: "center" }}>
-              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddExVisible(true); }}>
-                <View style={s.addExBtnWrap}>
-                  <View style={s.addExBtn}>
-                    <Ionicons name="add" size={18} color="#fff" />
-                    <Text style={s.addExText}>Add Exercise</Text>
-                  </View>
-                </View>
-              </BounceButton>
-            </View>
-            {exercises.length > 0 && <View style={s.notesToggleWrap} />}
-          </View>
-
-          {/* Session notes */}
-          <ExpandablePanel expanded={showNotes} duration={500}>
-            <NeuCard dark={isDark} style={{ marginBottom: 4, borderRadius: 16 }}>
-              <View style={s.notesInner}>
-                <View style={s.notesHeader}>
-                  <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
-                  <BounceButton onPress={() => setShowNotes(false)}>
-                    <Ionicons name="close" size={20} color={t.ts} />
-                  </BounceButton>
-                </View>
-                <TextInput
-                  style={[s.notesInput, { color: t.tp }]}
-                  placeholder="How's the session going? Anything to note..."
-                  placeholderTextColor={t.ts}
-                  multiline
-                  value={notes}
-                  onChangeText={setNotes}
-                  textAlignVertical="top"
-                />
-              </View>
-            </NeuCard>
-          </ExpandablePanel>
-
         </ScrollView>
 
       </KeyboardAvoidingView>
+
+      {/* Bottom-left action cluster (same as the workout screen): Session Notes
+          button + round green + Add Exercise. Pinned just above the Save button. */}
+      <View style={{ position: "absolute", left: 20, bottom: safeBottom + 80, zIndex: 6 }}>
+        <View style={s.actionCluster}>
+          <BounceButton onPress={openNotes} accessibilityLabel="Session notes">
+            <View style={s.notesToggleBtn}>
+              <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="document-text-outline" size={20} color={t.tp} />
+              </NeuCard>
+              <View style={s.notesTogglePlus}>
+                <Text style={s.notesTogglePlusText}>+</Text>
+              </View>
+            </View>
+          </BounceButton>
+          <BounceButton
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddExVisible(true); }}
+            accessibilityLabel="Add exercise"
+          >
+            <View style={s.addRoundWrap}>
+              <View style={s.addRoundBtn}>
+                <Ionicons name="add" size={24} color="#fff" />
+              </View>
+            </View>
+          </BounceButton>
+        </View>
+      </View>
+
+      {/* Floating Session Notes card (same as the workout screen). Mounted only
+          while open (plus a brief close-animation window) so no full-screen overlay
+          lingers in the tree. Tick / backdrop tap both save-and-close. */}
+      {notesMounted && (<>
+      <Reanimated.View
+        pointerEvents={showNotes ? "auto" : "none"}
+        style={[StyleSheet.absoluteFill, { backgroundColor: "#000", zIndex: 20 }, notesBackdropStyle]}
+      >
+        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeNotes} />
+      </Reanimated.View>
+      <Reanimated.View
+        pointerEvents={showNotes ? "auto" : "none"}
+        style={[
+          s.notesFloatCard,
+          { bottom: safeBottom + 140, backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? "#000" : "#a3afc0" },
+          notesCardStyle,
+        ]}
+      >
+        <View style={s.notesHeader}>
+          <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
+          <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
+            <View style={s.notesTickBtn}>
+              <Ionicons name="checkmark" size={18} color="#fff" />
+            </View>
+          </BounceButton>
+        </View>
+        <TextInput
+          ref={r => { sessionNotesInputRef.current = r; }}
+          style={[s.notesInput, { color: t.tp }]}
+          placeholder="How's the session going? Anything to note..."
+          placeholderTextColor={t.ts}
+          multiline
+          value={notes}
+          onChangeText={setNotes}
+          onFocus={() => { handleInputFocus(null, null); }}
+          textAlignVertical="top"
+        />
+      </Reanimated.View>
+      </>)}
 
       {/* Keyboard toolbar */}
       {kbHeight > 0 && Platform.OS === "ios" && (
@@ -1375,7 +1453,7 @@ export default function LogWorkoutScreen() {
       )}
 
       {/* Save Workout — floating above safe area */}
-      <View style={[s.saveRow, { bottom: insets.bottom + 16 }]} pointerEvents="box-none">
+      <View style={[s.saveRow, { bottom: safeBottom + 16 }]} pointerEvents="box-none">
         <BounceButton onPress={saveWorkout}>
           <View style={[s.saveBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }, saving && { opacity: 0.6 }]}>
             <Ionicons name="checkmark-circle" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
@@ -1485,22 +1563,19 @@ const s = StyleSheet.create({
   exNotesRow:   { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
   exNotesInput: { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
 
-  // Bottom action row
-  bottomActionRow:    { flexDirection: "row", alignItems: "center", marginTop: 6, marginBottom: 20 },
-  notesToggleWrap:    { width: 44, alignItems: "center", justifyContent: "center" },
+  // Bottom-left action cluster: Session Notes button + round green + Add Exercise
+  actionCluster:      { flexDirection: "row", alignItems: "center", gap: 14 },
   notesToggleBtn:     { width: 40, height: 40 },
   notesTogglePlus:    { position: "absolute", top: -4, right: -6, backgroundColor: ACCT, borderRadius: 7, width: 14, height: 14, alignItems: "center", justifyContent: "center" },
   notesTogglePlusText:{ color: "#fff", fontSize: 10, fontFamily: FontFamily.bold, lineHeight: 14 },
+  addRoundWrap:       { borderRadius: 24, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  addRoundBtn:        { width: 44, height: 44, borderRadius: 22, backgroundColor: ACCT, alignItems: "center", justifyContent: "center" },
 
-  // Add exercise
-  addExBtnWrap: { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  addExBtn:     { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 10, paddingHorizontal: 22, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 },
-  addExText:    { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
-
-  // Session notes
-  notesInner:  { padding: 16 },
-  notesInput:  { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
-  notesHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  // Session notes — floating card + tick button
+  notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
+  notesHeader:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  notesFloatCard: { position: "absolute", left: 20, right: 20, borderRadius: 16, padding: 16, zIndex: 21, transformOrigin: "left bottom", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 18 },
+  notesTickBtn:   { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 
   // Keyboard toolbar
   kbFloatBtn: { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },

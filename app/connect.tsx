@@ -302,9 +302,13 @@ export default function ConnectScreen() {
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 64, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 32 }]}
       >
-        <Text style={[styles.title, { color: t.tp }]}>Connect</Text>
+        <View style={styles.header}>
+          <View style={{ width: 40 }} />
+          <Text style={[styles.title, { color: t.tp }]}>Connect</Text>
+          <View style={{ width: 40 }} />
+        </View>
         <Text style={[styles.subtitle, { color: t.ts }]}>
           Share your code or scan someone else's to connect. They confirm the request before you're linked.
         </Text>
@@ -470,8 +474,9 @@ const styles = StyleSheet.create({
   root:        { flex: 1 },
   backBtn:     { position: "absolute", left: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:      { paddingHorizontal: 24 },
-  title:       { fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
-  subtitle:    { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", marginTop: 8, lineHeight: 20, paddingHorizontal: 8 },
+  header:      { flexDirection: "row", alignItems: "center", height: 40 },
+  title:       { flex: 1, fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
+  subtitle:    { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", marginTop: 24, lineHeight: 20, paddingHorizontal: 8 },
   label:       { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4, marginTop: 24 },
   card:        { borderRadius: 20 },
   codeInner:   { alignItems: "center", paddingVertical: 22, paddingHorizontal: 18, gap: 14 },

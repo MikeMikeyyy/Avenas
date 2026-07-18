@@ -123,10 +123,16 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
     if (computedTabWidth > 0) setTabWidth(computedTabWidth);
   }, [computedTabWidth]);
 
+  const prevIndexRef = useRef(state.index);
   useEffect(() => {
     if (tabWidth === 0) return;
     const toValue = state.index * tabWidth + PILL_INSET;
-    if (isFirstRender.current) {
+    const indexChanged = prevIndexRef.current !== state.index;
+    prevIndexRef.current = state.index;
+    // Only animate when the selected tab actually changed. When tabWidth changes
+    // on its own (e.g. a transient window-metric re-measure while a modal presents
+    // /dismisses), snap instead of springing so the pill never stutters.
+    if (isFirstRender.current || !indexChanged) {
       translateX.setValue(toValue);
       isFirstRender.current = false;
       return;

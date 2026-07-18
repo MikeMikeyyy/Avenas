@@ -97,9 +97,9 @@ eq(resolveDayIndex(makeProgram({ cycleOffset: -1 }), "2026-01-01"), 6, "dayIndex
 eq(resolveDayIndex(makeProgram({ startDate: "garbage" }), "2026-01-01"), null, "dayIndex unparseable start -> null");
 
 // ── getWorkoutForDate ──────────────────────────────────────────────────────────
-eq(getWorkoutForDate(p, "2026-01-01"), { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"] }, "workoutForDate -> Push");
+eq(getWorkoutForDate(p, "2026-01-01"), { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"], programId: "p1" }, "workoutForDate -> Push");
 eq(getWorkoutForDate(p, "2026-01-04"), null, "workoutForDate Rest -> null");
-eq(getWorkoutForDate(p, "2026-01-03"), { dayIndex: 2, name: "Legs", exercises: [] }, "workoutForDate Legs (empty exercises)");
+eq(getWorkoutForDate(p, "2026-01-03"), { dayIndex: 2, name: "Legs", exercises: [], programId: "p1" }, "workoutForDate Legs (empty exercises)");
 eq(getWorkoutForDate(makeProgram({ startDate: "nope" }), "2026-01-01"), null, "workoutForDate unparseable -> null");
 
 // ── getTodaysWorkout / resolveTodayWorkout (today-relative) ─────────────────────
@@ -108,7 +108,7 @@ eq(getTodaysWorkout(pToday)?.name, "Push", "getTodaysWorkout (start today) -> Pu
 eq(resolveTodayWorkout(pToday, null)?.name, "Push", "resolveToday no override -> Push");
 eq(
   resolveTodayWorkout(pToday, { date: todayYMD(), workoutName: "Pull" }),
-  { dayIndex: 1, name: "Pull", exercises: pToday.workouts["1:Pull"] },
+  { dayIndex: 1, name: "Pull", exercises: pToday.workouts["1:Pull"], programId: "p1" },
   "resolveToday override -> Pull",
 );
 eq(resolveTodayWorkout(pToday, { date: "2020-01-01", workoutName: "Pull" })?.name, "Push", "resolveToday stale override ignored");
@@ -122,12 +122,12 @@ eq(resolveTodayWorkout(null, null), null, "resolveToday null program + null over
 // ── resolveWorkoutForDate (explicit-date, override-aware) ───────────────────────
 eq(
   resolveWorkoutForDate(p, null, "2026-01-01"),
-  { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"] },
+  { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"], programId: "p1" },
   "resolveForDate no override -> scheduled",
 );
 eq(
   resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Pull" }, "2026-01-01"),
-  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"] },
+  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"], programId: "p1" },
   "resolveForDate override matching date -> override day",
 );
 eq(
@@ -147,6 +147,43 @@ eq(
   "resolveForDate free workout, no program",
 );
 eq(resolveWorkoutForDate(null, null, "2026-01-01"), null, "resolveForDate null program + null override -> null");
+
+// ── resolveWorkoutForDate: cross-program override (override.programId) ─────────
+// Change-day can pick a day from a NON-active program. The override records the
+// source program's id; re-resolution must restore THAT program's exercises, not
+// resolve the name against the active program (which would drop them).
+const pOther = makeProgram({
+  id: "p2",
+  name: "Other",
+  cyclePattern: ["Upper", "Rest"],
+  cycleDays: 2,
+  workouts: { "0:Upper": [{ id: "e9", name: "Overhead Press", sets: [{ type: "working", reps: "5" }] }] },
+});
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Upper", programId: "p2" }, "2026-01-01", [p, pOther]),
+  { dayIndex: 0, name: "Upper", exercises: pOther.workouts["0:Upper"], programId: "p2" },
+  "resolveForDate cross-program override -> source program's exercises",
+);
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Pull", programId: "p1" }, "2026-01-01", [p, pOther]),
+  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"], programId: "p1" },
+  "resolveForDate override with the active program's own id -> active day",
+);
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Upper", programId: "gone" }, "2026-01-01", [p, pOther]),
+  { dayIndex: -1, name: "Upper", exercises: [] },
+  "resolveForDate override whose source program was deleted -> name only, no exercises",
+);
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Upper", programId: "p2" }, "2026-01-01"),
+  { dayIndex: -1, name: "Upper", exercises: [] },
+  "resolveForDate cross-program override without allPrograms -> name only (degrades safely)",
+);
+eq(
+  resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Rest", programId: "p2" }, "2026-01-01", [p, pOther]),
+  null,
+  "resolveForDate cross-program Rest override -> null",
+);
 
 // ── getEffectiveToday: late-night grace window ──────────────────────────────────
 // makeProgram cyclePattern (from 01 Jan 2026): Push Pull Legs Rest Push Pull Rest
@@ -194,6 +231,60 @@ const fmtHist: CompletedWorkout[] = [{
   }],
 }];
 eq(buildPrevByName(fmtHist)["var"], ["100×5", "100", "8", "—"], "prev: set formatting variants");
+
+// ── Reorder / multi-session "previous figures" invariants ──────────────────────
+// Two program weeks with the SAME exercises in DIFFERENT orders, plus exercises
+// done in only one of the weeks. Previous figures must come from the most-recent
+// session BY DATE and resolve BY NAME — so reordering (or adding) exercises never
+// erases values or shows another exercise's figures.
+const mkSet = (w: string, r: string) => ({ type: "working" as const, weight: w, reps: r, done: true });
+const week3ago: CompletedWorkout = {
+  id: "wk-3ago", date: "2026-01-13", completedAt: "2026-01-13T10:00:00.000Z",
+  workoutName: "Push", durationSeconds: 0,
+  exercises: [
+    { name: "Squat", notes: "", sets: [mkSet("100", "5")] }, // index 0
+    { name: "Bench", notes: "", sets: [mkSet("80", "5")] },  // index 1
+    { name: "Curl",  notes: "", sets: [mkSet("20", "12")] }, // only ever done 3 weeks ago
+  ],
+};
+const weekLast: CompletedWorkout = {
+  id: "wk-last", date: "2026-01-27", completedAt: "2026-01-27T10:00:00.000Z",
+  workoutName: "Push", durationSeconds: 0,
+  exercises: [
+    { name: "Bench", notes: "", sets: [mkSet("90", "5")] },  // reordered to index 0
+    { name: "Row",   notes: "", sets: [mkSet("65", "8")] },  // added last week
+    { name: "Squat", notes: "", sets: [mkSet("110", "5")] }, // reordered to index 2
+  ],
+};
+const prevMulti = buildPrevByName([week3ago, weekLast]);
+eq(prevMulti["bench"], ["90×5"],  "prev multi: reordered exercise (idx 1->0) takes LAST week, not 3 weeks ago");
+eq(prevMulti["squat"], ["110×5"], "prev multi: reordered exercise (idx 0->2) takes LAST week by name");
+eq(prevMulti["row"],   ["65×8"],  "prev multi: exercise added last week shows its own figures");
+eq(prevMulti["curl"],  ["20×12"], "prev multi: exercise only done 3 weeks ago still shows its last recorded figures");
+// Recency is decided by completedAt, not array order — reversing the input is identical.
+eq(buildPrevByName([weekLast, week3ago])["bench"], ["90×5"], "prev multi: array order irrelevant — newest completedAt wins");
+
+// ── buildPrevByName day scoping ─────────────────────────────────────────────────
+// The same exercise programmed on two days (Lateral Raise heavier on Push than
+// on Arms). With a dayName, previous values come from the last session of THAT
+// day — not the most recent appearance overall — and fall back to any-day only
+// for exercises never done on the given day.
+const mkDaySession = (id: string, date: string, workoutName: string, exs: [string, string, string][]): CompletedWorkout => ({
+  id, date, completedAt: `${date}T10:00:00.000Z`, workoutName, durationSeconds: 0,
+  exercises: exs.map(([name, w, r]) => ({ name, notes: "", sets: [mkSet(w, r)] })),
+});
+const dayHist = [
+  mkDaySession("push1", "2026-06-01", "Push", [["Lateral Raise", "12", "10"], ["Bench", "100", "5"]]),
+  mkDaySession("arms1", "2026-06-04", "Arms", [["Lateral Raise", "8", "15"], ["Curl", "20", "12"]]),
+];
+eq(buildPrevByName(dayHist, undefined, "Push")["lateral raise"], ["12×10"], "prev day-scoped: Push day shows Push numbers even though Arms session is newer");
+eq(buildPrevByName(dayHist, undefined, "Arms")["lateral raise"], ["8×15"], "prev day-scoped: Arms day shows Arms numbers");
+eq(buildPrevByName(dayHist)["lateral raise"], ["8×15"], "prev unscoped: newest appearance on any day wins (unchanged)");
+eq(buildPrevByName(dayHist, undefined, "Push")["curl"], ["20×12"], "prev day-scoped: exercise never done on this day falls back to any-day");
+eq(buildPrevByName(dayHist, undefined, " push ")["lateral raise"], ["12×10"], "prev day-scoped: day match is trimmed + case-insensitive");
+eq(buildPrevByName(dayHist, "2026-06-04", "Arms")["lateral raise"], ["12×10"], "prev day-scoped + beforeDate: no earlier Arms session -> falls back to earlier Push");
+const dayHist2 = [...dayHist, mkDaySession("push2", "2026-06-08", "Push", [["Lateral Raise", "14", "8"]])];
+eq(buildPrevByName(dayHist2, undefined, "Push")["lateral raise"], ["14×8"], "prev day-scoped: newest session OF the day wins");
 
 eq(normalizeExerciseName("  Bench Press  "), "bench press", "normalizeExerciseName trims + lowercases");
 

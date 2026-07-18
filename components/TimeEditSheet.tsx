@@ -82,7 +82,7 @@ export default function TimeEditSheet({
   const divider = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.07)";
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={() => animateClose(onClose)}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={() => animateClose(onClose)}>
       <View style={styles.backdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.overlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => animateClose(onClose)} />

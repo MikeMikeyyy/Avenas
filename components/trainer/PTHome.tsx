@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,11 +22,11 @@ import ProgramPickerSheet from "./ProgramPickerSheet";
 import RecipientPickerSheet from "./RecipientPickerSheet";
 import PeopleIcon from "../icons/PeopleIcon";
 import ChatIcon from "../icons/ChatIcon";
-import PlusIcon from "../icons/PlusIcon";
 import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
 import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
+import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -40,7 +40,6 @@ import {
   makeInitials,
   migrateBroadcastShares,
   migrateCoachReceivedShares,
-  removeCoach,
   removeSharedProgramBatch,
   saveClients,
   type Client,
@@ -50,7 +49,7 @@ import {
 import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
 import { loadBlockedIds } from "../../utils/moderation";
 import { getJSON } from "../../utils/storage";
-import { getMyConnections, disconnect as disconnectConnection } from "../../lib/connections";
+import { getMyConnections } from "../../lib/connections";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 
 // Same SVG used by workout.tsx / new-program.tsx / review screen.
@@ -98,11 +97,9 @@ export default function PTHome() {
   const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
   const [sharedOut, setSharedOut] = useState<SharedProgram[]>([]);
   const [kbHeight, setKbHeight] = useState(0);
-  // Count of incoming connection requests (powers the Connect button badge) and a
-  // lookup from a real connection's account id → its connection row id (so removing
-  // such a roster entry severs the real connection rather than a local-only delete).
-  const [pendingIncoming, setPendingIncoming] = useState(0);
-  const connByOtherId = useRef<Record<string, string>>({});
+  // Live-ish presence for connected clients + the Connect button badge count.
+  // Disconnecting a real connection lives on the Connect screen (app/connect.tsx).
+  const { presenceById, pendingIncoming } = useConnectionPresence();
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
@@ -175,25 +172,19 @@ export default function PTHome() {
       let merged = fresh;
       try {
         const conns = await getMyConnections();
-        const map: Record<string, string> = {};
         const realClients: Client[] = conns
           .filter(c => c.status === "accepted")
-          .map(c => {
-            map[c.otherId] = c.connectionId;
-            return {
-              id: c.otherId,
-              name: c.name || "User",
-              initials: makeInitials(c.name || "User"),
-              photoUri: c.photoUri,
-              isTrainer: c.accountType === "pt",
-              lastActiveISO: c.lastActiveAt,
-              streak: 0,
-            };
-          });
-        connByOtherId.current = map;
+          .map(c => ({
+            id: c.otherId,
+            name: c.name || "User",
+            initials: makeInitials(c.name || "User"),
+            photoUri: c.photoUri,
+            isTrainer: c.accountType === "pt",
+            lastActiveISO: c.lastActiveAt,
+            streak: 0,
+          }));
         const realIds = new Set(realClients.map(c => c.id));
         merged = [...realClients, ...fresh.filter(f => !realIds.has(f.id))];
-        if (!cancelled) setPendingIncoming(conns.filter(c => c.status === "pending" && c.direction === "incoming").length);
       } catch { /* keep the local roster */ }
 
       // Hide anyone the user has blocked, in case blockContact's server-side
@@ -243,72 +234,6 @@ export default function PTHome() {
     setClients(next);
     await saveClients(next);
   }, [clients]);
-
-  const handleRemoveClient = useCallback((client: Client) => {
-    const connId = connByOtherId.current[client.id];
-    const isTrainer = !!client.isTrainer;
-    Alert.alert(
-      connId ? "Disconnect" : isTrainer ? "Remove Trainer" : "Remove Client",
-      connId
-        ? `Disconnect from ${client.name}? You'll stop seeing each other.`
-        : isTrainer
-          ? `Remove ${client.name}? This ends your connection, so they'll also be removed from your coaches.`
-          : `Remove ${client.name} from your roster? Their data will be deleted.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: connId ? "Disconnect" : "Remove",
-          style: "destructive",
-          onPress: async () => {
-            // Real connection → sever it server-side; the roster refreshes on focus.
-            if (connId) {
-              setClients(prev => prev.filter(c => c.id !== client.id));
-              delete connByOtherId.current[client.id];
-              try { await disconnectConnection(connId); } catch { /* keep UI responsive */ }
-              return;
-            }
-            const next = clients.filter(c => c.id !== client.id);
-            setClients(next);
-            await saveClients(next);
-            // A trainer connection is symmetric — drop the coach link too.
-            if (isTrainer) await removeCoach(client.id);
-          },
-        },
-      ]
-    );
-  }, [clients]);
-
-  const openRemovePicker = useCallback(() => {
-    if (clients.length === 0) {
-      Alert.alert("No Clients", "You haven't added any clients yet.");
-      return;
-    }
-    Alert.alert(
-      "Remove a Client",
-      "Pick a client to remove.",
-      [
-        { text: "Cancel", style: "cancel" },
-        ...clients.map(c => ({
-          text: c.name,
-          style: "destructive" as const,
-          onPress: () => handleRemoveClient(c),
-        })),
-      ]
-    );
-  }, [clients, handleRemoveClient]);
-
-  const openManageClients = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert(
-      "Manage Clients",
-      undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Connect Someone", onPress: () => router.push("/connect") },
-        { text: "Remove a Client", style: "destructive", onPress: openRemovePicker },
-      ]
-    );
-  }, [openRemovePicker]);
 
   const batches = useMemo(() => {
     const byKey = new Map<string, SharedProgram[]>();
@@ -407,7 +332,7 @@ export default function PTHome() {
         // Without this the keyboard eats the first tap on any button (incl. the
         // search-close X) while the search field is focused, forcing a double tap.
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 140 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top, paddingBottom: insets.bottom + 140 }}
       >
         <View style={styles.coachesRow}>
           <BounceButton
@@ -429,11 +354,6 @@ export default function PTHome() {
               <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
             </View>
           </BounceButton>
-          <BounceButton onPress={toggleSearch} accessibilityLabel={searchOpen ? "Close search" : "Search clients"}>
-            <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
-              <Ionicons name={searchOpen ? "close" : "search"} size={18} color={t.tp} />
-            </View>
-          </BounceButton>
           <BounceButton onPress={() => router.push("/connect")} accessibilityLabel="Connect with someone">
             <View>
               <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
@@ -445,15 +365,25 @@ export default function PTHome() {
         </View>
 
         <View style={styles.titleRow}>
-          <Pressable onPress={toggleClientsSection} style={styles.clientsHeaderLeft} accessibilityRole="button" accessibilityLabel="Toggle clients list">
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Pressable
+            onPress={toggleClientsSection}
+            style={styles.clientsHeaderLeft}
+            accessibilityRole="button"
+            accessibilityLabel={`My Clients, ${clients.length} ${clients.length === 1 ? "client" : "clients"}. Toggle list`}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <Text style={[styles.title, { color: t.tp }]}>My Clients</Text>
+              <View style={[styles.countBadge, { backgroundColor: ACCT }]}>
+                <Text style={[styles.countBadgeText, { color: "#fff" }]}>{clients.length}</Text>
+              </View>
               <ChevronToggle expanded={!collapsedClientsSection} color={t.ts} />
             </View>
-            <Text style={[styles.subtitle, { color: t.ts }]}>
-              {clients.length} {clients.length === 1 ? "client" : "clients"}
-            </Text>
           </Pressable>
+          <BounceButton onPress={toggleSearch} accessibilityLabel={searchOpen ? "Close search" : "Search clients"}>
+            <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <Ionicons name={searchOpen ? "close" : "search"} size={18} color={t.tp} />
+            </View>
+          </BounceButton>
         </View>
 
         {searchOpen && (
@@ -523,7 +453,9 @@ export default function PTHome() {
           filtered.map(c => (
             <ClientCard
               key={c.id}
-              client={c}
+              // Live presence overrides the load-time snapshot; local/mock
+              // entries aren't in the map and keep their stored value.
+              client={presenceById.has(c.id) ? { ...c, lastActiveISO: presenceById.get(c.id) ?? undefined } : c}
               activeProgramName={activeProgramByClient[c.id]}
               onPress={() => router.push({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
             />
@@ -826,10 +758,11 @@ const styles = StyleSheet.create({
   coachesBtnWrap: { alignSelf: "center" },
   coachesBtn:   { flexDirection: "row", alignItems: "center", gap: 8, height: 40, borderRadius: 20, paddingHorizontal: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   coachesBtnText: { fontFamily: FontFamily.semibold, fontSize: 13 },
-  titleRow:     { flexDirection: "row", alignItems: "flex-start", gap: 12, marginBottom: 18 },
+  titleRow:     { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 18 },
   clientsHeaderLeft: { flex: 1, flexDirection: "column" },
-  title:        { fontFamily: FontFamily.bold, fontSize: 32 },
-  subtitle:     { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
+  title:        { fontFamily: FontFamily.bold, fontSize: 28 },
+  countBadge:   { minWidth: 26, height: 24, borderRadius: 12, paddingHorizontal: 8, alignItems: "center", justifyContent: "center" },
+  countBadgeText:{ fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.2 },
   addBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   manageBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   searchBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },

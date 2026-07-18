@@ -85,8 +85,36 @@ export async function getMyConnections(): Promise<Connection[]> {
 }
 
 /** Bump this account's "last active" to server-now (presence heartbeat). No-ops
- *  silently when signed out. */
+ *  silently when signed out. Keeps running even when share_activity is off —
+ *  visibility is gated server-side at read time (migration 0009). */
 export async function touchLastActive(): Promise<void> {
   const { error } = await supabase.rpc("touch_last_active");
   if (error && __DEV__) console.warn("[avenas] touch_last_active", error.message);
+}
+
+/** Whether connections may see this account's activity status. Throws when
+ *  signed out or the profile can't be read (callers gate the toggle on it). */
+export async function getShareActivity(): Promise<boolean> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not signed in");
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("share_activity")
+    .eq("id", user.id)
+    .single();
+  if (error) throw new Error(`load share_activity: ${error.message}`);
+  return (data?.share_activity as boolean | null) ?? true;
+}
+
+/** Set whether connections may see this account's activity status. Enforced
+ *  server-side: when off, get_my_connections returns NULL last_active_at for
+ *  this account, so other devices never receive the timestamp. */
+export async function setShareActivity(share: boolean): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("not signed in");
+  const { error } = await supabase
+    .from("profiles")
+    .update({ share_activity: share })
+    .eq("id", user.id);
+  if (error) throw new Error(`save share_activity: ${error.message}`);
 }

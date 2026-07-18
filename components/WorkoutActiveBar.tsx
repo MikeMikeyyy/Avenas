@@ -83,7 +83,8 @@ export default function WorkoutActiveBar() {
         </View>
         <BounceButton onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          isPaused ? resumeTimer() : pauseTimer();
+          if (isPaused) resumeTimer();
+          else pauseTimer();
         }}>
           <View style={[styles.iconBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : APP_LIGHT.div }]}>
             <Ionicons name={isPaused ? "play" : "pause"} size={16} color={t.tp} />

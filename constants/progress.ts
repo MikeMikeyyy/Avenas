@@ -28,7 +28,7 @@ export const RANGE_OPTIONS: RangeOption[] = [
   { key: "thisWeek",    label: "This Week",   shortLabel: "Week",    bucket: "day"          },
   { key: "lastWeek",    label: "Last Week",   shortLabel: "Last Wk", bucket: "day"          },
   { key: "thisMonth",   label: "Last Month",  shortLabel: "Month",   bucket: "rollingWeeks" },
-  { key: "last3Months", label: "3 Months",    shortLabel: "3M",      bucket: "month"        },
+  { key: "last3Months", label: "Last 3 Months", shortLabel: "3M",    bucket: "month"        },
   { key: "year",        label: "Last Year",   shortLabel: "Year",    bucket: "month"        },
 ];
 
@@ -49,9 +49,13 @@ export const METRIC_OPTIONS: MetricOption[] = [
 //
 // The Strength card plots one value per muscle group on a 6-axis radar. Which
 // value depends on the active metric:
-//   - volume:    Σ tonnage (weight×reps) attributed to the group
+//   - load:      # of completed working sets attributed to the group. Sets
+//                are comparable across muscle groups where tonnage is not (a
+//                leg set moves several times the weight of an arm set), so
+//                this is the skew-free "training balance" view — the default.
 //   - frequency: # of sessions that trained the group
-//   - load:      derived at render time = group volume ÷ total volume × 100
+//   - volume:    Σ tonnage (weight×reps) attributed to the group. Raw work
+//                done; naturally dominated by the big lower-body lifts.
 export type StrengthMetricKey = "volume" | "frequency" | "load";
 
 export type StrengthMetricOption = {
@@ -61,11 +65,12 @@ export type StrengthMetricOption = {
 
 // The leading icon for each metric is chosen in StrengthRadarChart (it mixes
 // the canonical DumbbellIcon with MaterialCommunityIcons), so it isn't carried
-// here as a plain icon-font name.
+// here as a plain icon-font name. Load leads: it's the default metric (see
+// ProgressView's strengthMetric initial state).
 export const STRENGTH_METRIC_OPTIONS: StrengthMetricOption[] = [
-  { key: "volume",    label: "Total Volume"      },
-  { key: "frequency", label: "Workout Frequency" },
   { key: "load",      label: "Muscular Load"     },
+  { key: "frequency", label: "Workout Frequency" },
+  { key: "volume",    label: "Total Volume"      },
 ];
 
 // Per-muscle-group aggregate feeding the radar. `sessions` may be fractional
@@ -155,6 +160,16 @@ export type PRs = {
 // future "Custom" grouping if we ever surface it as a scope choice. The Progress
 // page itself only uses kind: "current" | "all" | "program".
 export const CUSTOM_PROGRAM_ID = "__custom__";
+
+// The Progress drill-down's selection: a (workout day, exercise) pair, both
+// matched case-insensitively (trim + lowercase). The day is part of the
+// identity because the same exercise can be programmed on two different days
+// (e.g. lateral raises on both Push and Arms) and each day's progress is
+// tracked separately — see collectExerciseHistory / computePRs `dayName`.
+export type ExerciseSelection = {
+  day: string;  // workout-day label, matched against CompletedWorkout.workoutName
+  name: string; // exercise name
+};
 
 // Exercise row data used by the day drill-down.
 export type LoggedExerciseRow = {

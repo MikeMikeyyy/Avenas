@@ -70,7 +70,10 @@ interface SessionRow {
 
 export default function ExerciseHistoryScreen() {
   const router = useRouter();
-  const { exerciseName } = useLocalSearchParams<{ exerciseName: string }>();
+  // `dayName` (optional) scopes the list to one workout day — progress is
+  // tracked per (day, exercise) pair, and the progression chart forwards its
+  // day so this page shows the same slice the chart plotted.
+  const { exerciseName, dayName } = useLocalSearchParams<{ exerciseName: string; dayName?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
@@ -110,6 +113,7 @@ export default function ExerciseHistoryScreen() {
   const sessions: SessionRow[] = useMemo(() => {
     if (!exerciseName) return [];
     const want = key(exerciseName);
+    const wantDay = typeof dayName === "string" && dayName.trim() ? key(dayName) : null;
     // Date cutoff for the active range — sessions older than this are dropped.
     const cutoff = new Date();
     cutoff.setHours(0, 0, 0, 0);
@@ -118,6 +122,7 @@ export default function ExerciseHistoryScreen() {
 
     const rows: SessionRow[] = [];
     for (const w of history) {
+      if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
       // Filter by date window first (cheaper than walking exercises).
       const [yy, mm, dd] = w.date.split("-").map(Number);
       if (!Number.isFinite(yy) || !Number.isFinite(mm) || !Number.isFinite(dd)) continue;
@@ -147,7 +152,7 @@ export default function ExerciseHistoryScreen() {
     // Newest first.
     rows.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
     return rows;
-  }, [history, programs, exerciseName, rangeOption.days]);
+  }, [history, programs, exerciseName, dayName, rangeOption.days]);
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -203,9 +208,16 @@ export default function ExerciseHistoryScreen() {
             used elsewhere on the Progress flow. */}
         <View style={styles.header}>
           <View style={{ width: 44 }} />
-          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={2}>
-            {exerciseName ?? ""}
-          </Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={2}>
+              {exerciseName ?? ""}
+            </Text>
+            {typeof dayName === "string" && dayName.trim() ? (
+              <Text style={[styles.screenDay, { color: t.ts }]} numberOfLines={1}>
+                {dayName}
+              </Text>
+            ) : null}
+          </View>
           <View style={{ width: 44 }} />
         </View>
 
@@ -342,11 +354,18 @@ const styles = StyleSheet.create({
     minHeight: 40,
     marginBottom: 18,
   },
+  // Title + optional day subtitle live in a flex:1 column between the two
+  // 44px spacers (the column carries the flex, not the Text).
   screenTitle: {
     fontFamily: FontFamily.bold,
     fontSize: 22,
     textAlign: "center",
-    flex: 1,
+  },
+  screenDay: {
+    fontFamily: FontFamily.semibold,
+    fontSize: 13,
+    textAlign: "center",
+    marginTop: 2,
   },
 
   // Range-filter row — session count on the left for context, dropdown

@@ -3,7 +3,7 @@
 // data (from the mock trainerStore) using identical visuals.
 
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, Animated, ScrollView } from "react-native";
+import { View, Text, StyleSheet, Animated } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -22,8 +22,8 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { type CompletedWorkout, type SavedProgram } from "../../constants/programs";
-import { type CustomExercise } from "../../constants/exercises";
-import type { MetricKey, ProgramScope, RangeKey, StrengthMetricKey } from "../../constants/progress";
+import { type CustomExercise, type SelectableMuscle } from "../../constants/exercises";
+import type { ExerciseSelection, MetricKey, MuscleGroupStat, ProgramScope, RangeKey, StrengthMetricKey } from "../../constants/progress";
 import {
   bucketMetricByDay,
   bucketMetricByMonth,
@@ -37,10 +37,27 @@ import {
   filterByDateWindow,
   filterByProgramScope,
   getRangeOption,
+  previousComparableWindow,
   rangeWindow,
   uniqueDaysInScope,
+  windowLengthDays,
 } from "../../utils/progressStats";
 import { toDisplayWeight } from "../../utils/units";
+
+// kg → display-unit lens for the radar stats: volume is the only weight-valued
+// field, sessions/sets pass through. Unit-invariant consumers (the load set
+// counts, the trend ratios) are unaffected by conversion, so it's safe to
+// convert always.
+function convertMuscleVolumes(
+  stats: Record<SelectableMuscle, MuscleGroupStat>,
+  isKg: boolean,
+): Record<SelectableMuscle, MuscleGroupStat> {
+  const out = { ...stats };
+  for (const k of Object.keys(out) as (keyof typeof out)[]) {
+    out[k] = { ...out[k], volume: toDisplayWeight(out[k].volume, isKg) };
+  }
+  return out;
+}
 
 export interface ProgressViewProps {
   history: CompletedWorkout[];
@@ -77,8 +94,10 @@ export default function ProgressView({
   const [scope, setScope] = useState<ProgramScope>({ kind: "current" });
   const [range, setRange] = useState<RangeKey>("thisWeek");
   const [metric, setMetric] = useState<MetricKey>("volume");
-  const [strengthMetric, setStrengthMetric] = useState<StrengthMetricKey>("volume");
-  const [selectedExercise, setSelectedExercise] = useState<string | null>(null);
+  const [strengthMetric, setStrengthMetric] = useState<StrengthMetricKey>("load");
+  // Day-qualified: the same exercise on two days (lateral raises on Push and
+  // on Arms) is two separate selections with separate progress data.
+  const [selectedExercise, setSelectedExercise] = useState<ExerciseSelection | null>(null);
   const [scopeFallbackNote, setScopeFallbackNote] = useState<string | null>(null);
 
   const scrollRef = useRef<any>(null);
@@ -91,7 +110,7 @@ export default function ProgressView({
       if (prev.kind !== "program") return prev;
       const stillExists = programs.some(pp => pp.id === prev.programId);
       if (stillExists) return prev;
-      setScopeFallbackNote("Selected program was removed — showing all programs.");
+      setScopeFallbackNote("Selected program was removed. Showing all programs.");
       return { kind: "all" };
     });
   }, [programs]);
@@ -124,19 +143,24 @@ export default function ProgressView({
     }
   }, [scopedWorkouts, range, metric]);
 
-  // Strength radar: same program scope + time range as the Volume graph above,
-  // so the whole page stays consistent. Range-window the scoped workouts, then
-  // break them down by muscle group.
-  const muscleStats = useMemo(() => {
-    const { startYMD, endYMD } = rangeWindow(range, new Date());
-    const windowed = filterByDateWindow(scopedWorkouts, startYMD, endYMD);
-    return computeMuscleGroupStats(windowed, customExercises);
-  }, [scopedWorkouts, range, customExercises]);
-
-  const totalMuscleVolume = useMemo(
-    () => Object.values(muscleStats).reduce((s, g) => s + g.volume, 0),
-    [muscleStats],
-  );
+  // Strength radar: program scope applies, but the window is PINNED to this
+  // week vs last week — deliberately independent of the Volume chart's range
+  // filter. Under a long range (e.g. Last Year) the aggregated per-group set
+  // counts balloon and the radar's "how close was each muscle to a solid
+  // week?" framing stops meaning anything. Last week (the same-length,
+  // weekday-aligned previous window) feeds the muted polygon + ▲/▼ arrows.
+  const { muscleStats, prevMuscleStats, radarWindowDays } = useMemo(() => {
+    const { startYMD, endYMD } = rangeWindow("thisWeek", new Date());
+    const prev = previousComparableWindow(startYMD, endYMD);
+    return {
+      muscleStats: computeMuscleGroupStats(
+        filterByDateWindow(scopedWorkouts, startYMD, endYMD), customExercises),
+      prevMuscleStats: computeMuscleGroupStats(
+        filterByDateWindow(scopedWorkouts, prev.startYMD, prev.endYMD), customExercises),
+      // Scales the radar's per-week full-scale benchmarks to the window length.
+      radarWindowDays: windowLengthDays(startYMD, endYMD),
+    };
+  }, [scopedWorkouts, customExercises]);
 
   const volumeSlotsCount = useMemo(() => {
     switch (range) {
@@ -162,30 +186,31 @@ export default function ProgressView({
 
   const { exerciseHistory, prs } = useMemo(() => {
     if (!selectedExercise) return { exerciseHistory: [], prs: null };
-    const eh = collectExerciseHistory(scopedWorkouts, selectedExercise);
-    const p = computePRs(eh, scopedWorkouts, selectedExercise);
+    // Day-scoped: only sessions of the selected day row feed the chart + PRs.
+    const eh = collectExerciseHistory(scopedWorkouts, selectedExercise.name, selectedExercise.day);
+    const p = computePRs(eh, scopedWorkouts, selectedExercise.name, selectedExercise.day);
     return { exerciseHistory: eh, prs: p };
   }, [scopedWorkouts, selectedExercise]);
 
   // ── kg → display-unit conversion for the charts ──────────────────────────────
   // All stats are computed in canonical kg; convert the weight/volume-valued
   // outputs to the active unit before plotting. Reps/duration/frequency are not
-  // weights and pass through. (Muscle "volume" is converted unconditionally:
-  // it's harmless for the frequency metric, and the "load" % is a ratio that's
-  // unit-invariant.)
+  // weights and pass through. (Muscle stats go through convertMuscleVolumes;
+  // the radar's frequency and set-count load metrics never read the converted
+  // volume, so converting unconditionally is harmless.)
   const dw = (n: number) => toDisplayWeight(n, isKg);
   const displayBuckets = useMemo(
     () => (metric === "volume" ? buckets.map((b) => ({ ...b, total: dw(b.total) })) : buckets),
     [buckets, metric, isKg],
   );
-  const displayMuscleStats = useMemo(() => {
-    const out = { ...muscleStats };
-    for (const k of Object.keys(out) as (keyof typeof out)[]) {
-      out[k] = { ...out[k], volume: dw(out[k].volume) };
-    }
-    return out;
-  }, [muscleStats, isKg]);
-  const displayTotalMuscleVolume = useMemo(() => dw(totalMuscleVolume), [totalMuscleVolume, isKg]);
+  const displayMuscleStats = useMemo(
+    () => convertMuscleVolumes(muscleStats, isKg),
+    [muscleStats, isKg],
+  );
+  const displayPrevMuscleStats = useMemo(
+    () => convertMuscleVolumes(prevMuscleStats, isKg),
+    [prevMuscleStats, isKg],
+  );
   const displayExerciseHistory = useMemo(
     () => exerciseHistory.map((p) => ({
       ...p,
@@ -219,8 +244,16 @@ export default function ProgressView({
     return () => cancelAnimationFrame(id);
   }, [selectedExercise]);
 
-  const onSelectExercise = useCallback((name: string) => {
-    setSelectedExercise(prev => (prev?.trim().toLowerCase() === name.trim().toLowerCase() ? prev : name));
+  const onSelectExercise = useCallback((day: string, name: string) => {
+    // Keep the previous object identity on a same-pair reselect so the
+    // scroll-into-view effect (keyed on the selection) doesn't refire.
+    setSelectedExercise(prev =>
+      prev &&
+      prev.day.trim().toLowerCase() === day.trim().toLowerCase() &&
+      prev.name.trim().toLowerCase() === name.trim().toLowerCase()
+        ? prev
+        : { day, name },
+    );
   }, []);
 
   const showNoActiveProgramHint = scope.kind === "current" && !hasActiveProgram;
@@ -303,8 +336,9 @@ export default function ProgressView({
             </View>
             <StrengthRadarChart
               stats={displayMuscleStats}
-              totalVolume={displayTotalMuscleVolume}
+              prevStats={displayPrevMuscleStats}
               unit={unit}
+              windowDays={radarWindowDays}
               metric={strengthMetric}
               onMetricChange={setStrengthMetric}
             />
@@ -320,7 +354,8 @@ export default function ProgressView({
         {selectedExercise && displayPrs ? (
           <View onLayout={e => { exerciseSectionY.current = e.nativeEvent.layout.y; }}>
             <ExerciseProgressionChart
-              exerciseName={selectedExercise}
+              exerciseName={selectedExercise.name}
+              dayName={selectedExercise.day}
               history={displayExerciseHistory}
               prs={displayPrs}
               unit={unit}

@@ -15,6 +15,9 @@ export type ProfileRow = {
   avatar_url: string | null;
   connect_code: string | null;
   last_active_at: string | null;
+  /** Whether connections may see last_active_at (migration 0009). When false,
+   *  get_my_connections returns this account's last_active_at as NULL. */
+  share_activity: boolean;
   flame_preference: string | null;
   streak: Record<string, unknown>;
   onboarding_complete: boolean;

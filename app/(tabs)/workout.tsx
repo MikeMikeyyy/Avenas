@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing as ReEasing, interpolateColor } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, withRepeat, withDelay, Easing as ReEasing, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
-  Alert, Animated, Keyboard, Modal, LayoutAnimation,
-  PanResponder, Easing, Switch,
+  Alert, Animated, Keyboard, Modal,
+  PanResponder, Easing, Switch, useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -23,14 +23,18 @@ import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
 import DumbbellIcon from "../../components/DumbbellIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
+import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { computeDurationMins, completedAtISO } from "../../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
+import { buildLiveActivityPayload } from "../../utils/liveActivity";
+import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
-import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, normalizeExerciseName } from "../../utils/workout";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, normalizeExerciseName, type DayOverride } from "../../utils/workout";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { useDayRollover } from "../../hooks/useDayRollover";
@@ -41,7 +45,6 @@ import { useRestTimer } from "../../contexts/RestTimerContext";
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const WARMUP_ORANGE = "#ffbf0f";
-const WORKOUT_VIEW_MODE_KEY = "@avenas/workout_view_mode";
 
 // Dev-only warning helper. Compiled out of release builds via `__DEV__`.
 function warnStorage(op: string, key: string, err: unknown) {
@@ -371,7 +374,7 @@ function WorkoutReorderSheet({ visible, workoutName, exercises, isDark, t, onReo
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={closeSheet}>
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
@@ -464,7 +467,7 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
   }, [slideY, backdropOpacity, onClose]);
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={closeSheet}>
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
@@ -632,7 +635,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
   };
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={() => animateOut(onDismiss)}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={() => animateOut(onDismiss)}>
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => animateOut(onDismiss)} />
@@ -758,7 +761,7 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={() => animateOut(onClose)}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={() => animateOut(onClose)}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
@@ -951,7 +954,8 @@ interface ExerciseCardProps {
   totalExercises: number;
   exLog: ExerciseLog;
   isDark: boolean;
-  onUpdateSet: (type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string) => void;
+  /** `cascade` marks typed input, which may auto-fill the sets below (Settings toggle). */
+  onUpdateSet: (type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade?: boolean) => void;
   onToggleDone: (type: "warmup" | "working", idx: number) => void;
   onAutoTick: (type: "warmup" | "working", idx: number) => void;
   onUpdateNotes: (notes: string) => void;
@@ -1137,7 +1141,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                       () => repsRefs.current[flatIdx]?.focus(),
                       flatIdx > 0 ? () => repsRefs.current[flatIdx - 1]?.focus() : null,
                     )}
-                    onChangeText={v => onUpdateSet(set.type, set.localIdx, "weight", v)}
+                    onChangeText={v => onUpdateSet(set.type, set.localIdx, "weight", v, true)}
                     onEndEditing={() => onAutoTick(set.type, set.localIdx)}
                     selectTextOnFocus
                   />
@@ -1163,11 +1167,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                       }
                       return ps.reps || "—";
                     })()}
-                    placeholderTextColor={(() => {
-                      const ps = set.programSet;
-                      const hasTarget = ps?.reps || ps?.repsMin || ps?.repsMax;
-                      return `${t.tp}66`;
-                    })()}
+                    placeholderTextColor={`${t.tp}66`}
                     value={set.reps}
                     editable={!isLocked}
                     onFocus={() => {
@@ -1178,7 +1178,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                         onInputFocus(null, prevFn);
                       }
                     }}
-                    onChangeText={v => onUpdateSet(set.type, set.localIdx, "reps", v)}
+                    onChangeText={v => onUpdateSet(set.type, set.localIdx, "reps", v, true)}
                     onEndEditing={() => onAutoTick(set.type, set.localIdx)}
                     selectTextOnFocus
                   />
@@ -1351,16 +1351,63 @@ function getActiveSetFlatIdx(exId: string, exercises: Exercise[], log: WorkoutLo
   return null;
 }
 
+// Speech-bubble hint that floats above the round "+" add button when a workout
+// has no exercises yet. Animates up + fades in on mount, then bobs gently to draw
+// the eye. Purely decorative (pointerEvents none) — the + button stays tappable.
+function AddExerciseHint() {
+  const rise = useSharedValue(10);
+  const op = useSharedValue(0);
+  const bob = useSharedValue(0);
+
+  useEffect(() => {
+    op.value = withTiming(1, { duration: 260, easing: ReEasing.out(ReEasing.cubic) });
+    rise.value = withSpring(0, { damping: 12, stiffness: 150 });
+    // Seamless ping-pong bob: reverse=true plays the timing forward then backward,
+    // so it eases smoothly up and down forever with no jump/reset at the loop point.
+    // sin easing makes it a natural, continuous hover.
+    bob.value = withDelay(
+      360,
+      withRepeat(
+        withTiming(-5, { duration: 1100, easing: ReEasing.inOut(ReEasing.sin) }),
+        -1,
+        true,
+      ),
+    );
+  }, []);
+
+  const style = useAnimatedStyle(() => ({
+    opacity: op.value,
+    transform: [{ translateY: rise.value + bob.value }],
+  }));
+
+  return (
+    <Reanimated.View style={[styles.addHintWrap, style]} pointerEvents="none">
+      <View style={styles.addHintBubble}>
+        <Text style={styles.addHintText} numberOfLines={1}>Add Exercises</Text>
+      </View>
+      <View style={styles.addHintTail} />
+    </Reanimated.View>
+  );
+}
+
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function WorkoutScreen() {
   const insets = useSafeAreaInsets();
+  // Latch the bottom inset to its stable max. It never legitimately shrinks in
+  // portrait, but react-native-safe-area-context can momentarily re-emit a smaller
+  // value while a modal (the exercise picker) presents/dismisses — which would make
+  // the pinned bottom UI (cluster, notes card, nav) jump. Latching keeps them put.
+  const safeBottomRef = useRef(insets.bottom);
+  if (insets.bottom > safeBottomRef.current) safeBottomRef.current = insets.bottom;
+  const safeBottom = safeBottomRef.current;
+  const { height: winH } = useWindowDimensions();
   const router = useRouter();
   const { isDark } = useTheme();
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { isRunning, isPaused, elapsedSeconds, discardCount, startTimer, pauseTimer, resumeTimer, stopTimer } = useWorkoutTimer();
-  const { startRestTimer, dismissRestTimer } = useRestTimer();
+  const { isRunning, isPaused, elapsedSeconds, startEpochMs, discardCount, startTimer, startTimerAt, pauseTimer, resumeTimer, stopTimer } = useWorkoutTimer();
+  const { startRestTimer, dismissRestTimer, restEndsAt, restTotal } = useRestTimer();
 
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const [allPrograms, setAllPrograms] = useState<SavedProgram[]>([]);
@@ -1384,6 +1431,11 @@ export default function WorkoutScreen() {
   const [isometricExIds, setIsometricExIds] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState("");
   const [showNotes, setShowNotes] = useState(false);
+  // Mount the full-screen notes overlay only while it's open (kept briefly for the
+  // close animation). Leaving an always-mounted absoluteFill overlay in the tree
+  // makes the bottom UI recomposite/stutter when other modals (the exercise picker)
+  // dismiss over it.
+  const [notesMounted, setNotesMounted] = useState(false);
   const [todaysCompletedWorkout, setTodaysCompletedWorkout] = useState<CompletedWorkout | null>(null);
   const [isFreeWorkout, setIsFreeWorkout] = useState(false);
   const [freeWorkoutAddToProgram, setFreeWorkoutAddToProgram] = useState(false);
@@ -1395,8 +1447,17 @@ export default function WorkoutScreen() {
   // sheet lets the user adjust its start/end times before it's persisted.
   const [completeSheetOpen, setCompleteSheetOpen] = useState(false);
   const [pendingComplete, setPendingComplete] = useState<CompletedWorkout | null>(null);
+  // Post-finish celebratory stats carousel, shown over the locked completed
+  // view. Transient — not persisted, so it only appears right after Finish.
+  const [summaryWorkout, setSummaryWorkout] = useState<CompletedWorkout | null>(null);
   const [focusMode, setFocusModeState] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
+  // Auto-fill sets (Settings toggle): typing a value fills the not-yet-done
+  // sets below it. Re-read on focus alongside the view mode.
+  const [autofillSets, setAutofillSets] = useState(false);
+  // Lock-screen Live Activity (Settings toggle, ON by default — any stored
+  // value other than "0" counts as enabled). Re-read on focus like the above.
+  const [liveActivityEnabled, setLiveActivityEnabled] = useState(true);
   const setFocusMode = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
     setFocusModeState(prev => {
       const v = typeof next === "function" ? (next as (p: boolean) => boolean)(prev) : next;
@@ -1406,7 +1467,7 @@ export default function WorkoutScreen() {
     });
   }, []);
   const scrollRef = useRef<ScrollView>(null);
-  const notesY = useRef(0);
+  const sessionNotesInputRef = useRef<TextInput | null>(null);
 
   const lockedData = useMemo(() => {
     if (!todaysCompletedWorkout) return null;
@@ -1431,8 +1492,24 @@ export default function WorkoutScreen() {
   // The interval Timer / Stopwatch and all its state live in <IntervalTimerModal/>;
   // this screen only owns whether it's open.
   const [showTimerModal, setShowTimerModal] = useState(false);
-  const notesBtnOpacity = useSharedValue(1);
-  const notesBtnStyle   = useAnimatedStyle(() => ({ opacity: notesBtnOpacity.value }));
+  // Floating Session Notes card animation (0 = hidden/in-button, 1 = shown), driven
+  // by showNotes. The card scales from its bottom-left corner (transformOrigin set in
+  // styles.notesFloatCard) while sliding down toward the Session Notes button, so it
+  // looks pulled out of / sucked back into that button. `notesKbShift` lifts the card
+  // above the keyboard as a separate animated offset (so closing never jumps).
+  const notesAnim = useSharedValue(0);
+  const notesKbShift = useSharedValue(0);
+  const notesCardStyle = useAnimatedStyle(() => {
+    const v = notesAnim.value;
+    return {
+      opacity: Math.min(1, v * 1.6),
+      transform: [
+        { translateY: notesKbShift.value + (1 - v) * 48 },
+        { scale: 0.3 + v * 0.7 },
+      ],
+    };
+  });
+  const notesBackdropStyle = useAnimatedStyle(() => ({ opacity: notesAnim.value * 0.5 }));
 
   const pendingChangingExId = useRef<string | null>(null);
   const isWorkoutActiveRef = useRef(false);
@@ -1456,9 +1533,7 @@ export default function WorkoutScreen() {
       const programs: SavedProgram[] = progRaw ? JSON.parse(progRaw) : [];
       const found = programs.find(p => p.status === "active") ?? null;
       const history: CompletedWorkout[] = histRaw ? JSON.parse(histRaw) : [];
-      const override = overrideRaw
-        ? (JSON.parse(overrideRaw) as { date: string; workoutName: string })
-        : null;
+      const override = overrideRaw ? (JSON.parse(overrideRaw) as DayOverride) : null;
 
       const effective = getEffectiveToday(found, history);
       effectiveTodayRef.current = effective;
@@ -1470,16 +1545,17 @@ export default function WorkoutScreen() {
       // across midnight): a session counts as "today's" only if it's dated the
       // current effective day.
       setTodaysCompletedWorkout(history.find(w => w.date === effective) ?? null);
-      setPrevByName(buildPrevByName(history));
+      setPrevHistory(history);
 
       // Re-resolve the scheduled template unless a live session is in progress
       // (don't clobber a workout the user is mid-way through). A just-finished
       // session is no longer "in progress" — finalizeComplete clears the log —
       // so this correctly advances to the new day after a completion.
       if (found && (!isWorkoutActiveRef.current || forceReload)) {
-        const workout = resolveWorkoutForDate(found, override, effective);
-        // Today's workout (and any change-day override) belongs to the active program.
-        setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: found.id } : null);
+        // Pass the full program list so a change-day override that picked a day
+        // from a NON-active program re-resolves to that program's exercises.
+        const workout = resolveWorkoutForDate(found, override, effective, programs);
+        setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: workout.programId } : null);
         if (workout) {
           setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
           setLog(initLog(workout.exercises));
@@ -1519,6 +1595,10 @@ export default function WorkoutScreen() {
             setLog(draft.log);
             setIsometricExIds(new Set(draft.isometricExIds ?? []));
             setNotes(draft.notes ?? "");
+            // Note: the card's open/closed state (showNotes) is intentionally NOT
+            // restored — a session always starts with the card closed (button
+            // visible). Only the text is restored; re-opening the card re-arms it
+            // for the journal, consistent with "saved only if the card is kept".
             setIsFreeWorkout(!!draft.isFreeWorkout);
             setFreeWorkoutAddToProgram(!!draft.freeWorkoutAddToProgram);
             draftLockedRef.current = true;
@@ -1554,6 +1634,22 @@ export default function WorkoutScreen() {
 
   useFocusEffect(useCallback(() => {
     if (draftRestored) loadData();
+
+    // Re-read the workout view-mode preference so a change made in Settings (the
+    // tab stays mounted, so the one-time mount load below won't pick it up).
+    AsyncStorage.getItem(WORKOUT_VIEW_MODE_KEY)
+      .then(v => setFocusModeState(v === "focus"))
+      .catch((e) => warnStorage("getItem", WORKOUT_VIEW_MODE_KEY, e));
+
+    // Same for the auto-fill-sets preference (Settings toggle, off by default).
+    AsyncStorage.getItem(WORKOUT_AUTOFILL_KEY)
+      .then(v => setAutofillSets(v === "1"))
+      .catch((e) => warnStorage("getItem", WORKOUT_AUTOFILL_KEY, e));
+
+    // And the lock-screen Live Activity preference (Settings toggle, ON by default).
+    AsyncStorage.getItem(LIVE_ACTIVITY_KEY)
+      .then(v => setLiveActivityEnabled(v !== "0"))
+      .catch((e) => warnStorage("getItem", LIVE_ACTIVITY_KEY, e));
 
     if (pendingChangingExId.current) {
       setChangingExId(pendingChangingExId.current);
@@ -1598,13 +1694,33 @@ export default function WorkoutScreen() {
     AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
   }, []);
 
-  const updateSet = (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string) => {
+  // `cascade` is true only for TYPED input (onChangeText). Programmatic fills
+  // (the checkbox's copy-from-prev) stay single-set, or ticking one empty set
+  // would overwrite the sets below with that set's prev values.
+  const updateSet = (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade = false) => {
+    const fillDown = cascade && autofillSets;
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
-      const sets = [...exLog[type]];
-      sets[idx] = { ...sets[idx], [field]: value };
-      return { ...prev, [exId]: { ...exLog, [type]: sets } };
+      if (!fillDown) {
+        const sets = [...exLog[type]];
+        sets[idx] = { ...sets[idx], [field]: value };
+        return { ...prev, [exId]: { ...exLog, [type]: sets } };
+      }
+      // Auto-fill: the typed value applies to this set and every set below it
+      // in the flat warmup→working order (a warmup entry fills the working
+      // sets too, matching the builder and log-workout). Unlike those bulk
+      // flows, sets already ticked done hold real logged performance, so they
+      // are never overwritten — and filled sets are NOT auto-ticked; each set
+      // still completes via its own checkbox / blur auto-tick.
+      const fillFrom = (sets: SetLog[], from: number) =>
+        sets.map((s, i) => (i === from || (i > from && !s.done)) ? { ...s, [field]: value } : s);
+      const fillAll = (sets: SetLog[]) =>
+        sets.map(s => s.done ? s : { ...s, [field]: value });
+      if (type === "warmup") {
+        return { ...prev, [exId]: { ...exLog, warmup: fillFrom(exLog.warmup, idx), working: fillAll(exLog.working) } };
+      }
+      return { ...prev, [exId]: { ...exLog, working: fillFrom(exLog.working, idx) } };
     });
   };
 
@@ -1737,18 +1853,6 @@ export default function WorkoutScreen() {
     });
   };
 
-  const moveExercise = (exId: string, dir: "up" | "down") => {
-    setWorkoutInfo(prev => {
-      if (!prev) return prev;
-      const arr = [...prev.exercises];
-      const idx = arr.findIndex(e => e.id === exId);
-      const target = dir === "up" ? idx - 1 : idx + 1;
-      if (target < 0 || target >= arr.length) return prev;
-      [arr[idx], arr[target]] = [arr[target], arr[idx]];
-      return { ...prev, exercises: arr };
-    });
-  };
-
   const removeExercise = (exId: string) => {
     setWorkoutInfo(prev => prev ? { ...prev, exercises: prev.exercises.filter(e => e.id !== exId) } : prev);
     setLog(prev => { const next = { ...prev }; delete next[exId]; return next; });
@@ -1773,7 +1877,14 @@ export default function WorkoutScreen() {
     setIsFreeWorkout(true);
     // A free workout only belongs to a program when the user opts to add it.
     setWorkoutInfo({ name, exercises: [], programId: addToProgram ? activeProgram?.id : undefined });
+    // Clean slate: a custom workout always starts with no exercises so the user
+    // adds their own. Also wipe any leftover log / isometric flags / notes / draft
+    // from a just-finished workout or a program session we're switching away from,
+    // so nothing carries over into the fresh session.
     setLog({});
+    setIsometricExIds(new Set());
+    setNotes("");
+    clearDraft();
     AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: effectiveTodayRef.current, workoutName: name }))
       .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -1786,6 +1897,7 @@ export default function WorkoutScreen() {
   const handleSelectDay = useCallback((dayName: string, fromProgram?: SavedProgram) => {
     setIsFreeWorkout(false);
     setFreeWorkoutAddToProgram(false);
+    let override: DayOverride = { date: effectiveTodayRef.current, workoutName: dayName };
     if (dayName === "Rest") {
       setWorkoutInfo(null);
       setLog({});
@@ -1795,8 +1907,11 @@ export default function WorkoutScreen() {
       const exercises = src?.workouts[`${dayIndex}:${dayName}`] ?? [];
       setWorkoutInfo({ name: dayName, exercises, programId: src?.id });
       setLog(initLog(exercises));
+      // Record the source program so re-resolution (tab refocus / relaunch)
+      // restores THIS program's exercises, not the active program's.
+      override = { ...override, programId: src?.id };
     }
-    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: effectiveTodayRef.current, workoutName: dayName }))
+    AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify(override))
       .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     setChangeDayOpen(false);
   }, [activeProgram]);
@@ -1816,19 +1931,6 @@ export default function WorkoutScreen() {
       return [...exLog.warmup, ...exLog.working].every(s => s.done);
     });
 
-  const exerciseProgress = useMemo(() => {
-    if (!workoutInfo) return { done: 0, total: 0 };
-    const total = workoutInfo.exercises.length;
-    let done = 0;
-    for (const ex of workoutInfo.exercises) {
-      const exLog = log[ex.id];
-      if (!exLog) continue;
-      const sets = [...exLog.warmup, ...exLog.working];
-      if (sets.length > 0 && sets.every(s => s.done)) done++;
-    }
-    return { done, total };
-  }, [workoutInfo, log]);
-
   // Build the in-memory CompletedWorkout from current state. Pure — no I/O.
   const buildCompletedWorkout = (): CompletedWorkout | null => {
     if (!workoutInfo) return null;
@@ -1847,7 +1949,9 @@ export default function WorkoutScreen() {
       // never treats a free workout as a legacy record to attribute by name.
       programId: workoutInfo.programId ?? "",
       durationSeconds: elapsedSeconds,
-      // sessionNotes mirrors log-workout.tsx's behaviour. Stored only when non-empty.
+      // sessionNotes always saves whatever text was written — opening, leaving
+      // open, or ticking the notes card all persist it. It's only dropped when
+      // the text is cleared (the card's open/closed state no longer gates this).
       sessionNotes: trimmedNotes ? notes : undefined,
       exercises: workoutInfo.exercises.map(ex => {
         const exLog = log[ex.id];
@@ -1880,7 +1984,7 @@ export default function WorkoutScreen() {
       const newHistory = [completed, ...history];
       await AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify(newHistory));
       // Keep prev-set suggestions correct for any same-session discard → restart.
-      setPrevByName(buildPrevByName(newHistory));
+      setPrevHistory(newHistory);
       scheduleCloudPush();
     } catch (e) {
       warnStorage("persistCompletedWorkout", WORKOUT_HISTORY_KEY, e);
@@ -1894,6 +1998,7 @@ export default function WorkoutScreen() {
     // Show the locked completed view synchronously so the UI flips on the same
     // tick — persistence runs in the background.
     setTodaysCompletedWorkout(completed);
+    setSummaryWorkout(completed);
     void persistCompletedWorkout(completed);
     if (isFreeWorkout && freeWorkoutAddToProgram && activeProgram && workoutInfo) {
       AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
@@ -1908,7 +2013,17 @@ export default function WorkoutScreen() {
           .catch((e) => warnStorage("setItem", PROGRAMS_KEY, e));
       }).catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
     }
+    if (isFreeWorkout) {
+      // A finished custom workout shouldn't leave its name as a day-override —
+      // otherwise the page could resurface that (now empty) custom day instead of
+      // the program's scheduled workout. The completed view renders from history,
+      // and the next custom workout starts fresh via confirmCustomWorkout.
+      AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DAY_OVERRIDE_KEY, e));
+    }
     stopTimer();
+    // A rest countdown started before Finish (e.g. "Finish Anyway" mid-rest)
+    // must not keep running over the locked completed view.
+    dismissRestTimer();
     setIsFreeWorkout(false);
     setFreeWorkoutAddToProgram(false);
     // Tear down the live session so it's no longer counted as "in progress"
@@ -1997,7 +2112,7 @@ export default function WorkoutScreen() {
                 // Rebuild prev-set suggestions from the post-delete history so the
                 // fresh log doesn't keep surfacing the deleted session's numbers as
                 // "previous" (persistCompletedWorkout had set them on finish).
-                setPrevByName(buildPrevByName(updated));
+                setPrevHistory(updated);
                 scheduleCloudPush();
               } catch (e) {
                 warnStorage("handleDiscardCompleted", WORKOUT_HISTORY_KEY, e);
@@ -2017,10 +2132,20 @@ export default function WorkoutScreen() {
     const next = customExercises.filter(e => e.name !== exName);
     setCustomExercises(next);
     AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next))
+      .then(() => scheduleCloudPush())
       .catch((e) => warnStorage("setItem", CUSTOM_KEY, e));
   };
 
-  const [prevByName, setPrevByName] = useState<Record<string, string[]>>({});
+  // Previous-set suggestions derive from history + the CURRENT day name, so an
+  // exercise programmed on two days (e.g. Lateral Raise on Push and on Arms)
+  // suggests that day's last numbers, not wherever it last appeared. Deriving
+  // (rather than storing the built map) keeps it correct when the day changes
+  // mid-screen — change-day override, free workout, day rollover.
+  const [prevHistory, setPrevHistory] = useState<CompletedWorkout[]>([]);
+  const prevByName = useMemo(
+    () => buildPrevByName(prevHistory, undefined, workoutInfo?.name),
+    [prevHistory, workoutInfo],
+  );
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -2033,24 +2158,158 @@ export default function WorkoutScreen() {
     setHasPrev(prevFn !== null);
   }, []);
 
+  // ── Lock-screen Live Activity ─────────────────────────────────────────────
+  // Same gate as the draft autosave: once the user has engaged with today's
+  // session, project it onto the iOS lock screen / Dynamic Island (dev and
+  // production builds only — silently inert in Expo Go). Lock-screen ticks and
+  // rest changes made while the app was backgrounded replay into the log and
+  // timers on foreground via the two appliers below.
+  const sessionActiveForActivity =
+    !!workoutInfo && !todaysCompletedWorkout &&
+    (isRunning || isPaused || hasWorkoutProgress(log) || isFreeWorkout || notes.trim().length > 0);
+
+  const liveActivityPayload = useMemo(() => {
+    if (!workoutInfo || todaysCompletedWorkout) return null;
+    return buildLiveActivityPayload({
+      workoutName: workoutInfo.name,
+      exercises: workoutInfo.exercises.map(e => ({ id: e.id, name: e.name, restSeconds: e.restSeconds })),
+      log,
+      // Exactly the prevSets lookup ExerciseCard feeds its checkboxes.
+      prevHintsFor: name => (prevByName[normalizeExerciseName(name)] ?? []).map(p => formatPrevHint(p, isKg)),
+      isKg,
+      timerStartMs: startEpochMs,
+      pausedElapsedSec: isPaused ? elapsedSeconds : 0,
+      restEndsAt,
+      restTotalSec: restTotal,
+    });
+  }, [workoutInfo, todaysCompletedWorkout, log, prevByName, isKg, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
+
+  const applyLockScreenTicks = useCallback((actions: LiveActivityTickAction[]) => {
+    setLog(prev => {
+      let next = prev;
+      for (const a of actions) {
+        const exLog = next[a.exId];
+        const sets = exLog?.[a.setType];
+        const set = sets?.[a.setIdx];
+        if (!exLog || !sets || !set || set.done) continue;
+        const updated = [...sets];
+        // Tick only — unlike the in-app checkbox, a lock-screen tick never
+        // writes numbers. Whatever the user typed before locking stays; an
+        // empty set comes back ticked-but-empty for them to fill in after
+        // unlocking (the card's weight×reps preview is guidance only).
+        updated[a.setIdx] = { ...set, done: true };
+        next = { ...next, [a.exId]: { ...exLog, [a.setType]: updated } };
+      }
+      return next;
+    });
+    // In-app ticks start the workout timer; anchor to when the first
+    // lock-screen tick actually happened, not to this reconciliation moment.
+    if (actions.length > 0 && !isRunning && !isPaused) startTimerAt(actions[0].ts);
+  }, [isRunning, isPaused, startTimerAt]);
+
+  const applyLockScreenRest = useCallback((endMs: number) => {
+    if (endMs > Date.now() + 1000) {
+      startRestTimer(Math.max(1, Math.round((endMs - Date.now()) / 1000)));
+    } else {
+      dismissRestTimer();
+    }
+  }, [startRestTimer, dismissRestTimer]);
+
+  useWorkoutLiveActivity({
+    enabled: liveActivityEnabled,
+    ready: draftRestored,
+    active: sessionActiveForActivity,
+    payload: sessionActiveForActivity ? liveActivityPayload : null,
+    restEndsAt,
+    onRemoteTicks: applyLockScreenTicks,
+    onRemoteRest: applyLockScreenRest,
+  });
+
+  // Open the floating notes card and focus the input. The note text always
+  // persists in `notes` state (it saves on Finish), so opening/closing never
+  // discards anything — closing just dismisses the card.
   const openNotes = () => {
-    notesBtnOpacity.value = withTiming(0, { duration: 180 });
     setShowNotes(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setTimeout(() => {
-      scrollRef.current?.scrollTo({ y: notesY.current - 12, animated: true });
-    }, 80);
+    // Focus shortly after the card starts emerging so the keyboard rises with it.
+    setTimeout(() => sessionNotesInputRef.current?.focus(), 70);
   };
   const closeNotes = () => {
+    Keyboard.dismiss();
     setShowNotes(false);
-    notesBtnOpacity.value = withTiming(1, { duration: 180 });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
+  // Cap the notes input so the card never grows past ~3/4 of the screen — and,
+  // while the keyboard is up (the card is lifted to sit just above it), never
+  // past the top safe area. The tick button lives at the top of the card, so an
+  // uncapped card pushes it off-screen on long notes. A bounded multiline
+  // TextInput scrolls its overflow natively.
+  // 74 = card padding (16×2) + header row (32) + header margin (10).
+  const notesCardBottom = Math.max(safeBottom + 162, kbHeight > 0 ? kbHeight + 12 : 0);
+  const notesInputMaxH = Math.max(
+    72,
+    Math.min(winH * 0.78, winH - notesCardBottom - insets.top - 8) - 74,
+  );
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => { setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null; });
+    // Open: decelerate as it grows out (ease-out). Close: accelerate as it gets
+    // sucked into the button (ease-in) — a true reverse of the opening motion.
+    notesAnim.value = withTiming(showNotes ? 1 : 0, {
+      duration: showNotes ? 320 : 240,
+      easing: showNotes ? ReEasing.out(ReEasing.cubic) : ReEasing.in(ReEasing.cubic),
+    });
+  }, [showNotes]);
+  useEffect(() => {
+    if (showNotes) { setNotesMounted(true); return; }
+    const id = setTimeout(() => setNotesMounted(false), 300);
+    return () => clearTimeout(id);
+  }, [showNotes]);
+
+  // Bottom-left action cluster: [Session Notes button] [round green + Add Exercise].
+  // Rendered in-scroll below the card in focus mode, and pinned above the nav bar
+  // in list mode (see the two call sites). Identical in both for consistency.
+  const renderActionCluster = () => (
+    <View style={styles.actionCluster}>
+      <BounceButton onPress={openNotes} accessibilityLabel="Session notes">
+        <View style={styles.notesToggleBtn}>
+          <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+            <Ionicons name="document-text-outline" size={20} color={t.tp} />
+          </NeuCard>
+          <View style={styles.notesTogglePlus}>
+            <Text style={styles.notesTogglePlusText}>+</Text>
+          </View>
+        </View>
+      </BounceButton>
+      <View style={styles.addBtnAnchor}>
+        {/* Speech-bubble hint: only while the workout has no exercises yet, nudging
+            the user toward the + to start adding. Unmounts once the first is added. */}
+        {(workoutInfo?.exercises.length ?? 0) === 0 && <AddExerciseHint />}
+        <BounceButton
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}
+          accessibilityLabel="Add exercise"
+        >
+          <View style={styles.addRoundWrap}>
+            <View style={styles.addRoundBtn}>
+              <Ionicons name="add" size={22} color="#fff" />
+            </View>
+          </View>
+        </BounceButton>
+      </View>
+    </View>
+  );
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardWillShow", e => {
+      setKbHeight(e.endCoordinates.height);
+      // Lift the floating notes card above the keyboard as an animated offset so
+      // opening/closing with the keyboard up stays smooth (no layout jump).
+      const base = safeBottom + 162;
+      notesKbShift.value = withTiming(Math.min(0, base - (e.endCoordinates.height + 12)), { duration: e.duration || 250, easing: ReEasing.out(ReEasing.cubic) });
+    });
+    const hide = Keyboard.addListener("keyboardWillHide", e => {
+      setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null;
+      notesKbShift.value = withTiming(0, { duration: (e && e.duration) || 250, easing: ReEasing.out(ReEasing.cubic) });
+    });
     return () => { show.remove(); hide.remove(); };
-  }, []);
+  }, [safeBottom]);
 
   // Load persisted view mode preference once.
   useEffect(() => {
@@ -2070,7 +2329,10 @@ export default function WorkoutScreen() {
   useEffect(() => { setFocusIndex(0); }, [workoutInfo?.name]);
 
   // ─── No active program ──────────────────────────────────────────────────────
-  if (!activeProgram && !isFreeWorkout) {
+  // Skip this empty state when today's workout is already logged (e.g. a custom
+  // workout with no program): the completed/locked view in the main return must
+  // win so "View Today's Workout" shows the finished session, not this screen.
+  if (!activeProgram && !isFreeWorkout && !todaysCompletedWorkout) {
     return (
       <FadeScreen style={{ backgroundColor: t.bg }}>
         <View style={[styles.emptyWrap, { paddingTop: insets.top + 60 }]}>
@@ -2079,7 +2341,7 @@ export default function WorkoutScreen() {
           </NeuCard>
           <Text style={[styles.emptyTitle, { color: t.tp }]}>No Active Program</Text>
           <Text style={[styles.emptySub, { color: t.ts }]}>
-            Start a custom session to log exercises without a program.
+            Start a custom workout to log exercises without a program.
           </Text>
           <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 8 }}>
             <View style={styles.emptyBtn}>
@@ -2087,12 +2349,24 @@ export default function WorkoutScreen() {
             </View>
           </BounceButton>
         </View>
+
+        <CustomWorkoutNameSheet
+          visible={customWorkoutNamingOpen}
+          isDark={isDark}
+          t={t}
+          activeProgram={activeProgram}
+          onStart={confirmCustomWorkout}
+          onClose={() => setCustomWorkoutNamingOpen(false)}
+        />
       </FadeScreen>
     );
   }
 
   // ─── Rest day ───────────────────────────────────────────────────────────────
-  if (!workoutInfo) {
+  // A logged workout for the effective day takes precedence over the rest-day
+  // screen even when there's no scheduled template (workoutInfo is null) — the
+  // main return renders the locked summary from todaysCompletedWorkout.
+  if (!workoutInfo && !todaysCompletedWorkout) {
     return (
       <FadeScreen style={{ backgroundColor: t.bg }}>
         <View style={[styles.emptyWrap, { paddingTop: insets.top + 60 }]}>
@@ -2111,15 +2385,15 @@ export default function WorkoutScreen() {
           <View style={[styles.topBar, { top: insets.top }]}>
             <View style={styles.topBarLeft}>
               <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
-                <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                  <Ionicons name="add" size={22} color={APP_LIGHT.tp} />
+                <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                  <Ionicons name="add" size={22} color={t.tp} />
                 </View>
               </BounceButton>
             </View>
             {/* Rest days keep the timer/stopwatch available (top-right), same as an active workout. */}
             <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
-              <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                <Ionicons name="timer-outline" size={22} color={APP_LIGHT.tp} />
+              <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <Ionicons name="timer-outline" size={22} color={t.tp} />
               </View>
             </TouchableOpacity>
           </View>
@@ -2165,6 +2439,18 @@ export default function WorkoutScreen() {
     );
   }
 
+  // The program named under the header. This is the program the SESSION belongs
+  // to, not blindly the active one: change-day can put a non-active program's
+  // day on screen, and the locked view carries its own programId ("" = free
+  // workout with no program → no line; undefined = legacy record → active).
+  const headerProgram = (() => {
+    const pid = todaysCompletedWorkout ? todaysCompletedWorkout.programId : workoutInfo?.programId;
+    if (pid === "") return null;
+    if (pid) return allPrograms.find(p => p.id === pid) ?? null;
+    if (!todaysCompletedWorkout && isFreeWorkout && !freeWorkoutAddToProgram) return null;
+    return activeProgram;
+  })();
+
   // ─── Workout ────────────────────────────────────────────────────────────────
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -2194,22 +2480,22 @@ export default function WorkoutScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         style={{ backgroundColor: t.bg }}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: insets.bottom + 140 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: !todaysCompletedWorkout && workoutInfo ? safeBottom + 150 : 92 }]}
       >
         {/* Header scrolls with content */}
         <View style={styles.header}>
           <Text style={[styles.headerName, { color: t.tp }]}>
-            {(todaysCompletedWorkout?.workoutName ?? workoutInfo.name).toUpperCase()}
+            {(todaysCompletedWorkout?.workoutName ?? workoutInfo?.name ?? "").toUpperCase()}
           </Text>
-          {(!isFreeWorkout || freeWorkoutAddToProgram) && activeProgram && (
+          {headerProgram && (
             <Text style={[styles.headerSub, { color: t.ts }]}>
-              {activeProgram.name} · Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}
+              {headerProgram.name} · Week {getCurrentWeek(headerProgram)} of {headerProgram.totalWeeks}
             </Text>
           )}
         </View>
 
         {/* Focus mode: inline progress under header */}
-        {focusMode && !todaysCompletedWorkout && workoutInfo.exercises.length > 0 && (() => {
+        {focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
           const total = workoutInfo.exercises.length;
           const idx = Math.min(focusIndex, total - 1);
           const pct = ((idx + 1) / total) * 100;
@@ -2283,7 +2569,7 @@ export default function WorkoutScreen() {
             ))}
 
           </>
-        ) : workoutInfo.exercises.length === 0 ? (
+        ) : !workoutInfo ? null : workoutInfo.exercises.length === 0 ? (
           <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 16 }}>
             <View style={{ padding: 32, alignItems: "center", gap: 8 }}>
               <Text style={[styles.emptyTitle, { color: t.tp, fontSize: 16 }]}>No exercises added</Text>
@@ -2314,7 +2600,7 @@ export default function WorkoutScreen() {
                   totalExercises={workoutInfo.exercises.length}
                   exLog={exLog}
                   isDark={isDark}
-                  onUpdateSet={(type, idx, field, value) => updateSet(exercise.id, type, idx, field, value)}
+                  onUpdateSet={(type, idx, field, value, cascade) => updateSet(exercise.id, type, idx, field, value, cascade)}
                   onToggleDone={(type, idx) => toggleDone(exercise.id, type, idx)}
                   onAutoTick={(type, idx) => autoTickIfComplete(exercise.id, type, idx)}
                   exNotes={log[exercise.id]?.notes ?? ""}
@@ -2333,7 +2619,8 @@ export default function WorkoutScreen() {
                   numberBadge={focusMode ? undefined : i + 1}
                   onToggleIsometric={() => setIsometricExIds(prev => {
                     const next = new Set(prev);
-                    next.has(exercise.id) ? next.delete(exercise.id) : next.add(exercise.id);
+                    if (next.has(exercise.id)) next.delete(exercise.id);
+                    else next.add(exercise.id);
                     return next;
                   })}
                 />
@@ -2342,68 +2629,17 @@ export default function WorkoutScreen() {
           })
         )}
 
-        {/* Bottom action row — only when not locked and not in focus mode */}
-        {!todaysCompletedWorkout && !focusMode && (
-          <View style={styles.bottomActionRow}>
-            {workoutInfo.exercises.length > 0 && (
-              <Reanimated.View style={[styles.notesToggleWrap, notesBtnStyle]}>
-                <BounceButton onPress={openNotes}>
-                  <View style={styles.notesToggleBtn}>
-                    <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
-                      <Ionicons name="document-text-outline" size={20} color={t.tp} />
-                    </NeuCard>
-                    <View style={styles.notesTogglePlus}>
-                      <Text style={styles.notesTogglePlusText}>+</Text>
-                    </View>
-                  </View>
-                </BounceButton>
-              </Reanimated.View>
-            )}
-            <View style={{ flex: 1, alignItems: "center" }}>
-              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}>
-                <View style={styles.addExBtnWrap}>
-                  <View style={styles.addExBtn}>
-                    <Ionicons name="add" size={18} color="#fff" />
-                    <Text style={styles.addExText}>Add Exercise</Text>
-                  </View>
-                </View>
-              </BounceButton>
-            </View>
-            {workoutInfo.exercises.length > 0 && <View style={styles.notesToggleWrap} />}
+        {/* Focus mode: bottom-left action cluster below the exercise / empty card.
+            (In list mode the cluster is pinned instead — see below the ScrollView.)
+            The scroll's bottom padding keeps it clear of the pinned controls. */}
+        {focusMode && !todaysCompletedWorkout && workoutInfo && (
+          <View style={{ marginTop: 4, marginBottom: 8 }}>
+            {renderActionCluster()}
           </View>
         )}
-
-        {/* Session Notes — only when not locked and not in focus mode */}
-        {!todaysCompletedWorkout && !focusMode && workoutInfo.exercises.length > 0 && (
-          <View onLayout={e => { notesY.current = e.nativeEvent.layout.y; }}>
-          <ExpandablePanel expanded={showNotes} duration={500}>
-            <NeuCard dark={isDark} style={{ marginBottom: 4, borderRadius: 16 }}>
-              <View style={styles.notesInner}>
-                <View style={styles.notesHeader}>
-                  <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
-                  <BounceButton onPress={closeNotes} accessibilityLabel="Close notes">
-                    <Ionicons name="close" size={20} color={t.ts} />
-                  </BounceButton>
-                </View>
-                <TextInput
-                  style={[styles.notesInput, { color: t.tp }]}
-                  placeholder="How's the session going? Anything to note..."
-                  placeholderTextColor={t.ts}
-                  multiline
-                  value={notes}
-                  onChangeText={setNotes}
-                  onFocus={() => { handleInputFocus(null, null); }}
-                  textAlignVertical="top"
-                />
-              </View>
-            </NeuCard>
-          </ExpandablePanel>
-          </View>
-        )}
-
 
         {/* Complete Workout button — inline at bottom of scroll, only while running (hidden in focus mode) */}
-        {isRunning && !todaysCompletedWorkout && !focusMode && workoutInfo.exercises.length > 0 && (
+        {isRunning && !todaysCompletedWorkout && !focusMode && workoutInfo && workoutInfo.exercises.length > 0 && (
           <BounceButton onPress={handleFinish} style={{ marginHorizontal: 0, marginTop: 12, marginBottom: 16 }}>
             <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
               <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
@@ -2416,20 +2652,64 @@ export default function WorkoutScreen() {
 
       </ScrollView>
 
-      {/* List mode: pinned progress card just above the nav bar */}
-      {!focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
-        const pct = exerciseProgress.total === 0 ? 0 : (exerciseProgress.done / exerciseProgress.total) * 100;
-        return (
-          <View pointerEvents="none" style={{ position: "absolute", left: 20, right: 20, bottom: insets.bottom + 80, zIndex: 9 }}>
-            <View style={{ backgroundColor: "#fff", borderRadius: 999, paddingHorizontal: 20, paddingVertical: 10, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
-              <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: APP_LIGHT.tp, marginBottom: 8 }}>
-                {exerciseProgress.done} of {exerciseProgress.total} Exercises Complete
-              </Text>
-              <AnimatedProgressBar pct={pct} trackColor={APP_LIGHT.div} />
+      {/* List mode: bottom-left action cluster pinned just above the nav bar. Always
+          available while a workout is active (even with 0 exercises) so notes /
+          extra exercises can be added without scrolling. The nav bar is fixed at
+          bottom:28 + height 64 (top ≈ 92 from the screen bottom, device-independent),
+          so pin the cluster to that fixed top rather than the safe-area inset —
+          otherwise notched devices leave a big gap and non-notch phones nearly touch. */}
+      {!focusMode && !todaysCompletedWorkout && workoutInfo && (
+        <View style={{ position: "absolute", left: 20, bottom: 100, zIndex: 6 }}>
+          {renderActionCluster()}
+        </View>
+      )}
+
+      {/* Floating Session Notes card (both modes). Mounted only while open (plus a
+          brief close-animation window) so no full-screen overlay lingers in the tree.
+          The tick saves-and-closes; tapping the backdrop does the same. Notes always
+          persist in `notes` state (committed on Finish). */}
+      {notesMounted && !todaysCompletedWorkout && workoutInfo && (
+        <>
+          <Reanimated.View
+            pointerEvents={showNotes ? "auto" : "none"}
+            style={[StyleSheet.absoluteFill, { backgroundColor: "#000", zIndex: 20 }, notesBackdropStyle]}
+          >
+            <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeNotes} />
+          </Reanimated.View>
+          <Reanimated.View
+            pointerEvents={showNotes ? "auto" : "none"}
+            style={[
+              styles.notesFloatCard,
+              {
+                bottom: safeBottom + 162,
+                backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
+                shadowColor: isDark ? "#000" : "#a3afc0",
+              },
+              notesCardStyle,
+            ]}
+          >
+            <View style={styles.notesHeader}>
+              <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
+              <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
+                <View style={styles.notesTickBtn}>
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                </View>
+              </BounceButton>
             </View>
-          </View>
-        );
-      })()}
+            <TextInput
+              ref={r => { sessionNotesInputRef.current = r; }}
+              style={[styles.notesInput, { color: t.tp, maxHeight: notesInputMaxH }]}
+              placeholder="How's the session going? Anything to note..."
+              placeholderTextColor={t.ts}
+              multiline
+              value={notes}
+              onChangeText={setNotes}
+              onFocus={() => { handleInputFocus(null, null); }}
+              textAlignVertical="top"
+            />
+          </Reanimated.View>
+        </>
+      )}
 
       {/* Focus mode: pinned Prev / Next or Complete Workout above the tab bar */}
       {focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
@@ -2447,7 +2727,7 @@ export default function WorkoutScreen() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         };
         return (
-          <View pointerEvents="box-none" style={{ position: "absolute", left: 20, right: 20, bottom: insets.bottom + 80, zIndex: 5 }}>
+          <View pointerEvents="box-none" style={{ position: "absolute", left: 20, right: 20, bottom: safeBottom + 80, zIndex: 5 }}>
             <View style={{ flexDirection: "row", gap: 16, alignItems: "center", justifyContent: isLast ? "flex-start" : "center" }}>
               <BounceButton onPress={isFirst ? undefined : goPrev} accessibilityLabel="Previous exercise">
                 <View style={[styles.focusBackWrap, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? "#000" : "#a3afc0", shadowOpacity: isDark ? 0.35 : 0.5, opacity: isFirst ? 0.4 : 1 }]}>
@@ -2483,28 +2763,29 @@ export default function WorkoutScreen() {
       <View style={[styles.topBar, { top: insets.top }]}>
         <View style={styles.topBarLeft}>
           {todaysCompletedWorkout ? (
-            <View style={styles.workoutTimerPill}>
+            <View style={[styles.workoutTimerPill, { backgroundColor: isDark ? t.div : "#fff" }]}>
               <Ionicons name="checkmark-circle" size={14} color={ACCT} />
-              <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>
+              <Text style={[styles.workoutTimerText, { color: t.tp }]}>
                 {todaysCompletedWorkout.durationSeconds > 0 ? fmtTime(todaysCompletedWorkout.durationSeconds) : "Done"}
               </Text>
             </View>
           ) : (isRunning || isPaused) ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View style={styles.workoutTimerPill}>
+              <View style={[styles.workoutTimerPill, { backgroundColor: isDark ? t.div : "#fff" }]}>
                 <View style={[styles.timerActiveDot, isPaused && styles.timerActiveDotPaused]} />
-                <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>{fmtTime(elapsedSeconds)}</Text>
+                <Text style={[styles.workoutTimerText, { color: t.tp }]}>{fmtTime(elapsedSeconds)}</Text>
               </View>
               <BounceButton onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                isPaused ? resumeTimer() : pauseTimer();
+                if (isPaused) resumeTimer();
+                else pauseTimer();
               }}>
-                <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                   <Ionicons name={isPaused ? "play" : "pause"} size={16} color={t.tp} />
                 </View>
               </BounceButton>
               <BounceButton onPress={handleDiscard}>
-                <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                   <TrashIcon size={18} color={t.ts} />
                 </View>
               </BounceButton>
@@ -2512,14 +2793,14 @@ export default function WorkoutScreen() {
           ) : (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}>
-                <View style={styles.workoutTimerPill}>
-                  <Text style={[styles.workoutTimerText, { color: APP_LIGHT.tp }]}>Start</Text>
+                <View style={[styles.workoutTimerPill, { backgroundColor: isDark ? t.div : "#fff" }]}>
+                  <Text style={[styles.workoutTimerText, { color: t.tp }]}>Start</Text>
                 </View>
               </BounceButton>
               {activeProgram && (
                 <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
-                  <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                    <Ionicons name="add" size={22} color={APP_LIGHT.tp} />
+                  <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                    <Ionicons name="add" size={22} color={t.tp} />
                   </View>
                 </BounceButton>
               )}
@@ -2527,8 +2808,8 @@ export default function WorkoutScreen() {
           )}
         </View>
         <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
-          <View style={[styles.topIconBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-            <Ionicons name="timer-outline" size={22} color={APP_LIGHT.tp} />
+          <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+            <Ionicons name="timer-outline" size={22} color={t.tp} />
           </View>
         </TouchableOpacity>
       </View>
@@ -2565,7 +2846,13 @@ export default function WorkoutScreen() {
           visible
           subtitle="ADD EXERCISE"
           customExercises={customExercises}
-          onSelectMultiple={names => { names.forEach((name, i) => addExercise(name, i)); setAddingExercise(false); }}
+          onSelectMultiple={names => {
+            // Append the new exercises and stay on the exercise the user is
+            // currently viewing. New exercises append to the end, so the current
+            // focusIndex keeps pointing at the same exercise (no jump in focus mode).
+            names.forEach((name, i) => addExercise(name, i));
+            setAddingExercise(false);
+          }}
           onDeleteCustom={deleteCustomExercise}
           onCreateCustom={() => {
             setAddingExercise(false);
@@ -2647,6 +2934,19 @@ export default function WorkoutScreen() {
           onClose={() => { setCompleteSheetOpen(false); setPendingComplete(null); }}
         />
       )}
+
+      {summaryWorkout && (
+        <WorkoutSummarySheet
+          visible
+          workout={summaryWorkout}
+          onDone={() => {
+            setSummaryWorkout(null);
+            // Land on Home after the celebration — it picks the finished
+            // workout up on focus. navigate (not push) just switches tabs.
+            router.navigate("/home");
+          }}
+        />
+      )}
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
       <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
@@ -2692,13 +2992,12 @@ const styles = StyleSheet.create({
 
   // Header
   header:       { paddingBottom: 14, gap: 2, marginBottom: 4 },
-  headerLabel:  { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.4 },
   headerName:   { fontFamily: FontFamily.bold, fontSize: 28, letterSpacing: 0.3, marginTop: 2 },
   headerSub:        { fontFamily: FontFamily.regular, fontSize: 14 },
   topBar:           { position: "absolute", left: 20, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   topBarLeft:       { flexDirection: "row", alignItems: "center", gap: 10 },
-  topIconBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
-  workoutTimerPill: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 100, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 22, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  topIconBtn:       { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  workoutTimerPill: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 100, paddingHorizontal: 14, height: 40, borderRadius: 20, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   workoutTimerText: { fontFamily: FontFamily.bold, fontSize: 15, letterSpacing: 0.5 },
   timerActiveDot:       { width: 8, height: 8, borderRadius: 4, backgroundColor: ACCT },
   timerActiveDotPaused: { backgroundColor: "#F59E0B" },
@@ -2716,16 +3015,11 @@ const styles = StyleSheet.create({
   exNumLabel:   { fontFamily: FontFamily.semibold, fontSize: 13 },
   exName:       { fontFamily: FontFamily.bold, fontSize: 22, flex: 1 },
   exNotesRow:    { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
-  exNotesHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
-  exNotesDone:   { fontFamily: FontFamily.semibold, fontSize: 13 },
   exNotesInput:  { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
-  exDoneChip:   { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-  exDoneText:   { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   // Column headers
   colHeaderRow:   { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 4, paddingBottom: 4 },
   colHeaderText:  { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: "center" },
-  repRangeHeader: { fontFamily: FontFamily.bold, fontSize: 10, letterSpacing: 0.5, textAlign: "center", marginBottom: 1 },
   headerDivider:  { height: 1, marginBottom: 4, opacity: 0.6 },
 
   // Column widths — match old app exactly
@@ -2745,32 +3039,36 @@ const styles = StyleSheet.create({
   inputBox:      { width: "100%", height: 40, borderRadius: 10, justifyContent: "center" },
   inputBoxText:  { fontFamily: FontFamily.bold, fontSize: 15, textAlign: "center", flex: 1, paddingVertical: 0 },
 
-  // Checkbox
-
-  // Add / remove set
-  addSetBtn:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingVertical: 6, marginTop: 2, borderRadius: 8, borderWidth: 1, borderStyle: "dashed" },
-  addSetText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
+  // Remove set
   removeSetBtn:  { width: 24, height: 24, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 
   // Edit actions
   editMoveRow:   { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
   editMoveLabel: { fontFamily: FontFamily.regular, fontSize: 12, marginLeft: 2 },
   editChipsRow:  { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
-  editChipWrap:  { alignSelf: "center", borderRadius: 12, shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.28, shadowRadius: 5 },
-  editChip:      { borderRadius: 12, paddingVertical: 8, paddingHorizontal: 20, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
   editChipText:  { fontFamily: FontFamily.semibold, fontSize: 12 },
 
-  // Notes
-  notesInner:  { padding: 16 },
-  notesInput:  { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
-  notesHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  // Session Notes — floating card + tick button
+  notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
+  notesHeader:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  notesFloatCard: { position: "absolute", left: 20, right: 20, borderRadius: 16, padding: 16, zIndex: 21, transformOrigin: "left bottom", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 18 },
+  notesTickBtn:   { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 
-  // Notes toggle button
-  bottomActionRow:    { flexDirection: "row", alignItems: "center", marginTop: 6, marginBottom: 20 },
-  notesToggleWrap:    { width: 44, alignItems: "center", justifyContent: "center" },
+  // Bottom-left action cluster: Session Notes button + round green + Add Exercise
+  actionCluster:      { flexDirection: "row", alignItems: "center", gap: 14 },
   notesToggleBtn:     { width: 40, height: 40 },
   notesTogglePlus:    { position: "absolute", top: -4, right: -6, backgroundColor: ACCT, borderRadius: 7, width: 14, height: 14, alignItems: "center", justifyContent: "center" },
   notesTogglePlusText: { color: "#fff", fontSize: 10, fontFamily: FontFamily.bold, lineHeight: 14 },
+  addRoundWrap:       { borderRadius: 20, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  addRoundBtn:        { width: 40, height: 40, borderRadius: 20, backgroundColor: ACCT, alignItems: "center", justifyContent: "center" },
+  addBtnAnchor:       { position: "relative" },
+  // Equal negative left/right keeps the wrap symmetric (so it stays centered over
+  // the 44px button) while giving the bubble ~160px to lay its text out on one
+  // line; alignItems:center centers the bubble + tail. bottom clears the button.
+  addHintWrap:        { position: "absolute", bottom: 52, left: -60, right: -60, alignItems: "center" },
+  addHintBubble:      { backgroundColor: ACCT, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.45, shadowRadius: 8 },
+  addHintText:        { color: "#fff", fontFamily: FontFamily.semibold, fontSize: 13 },
+  addHintTail:        { width: 0, height: 0, marginTop: -0.5, borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: ACCT },
 
   // Finish button
   finishWrap:       { borderRadius: 16, backgroundColor: "#8896A7", shadowColor: "#4a5568", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.45, shadowRadius: 8 },
@@ -2784,12 +3082,8 @@ const styles = StyleSheet.create({
   focusBackBtn:     { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", borderWidth: 1, shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4 },
 
   checkCircle:      { width: 24, height: 24, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  addExBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 10, paddingHorizontal: 22, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 },
-  addExText:        { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
 
   // Keyboard floating dismiss button
-  kbFloatRow: { flexDirection: "row", justifyContent: "flex-end", paddingRight: 10, paddingTop: 8, paddingBottom: 4 },
   kbFloatBtn: { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
 
   // Reorder button in exercise edit panel
@@ -2810,12 +3104,6 @@ const styles = StyleSheet.create({
   woReorderDoneBtn:   { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
   woReorderDone:      { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
 
-  // Options sheet rows (used by ChangeDaySheet)
-  woOptionRow:   { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1 },
-  woOptionIcon:  { width: 36, alignItems: "center" },
-  woOptionTitle: { fontFamily: FontFamily.semibold, fontSize: 15 },
-  woOptionSub:   { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
-
   // Shared step-header (matches journal pickerStepHeader style)
   woStepHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 10 },
   woStepBackBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 18 },
@@ -2824,7 +3112,6 @@ const styles = StyleSheet.create({
   // WorkoutOptionsSheet card-style picker
   woPickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, textAlign: "center", paddingHorizontal: 24, paddingTop: 4, paddingBottom: 16 },
   woPickerContent:     { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 },
-  woPickerSection:     { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.8, marginTop: 8, marginBottom: 12 },
   woPickerOptionInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
   woPickerOptionText:  { fontFamily: FontFamily.semibold, fontSize: 15, flex: 1 },
   woPickerOptionSub:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
@@ -2853,7 +3140,7 @@ const styles = StyleSheet.create({
   emptyIconInner: { width: 80, height: 80, alignItems: "center", justifyContent: "center" },
   emptyTitle:     { fontFamily: FontFamily.bold, fontSize: 22, textAlign: "center" },
   emptySub:       { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center", lineHeight: 22 },
-  emptyBtn:       { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, paddingHorizontal: 28, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
+  emptyBtn:       { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, paddingHorizontal: 28, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   emptyBtnText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   // Interval Timer / Stopwatch modal styles now live in components/IntervalTimerModal.tsx.
 });

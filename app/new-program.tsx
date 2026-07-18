@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, memo } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor, FadeIn } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View,
@@ -14,6 +14,7 @@ import {
   Animated,
   Easing,
   PanResponder,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useNavigation, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -24,23 +25,25 @@ import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
-import { PROGRAMS_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
+import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { batchKeyOf, SENT_PROGRAMS_KEY, SHARED_PROGRAMS_KEY, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
+import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
-import CollapsibleSection from "../components/CollapsibleSection";
 import DumbbellIcon from "../components/DumbbellIcon";
 import ExerciseImage from "../components/ExerciseImage";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
+import { formatStoredDate } from "../utils/dates";
 import { exerciseIdByName } from "../utils/exerciseLookup";
+import { musclesForExercise } from "../utils/muscleGroups";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -121,6 +124,35 @@ function dayLabel(key: string): string {
   return key.split(":").slice(1).join(":");
 }
 
+// Collision-proof exercise id. A bare `Date.now()` collides when two exercises
+// are added on the same millisecond (multi-select batches, or a second add
+// right after a first), and a duplicate id corrupts React keys + the shared
+// `collapsingIds` identity, making an exercise render/act under the wrong day.
+function makeExerciseId(): string {
+  return `pex_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// Heal a loaded WorkoutMap whose exercises may carry duplicate ids from the old
+// `Date.now() + offset` scheme. Reassigns a fresh unique id to any repeat so an
+// already-saved program stops misbehaving on edit. Ids are local-only identity,
+// so reassigning is safe.
+function dedupeExerciseIds(workouts: WorkoutMap): WorkoutMap {
+  const seen = new Set<string>();
+  const out: WorkoutMap = {};
+  for (const day of Object.keys(workouts)) {
+    out[day] = (workouts[day] ?? []).map(ex => {
+      if (!ex.id || seen.has(ex.id)) {
+        const fresh = makeExerciseId();
+        seen.add(fresh);
+        return { ...ex, id: fresh };
+      }
+      seen.add(ex.id);
+      return ex;
+    });
+  }
+  return out;
+}
+
 // ─── Rest picker helpers ───────────────────────────────────────────────────────
 
 const REST_ITEM_H = 38;
@@ -139,16 +171,21 @@ function formatRest(secs: number): string {
 const WARMUP_ORANGE = "#ffbf0f";
 
 interface ExerciseRowProps {
+  day: string;
   exercise: Exercise;
   exIndex: number;
   totalExercises: number;
   isDark: boolean;
-  onUpdate: (field: keyof Exercise, value: string | number | boolean) => void;
-  onUpdateSets: (sets: ProgramSet[]) => void;
-  onSetRemoved: (sets: ProgramSet[]) => void;
-  onRemove: () => void;
-  onOpenReorder: () => void;
-  onEdit: () => void;
+  // Day-scoped handlers, all referentially stable (useCallback at the root/Step2
+  // level) so the memo below can bail out. Per-exercise closures are derived
+  // inside the row — inline arrows here would defeat the memo.
+  onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number | boolean) => void;
+  onUpdateExerciseSets: (day: string, id: string, sets: ProgramSet[]) => void;
+  /** Write a rest value onto every exercise of every day in the draft. */
+  onApplyRestToAll: (secs: number) => void;
+  onStartCollapse: (day: string, id: string) => void;
+  onOpenReorder: (day: string) => void;
+  onEditExercise: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   /** Lowercased exercise name → custom photo URI, for custom exercises. */
   customImageByName: Record<string, string>;
@@ -156,12 +193,15 @@ interface ExerciseRowProps {
 
 /**
  * Prescribed-weight input. Storage is canonical kg; the user edits in their
- * display unit. To avoid mangling decimals (converting "2." per keystroke would
- * drop the dot), it keeps a local display-text buffer and only commits the
- * kg value on blur (onEndEditing). The buffer re-syncs whenever the stored kg
- * changes from outside the field (fill-down from an earlier set, program load,
- * unit toggle) — which never happens mid-edit, since weightKg only changes on
- * our own commit.
+ * display unit. Each keystroke commits its parsed kg value immediately so the
+ * fill-down reaches the sets below live (matching the reps fields). To avoid
+ * mangling decimals ("2." round-tripped through the converter would drop the
+ * dot), the field keeps a local display-text buffer that is never re-synced
+ * while focused — the buffer re-syncs on blur and whenever the stored kg
+ * changes while the field is NOT being edited (fill-down from an earlier set,
+ * program load, unit toggle). Commits only fire on actual keystrokes, so an
+ * untouched focus+blur can't nudge a fractional-kg value into a phantom
+ * "unsaved change".
  */
 function WeightSetInput({
   valueKg, isKg, onCommitKg, inputRef, onFocus, style, placeholderColor,
@@ -175,7 +215,9 @@ function WeightSetInput({
   placeholderColor: string;
 }) {
   const [text, setText] = useState(() => formatWeightForDisplay(valueKg ?? "", isKg));
+  const isFocused = useRef(false);
   useEffect(() => {
+    if (isFocused.current) return;
     setText(formatWeightForDisplay(valueKg ?? "", isKg));
   }, [valueKg, isKg]);
   return (
@@ -183,24 +225,29 @@ function WeightSetInput({
       ref={inputRef}
       style={style}
       value={text}
-      onChangeText={setText}
+      onChangeText={v => {
+        setText(v);
+        onCommitKg(parseWeightToKg(v, isKg));
+      }}
       onEndEditing={() => {
-        // Skip no-op commits: a focus+blur with no edit must not re-commit, or
-        // lb display-rounding would nudge a fractional-kg value and trigger a
-        // phantom "unsaved change".
-        if (text === formatWeightForDisplay(valueKg ?? "", isKg)) return;
-        onCommitKg(parseWeightToKg(text, isKg));
+        isFocused.current = false;
+        // Re-sync the buffer to the canonical display form ("080" → "80").
+        setText(formatWeightForDisplay(valueKg ?? "", isKg));
       }}
       placeholder="—"
       placeholderTextColor={placeholderColor}
       keyboardType="decimal-pad"
       selectTextOnFocus
-      onFocus={onFocus}
+      onFocus={() => { isFocused.current = true; onFocus(); }}
     />
   );
 }
 
-function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUpdateSets, onSetRemoved, onRemove, onOpenReorder, onEdit, onInputFocus, customImageByName }: ExerciseRowProps) {
+// Memoized: a keystroke in one exercise's set input must re-render only that
+// exercise's row, not every row in the day. All function props are stable, and
+// updateExerciseSets preserves the identity of untouched Exercise objects, so
+// the shallow compare bails for every row except the one being edited.
+const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExercises, isDark, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onStartCollapse, onOpenReorder, onEditExercise, onInputFocus, customImageByName }: ExerciseRowProps) {
   const router = useRouter();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
@@ -208,8 +255,20 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
   const restSecs = exercise.restSeconds ?? 0;
   const sets = normaliseSets(exercise);
 
+  const exId = exercise.id;
+  const onUpdate = useCallback((field: keyof Exercise, value: string | number | boolean) => {
+    onUpdateExercise(day, exId, field, value);
+  }, [onUpdateExercise, day, exId]);
+  const onUpdateSets = useCallback((next: ProgramSet[]) => {
+    onUpdateExerciseSets(day, exId, next);
+  }, [onUpdateExerciseSets, day, exId]);
+
   const [showRestPicker, setShowRestPicker] = useState(false);
   const restScrollOffset = useRef(0);
+  // Rest value waiting to be applied to ALL exercises. Committed only after the
+  // sheet finishes closing — the every-day re-render is heavy enough to stall
+  // JS and visibly hold the modal open if it runs before the unmount commits.
+  const pendingRestApplyAll = useRef<number | null>(null);
   const scrollAnim = useRef(new Animated.Value(0)).current;
   const slideY = useRef(new Animated.Value(500)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -257,8 +316,17 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
     Animated.parallel([
       Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); setShowRestPicker(false); });
-  }, [slideY, backdropOpacity]);
+    ]).start(() => {
+      slideY.setValue(500); backdropOpacity.setValue(0); setShowRestPicker(false);
+      // Flush a pending Apply-to-All on the next task so the modal's unmount
+      // commits first and the bulk update can't keep the sheet on screen.
+      const pending = pendingRestApplyAll.current;
+      if (pending !== null) {
+        pendingRestApplyAll.current = null;
+        setTimeout(() => onApplyRestToAll(pending), 0);
+      }
+    });
+  }, [slideY, backdropOpacity, onApplyRestToAll]);
 
   const modeOffset     = useSharedValue(exercise.isIsometric ? 1 : 0);
   const modeTrackWidth = useSharedValue(0);
@@ -353,12 +421,12 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
             fallbackColor={t.ts}
           />
         </TouchableOpacity>
-        <TouchableOpacity onPress={onEdit} activeOpacity={0.7} style={styles.exNameBtn}>
+        <TouchableOpacity onPress={() => onEditExercise(day, exId)} activeOpacity={0.7} style={styles.exNameBtn}>
           <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
           <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1} ellipsizeMode="tail">{exercise.name}</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(); }}
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(day); }}
           activeOpacity={0.7}
           style={styles.exReorderBtn}
           accessibilityLabel="Reorder exercises"
@@ -370,7 +438,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
           onPress={() =>
             Alert.alert("Remove Exercise", `Remove "${exercise.name}"?`, [
               { text: "Cancel", style: "cancel" },
-              { text: "Remove", style: "destructive", onPress: onRemove },
+              { text: "Remove", style: "destructive", onPress: () => onStartCollapse(day, exId) },
             ])
           }
           activeOpacity={0.7}
@@ -469,7 +537,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
           <CollapsibleCard
             key={idx}
             isCollapsing={idx === collapsingSetIdx}
-            onCollapsed={() => { setCollapsingSetIdx(null); onSetRemoved(sets.slice(0, -1)); }}
+            onCollapsed={() => { setCollapsingSetIdx(null); onUpdateSets(sets.slice(0, -1)); }}
             expanding={idx === newlyAddedIdx}
             naturalHeight={idx === newlyAddedIdx ? setRowHeight.current : undefined}
           >
@@ -583,7 +651,10 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
         <BounceButton
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            onUpdateSets([...sets, { type: "working" }]);
+            // Duplicate the last working set's targets so a typed value carries
+            // into new sets. Warmup values are never copied into a working set.
+            const lastWorking = [...sets].reverse().find(s => s.type === "working");
+            onUpdateSets([...sets, { ...(lastWorking ?? {}), type: "working" }]);
           }}
           style={{ flex: 1, marginLeft: 6 }}
         >
@@ -672,7 +743,22 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
                 </Animated.View>
               </View>
             </View>
-            <View style={styles.restDoneRow}>
+            <View style={styles.restBtnPairRow}>
+              <BounceButton
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  const index = Math.round(restScrollOffset.current / REST_ITEM_H);
+                  const val = REST_OPTIONS[Math.max(0, Math.min(index, REST_OPTIONS.length - 1))] ?? 0;
+                  pendingRestApplyAll.current = val;
+                  closeRestPicker();
+                }}
+                accessibilityLabel="Apply rest timer to all exercises"
+                accessibilityRole="button"
+              >
+                <View style={[styles.restApplyAllBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+                  <Text style={[styles.restApplyAll, { color: isDark ? APP_DARK.bg : "#fff" }]}>Apply to All</Text>
+                </View>
+              </BounceButton>
               <BounceButton
                 onPress={() => {
                   const index = Math.round(restScrollOffset.current / REST_ITEM_H);
@@ -697,7 +783,7 @@ function ExerciseRow({ exercise, exIndex, totalExercises, isDark, onUpdate, onUp
 
     </View>
   );
-}
+});
 
 // ─── Stepper ──────────────────────────────────────────────────────────────────
 
@@ -735,14 +821,22 @@ function StepIndicator({ step, isDark, canStep2, onStepPress }: {
   onStepPress: (s: 1 | 2) => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+  // The green aurora glows behind this indicator, so light mode needs stronger
+  // colors than the usual pale grays / bright ACCT: a deeper green for text and
+  // the line, a translucent slate for inactive parts, and a frosted white rim
+  // on the dots to lift them off the tint (same rim as the Home orbs).
+  const accent  = isDark ? ACCT : ACCT_DEEP;
+  const divider = isDark ? "rgba(255,255,255,0.12)" : "rgba(45,55,72,0.18)";
+  const muted   = isDark ? t.ts : "rgba(45,55,72,0.55)";
+  const rim     = isDark ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.9)";
   return (
     <View style={styles.stepIndicatorWrap}>
-      <View style={[styles.stepLine, { backgroundColor: step === 2 ? ACCT : divider }]} />
+      <View style={[styles.stepLine, { backgroundColor: step === 2 ? accent : divider }]} />
       <View style={styles.stepIndicatorRow}>
         <BounceButton style={styles.stepItem} onPress={() => onStepPress(1)} accessibilityLabel="Go to setup" accessibilityRole="button">
           <View style={[styles.stepDot, {
             backgroundColor: ACCT,
+            borderColor: rim,
             shadowColor: ACCT,
             shadowOffset: { width: 0, height: 3 },
             shadowOpacity: 0.55,
@@ -750,7 +844,7 @@ function StepIndicator({ step, isDark, canStep2, onStepPress }: {
           }]}>
             <Text style={styles.stepDotText}>1</Text>
           </View>
-          <Text style={[styles.stepDotLabel, { color: ACCT }]}>Setup</Text>
+          <Text style={[styles.stepDotLabel, { color: accent }]}>Setup</Text>
         </BounceButton>
         <BounceButton
           style={[styles.stepItem, !canStep2 && { opacity: 0.4 }]}
@@ -760,14 +854,15 @@ function StepIndicator({ step, isDark, canStep2, onStepPress }: {
         >
           <View style={[styles.stepDot, step === 2 ? {
             backgroundColor: ACCT,
+            borderColor: rim,
             shadowColor: ACCT,
             shadowOffset: { width: 0, height: 3 },
             shadowOpacity: 0.55,
             shadowRadius: 8,
-          } : { backgroundColor: divider }]}>
-            <Text style={[styles.stepDotText, { color: step === 2 ? "#fff" : t.ts }]}>2</Text>
+          } : { backgroundColor: divider, borderColor: rim }]}>
+            <Text style={[styles.stepDotText, { color: step === 2 ? "#fff" : muted }]}>2</Text>
           </View>
-          <Text style={[styles.stepDotLabel, { color: step === 2 ? ACCT : t.ts }]}>Workouts</Text>
+          <Text style={[styles.stepDotLabel, { color: step === 2 ? accent : muted }]}>Workouts</Text>
         </BounceButton>
       </View>
     </View>
@@ -1236,44 +1331,428 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
   );
 }
 
+// ─── Workout Summary sheet ────────────────────────────────────────────────────
+// Compact overview of the whole program, opened from the floating Summary
+// button on Step 2 (whose full page gets very long once exercises are added).
+// Two steps inside one sheet, mirroring workout.tsx's ChangeDaySheet:
+//   - days list: every cycle day (Training AND Rest) with exercise/set counts
+//     and the muscle groups it hits. Drag the handle to reorder the cycle —
+//     each day's exercises travel with it (see reorderCycleDays).
+//   - day detail: that day's exercises via the existing DraggableExerciseList
+//     (drag to reorder, tap to change, trash to remove), plus Go to Day (jump
+//     the long Step 2 page straight to it) and Add Exercise shortcuts.
+
+function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercises, isDark, t, onReorder, onDragStateChange, onOpenDay }: {
+  cyclePattern: string[];
+  isTrainingDay: boolean[];
+  workouts: WorkoutMap;
+  customExercises: CustomExercise[];
+  isDark: boolean;
+  t: typeof APP_LIGHT | typeof APP_DARK;
+  onReorder: (from: number, to: number) => void;
+  onDragStateChange: (dragging: boolean) => void;
+  onOpenDay: (cycleIdx: number) => void;
+}) {
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const activeIdxRef = useRef<number | null>(null);
+  const hoverIdxRef = useRef<number | null>(null);
+  const rowHeightRef = useRef(62);
+  const count = cyclePattern.length;
+
+  // Rows are uniform height and reorder commits on release, so index-keyed
+  // Animated.Values are safe here (the exercise list keys by id because its
+  // rows carry identity; a cycle slot IS its position).
+  const rowAnims = useRef<Animated.Value[]>([]);
+  while (rowAnims.current.length < count) rowAnims.current.push(new Animated.Value(0));
+
+  const countRef = useRef(count);
+  countRef.current = count;
+  const onReorderRef = useRef(onReorder);
+  onReorderRef.current = onReorder;
+  const onDragStateRef = useRef(onDragStateChange);
+  onDragStateRef.current = onDragStateChange;
+
+  useLayoutEffect(() => {
+    rowAnims.current.forEach(a => a.setValue(0));
+  }, [cyclePattern, isTrainingDay]);
+
+  const panResponders = useMemo(() =>
+    cyclePattern.map((_, idx) =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderGrant: () => {
+          activeIdxRef.current = idx;
+          hoverIdxRef.current = idx;
+          rowAnims.current.forEach(a => a.setValue(0));
+          setActiveIdx(idx);
+          onDragStateRef.current(true);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        },
+        onPanResponderMove: (_, gs) => {
+          rowAnims.current[idx]?.setValue(gs.dy);
+          const rh = rowHeightRef.current;
+          const newHover = Math.max(0, Math.min(countRef.current - 1, Math.round(idx + gs.dy / rh)));
+          if (newHover !== hoverIdxRef.current) {
+            hoverIdxRef.current = newHover;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            for (let i = 0; i < countRef.current; i++) {
+              if (i === idx) continue;
+              let toVal = 0;
+              if (newHover > idx && i > idx && i <= newHover) toVal = -rh;
+              else if (newHover < idx && i < idx && i >= newHover) toVal = rh;
+              Animated.spring(rowAnims.current[i], {
+                toValue: toVal, useNativeDriver: false, damping: 20, stiffness: 280,
+              }).start();
+            }
+          }
+        },
+        onPanResponderRelease: () => {
+          const from = activeIdxRef.current!;
+          const to = hoverIdxRef.current ?? from;
+          if (to !== from) {
+            onReorderRef.current(from, to);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          } else {
+            rowAnims.current.forEach(a => a.setValue(0));
+          }
+          activeIdxRef.current = null;
+          hoverIdxRef.current = null;
+          setActiveIdx(null);
+          onDragStateRef.current(false);
+        },
+        onPanResponderTerminate: () => {
+          rowAnims.current.forEach(a => a.setValue(0));
+          activeIdxRef.current = null;
+          hoverIdxRef.current = null;
+          setActiveIdx(null);
+          onDragStateRef.current(false);
+        },
+      })
+    ),
+  [cyclePattern]);
+
+  const divider = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+
+  return (
+    <>
+      {cyclePattern.map((name, i) => {
+        const isTraining = isTrainingDay[i];
+        const label = name.trim() || "Workout";
+        const exs = isTraining ? (workouts[`${i}:${label}`] ?? []) : [];
+        const setCount = exs.reduce((n, e) => n + normaliseSets(e).length, 0);
+        const muscles = isTraining
+          ? Array.from(new Set(exs.flatMap(e => musclesForExercise(e.name, customExercises))))
+          : [];
+        const isActive = activeIdx === i;
+        return (
+          <Animated.View
+            key={i}
+            style={[
+              styles.sumDayRow,
+              i < count - 1 && { borderBottomWidth: 1, borderBottomColor: isActive ? "transparent" : divider },
+              { transform: [{ translateY: rowAnims.current[i] }], zIndex: isActive ? 10 : 1 },
+              isActive && {
+                backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)",
+                borderRadius: 8,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.2,
+                shadowRadius: 8,
+              },
+            ]}
+            onLayout={i === 0 ? (e) => { rowHeightRef.current = e.nativeEvent.layout.height; } : undefined}
+          >
+            <View {...panResponders[i].panHandlers} style={styles.dragHandleArea}>
+              <DragHandleIcon color={t.ts} />
+            </View>
+            <View style={[styles.daySummaryNumChip, { backgroundColor: isTraining ? ACCT + "18" : (isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)") }]}>
+              <Text style={[styles.daySummaryNum, { color: isTraining ? ACCT : t.ts }]}>{i + 1}</Text>
+            </View>
+            {isTraining ? (
+              <TouchableOpacity
+                style={styles.sumDayBody}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenDay(i); }}
+                activeOpacity={0.7}
+                accessibilityLabel={`Open ${label}`}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.sumDayName, { color: t.tp }]} numberOfLines={1}>{label}</Text>
+                <Text style={[styles.sumDayMeta, { color: t.ts }]} numberOfLines={1}>
+                  {exs.length} exercise{exs.length === 1 ? "" : "s"} · {setCount} set{setCount === 1 ? "" : "s"}
+                  {muscles.length > 0 ? ` · ${muscles.join(", ")}` : ""}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.sumDayBody}>
+                <Text style={[styles.sumDayName, { color: t.ts }]}>Rest</Text>
+              </View>
+            )}
+            {isTraining
+              ? <Ionicons name="chevron-forward" size={16} color={t.ts} />
+              : <Ionicons name="moon-outline" size={15} color={t.ts} />}
+          </Animated.View>
+        );
+      })}
+    </>
+  );
+}
+
+function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, workouts, customExercises, onReorderDays, onReorderExercises, onRemoveExercise, onEditExercise, onAddExercise, onJumpToDay, onClose }: {
+  visible: boolean;
+  isDark: boolean;
+  t: typeof APP_LIGHT | typeof APP_DARK;
+  cyclePattern: string[];
+  isTrainingDay: boolean[];
+  workouts: WorkoutMap;
+  customExercises: CustomExercise[];
+  onReorderDays: (from: number, to: number) => void;
+  onReorderExercises: (day: string, exercises: Exercise[]) => void;
+  onRemoveExercise: (day: string, id: string) => void;
+  onEditExercise: (day: string, id: string) => void;
+  onAddExercise: (day: string) => void;
+  onJumpToDay: (cycleIdx: number) => void;
+  onClose: () => void;
+}) {
+  const slideY = useRef(new Animated.Value(600)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  // null = days overview; a cycle index = that day's exercise list.
+  const [detailIdx, setDetailIdx] = useState<number | null>(null);
+  // The sheet's ScrollView must not fight row drags — same trick as Step 2.
+  const [listScrollEnabled, setListScrollEnabled] = useState(true);
+
+  useEffect(() => {
+    if (visible) {
+      setDetailIdx(null);
+      setListScrollEnabled(true);
+      slideY.setValue(600);
+      backdropOpacity.setValue(0);
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const animateOut = useCallback((cb: () => void) => {
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 600, duration: 220, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); cb(); });
+  }, [slideY, backdropOpacity]);
+
+  const closeSheet = useCallback(() => animateOut(onClose), [animateOut, onClose]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) { slideY.setValue(g.dy); backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300)); }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.8) {
+          animateOut(onClose);
+        } else {
+          Animated.parallel([
+            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+    })
+  ).current;
+
+  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+
+  const detailLabel = detailIdx != null ? (cyclePattern[detailIdx] ?? "").trim() || "Workout" : "";
+  const detailKey = detailIdx != null ? `${detailIdx}:${detailLabel}` : null;
+  const detailExs = detailKey ? (workouts[detailKey] ?? []) : [];
+  const detailSets = detailExs.reduce((n, e) => n + normaliseSets(e).length, 0);
+
+  const trainingCount = isTrainingDay.filter(Boolean).length;
+  let totalEx = 0;
+  let totalSets = 0;
+  cyclePattern.forEach((n, i) => {
+    if (!isTrainingDay[i]) return;
+    const exs = workouts[`${i}:${n.trim() || "Workout"}`] ?? [];
+    totalEx += exs.length;
+    totalSets += exs.reduce((s, e) => s + normaliseSets(e).length, 0);
+  });
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      animationType="none"
+      onRequestClose={() => { if (detailIdx != null) setDetailIdx(null); else closeSheet(); }}
+    >
+      <View style={styles.restBackdrop}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.restOverlay, { opacity: backdropOpacity }]} />
+        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
+        <Animated.View style={[styles.summarySheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+          <View {...panResponder.panHandlers} style={styles.restHandleArea}>
+            <View style={styles.reorderHandle} />
+          </View>
+
+          <View style={[styles.sumHeader, { borderBottomColor: divider }]}>
+            {detailIdx != null ? (
+              <TouchableOpacity
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setDetailIdx(null); }}
+                style={styles.sumBackBtn}
+                activeOpacity={0.7}
+                accessibilityLabel="Back to summary"
+                accessibilityRole="button"
+              >
+                <Ionicons name="chevron-back" size={20} color={t.tp} />
+              </TouchableOpacity>
+            ) : <View style={styles.sumBackBtn} />}
+            <View style={{ flex: 1, alignItems: "center" }}>
+              <Text style={[styles.restTitle, { color: t.tp }]} numberOfLines={1}>
+                {detailIdx != null ? detailLabel : "Workout Summary"}
+              </Text>
+              <Text style={[styles.restSubtitle, { color: t.ts }]} numberOfLines={1}>
+                {detailIdx != null
+                  ? `${detailExs.length} exercise${detailExs.length === 1 ? "" : "s"} · ${detailSets} set${detailSets === 1 ? "" : "s"}`
+                  : `${trainingCount} training day${trainingCount === 1 ? "" : "s"} · ${totalEx} exercise${totalEx === 1 ? "" : "s"} · ${totalSets} set${totalSets === 1 ? "" : "s"}`}
+              </Text>
+            </View>
+            <View style={styles.sumBackBtn} />
+          </View>
+
+          <ScrollView
+            style={{ flexGrow: 0 }}
+            scrollEnabled={listScrollEnabled}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.sumListWrap}
+          >
+            {detailIdx == null ? (
+              <DraggableDayList
+                cyclePattern={cyclePattern}
+                isTrainingDay={isTrainingDay}
+                workouts={workouts}
+                customExercises={customExercises}
+                isDark={isDark}
+                t={t}
+                onReorder={onReorderDays}
+                onDragStateChange={dragging => setListScrollEnabled(!dragging)}
+                onOpenDay={setDetailIdx}
+              />
+            ) : detailExs.length === 0 ? (
+              <Text style={[styles.daySummaryEmpty, { color: t.ts }]}>No exercises yet</Text>
+            ) : (
+              <DraggableExerciseList
+                exercises={detailExs}
+                day={detailKey!}
+                isDark={isDark}
+                t={t}
+                onReorderExercises={onReorderExercises}
+                onDragStateChange={dragging => setListScrollEnabled(!dragging)}
+                onRemoveExercise={onRemoveExercise}
+                onEditExercise={(day, id) => animateOut(() => onEditExercise(day, id))}
+              />
+            )}
+          </ScrollView>
+
+          {detailIdx == null ? (
+            <View style={styles.restDoneRow}>
+              <BounceButton
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}
+                accessibilityLabel="Done"
+                accessibilityRole="button"
+              >
+                <View style={styles.restDoneWrap}>
+                  <View style={styles.restDoneBtn}>
+                    <Text style={styles.restDone}>Done</Text>
+                  </View>
+                </View>
+              </BounceButton>
+            </View>
+          ) : (
+            <View style={styles.restBtnPairRow}>
+              <BounceButton
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(() => onJumpToDay(detailIdx)); }}
+                accessibilityLabel="Go to day"
+                accessibilityRole="button"
+              >
+                <View style={[styles.restApplyAllBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+                  <Text style={[styles.restApplyAll, { color: isDark ? APP_DARK.bg : "#fff" }]}>Go to Day</Text>
+                </View>
+              </BounceButton>
+              <BounceButton
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(() => onAddExercise(detailKey!)); }}
+                accessibilityLabel="Add exercise"
+                accessibilityRole="button"
+              >
+                <View style={styles.restDoneWrap}>
+                  <View style={[styles.restDoneBtn, { paddingHorizontal: 24 }]}>
+                    <Text style={styles.restDone}>Add Exercise</Text>
+                  </View>
+                </View>
+              </BounceButton>
+            </View>
+          )}
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
 // ─── Step 2 ───────────────────────────────────────────────────────────────────
 
 interface DayCardProps {
   day: string;
   exercises: Exercise[];
-  isCollapsed: boolean;
   isDark: boolean;
   collapsingIds: Set<string>;
   customImageByName: Record<string, string>;
-  onToggle: (day: string) => void;
   onOpenPicker: (day: string) => void;
   onEditExercise: (day: string, id: string) => void;
   onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number | boolean) => void;
   onUpdateExerciseSets: (day: string, id: string, sets: ProgramSet[]) => void;
+  onApplyRestToAll: (secs: number) => void;
   onRemoveExercise: (day: string, id: string) => void;
   onStartCollapse: (day: string, id: string) => void;
   onReorderExercises: (day: string, exercises: Exercise[]) => void;
   onDragStateChange: (dragging: boolean) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   onOpenReorder: (day: string) => void;
+  onMeasureDay: (day: string, y: number) => void;
 }
 
-// One day's heading + collapsible body. Memoized so toggling a single day only
-// re-renders that day — re-rendering every day's exercise rows on each toggle was
-// the JS work that delayed the collapse/expand animation. Every prop is kept
-// referentially stable by the parent (callbacks via useCallback, a per-day
-// `isCollapsed` boolean instead of the whole Set), so untouched days bail out.
+// One day's heading + full exercise list (always expanded — no collapsed/summary
+// view). Memoized so editing one day only re-renders that day; every prop is kept
+// referentially stable by the parent (callbacks via useCallback), so untouched
+// days bail out.
 const DayCard = memo(function DayCard({
-  day, exercises, isCollapsed, isDark, collapsingIds, customImageByName,
-  onToggle, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets,
+  day, exercises, isDark, collapsingIds, customImageByName,
+  onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll,
   onRemoveExercise, onStartCollapse, onReorderExercises, onDragStateChange,
-  onInputFocus, onOpenReorder,
+  onInputFocus, onOpenReorder, onMeasureDay,
 }: DayCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+
+  // The sticky day header docks a day the moment its HEADING CARD reaches the
+  // top (plain onLayout — no measureLayout, which can throw on Fabric). It used
+  // to dock on the first exercise's "EXERCISE 1 OF N" label instead, which made
+  // the pinned title lag on the previous day while the next day's heading (and
+  // first exercise) were already on screen.
+  const dayTopRef = useRef(0);
+  const reportDock = useCallback(() => {
+    onMeasureDay(day, dayTopRef.current);
+  }, [day, onMeasureDay]);
+
   return (
-    <View style={{ marginBottom: 16 }}>
+    <View
+      style={{ marginBottom: 16 }}
+      onLayout={e => { dayTopRef.current = e.nativeEvent.layout.y; reportDock(); }}
+    >
       <NeuCard dark={isDark} radius={16} style={styles.dayHeadingCard} innerStyle={styles.dayHeadingCardInner}>
-        <TouchableOpacity onPress={() => onToggle(day)} activeOpacity={0.8} style={styles.dayHeadingRow}>
+        <View style={styles.dayHeadingRow}>
           <View style={styles.dayHeadingLeft}>
             <View style={[styles.dayAccentBar, { backgroundColor: ACCT }]} />
             <Text style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(day).toUpperCase()}</Text>
@@ -1283,71 +1762,48 @@ const DayCard = memo(function DayCard({
               </NeuCard>
             )}
           </View>
-          <Ionicons name={isCollapsed ? "chevron-forward" : "chevron-down"} size={16} color={t.ts} />
-        </TouchableOpacity>
+        </View>
       </NeuCard>
 
-      <CollapsibleSection collapsed={isCollapsed} duration={300}>
-      {isCollapsed ? (
-        <Reanimated.View key="collapsed" entering={FadeIn.duration(220)}>
-          {exercises.length === 0 ? (
-            <NeuCard dark={isDark} radius={16} style={styles.emptyCard}>
-              <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
-            </NeuCard>
-          ) : (
-            <NeuCard dark={isDark} radius={16} style={styles.daySummaryCard} innerStyle={styles.daySummaryCardInner}>
-              <DraggableExerciseList
-                exercises={exercises}
-                day={day}
-                isDark={isDark}
-                t={t}
-                onReorderExercises={onReorderExercises}
-                onDragStateChange={onDragStateChange}
-                onRemoveExercise={onRemoveExercise}
-                onEditExercise={onEditExercise}
-              />
-            </NeuCard>
-          )}
-          <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
-            <View style={styles.addExBtnWrap}>
-              <View style={styles.addExBtn}>
-                <Ionicons name="add" size={18} color="#fff" />
-                <Text style={styles.addExText}>Add Exercise</Text>
-              </View>
-            </View>
-          </BounceButton>
-        </Reanimated.View>
-      ) : (
-        <Reanimated.View key="expanded" entering={FadeIn.duration(220)}>
+      {/* Full exercise list, always shown — no collapsed/summary view. A plain
+          View (no Reanimated layout-anim ancestor) so the per-set CollapsibleCards
+          reflow live as sets are added. */}
+      <View>
           {exercises.length === 0 && (
             <NeuCard dark={isDark} radius={16} style={styles.emptyCard}>
               <Text style={[styles.emptyHint, { color: t.ts }]}>No exercises yet</Text>
             </NeuCard>
           )}
-          {exercises.map((ex, i) => (
-            <CollapsibleCard
-              key={ex.id}
-              isCollapsing={collapsingIds.has(ex.id)}
-              onCollapsed={() => onRemoveExercise(day, ex.id)}
-            >
+          {exercises.map((ex, i) => {
+            const card = (
               <NeuCard dark={isDark} radius={16} style={styles.exerciseCard}>
                 <ExerciseRow
+                  day={day}
                   exercise={ex}
                   exIndex={i}
                   totalExercises={exercises.length}
                   isDark={isDark}
-                  onUpdate={(field, value) => onUpdateExercise(day, ex.id, field, value)}
-                  onUpdateSets={sets => onUpdateExerciseSets(day, ex.id, sets)}
-                  onSetRemoved={sets => onUpdateExerciseSets(day, ex.id, sets)}
-                  onRemove={() => onStartCollapse(day, ex.id)}
-                  onOpenReorder={() => onOpenReorder(day)}
-                  onEdit={() => onEditExercise(day, ex.id)}
+                  onUpdateExercise={onUpdateExercise}
+                  onUpdateExerciseSets={onUpdateExerciseSets}
+                  onApplyRestToAll={onApplyRestToAll}
+                  onStartCollapse={onStartCollapse}
+                  onOpenReorder={onOpenReorder}
+                  onEditExercise={onEditExercise}
                   onInputFocus={onInputFocus}
                   customImageByName={customImageByName}
                 />
               </NeuCard>
-            </CollapsibleCard>
-          ))}
+            );
+            return (
+              <CollapsibleCard
+                key={ex.id}
+                isCollapsing={collapsingIds.has(ex.id)}
+                onCollapsed={() => onRemoveExercise(day, ex.id)}
+              >
+                {card}
+              </CollapsibleCard>
+            );
+          })}
           <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
             <View style={styles.addExBtnWrap}>
               <View style={styles.addExBtn}>
@@ -1356,21 +1812,20 @@ const DayCard = memo(function DayCard({
               </View>
             </View>
           </BounceButton>
-        </Reanimated.View>
-      )}
-      </CollapsibleSection>
+      </View>
     </View>
   );
 });
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, isSharedEditMode, collapsingIds, onStartCollapse, onInputFocus, customImageByName,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, isSharedEditMode, collapsingIds, onStartCollapse, onInputFocus, customImageByName, onMeasureDay,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
   onEditExercise: (day: string, id: string) => void;
   onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number | boolean) => void;
   onUpdateExerciseSets: (day: string, id: string, sets: ProgramSet[]) => void;
+  onApplyRestToAll: (secs: number) => void;
   onRemoveExercise: (day: string, id: string) => void;
   onReorderExercises: (day: string, exercises: Exercise[]) => void;
   onDragStateChange: (dragging: boolean) => void;
@@ -1383,24 +1838,11 @@ function Step2({
   onStartCollapse: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   customImageByName: Record<string, string>;
+  onMeasureDay: (day: string, y: number) => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const days = Object.keys(workouts);
-  // Land on Step 2 with every day collapsed. The collapsed summary rows are
-  // light, so they mount instantly in the first commit (no header-then-pop
-  // two-phase). A day's heavy editable rows mount only when it's expanded,
-  // where the expand animation makes the mount read as intentional.
-  const [collapsedDays, setCollapsedDays] = useState<Set<string>>(() => new Set(days));
   const [reorderDay, setReorderDay] = useState<string | null>(null);
-
-  const toggleDay = useCallback((day: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCollapsedDays(prev => {
-      const next = new Set(prev);
-      next.has(day) ? next.delete(day) : next.add(day);
-      return next;
-    });
-  }, []);
 
   const openReorder = useCallback((day: string) => setReorderDay(day), []);
 
@@ -1411,31 +1853,38 @@ function Step2({
           key={day}
           day={day}
           exercises={workouts[day] ?? []}
-          isCollapsed={collapsedDays.has(day)}
           isDark={isDark}
           collapsingIds={collapsingIds}
           customImageByName={customImageByName}
-          onToggle={toggleDay}
           onOpenPicker={onOpenPicker}
           onEditExercise={onEditExercise}
           onUpdateExercise={onUpdateExercise}
           onUpdateExerciseSets={onUpdateExerciseSets}
+          onApplyRestToAll={onApplyRestToAll}
           onRemoveExercise={onRemoveExercise}
           onStartCollapse={onStartCollapse}
           onReorderExercises={onReorderExercises}
           onDragStateChange={onDragStateChange}
           onInputFocus={onInputFocus}
           onOpenReorder={openReorder}
+          onMeasureDay={onMeasureDay}
         />
       ))}
 
       {!isEditMode && !isReviewMode && !isSharedEditMode && (
         <BounceButton onPress={onFinish} accessibilityLabel="Create program" accessibilityRole="button">
-          <View style={styles.primaryBtnWrap}>
-            <View style={styles.primaryBtn}>
-              <Text style={styles.primaryBtnText}>Create Program</Text>
-            </View>
-          </View>
+          {(() => {
+            const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+            const btnContent = isDark ? APP_DARK.bg : "#fff";
+            const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
+            return (
+              <View style={[styles.primaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
+                <View style={[styles.primaryBtn, { backgroundColor: btnBg }]}>
+                  <Text style={[styles.primaryBtnText, { color: btnContent }]}>Create Program</Text>
+                </View>
+              </View>
+            );
+          })()}
         </BounceButton>
       )}
 
@@ -1487,6 +1936,33 @@ export default function NewProgramScreen() {
   }, [customExercises]);
   const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
   const [pickerState, setPickerState] = useState<{ day: string; replaceId?: string } | null>(null);
+  // Workout Summary sheet (floating button on Step 2).
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  // First-run coach mark teaching the tap-to-toggle Training/Rest interaction.
+  const [showCycleCoach, setShowCycleCoach] = useState(false);
+
+  // Show the coach mark once, only when freshly creating a program (never in
+  // edit/review/shared flows, where the user already knows the builder).
+  useEffect(() => {
+    if (isEditMode || isReviewMode || isSharedEditMode) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    AsyncStorage.getItem(CYCLE_COACHMARK_KEY)
+      .then(seen => {
+        if (cancelled || seen) return;
+        // Brief delay so the popup lands after the screen's entrance settles.
+        timer = setTimeout(() => { if (!cancelled) setShowCycleCoach(true); }, 450);
+      })
+      .catch(e => warnStorage("getItem", CYCLE_COACHMARK_KEY, e));
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [isEditMode, isReviewMode, isSharedEditMode]);
+
+  const dismissCycleCoach = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowCycleCoach(false);
+    AsyncStorage.setItem(CYCLE_COACHMARK_KEY, "1")
+      .catch(e => warnStorage("setItem", CYCLE_COACHMARK_KEY, e));
+  }, []);
 
   // Tracks whether the draft has been loaded — prevents auto-save overwriting it before load completes
   const isDraftLoaded = useRef(false);
@@ -1582,8 +2058,9 @@ export default function NewProgramScreen() {
             const isTraining = snap.cyclePattern.map(d => d !== "Rest");
             const names = snap.cyclePattern.map(d => d === "Rest" ? "" : d);
             const canonicalDays = trainingDayKeys(names, isTraining);
-            const canonicalWorkouts: WorkoutMap = {};
-            canonicalDays.forEach(d => { canonicalWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
+            const rawWorkouts: WorkoutMap = {};
+            canonicalDays.forEach(d => { rawWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
+            const canonicalWorkouts = dedupeExerciseIds(rawWorkouts);
             setName(snap.name);
             setTotalWeeks(snap.totalWeeks);
             setCycleDays(snap.cycleDays);
@@ -1611,8 +2088,9 @@ export default function NewProgramScreen() {
             const isTraining = snap.cyclePattern.map(d => d !== "Rest");
             const names = snap.cyclePattern.map(d => d === "Rest" ? "" : d);
             const canonicalDays = trainingDayKeys(names, isTraining);
-            const canonicalWorkouts: WorkoutMap = {};
-            canonicalDays.forEach(d => { canonicalWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
+            const rawWorkouts: WorkoutMap = {};
+            canonicalDays.forEach(d => { rawWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
+            const canonicalWorkouts = dedupeExerciseIds(rawWorkouts);
             setName(snap.name);
             setTotalWeeks(snap.totalWeeks);
             setCycleDays(snap.cycleDays);
@@ -1635,7 +2113,8 @@ export default function NewProgramScreen() {
           if (draftRaw) {
             const draft = JSON.parse(draftRaw) as ProgramDraft;
             if (draft.editId === editId) {
-              if (draft.step) setStep(draft.step);
+              // Always land on Step 1 (setup), even if the draft was saved on Step 2.
+              // Opening Create/Edit should never jump straight to the exercise list.
               if (draft.name !== undefined) setName(draft.name);
               if (draft.totalWeeks) setTotalWeeks(draft.totalWeeks);
               if (draft.cycleDays) setCycleDays(draft.cycleDays);
@@ -1646,7 +2125,7 @@ export default function NewProgramScreen() {
                 const draftDays = trainingDayKeys(draft.cyclePattern ?? [], draft.isTrainingDay ?? []);
                 const canonical: WorkoutMap = {};
                 draftDays.forEach(d => { canonical[d] = draft.workouts[d] ?? []; });
-                setWorkouts(canonical);
+                setWorkouts(dedupeExerciseIds(canonical));
               }
               loadedFromDraft = true;
             }
@@ -1661,8 +2140,9 @@ export default function NewProgramScreen() {
             // Canonicalize workouts to the same key format `handleNext` produces so
             // navigating between steps never triggers a spurious "hasChanges" diff.
             const canonicalDays = trainingDayKeys(names, isTraining);
-            const canonicalWorkouts: WorkoutMap = {};
-            canonicalDays.forEach(d => { canonicalWorkouts[d] = (program.workouts ?? {})[d] ?? []; });
+            const rawWorkouts: WorkoutMap = {};
+            canonicalDays.forEach(d => { rawWorkouts[d] = (program.workouts ?? {})[d] ?? []; });
+            const canonicalWorkouts = dedupeExerciseIds(rawWorkouts);
             if (!loadedFromDraft) {
               setName(program.name);
               setTotalWeeks(program.totalWeeks);
@@ -1686,13 +2166,13 @@ export default function NewProgramScreen() {
           if (raw) {
             const draft = JSON.parse(raw) as ProgramDraft;
             if (draft.editId) { isDraftLoaded.current = true; return; }
-            if (draft.step) setStep(draft.step);
+            // Always land on Step 1 (see edit-mode note above) — never auto-jump to Step 2.
             if (draft.name !== undefined) setName(draft.name);
             if (draft.totalWeeks) setTotalWeeks(draft.totalWeeks);
             if (draft.cycleDays) setCycleDays(draft.cycleDays);
             if (draft.cyclePattern) setCyclePattern(draft.cyclePattern);
             if (draft.isTrainingDay) setIsTrainingDay(draft.isTrainingDay);
-            if (draft.workouts) setWorkouts(draft.workouts);
+            if (draft.workouts) setWorkouts(dedupeExerciseIds(draft.workouts));
           }
         }
       } catch { /* corrupt data — use defaults */ }
@@ -1700,16 +2180,40 @@ export default function NewProgramScreen() {
     })();
   }, []);
 
-  // Auto-save draft on every state change. Review-mode edits don't persist a
-  // create-flow draft — they live in the SentProgram entry and would otherwise
-  // pollute the next plain "New Program" session.
+  // Auto-save draft on state changes, debounced one keystroke-burst at a time —
+  // serializing + writing the whole draft per keystroke added to the set-input
+  // fill-down latency. Review-mode edits don't persist a create-flow draft —
+  // they live in the SentProgram entry and would otherwise pollute the next
+  // plain "New Program" session.
+  //
+  // `draftDeleted` is set right before the intentional DRAFT_KEY removals
+  // (Finish / Discard) so a trailing debounce write can't resurrect the draft;
+  // any other unmount (e.g. "Save Draft") flushes the pending write instead.
+  const draftDeleted = useRef(false);
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDraft = useRef<ProgramDraft | null>(null);
   useEffect(() => {
     if (!isDraftLoaded.current) return;
     if (isReviewMode || isSharedEditMode) return;
     const draft: ProgramDraft = { step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, ...(editId ? { editId } : {}) };
-    AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
-      .catch((e) => warnStorage("setItem", DRAFT_KEY, e));
+    pendingDraft.current = draft;
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      draftSaveTimer.current = null;
+      pendingDraft.current = null;
+      if (draftDeleted.current) return;
+      AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+        .catch((e) => warnStorage("setItem", DRAFT_KEY, e));
+    }, 400);
   }, [step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, editId, isReviewMode, isSharedEditMode]);
+  useEffect(() => () => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    const pending = pendingDraft.current;
+    if (pending && !draftDeleted.current) {
+      AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(pending))
+        .catch((e) => warnStorage("setItem", DRAFT_KEY, e));
+    }
+  }, []);
 
   // Intercept back navigation — prompt save or discard
   useEffect(() => {
@@ -1749,6 +2253,7 @@ export default function NewProgramScreen() {
             style: "destructive",
             onPress: () => {
               isLeavingIntentionally.current = true;
+              draftDeleted.current = true;
               AsyncStorage.removeItem(DRAFT_KEY).catch((err) => warnStorage("removeItem", DRAFT_KEY, err));
               navigation.dispatch(e.data.action);
             },
@@ -1767,9 +2272,7 @@ export default function NewProgramScreen() {
                   const list: SentProgram[] = raw ? JSON.parse(raw) : [];
                   const target = list.find(s => s.id === reviewId);
                   const prev = target?.programSnapshot;
-                  const today = new Date();
-                  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-                  const startDate = `${String(today.getDate()).padStart(2, "0")} ${months[today.getMonth()]} ${today.getFullYear()}`;
+                  const startDate = formatStoredDate(new Date());
                   const updatedSnap: SavedProgram = {
                     id: prev?.id ?? `snap_${Date.now()}`,
                     name: programName,
@@ -1829,11 +2332,37 @@ export default function NewProgramScreen() {
     setStep(2);
   }, [cyclePattern, isTrainingDay]);
 
-  const addExercise = useCallback((day: string, exName: string, idOffset = 0) => {
-    setWorkouts(prev => ({
-      ...prev,
-      [day]: [...(prev[day] ?? []), { id: (Date.now() + idOffset).toString(), name: exName, sets: [{ type: "working" as const }] }],
-    }));
+  const addExercise = useCallback((day: string, exName: string, setCount = 1) => {
+    setWorkouts(prev => {
+      // New exercises inherit the prevailing rest timer: the most common
+      // restSeconds (> 0) across the whole draft. Once the user sets a rest
+      // anywhere (or applies one to all), later additions follow it — no
+      // repeated wheel trips. Ties keep the first-seen value (stable).
+      const restCounts = new Map<number, number>();
+      for (const d of Object.keys(prev)) {
+        for (const e of prev[d] ?? []) {
+          const r = e.restSeconds ?? 0;
+          if (r > 0) restCounts.set(r, (restCounts.get(r) ?? 0) + 1);
+        }
+      }
+      let inheritedRest: number | undefined;
+      let bestCount = 0;
+      restCounts.forEach((n, r) => { if (n > bestCount) { bestCount = n; inheritedRest = r; } });
+
+      const sets: ProgramSet[] = Array.from(
+        { length: Math.max(1, Math.round(setCount)) },
+        () => ({ type: "working" as const })
+      );
+      return {
+        ...prev,
+        [day]: [...(prev[day] ?? []), {
+          id: makeExerciseId(),
+          name: exName,
+          sets,
+          ...(inheritedRest !== undefined ? { restSeconds: inheritedRest } : {}),
+        }],
+      };
+    });
   }, []);
 
   const updateExercise = useCallback((day: string, id: string, field: keyof Exercise, value: string | number | boolean) => {
@@ -1850,6 +2379,18 @@ export default function NewProgramScreen() {
     }));
   }, []);
 
+  // "Apply to All" in the rest picker: one rest value for every exercise on
+  // every day. Individual exercises can still be changed afterwards.
+  const applyRestToAll = useCallback((secs: number) => {
+    setWorkouts(prev => {
+      const next: WorkoutMap = {};
+      for (const day of Object.keys(prev)) {
+        next[day] = prev[day].map(e => ({ ...e, restSeconds: secs }));
+      }
+      return next;
+    });
+  }, []);
+
   const removeExercise = useCallback((day: string, id: string) => {
     setWorkouts(prev => ({ ...prev, [day]: prev[day].filter(e => e.id !== id) }));
     setCollapsingIds(prev => { const next = new Set(prev); next.delete(id); return next; });
@@ -1859,25 +2400,45 @@ export default function NewProgramScreen() {
     setCollapsingIds(prev => new Set(prev).add(id));
   }, []);
 
-  const moveExercise = useCallback((day: string, id: string, dir: "up" | "down") => {
-    setWorkouts(prev => {
-      const arr = [...prev[day]];
-      const idx = arr.findIndex(e => e.id === id);
-      const target = dir === "up" ? idx - 1 : idx + 1;
-      if (target < 0 || target >= arr.length) return prev;
-      [arr[idx], arr[target]] = [arr[target], arr[idx]];
-      return { ...prev, [day]: arr };
-    });
-  }, []);
+  // Stable identities for the Step 2 handlers that end up as DayCard /
+  // ExerciseRow props — inline arrows here would defeat their memo() and make
+  // every keystroke in a set input re-render every day card (that lag was
+  // user-visible on device).
+  const openPickerForDay = useCallback((day: string) => setPickerState({ day }), []);
+  const editExerciseInPicker = useCallback((day: string, id: string) => setPickerState({ day, replaceId: id }), []);
+  const handleDragStateChange = useCallback((dragging: boolean) => setScrollEnabled(!dragging), []);
 
   const reorderExercises = useCallback((day: string, exercises: Exercise[]) => {
     setWorkouts(prev => ({ ...prev, [day]: exercises }));
   }, []);
 
+  // Reorder the cycle (Workout Summary sheet): move the day at `from` to `to`,
+  // carrying its Training/Rest flag AND its exercises. Workout keys embed the
+  // day index (`${i}:${label}`), so the map is rebuilt against new positions —
+  // same canonical form handleNext produces, so no phantom "hasChanges" diffs.
+  const reorderCycleDays = useCallback((from: number, to: number) => {
+    if (from === to) return;
+    const order = cyclePattern.map((_, i) => i);
+    const [moved] = order.splice(from, 1);
+    order.splice(to, 0, moved);
+    setCyclePattern(order.map(i => cyclePattern[i]));
+    setIsTrainingDay(order.map(i => isTrainingDay[i]));
+    setWorkouts(prev => {
+      const next: WorkoutMap = {};
+      order.forEach((oldIdx, newIdx) => {
+        if (!isTrainingDay[oldIdx]) return;
+        const label = cyclePattern[oldIdx].trim() || "Workout";
+        next[`${newIdx}:${label}`] = prev[`${oldIdx}:${label}`] ?? [];
+      });
+      return next;
+    });
+  }, [cyclePattern, isTrainingDay]);
+
   const deleteCustomExercise = useCallback((exName: string) => {
     const next = customExercises.filter(e => e.name !== exName);
     setCustomExercises(next);
     AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next))
+      .then(() => scheduleCloudPush())
       .catch((e) => warnStorage("setItem", CUSTOM_KEY, e));
     // Also remove this exercise from every day in the current program
     setWorkouts(prev => {
@@ -1893,9 +2454,7 @@ export default function NewProgramScreen() {
     const programName = name.trim() || "My Program";
     const savedCyclePattern = cyclePattern.map((n, i) => isTrainingDay[i] ? (n.trim() || "Workout") : "Rest");
     const trainingDays = isTrainingDay.filter(Boolean).length;
-    const today = new Date();
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const startDate = `${String(today.getDate()).padStart(2, "0")} ${months[today.getMonth()]} ${today.getFullYear()}`;
+    const startDate = formatStoredDate(new Date());
 
     if (isSharedEditMode && sharedId) {
       // Shared-edit mode — write the edited program back into the SharedProgram
@@ -1991,6 +2550,7 @@ export default function NewProgramScreen() {
             workouts,
           } : p);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+          draftDeleted.current = true;
           await AsyncStorage.removeItem(DRAFT_KEY);
           scheduleCloudPush();
         } catch (e) {
@@ -2024,19 +2584,35 @@ export default function NewProgramScreen() {
         const existing: SavedProgram[] = raw ? JSON.parse(raw) : [];
         let updated = [...existing, newProgram];
         if (makeActive) {
-          updated = updated.map(p => ({
-            ...p,
-            status: p.id === newProgram.id ? "active" : p.status === "active" ? "paused" : p.status,
-            currentWeek: p.id === newProgram.id ? 1 : p.currentWeek,
-          })) as SavedProgram[];
+          // Demote the old active the same way programs.tsx handleMakeActive
+          // does: week-aware (completed / paused / created), snapshotting its
+          // currentWeek — the two activation paths must not diverge.
+          updated = updated.map(p => {
+            if (p.id === newProgram.id) return { ...p, status: "active" as const, currentWeek: 1 };
+            if (p.status === "active") {
+              const week = getCurrentWeek(p);
+              if (week >= p.totalWeeks) {
+                return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: startDate };
+              }
+              return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week };
+            }
+            return p;
+          });
         }
         await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+        // A same-day change-day override belongs to the demoted program — clear
+        // it so the workout tab shows the new program's scheduled day.
+        if (makeActive) {
+          AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY)
+            .catch((err) => warnStorage("removeItem", WORKOUT_DAY_OVERRIDE_KEY, err));
+        }
         scheduleCloudPush();
       } catch (e) {
         Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
         return;
       }
       isLeavingIntentionally.current = true;
+      draftDeleted.current = true;
       AsyncStorage.removeItem(DRAFT_KEY).catch((err) => warnStorage("removeItem", DRAFT_KEY, err));
       router.back();
     };
@@ -2059,8 +2635,81 @@ export default function NewProgramScreen() {
     isTrainingDay.some(Boolean) &&
     isTrainingDay.every((isTraining, i) => !isTraining || cyclePattern[i].trim().length > 0);
 
+  // ── Sticky day header (Step 2) ──────────────────────────────────────────────
+  // A scroll-linked filmstrip of the day names, pinned at the top next to the back
+  // button. Every name is stacked in one strip and a single scrollY-driven
+  // translateY rolls the active one into place — so it animates identically in BOTH
+  // scroll directions (no discrete state flip that only played one way). Each title
+  // also fades as it rolls off centre, so titles dissolve instead of hard-clipping
+  // at the bar edges. scrollY is native RN Animated (not Reanimated — avoids the
+  // Reanimated.ScrollView reflow bug).
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const dayOffsets = useRef<Record<string, number>>({});
+  const [, bumpOffsets] = useState(0);
+  const daysOrder = useMemo(() => Object.keys(workouts), [workouts]);
+  const PIN_TOP = insets.top + 16;   // screen-Y where a day docks (aligns with back button)
+  const PIN_H = 40;                  // one title row's height / roll distance
+  const onMeasureDay = useCallback((day: string, y: number) => {
+    if (dayOffsets.current[day] !== y) { dayOffsets.current[day] = y; bumpOffsets(v => v + 1); }
+  }, []);
+
+  // Jump the long Step 2 page to a day (Workout Summary's "Go to Day"). Lands
+  // exactly on the day's dock boundary, so the pinned title strip shows it —
+  // the same scroll position you'd reach scrolling there by hand. The small
+  // delay lets the sheet's modal finish unmounting before the scroll animates.
+  const jumpToDay = useCallback((cycleIdx: number) => {
+    const key = `${cycleIdx}:${(cyclePattern[cycleIdx] ?? "").trim() || "Workout"}`;
+    const off = dayOffsets.current[key];
+    if (off == null) return;
+    setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(0, off - PIN_TOP + 2), animated: true }), 80);
+  }, [cyclePattern, PIN_TOP]);
+
+  // Strip translateY(scrollY): day 0 rolls in from one row below over the last PIN_H
+  // before it docks (so it enters/exits like every other transition, not a pop);
+  // thereafter it holds day i centred through day i's section and shifts by one row
+  // over the last PIN_H before day i+1 docks. Piecewise + fully scroll-linked, so
+  // it's symmetric both ways.
+  const dayBoundaries = daysOrder.map(d => {
+    const off = dayOffsets.current[d];
+    return off != null ? off - PIN_TOP : null;   // scrollY at which this day docks
+  });
+  let stripReady = dayBoundaries.length >= 1 && dayBoundaries.every(b => b != null);
+  const stripInput: number[] = [];
+  const stripOutput: number[] = [];
+  if (stripReady) {
+    for (let i = 0; i < dayBoundaries.length; i++) {
+      const Bi = dayBoundaries[i] as number;
+      // Roll from the previous row (day 0's "previous" is one row below = +PIN_H,
+      // i.e. off-screen under the bar) up to this day centred, over [Bi-PIN_H, Bi].
+      const fromTY = i === 0 ? PIN_H : -(i - 1) * PIN_H;
+      stripInput.push(Bi - PIN_H); stripOutput.push(fromTY);
+      stripInput.push(Bi);         stripOutput.push(-i * PIN_H);
+    }
+    // interpolate() needs a strictly-increasing input range; a mid-measure can
+    // briefly produce non-monotonic offsets, so bail to static until stable.
+    for (let k = 1; k < stripInput.length; k++) {
+      if (stripInput[k] <= stripInput[k - 1]) { stripReady = false; break; }
+    }
+  }
+  const stripTYNode = stripReady
+    ? scrollY.interpolate({ inputRange: stripInput, outputRange: stripOutput, extrapolate: "clamp" })
+    : null;
+  const stripTY = stripTYNode ?? 0;
+  // Each title is fully opaque only while centred (stripTY ≈ -i*PIN_H), fading to 0
+  // one row away in either direction — so it's transparent by the time it reaches a
+  // bar edge (no hard clip line) and hidden entirely before day 0 has rolled in.
+  const titleOpacity = (i: number) =>
+    stripTYNode
+      ? stripTYNode.interpolate({ inputRange: [-(i + 1) * PIN_H, -i * PIN_H, -(i - 1) * PIN_H], outputRange: [0, 1, 0], extrapolate: "clamp" })
+      : 0;
+  const updateBtnGap = isEditMode || isReviewMode || isSharedEditMode;   // leave room for the Update button
+
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
+      {/* Pastel glow matching the green New Program orb on Home */}
+      <AuroraBackdrop dark={isDark} tint="green" />
+
       {/* Back button */}
       <TouchableOpacity
         onPress={handleBack}
@@ -2091,6 +2740,31 @@ export default function NewProgramScreen() {
         </Reanimated.View>
       )}
 
+      {/* Sticky day header — pins the current day's name next to the back button.
+          Two title layers (current + next) clipped to a PIN_H-tall bar; the next
+          pushes the current up and out, driven natively by scrollY. */}
+      {step === 2 && daysOrder.length > 0 && (
+        <Animated.View
+          pointerEvents="none"
+          style={{ position: "absolute", top: PIN_TOP, left: 92, right: updateBtnGap ? 116 : 20, height: PIN_H, zIndex: 9, overflow: "hidden" }}
+        >
+          {/* One filmstrip of all day names; translateY rolls the active one to
+              centre. Each row fades off-centre so the roll dissolves (no clip lines). */}
+          <Animated.View style={{ transform: [{ translateY: stripTY }] }}>
+            {daysOrder.map((d, i) => (
+              <Animated.View
+                key={d}
+                style={{ height: PIN_H, justifyContent: "center", alignItems: "flex-start", opacity: titleOpacity(i) }}
+              >
+                <View style={[styles.pinnedDayChip, { backgroundColor: isDark ? APP_DARK.div : "#ffffff" }]}>
+                  <Text numberOfLines={1} style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(d).toUpperCase()}</Text>
+                </View>
+              </Animated.View>
+            ))}
+          </Animated.View>
+        </Animated.View>
+      )}
+
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
           <LinearGradient
@@ -2103,12 +2777,20 @@ export default function NewProgramScreen() {
         </MaskedView>
       </View>
 
-      <Reanimated.ScrollView
-        showsVerticalScrollIndicator={false}
+      {/* RN Animated.ScrollView (core RN Animated, NOT Reanimated.ScrollView) so the
+          sticky day header can read scrollY on the native thread. This is distinct
+          from Reanimated.ScrollView, which caused the set-overflow reflow bug — the
+          native scroll view still reflows its content normally. */}
+      <Animated.ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator
+        indicatorStyle={isDark ? "white" : "black"}
         keyboardShouldPersistTaps="handled"
         automaticallyAdjustKeyboardInsets
         scrollEnabled={scrollEnabled}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }}
+        scrollEventThrottle={16}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + (step === 2 ? 120 : 40) }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -2135,13 +2817,14 @@ export default function NewProgramScreen() {
         ) : (
           <Step2
             workouts={workouts}
-            onOpenPicker={day => setPickerState({ day })}
-            onEditExercise={(day, id) => setPickerState({ day, replaceId: id })}
+            onOpenPicker={openPickerForDay}
+            onEditExercise={editExerciseInPicker}
             onUpdateExercise={updateExercise}
             onUpdateExerciseSets={updateExerciseSets}
+            onApplyRestToAll={applyRestToAll}
             onRemoveExercise={removeExercise}
             onReorderExercises={reorderExercises}
-            onDragStateChange={dragging => setScrollEnabled(!dragging)}
+            onDragStateChange={handleDragStateChange}
             isDark={isDark}
             onFinish={handleFinish}
             isEditMode={isEditMode}
@@ -2151,9 +2834,10 @@ export default function NewProgramScreen() {
             onStartCollapse={startCollapse}
             onInputFocus={handleInputFocus}
             customImageByName={customImageByName}
+            onMeasureDay={onMeasureDay}
           />
         )}
-      </Reanimated.ScrollView>
+      </Animated.ScrollView>
 
       {/* Floating keyboard toolbar (back / forward / dismiss) */}
       {kbHeight > 0 && Platform.OS === "ios" && (
@@ -2184,17 +2868,54 @@ export default function NewProgramScreen() {
         </View>
       )}
 
+      {/* Floating Workout Summary button — Step 2 only, where the full page gets
+          long. Hidden while the keyboard is up so it never overlaps the toolbar. */}
+      {step === 2 && kbHeight === 0 && (
+        <View style={{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
+          <BounceButton
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSummaryOpen(true); }}
+            accessibilityLabel="Workout summary"
+            accessibilityRole="button"
+          >
+            <View style={styles.summaryFabWrap}>
+              <View style={styles.summaryFab}>
+                <Ionicons name="list" size={16} color="#fff" />
+                <Text style={styles.summaryFabText}>Summary</Text>
+              </View>
+            </View>
+          </BounceButton>
+        </View>
+      )}
+
+      <ProgramSummarySheet
+        visible={summaryOpen}
+        isDark={isDark}
+        t={t}
+        cyclePattern={cyclePattern}
+        isTrainingDay={isTrainingDay}
+        workouts={workouts}
+        customExercises={customExercises}
+        onReorderDays={reorderCycleDays}
+        onReorderExercises={reorderExercises}
+        onRemoveExercise={removeExercise}
+        onEditExercise={(day, id) => { setSummaryOpen(false); setPickerState({ day, replaceId: id }); }}
+        onAddExercise={(day) => { setSummaryOpen(false); setPickerState({ day }); }}
+        onJumpToDay={(i) => { setSummaryOpen(false); jumpToDay(i); }}
+        onClose={() => setSummaryOpen(false)}
+      />
+
       {/* Exercise picker — rendered above ScrollView so it's never clipped */}
       {pickerState !== null && (
         <ExercisePicker
           visible
           subtitle={dayLabel(pickerState.day).toUpperCase()}
           customExercises={customExercises}
-          onSelectMultiple={exNames => {
+          withSetCount={!pickerState.replaceId}
+          onSelectMultiple={(exNames, setCount) => {
             if (pickerState.replaceId) {
               updateExercise(pickerState.day, pickerState.replaceId, "name", exNames[0]);
             } else {
-              exNames.forEach((name, i) => addExercise(pickerState.day, name, i));
+              exNames.forEach((name) => addExercise(pickerState.day, name, setCount));
             }
             setPickerState(null);
           }}
@@ -2212,6 +2933,44 @@ export default function NewProgramScreen() {
           onClose={() => setPickerState(null)}
           isDark={isDark}
         />
+      )}
+
+      {/* First-run coach mark — teaches that each day's pill is tappable to
+          switch between Training and Rest. Shown once (CYCLE_COACHMARK_KEY),
+          only on Step 1 where the cycle pattern is visible. */}
+      {showCycleCoach && step === 1 && (
+        <Modal visible transparent animationType="fade" onRequestClose={dismissCycleCoach}>
+          <View style={styles.coachBackdrop}>
+            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissCycleCoach} />
+            <NeuCard dark={isDark} radius={24} style={styles.coachCard} innerStyle={styles.coachCardInner}>
+              <Text style={[styles.coachTitle, { color: t.tp }]}>Set up your week</Text>
+              <Text style={[styles.coachBody, { color: t.ts }]}>
+                Tap any day to switch it between Training and Rest. Name your training days and we build the schedule for you.
+              </Text>
+
+              {/* Live demo of the two pill states */}
+              <View style={styles.coachDemoRow}>
+                <View style={[styles.togglePill, { backgroundColor: ACCT }]}>
+                  <DumbbellIcon size={13} color="#fff" />
+                  <Text style={[styles.togglePillText, { color: "#fff" }]}>Training</Text>
+                </View>
+                <Ionicons name="swap-horizontal" size={20} color={t.ts} />
+                <View style={[styles.togglePill, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : t.div }]}>
+                  <Ionicons name="moon-outline" size={13} color={t.ts} />
+                  <Text style={[styles.togglePillText, { color: t.ts }]}>Rest</Text>
+                </View>
+              </View>
+
+              <BounceButton onPress={dismissCycleCoach} accessibilityLabel="Got it" accessibilityRole="button">
+                <View style={styles.coachBtnWrap}>
+                  <View style={styles.coachBtn}>
+                    <Text style={styles.coachBtnText}>Got it</Text>
+                  </View>
+                </View>
+              </BounceButton>
+            </NeuCard>
+          </View>
+        </Modal>
       )}
     </View>
   );
@@ -2232,7 +2991,7 @@ const styles = StyleSheet.create({
   stepLine:          { position: "absolute", left: "32%", right: "32%", top: 13, height: 2 },
   stepIndicatorRow:  { flexDirection: "row" },
   stepItem:          { flex: 1, alignItems: "center", gap: 6, zIndex: 1 },
-  stepDot:           { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  stepDot:           { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center", borderWidth: 1.5 },
   stepDotText:       { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
   stepDotLabel:      { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.5 },
 
@@ -2261,6 +3020,17 @@ const styles = StyleSheet.create({
   togglePill:       { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 6 },
   togglePillText:   { fontFamily: FontFamily.semibold, fontSize: 12 },
 
+  // First-run coach mark
+  coachBackdrop:    { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, backgroundColor: "rgba(0,0,0,0.45)" },
+  coachCard:        { width: "100%", maxWidth: 360 },
+  coachCardInner:   { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 20 },
+  coachTitle:       { fontFamily: FontFamily.bold, fontSize: 19, textAlign: "center" },
+  coachBody:        { fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 20, textAlign: "center", marginTop: 8 },
+  coachDemoRow:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 18, marginBottom: 22 },
+  coachBtnWrap:     { borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  coachBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 15, alignItems: "center" },
+  coachBtnText:     { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
+
   // Primary button
   primaryBtnWrap:   { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
@@ -2275,6 +3045,9 @@ const styles = StyleSheet.create({
   dayHeadingLeft:       { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
   dayAccentBar:         { width: 3, height: 18, borderRadius: 2 },
   dayHeading:           { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 1.2 },
+  // Matches the workout page's "Start" pill (workoutTimerPill) and the back
+  // button height: a 40px-tall pill. Fills the PIN_H (40) roll window exactly.
+  pinnedDayChip:        { height: 40, paddingHorizontal: 14, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   dayExBadge:           { width: 28, height: 28 },
   dayExBadgeInner:      { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
   dayExBadgeText:       { fontFamily: FontFamily.bold, fontSize: 13 },
@@ -2341,6 +3114,9 @@ const styles = StyleSheet.create({
   restHandle:       { width: 40, height: 4, borderRadius: 2 },
   restHeader:       { alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1 },
   restDoneRow:      { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
+  restBtnPairRow:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, paddingTop: 16, paddingBottom: 4 },
+  restApplyAllBtn:  { borderRadius: 50, paddingVertical: 13, paddingHorizontal: 24 },
+  restApplyAll:     { fontFamily: FontFamily.semibold, fontSize: 16 },
   restTitle:        { fontFamily: FontFamily.bold, fontSize: 16 },
   restSubtitle:     { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
   restDoneWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
@@ -2357,4 +3133,16 @@ const styles = StyleSheet.create({
   reorderHandle:    { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
   reorderListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
 
+  // Workout Summary sheet + floating button
+  summarySheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 30, maxHeight: "82%" },
+  sumHeader:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1 },
+  sumBackBtn:       { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  sumListWrap:      { paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8 },
+  sumDayRow:        { flexDirection: "row", alignItems: "center", gap: 10, height: 62, paddingHorizontal: 8 },
+  sumDayBody:       { flex: 1, justifyContent: "center", gap: 2 },
+  sumDayName:       { fontFamily: FontFamily.semibold, fontSize: 15 },
+  sumDayMeta:       { fontFamily: FontFamily.regular, fontSize: 12 },
+  summaryFabWrap:   { borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  summaryFab:       { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 12, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 6 },
+  summaryFabText:   { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
 });

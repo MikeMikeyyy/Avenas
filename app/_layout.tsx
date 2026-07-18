@@ -15,6 +15,7 @@ import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileCont
 import { NotificationPrefsProvider } from "../contexts/NotificationPrefsContext";
 import { AuthProvider, useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
+import { APP_DARK, APP_LIGHT } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
 import { flushCloudPush } from "../lib/syncManager";
 import { touchLastActive } from "../lib/connections";
@@ -25,6 +26,13 @@ SplashScreen.preventAutoHideAsync();
 // How often to refresh "last active" while the app is foregrounded, so connected
 // accounts can show "active now". Cleared on background.
 const HEARTBEAT_MS = 120000;
+
+// Insights modal options. `detachPreviousScreen: false` keeps Home mounted behind
+// the modal — without it the native stack tears Home down while the modal is up
+// and rebuilds it on dismiss, so Home blanks then repopulates. It's a valid
+// native-stack runtime option but isn't in Expo Router's option types yet; a
+// named (non-fresh) const sidesteps the excess-property check without `any`.
+const INSIGHTS_MODAL_OPTIONS = { presentation: "modal" as const, detachPreviousScreen: false };
 
 function AppShell() {
   const { isDark } = useTheme();
@@ -59,14 +67,22 @@ function AppShell() {
     return () => { sub.remove(); if (beat) clearInterval(beat); };
   }, []);
 
+  // Theme the navigator's screen background. React Navigation's default screen
+  // background is white, which flashes through during the Insights modal's dismiss
+  // transition (and the window re-measure it triggers) before Home repaints.
+  // Giving every screen a themed contentStyle bg removes the white flash.
+  const navBg = isDark ? APP_DARK.bg : APP_LIGHT.bg;
+
   return (
     <>
       <StatusBar style={isDark ? "light" : "dark"} />
       <StreakProvider>
         <WorkoutTimerProvider>
           <RestTimerProvider>
-            <View style={{ flex: 1 }}>
-              <Stack screenOptions={{ headerShown: false }} />
+            <View style={{ flex: 1, backgroundColor: navBg }}>
+              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
+                <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
+              </Stack>
               <WorkoutActiveBar />
             </View>
           </RestTimerProvider>

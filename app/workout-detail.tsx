@@ -61,16 +61,44 @@ function fmtDuration(secs: number): string {
   return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
 }
 
-function formatWorkoutDate(completedIso: string, durationSeconds: number): string {
+function workoutMetaParts(completedIso: string, durationSeconds: number): { date: string; time: string; duration: string | null } {
   const d = new Date(completedIso);
   const dateStr = `${DAY_FULL[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
   const endTime = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
   if (durationSeconds > 0) {
     const startTime = new Date(d.getTime() - durationSeconds * 1000)
       .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
-    return `${dateStr}  ·  ${startTime} – ${endTime}  ·  ${fmtDuration(durationSeconds)}`;
+    return { date: dateStr, time: `${startTime} – ${endTime}`, duration: fmtDuration(durationSeconds) };
   }
-  return `${dateStr}  ·  ${endTime}`;
+  return { date: dateStr, time: endTime, duration: null };
+}
+
+// Icon-led date / time-range / duration row under the workout title. `color`
+// carries the edit-mode state: secondary when viewing, ACCT (with a trailing
+// pencil) when the row is tappable to edit the session time.
+function WorkoutMetaRow({ completedIso, durationSeconds, color, pencil = false }: {
+  completedIso: string; durationSeconds: number; color: string; pencil?: boolean;
+}) {
+  const parts = workoutMetaParts(completedIso, durationSeconds);
+  return (
+    <View style={styles.metaRow}>
+      <View style={styles.metaItem}>
+        <Ionicons name="calendar-outline" size={13} color={color} />
+        <Text style={[styles.metaText, { color }]}>{parts.date}</Text>
+      </View>
+      <View style={styles.metaItem}>
+        <Ionicons name="time-outline" size={14} color={color} />
+        <Text style={[styles.metaText, { color }]}>{parts.time}</Text>
+      </View>
+      {parts.duration !== null && (
+        <View style={styles.metaItem}>
+          <Ionicons name="stopwatch-outline" size={14} color={color} />
+          <Text style={[styles.metaText, { color }]}>{parts.duration}</Text>
+        </View>
+      )}
+      {pencil && <Ionicons name="pencil" size={13} color={color} />}
+    </View>
+  );
 }
 
 // ─── KeyboardDismissIcon ──────────────────────────────────────────────────────
@@ -337,7 +365,7 @@ function DetailReorderSheet({ visible, exercises, isDark, t, onReorder, onClose 
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
+    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={closeSheet}>
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
@@ -403,6 +431,11 @@ export default function WorkoutDetailScreen() {
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [collapsingSet, setCollapsingSet]   = useState<{ exIdx: number; setIdx: number } | null>(null);
   const [justAddedSet, setJustAddedSet]     = useState<{ exIdx: number; setIdx: number } | null>(null);
+  // Workout-level session notes. Edited + persisted independently of the exercise
+  // edit/save flow (saved on blur / close), mirroring the live workout page.
+  const [editedSessionNotes, setEditedSessionNotes] = useState("");
+  const [showSessionNotes, setShowSessionNotes]     = useState(false);
+  const sessionNotesRef = useRef<TextInput | null>(null);
   const setRowHeightRef = useRef(0);
   const [collapsingIndices, setCollapsingIndices] = useState<Set<number>>(new Set());
   const startCollapseEx = (idx: number) => setCollapsingIndices(prev => new Set(prev).add(idx));
@@ -440,6 +473,7 @@ export default function WorkoutDetailScreen() {
         setEditedIsIsometric(found.exercises.map(() => false));
         setEditedCompletedAt(found.completedAt);
         setEditedDurationSeconds(found.durationSeconds);
+        setEditedSessionNotes(found.sessionNotes ?? "");
       }
     }).catch(() => {});
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
@@ -508,6 +542,37 @@ export default function WorkoutDetailScreen() {
         },
       ]
     );
+  };
+
+  // Persist just the session notes back to history (independent of the exercise
+  // save flow). Reads the latest history so it never clobbers other edits, and
+  // mirrors the change into local `workout` state so handleSave's `...workout`
+  // carries it forward. No-ops when nothing changed to avoid spurious sync pushes.
+  const persistSessionNotes = async (value: string) => {
+    if (!workout) return;
+    const next = value.trim() ? value : undefined;
+    if ((workout.sessionNotes ?? "") === (next ?? "")) return;
+    const raw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
+    const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
+    await AsyncStorage.setItem(
+      WORKOUT_HISTORY_KEY,
+      JSON.stringify(history.map(w => (w.id === workout.id ? { ...w, sessionNotes: next } : w))),
+    );
+    scheduleCloudPush();
+    setWorkout(prev => (prev ? { ...prev, sessionNotes: next } : prev));
+  };
+
+  const openSessionNotes = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowSessionNotes(true);
+    setTimeout(() => sessionNotesRef.current?.focus(), 80);
+  };
+
+  const closeSessionNotes = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Keyboard.dismiss();
+    void persistSessionNotes(editedSessionNotes);
+    setShowSessionNotes(false);
   };
 
   const updateNote = (exIdx: number, value: string) => {
@@ -677,13 +742,67 @@ export default function WorkoutDetailScreen() {
                 <TouchableOpacity
                   onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTimeSheetOpen(true); }}
                   activeOpacity={0.7}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start" }}
+                  style={{ alignSelf: "flex-start" }}
                 >
-                  <Text style={[styles.meta, { color: ACCT }]}>{formatWorkoutDate(editedCompletedAt || workout.completedAt, editedDurationSeconds)}</Text>
-                  <Ionicons name="pencil" size={13} color={ACCT} />
+                  <WorkoutMetaRow completedIso={editedCompletedAt || workout.completedAt} durationSeconds={editedDurationSeconds} color={ACCT} pencil />
                 </TouchableOpacity>
               ) : (
-                <Text style={[styles.meta, { color: t.ts }]}>{formatWorkoutDate(workout.completedAt, workout.durationSeconds)}</Text>
+                <WorkoutMetaRow completedIso={workout.completedAt} durationSeconds={workout.durationSeconds} color={t.ts} />
+              )}
+            </View>
+
+            {/* Session Notes — workout-level, same button style as the live workout page */}
+            <View style={{ marginBottom: 20 }}>
+              {showSessionNotes ? (
+                <NeuCard dark={isDark} style={{ borderRadius: 16 }}>
+                  <View style={styles.sessionNotesInner}>
+                    <View style={styles.sessionNotesHeader}>
+                      <Text style={[styles.sessionNotesTitle, { color: t.tp }]}>Session Notes</Text>
+                      <BounceButton onPress={closeSessionNotes} accessibilityLabel="Save session notes">
+                        <View style={styles.notesTickBtn}>
+                          <Ionicons name="checkmark" size={18} color="#fff" />
+                        </View>
+                      </BounceButton>
+                    </View>
+                    <TextInput
+                      ref={r => { sessionNotesRef.current = r; }}
+                      style={[styles.sessionNotesInput, { color: t.tp }]}
+                      placeholder="How did the session go? Anything to note..."
+                      placeholderTextColor={t.ts}
+                      multiline
+                      value={editedSessionNotes}
+                      onChangeText={setEditedSessionNotes}
+                      onBlur={() => void persistSessionNotes(editedSessionNotes)}
+                      textAlignVertical="top"
+                    />
+                  </View>
+                </NeuCard>
+              ) : editedSessionNotes.trim() ? (
+                <TouchableOpacity activeOpacity={0.85} onPress={openSessionNotes}>
+                  <NeuCard dark={isDark} style={{ borderRadius: 16 }}>
+                    <View style={styles.sessionNotesInner}>
+                      <View style={styles.sessionNotesHeader}>
+                        <Text style={[styles.sessionNotesTitle, { color: t.tp }]}>Session Notes</Text>
+                        <Ionicons name="pencil" size={15} color={t.ts} />
+                      </View>
+                      <Text style={[styles.sessionNotesText, { color: t.ts }]}>{editedSessionNotes.trim()}</Text>
+                    </View>
+                  </NeuCard>
+                </TouchableOpacity>
+              ) : (
+                <BounceButton onPress={openSessionNotes} accessibilityLabel="Add session notes">
+                  <View style={styles.sessionNotesAddRow}>
+                    <View style={styles.notesToggleBtn}>
+                      <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+                        <Ionicons name="document-text-outline" size={20} color={t.tp} />
+                      </NeuCard>
+                      <View style={styles.notesTogglePlus}>
+                        <Text style={styles.notesTogglePlusText}>+</Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.sessionNotesAddLabel, { color: t.ts }]}>Add session notes</Text>
+                  </View>
+                </BounceButton>
               )}
             </View>
 
@@ -700,7 +819,7 @@ export default function WorkoutDetailScreen() {
                     setCollapsingIndices(prev => { const n = new Set(prev); n.delete(ei); return n; });
                   }}
                 >
-                <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 12 }}>
+                <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 20 }}>
                   <View style={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: 14 }}>
 
                     {/* Exercise name */}
@@ -1010,7 +1129,9 @@ const styles = StyleSheet.create({
   navBtn:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
 
   title: { fontFamily: FontFamily.bold, fontSize: 26, marginBottom: 4 },
-  meta:  { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
+  metaRow:  { flexDirection: "row", alignItems: "center", flexWrap: "wrap", columnGap: 14, rowGap: 4, marginTop: 2 },
+  metaItem: { flexDirection: "row", alignItems: "center", gap: 5 },
+  metaText: { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
 
   exHeader:    { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 },
   exNumBadge:  { width: 32, height: 32 },
@@ -1069,4 +1190,18 @@ const styles = StyleSheet.create({
   woDragName:    { fontFamily: FontFamily.regular, fontSize: 15 },
   kbDismissBtn:  { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
   notesLabel:    { fontFamily: FontFamily.semibold, fontSize: 13, marginBottom: 6 },
+
+  // Session notes — button + card styling mirrors the live workout page.
+  notesToggleBtn:      { width: 40, height: 40 },
+  // Same green save-tick as the live workout page's notes card.
+  notesTickBtn:        { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  notesTogglePlus:     { position: "absolute", top: -4, right: -6, backgroundColor: ACCT, borderRadius: 7, width: 14, height: 14, alignItems: "center", justifyContent: "center" },
+  notesTogglePlusText: { color: "#fff", fontSize: 10, fontFamily: FontFamily.bold, lineHeight: 14 },
+  sessionNotesInner:   { padding: 16 },
+  sessionNotesHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  sessionNotesTitle:   { fontFamily: FontFamily.bold, fontSize: 16 },
+  sessionNotesInput:   { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
+  sessionNotesText:    { fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 22 },
+  sessionNotesAddRow:  { flexDirection: "row", alignItems: "center", gap: 12 },
+  sessionNotesAddLabel: { fontFamily: FontFamily.semibold, fontSize: 14 },
 });

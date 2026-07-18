@@ -13,16 +13,17 @@
 import { EXERCISES } from "../constants/exerciseData";
 import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
 
-// Canonical axis order for the Strength radar. Starts at Chest (top of the
-// chart) and proceeds clockwise — Back, Legs, Shoulders, Core, Arms — matching
-// the reference design. Deliberately separate from MUSCLE_GROUPS (which leads
+// Canonical axis order for the Strength radar. The hexagon is flat-topped:
+// Chest sits top-left, then clockwise — Back (top-right), Legs (right),
+// Core (bottom-right), Shoulders (bottom-left), Arms (left) — matching the
+// reference design. Deliberately separate from MUSCLE_GROUPS (which leads
 // with "All" and uses a different order for the picker filter).
 export const RADAR_GROUPS: SelectableMuscle[] = [
   "Chest",
   "Back",
   "Legs",
-  "Shoulders",
   "Core",
+  "Shoulders",
   "Arms",
 ];
 

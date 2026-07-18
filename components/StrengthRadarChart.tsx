@@ -9,17 +9,30 @@ import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { RADAR_GROUPS } from "../utils/muscleGroups";
+import { toDisplayWeight } from "../utils/units";
 import type { MuscleGroupStat, StrengthMetricKey } from "../constants/progress";
 import { STRENGTH_METRIC_OPTIONS } from "../constants/progress";
 import type { SelectableMuscle } from "../constants/exercises";
 
 interface Props {
-  /** Per-muscle-group aggregates (volume / sessions / sets). */
+  /** Per-muscle-group aggregates (volume / sessions / sets) for the active window. */
   stats: Record<SelectableMuscle, MuscleGroupStat>;
-  /** Σ volume across all groups — used to derive the "load" percentages. */
-  totalVolume: number;
+  /**
+   * Same aggregates for the previous comparable window (see
+   * previousComparableWindow in utils/progressStats.ts) — drives the per-group
+   * ▲/▼ trend and the muted "Previous" polygon. Omitted, or empty of training,
+   * means no arrows and no previous polygon (e.g. a brand-new user with no
+   * baseline to compare against).
+   */
+  prevStats?: Record<SelectableMuscle, MuscleGroupStat>;
   /** "kg" | "lbs" — appended to volume labels. */
   unit: string;
+  /**
+   * Inclusive day count of the active window (see windowLengthDays in
+   * utils/progressStats.ts) — scales the per-week full-scale benchmarks to
+   * the selected range. The previous comparable window has the same length.
+   */
+  windowDays: number;
   metric: StrengthMetricKey;
   onMetricChange: (m: StrengthMetricKey) => void;
 }
@@ -31,70 +44,16 @@ function polar(cx: number, cy: number, r: number, deg: number) {
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
 }
 
-// Center angle for axis i: Chest at top (-90°), then clockwise every 60°.
-const axisAngle = (i: number) => -90 + i * 60;
+// Vertex angle for axis i. The hexagon is FLAT-TOPPED: the first two axes
+// straddle the top edge (Chest top-left at -120°, Back top-right at -60°),
+// then clockwise every 60° — so the top and bottom of the chart are edges,
+// not points.
+const axisAngle = (i: number) => -120 + i * 60;
 
-const RAD2DEG = 180 / Math.PI;
-const lerp = (p: { x: number; y: number }, q: { x: number; y: number }, t: number) => ({
-  x: p.x + (q.x - p.x) * t,
-  y: p.y + (q.y - p.y) * t,
-});
-
-// Annular-sector ("petal segment") path between two radii, with softly rounded
-// corners. The outer and inner arcs take their own angle pair so the side edges
-// can be trimmed by a radius-dependent amount — that's what keeps the gap
-// between adjacent wedges a constant *width* (rather than a constant angle,
-// which tapers toward center). `cr` is the corner radius: each of the four
-// corners backs off `cr` along both edges and is bridged by a quadratic curve
-// through the original (sharp) corner, giving the petals a gentle rounded look.
-function annularSector(
-  cx: number,
-  cy: number,
-  ri: number,
-  ro: number,
-  a0o: number,
-  a1o: number,
-  a0i: number,
-  a1i: number,
-  cr: number,
-): string {
-  // Sharp corners (used as the quadratic control points).
-  const C1 = polar(cx, cy, ro, a0o); // outer-left
-  const C2 = polar(cx, cy, ro, a1o); // outer-right
-  const C3 = polar(cx, cy, ri, a1i); // inner-right
-  const C4 = polar(cx, cy, ri, a0i); // inner-left
-
-  // Back-off along the arcs (angular) — clamped so it can't exceed the span.
-  const dao = Math.min((cr / ro) * RAD2DEG, (a1o - a0o) * 0.4);
-  const dai = Math.min((cr / ri) * RAD2DEG, (a1i - a0i) * 0.4);
-  const Pout0 = polar(cx, cy, ro, a0o + dao);
-  const Pout1 = polar(cx, cy, ro, a1o - dao);
-  const Pin3 = polar(cx, cy, ri, a1i - dai);
-  const Pin4 = polar(cx, cy, ri, a0i + dai);
-
-  // Back-off along the (near-radial) side edges.
-  const lr = Math.hypot(C3.x - C2.x, C3.y - C2.y) || 1;
-  const tr = Math.min(0.45, cr / lr);
-  const PrT = lerp(C2, C3, tr);
-  const PrB = lerp(C3, C2, tr);
-  const ll = Math.hypot(C1.x - C4.x, C1.y - C4.y) || 1;
-  const tl = Math.min(0.45, cr / ll);
-  const PlB = lerp(C4, C1, tl);
-  const PlT = lerp(C1, C4, tl);
-
-  const f = (p: { x: number; y: number }) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
-  return [
-    `M ${f(Pout0)}`,
-    `A ${ro} ${ro} 0 0 1 ${f(Pout1)}`, // outer arc
-    `Q ${f(C2)} ${f(PrT)}`, // round outer-right
-    `L ${f(PrB)}`, // right edge
-    `Q ${f(C3)} ${f(Pin3)}`, // round inner-right
-    `A ${ri} ${ri} 0 0 0 ${f(Pin4)}`, // inner arc
-    `Q ${f(C4)} ${f(PlB)}`, // round inner-left
-    `L ${f(PlT)}`, // left edge
-    `Q ${f(C1)} ${f(Pout0)}`, // round outer-left
-    "Z",
-  ].join(" ");
+// Closed polygon through one point per axis (index order = RADAR_GROUPS order).
+function polygonPath(cx: number, cy: number, radii: number[]): string {
+  const pts = radii.map((r, i) => polar(cx, cy, r, axisAngle(i)));
+  return `M ${pts.map(p => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" L ")} Z`;
 }
 
 // ─── value formatting ──────────────────────────────────────────────────────--
@@ -106,17 +65,110 @@ function fmtVolume(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
+// ─── metric values & trends ──────────────────────────────────────────────────
+
+type StatTotals = { volume: number; sets: number };
+
+function sumTotals(stats: Record<SelectableMuscle, MuscleGroupStat>): StatTotals {
+  let volume = 0;
+  let sets = 0;
+  for (const g of RADAR_GROUPS) {
+    volume += stats[g].volume;
+    sets += stats[g].sets;
+  }
+  return { volume, sets };
+}
+
 /**
- * Strength radar — a 6-axis muscle-group breakdown. The active metric (Total
- * Volume / Workout Frequency / Muscular Load) is chosen via the compact
- * top-right toggle, which opens a bottom sheet (DropdownPicker). The polygon is
- * always normalized to the strongest group, so the shape reads as relative
- * balance regardless of metric; the per-axis labels carry the real numbers.
+ * The raw number a group contributes under the active metric. Load is the
+ * group's count of completed working sets — NOT tonnage. A leg set moves
+ * several times the weight of an arm set, so tonnage permanently skews the
+ * radar toward Legs no matter how the user actually distributes training;
+ * set counts are comparable across muscle groups (and also count bodyweight
+ * work, which has no tonnage at all). Each group is then measured against the
+ * benchmark-floored shared scale (see FULL_SCALE_PER_WEEK / fullScale); the
+ * label just shows the real number.
+ */
+function metricRaw(s: MuscleGroupStat, metric: StrengthMetricKey): number {
+  if (metric === "volume") return s.volume;
+  if (metric === "frequency") return s.sessions;
+  return s.sets;
+}
+
+// Change within ±5% of the previous window reads as "held steady" — no arrow.
+// Keeps the labels calm for users with a consistent routine.
+const TREND_BAND = 0.05;
+
+type Trend = "up" | "down" | null;
+
+// Trend compares the SAME quantity the label shows: tonnage for volume,
+// sessions for frequency, working-set count for load — so every arrow simply
+// means "more/less than the previous period".
+function trendFor(current: number, previous: number): Trend {
+  if (previous <= 0) return current > 0 ? "up" : null;
+  if (current <= 0) return "down";
+  const ratio = current / previous;
+  if (ratio >= 1 + TREND_BAND) return "up";
+  if (ratio <= 1 - TREND_BAND) return "down";
+  return null;
+}
+
+// One-line explainer under the header so the numbers are never ambiguous.
+const METRIC_CAPTIONS: Record<StrengthMetricKey, string> = {
+  load: "Working sets per group",
+  frequency: "Sessions that trained each group",
+  volume: "Total weight lifted per group",
+};
+
+// Concentric hexagonal grid rings behind the polygon — quarters of the
+// full-scale benchmark (see vertexRadius).
+const GRID_LEVELS = 4;
+
+// The MINIMUM a vertex must reach to touch the outer ring, per metric, for
+// ONE week of training of ONE muscle group. Scaled by the window length (see
+// fullScale) so a month-range chart expects ~4× the weekly amount. These are
+// deliberate product anchors, not derived from the user's data: they are the
+// FLOOR of the chart's scale, so a quiet week (2 sets on a Tuesday) can never
+// max out the graph. When the user trains PAST a benchmark, the scale grows
+// to the window's biggest group instead of clamping (see fullScale), so only
+// the single largest number touches the ring.
+//   load:      7 completed working sets — a solid weekly dose for one group.
+//   frequency: 3 sessions touching the group — high frequency for anyone.
+//   volume:    4,000 kg lifted — roughly 7 hard sets of a mid-weight compound.
+const FULL_SCALE_PER_WEEK: Record<StrengthMetricKey, number> = {
+  load: 7,
+  frequency: 3,
+  volume: 4000,
+};
+
+/**
+ * Strength radar — a 6-axis muscle-group spider chart. The active metric
+ * (Muscular Load / Workout Frequency / Total Volume) is chosen via the compact
+ * top-right toggle, which opens a bottom sheet (DropdownPicker).
+ *
+ * Muscular Load (the default) counts working sets, not tonnage — see metricRaw
+ * for why. Total Volume remains available for the raw tonnage numbers, whose
+ * lower-body dominance is real information once it's labeled as weight lifted.
+ *
+ * Chart encoding: one connected polygon spans all six axes, each vertex placed
+ * against a scale whose outer ring is the larger of an absolute weekly-training
+ * benchmark (scaled to the window length) and the window's own biggest value —
+ * so a quiet week can't max out, and past the benchmark only the single
+ * largest group touches the ring (see FULL_SCALE_PER_WEEK / fullScale). The
+ * current (ACCT) and previous (muted) polygons share that one scale, so their
+ * overlap reads as real change. Behind them sits a hexagonal grid (GRID_LEVELS rings +
+ * spokes). When `prevStats` contains training, each label also carries a
+ * ▲ (ACCT) / ▼ (muted) vs the previous comparable window, and a
+ * "Current Week / Previous Week" legend appears under the chart (ProgressView
+ * pins the windows to exactly that — the radar is deliberately not tied to
+ * the Volume chart's range filter). The per-axis labels always carry the
+ * real numbers.
  */
 export default function StrengthRadarChart({
   stats,
-  totalVolume,
+  prevStats,
   unit,
+  windowDays,
   metric,
   onMetricChange,
 }: Props) {
@@ -124,129 +176,132 @@ export default function StrengthRadarChart({
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { width: screenWidth } = useWindowDimensions();
 
-  // Square the chart to the card's inner content width (card = screen − 40
-  // margins; NeuCard inner padding = 16 each side).
+  // Chart width = the card's inner content width (card = screen − 40 margins;
+  // NeuCard inner padding = 16 each side).
   const S = Math.min(screenWidth - 40, 420) - 32;
+
+  // ── layout ──────────────────────────────────────────────────────────────
+  // The hexagon keeps its full size; labels adapt around it instead. The
+  // side (Arms / Legs) labels are confined to the strip between their vertex
+  // and the card edge (shrink-to-fit absorbs the narrowness), the top and
+  // bottom pairs get a generous vertical gap off the graph plus an outward
+  // horizontal spread so the two labels in a pair stay clearly apart. The
+  // flat-top hexagon is shorter than it is wide (vertical half-extent
+  // R·sin60°), so the chart box hugs the hexagon plus one label row above
+  // and below instead of staying square.
+  const R = S * 0.3; // outer grid-ring radius
+  const GAP_V = 14; // vertical clearance between a top/bottom vertex and its label
+  const GAP_SIDE = 6; // horizontal clearance between a side vertex and its label
+  const PAIR_SPREAD = 12; // extra outward shift for the top/bottom pairs
+  const LABEL_H = 38;
+  const LABEL_W = S * 0.3;
+  const HEX_HALF_H = R * Math.sin(Math.PI / 3);
+  const H = Math.ceil(2 * (HEX_HALF_H + GAP_V + LABEL_H)) + 4;
   const cx = S / 2;
-  const cy = S / 2;
-  const R = S * 0.27; // outer petal radius
-  const labelR = S * 0.4; // labels sit on this ring, radially aligned to each axis
+  const cy = H / 2;
 
   const activeOption =
     STRENGTH_METRIC_OPTIONS.find(o => o.key === metric) ?? STRENGTH_METRIC_OPTIONS[0];
 
-  // Per-group raw value (drives polygon radius) + display string (the label).
+  const totals = useMemo(() => sumTotals(stats), [stats]);
+  const prevTotals = useMemo(() => (prevStats ? sumTotals(prevStats) : null), [prevStats]);
+
+  // The previous polygon and the arrows need training on both sides of the
+  // comparison: a previous window with at least one completed working set (the
+  // baseline), and a current one too — otherwise a not-yet-touched week would
+  // open on six ▼s. (Sets are counted for every completed working set,
+  // weighted or not, so sets === 0 means the window truly holds no training.)
+  const hasTrendBaseline =
+    prevStats != null && prevTotals != null && prevTotals.sets > 0 && totals.sets > 0;
+
+  // Per-group raw value (drives the polygon vertex) + display string + trend.
   const points = useMemo(() => {
     return RADAR_GROUPS.map((g, i) => {
       const s = stats[g];
-      let raw: number;
+      const raw = metricRaw(s, metric);
       let display: string;
       if (metric === "volume") {
-        raw = s.volume;
         display = `${fmtVolume(s.volume)} ${unit}`;
       } else if (metric === "frequency") {
-        raw = s.sessions;
-        display = `${Math.round(s.sessions)} sessions`;
+        // "3×" (trained 3 times) — the caption above spells out "sessions";
+        // the long word would ellipsize past ~9 sessions and eat the arrow.
+        display = `${Math.round(s.sessions)}×`;
       } else {
-        const pct = totalVolume > 0 ? (s.volume / totalVolume) * 100 : 0;
-        raw = pct;
-        display = `${Math.round(pct)}%`;
+        // Rounded because multi-muscle custom exercises split set credit
+        // fractionally across their groups (see computeMuscleGroupStats).
+        const n = Math.round(raw);
+        display = `${n} ${n === 1 ? "set" : "sets"}`;
       }
-      return { group: g, angle: axisAngle(i), raw, display };
+      const prevRaw = prevStats ? metricRaw(prevStats[g], metric) : 0;
+      const trend: Trend = hasTrendBaseline ? trendFor(raw, prevRaw) : null;
+      return { group: g, angle: axisAngle(i), raw, prevRaw, display, trend };
     });
-  }, [stats, totalVolume, metric, unit]);
+  }, [stats, prevStats, hasTrendBaseline, metric, unit]);
 
-  // Total across groups — the basis for each group's distribution share.
-  const totalRaw = useMemo(() => points.reduce((s, p) => s + p.raw, 0), [points]);
-  const hasData = totalRaw > 0;
+  const hasData = useMemo(() => points.some(p => p.raw > 0), [points]);
 
-  // "Smart" fill radius. A group fills relative to how its share of the total
-  // compares to an EVEN split across all axes — not relative to the strongest
-  // group (which would always pin one petal to full, so the radar "stayed
-  // filled out" no matter how you trained). A group at exactly its fair share
-  // (1/6 of the total) fills halfway; a group carrying FOCUS_FULL× its fair
-  // share (or more) fills completely; neglected groups stay near empty. So the
-  // radar spreads to reflect the actual distribution of training across the six
-  // muscle groups, consistently for whichever metric (volume / frequency /
-  // load) is active.
-  const radiusForRaw = useMemo(() => {
-    const evenShare = 1 / RADAR_GROUPS.length;
-    const FOCUS_FULL = 2; // a group at 2× its even share fills the petal
-    return (raw: number) => {
-      if (totalRaw <= 0) return 0;
-      const focus = raw / totalRaw / evenShare; // 1 = fair share, >1 = emphasized
-      return Math.min(focus / FOCUS_FULL, 1) * R;
-    };
-  }, [totalRaw, R]);
-
-  // Shared petal geometry: 6 wedges × 3 concentric ring "bars". The side-gap
-  // between adjacent wedges is a constant *width* (≈2·g px) at every radius:
-  // the angular trim per edge = g / r, so larger radii trim a smaller angle.
-  // Clamped so the innermost ring can't over-trim past 0°.
-  const petalGeom = useMemo(() => {
-    const hole = R * 0.16; // small center hole
-    const ringGap = R * 0.04;
-    const g = S * 0.009; // half-gap, in px (constant across radii)
-    const band = (R - hole - 2 * ringGap) / 3;
-    const cr = Math.min(band * 0.4, S * 0.014); // corner radius — a little curve
-    const halfGapDeg = (r: number) => Math.min(24, (g / r) * RAD2DEG);
-    const rings = [0, 1, 2].map(k => {
-      const ri = hole + k * (band + ringGap);
-      return { ri, ro: ri + band };
+  // Hexagonal grid: GRID_LEVELS concentric rings plus a spoke out to each
+  // vertex. Straight-sided (polygon) rings, not circles — the spider-chart
+  // look the rest of the polygon encoding depends on.
+  const grid = useMemo(() => {
+    const rings = Array.from({ length: GRID_LEVELS }, (_, k) => {
+      const r = ((k + 1) / GRID_LEVELS) * R;
+      return polygonPath(cx, cy, RADAR_GROUPS.map(() => r));
     });
-    return { cr, halfGapDeg, rings };
-  }, [R, S]);
+    const spokes = RADAR_GROUPS.map((_, i) => {
+      const p = polar(cx, cy, R, axisAngle(i));
+      return `M ${cx} ${cy} L ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+    }).join(" ");
+    return { rings, spokes };
+  }, [cx, cy, R]);
 
-  // Faint base "bars" — the empty shells each muscle group's fill grows into.
-  const basePetals = useMemo(() => {
-    const { cr, halfGapDeg, rings } = petalGeom;
-    const paths: string[] = [];
-    for (let i = 0; i < 6; i++) {
-      const c = axisAngle(i);
-      for (const { ri, ro } of rings) {
-        const to = halfGapDeg(ro);
-        const ti = halfGapDeg(ri);
-        paths.push(
-          annularSector(cx, cy, ri, ro, c - 30 + to, c + 30 - to, c - 30 + ti, c + 30 - ti, cr),
-        );
-      }
-    }
-    return paths;
-  }, [cx, cy, petalGeom]);
+  // "Smart" vertex radius: the outer ring is the LARGER of two candidates —
+  //   1. the absolute benchmark FULL_SCALE_PER_WEEK[metric] × weeks, and
+  //   2. the biggest value plotted this window (across both polygons).
+  // The benchmark floor stops a quiet week from maxing out (2 sets after one
+  // session reads as 2/7 of a solid week — never against the biggest group,
+  // which would pin a vertex to the ring even when "biggest" is 2 sessions).
+  // The peak candidate takes over once training EXCEEDS the benchmark: with
+  // 12/10/8 sets the scale stretches to 12, so only the largest group touches
+  // the ring instead of everything past the benchmark clamping there together.
+  //
+  // weeks is floored at 1 so a partial "this week" (Mon–today) still measures
+  // against the FULL weekly benchmark. The peak spans the previous polygon's
+  // values too (when drawn), so both polygons share one identical scale,
+  // neither ever clamps, and their overlap reads as real change.
+  //
+  // Untrained (zero) groups still get a small stub (FLOOR), so the polygon
+  // stays a closed shape that dips TOWARD the center on that axis instead of
+  // degenerating into a line through it (e.g. a Shoulders-heavy week with 0
+  // Core and 0 Legs).
+  const FLOOR = 0.1;
+  const weeks = Math.max(1, windowDays / 7);
+  const fullScale = useMemo(() => {
+    const perWeek = FULL_SCALE_PER_WEEK[metric];
+    // Stats arrive already converted to the display unit, so the kg-denominated
+    // volume benchmark must be converted the same way before comparing.
+    const benchmark =
+      metric === "volume"
+        ? toDisplayWeight(perWeek * weeks, unit === "kg")
+        : perWeek * weeks;
+    const peak = points.reduce(
+      (m, p) => Math.max(m, p.raw, hasTrendBaseline ? p.prevRaw : 0),
+      0,
+    );
+    return Math.max(benchmark, peak);
+  }, [metric, weeks, unit, points, hasTrendBaseline]);
+  const vertexRadius = (raw: number) =>
+    Math.max(FLOOR, Math.min(raw / fullScale, 1)) * R;
 
-  // Per-group fill: each muscle group's wedge fills radially from the center
-  // outward, sized by `radiusForRaw` so it reflects that group's share of the
-  // training distribution (see above). The fill is drawn ring-by-ring so it
-  // lands inside the same 3 "bars" as the base (ring gaps preserved), and the
-  // topmost reached ring is clipped to a partial height when the value lands
-  // mid-bar. This replaces the old connected radar polygon (a single line
-  // through the bars) with bars that spread to match how you trained.
-  const fillPetals = useMemo(() => {
-    if (!hasData) return [];
-    const { cr, halfGapDeg, rings } = petalGeom;
-    const paths: string[] = [];
-    points.forEach((p, i) => {
-      const c = axisAngle(i);
-      const rFill = radiusForRaw(p.raw);
-      for (const { ri, ro } of rings) {
-        const top = Math.min(ro, rFill);
-        if (top <= ri + 0.5) continue; // bar not (meaningfully) reached
-        const to = halfGapDeg(top);
-        const ti = halfGapDeg(ri);
-        const segCr = Math.min(cr, (top - ri) * 0.4); // shrink corners for thin partials
-        paths.push(
-          annularSector(cx, cy, ri, top, c - 30 + to, c + 30 - to, c - 30 + ti, c + 30 - ti, segCr),
-        );
-      }
-    });
-    return paths;
-  }, [points, radiusForRaw, hasData, cx, cy, petalGeom]);
+  const currentPath = useMemo(() => {
+    if (!hasData) return null;
+    return polygonPath(cx, cy, points.map(p => vertexRadius(p.raw)));
+  }, [points, hasData, fullScale, cx, cy, R]);
 
-  // Labels are placed on a ring (labelR) radially aligned with each axis, so
-  // each one sits just outside the petal it describes. Boxes are centered on
-  // the polar point and clamped so they never run off the card edge.
-  const LABEL_H = 38;
-  const LABEL_W = S * 0.3;
+  const prevPath = useMemo(() => {
+    if (!hasTrendBaseline) return null;
+    return polygonPath(cx, cy, points.map(p => vertexRadius(p.prevRaw)));
+  }, [points, hasTrendBaseline, fullScale, cx, cy, R]);
 
   // Leading header icon per metric: a heavy weight for Total Volume, a rotating
   // icon for Workout Frequency (distinct from the swap arrows used elsewhere),
@@ -280,37 +335,129 @@ export default function StrengthRadarChart({
           />
         </View>
 
-        <View style={[styles.chartWrap, { width: S, height: S }]}>
-          <Svg width={S} height={S}>
-            {basePetals.map((d, idx) => (
-              <Path key={`petal-${idx}`} d={d} fill={t.ts} fillOpacity={0.1} />
+        {/* Just the metric explainer — the week-vs-week comparison is spelled
+            out by the "Current Week / Previous Week" legend below instead. */}
+        <Text style={[styles.caption, { color: t.ts }]} numberOfLines={1}>
+          {METRIC_CAPTIONS[metric]}
+        </Text>
+
+        <View style={[styles.chartWrap, { width: S, height: H }]}>
+          <Svg width={S} height={H}>
+            {grid.rings.map((d, k) => (
+              <Path
+                key={`ring-${k}`}
+                d={d}
+                fill="none"
+                stroke={t.ts}
+                strokeOpacity={k === GRID_LEVELS - 1 ? 0.3 : 0.14}
+                strokeWidth={1}
+              />
             ))}
-            {fillPetals.map((d, idx) => (
-              <Path key={`fill-${idx}`} d={d} fill={ACCT} fillOpacity={0.9} />
-            ))}
+            <Path d={grid.spokes} fill="none" stroke={t.ts} strokeOpacity={0.14} strokeWidth={1} />
+            {/* Previous window behind, current on top — overlap stays legible. */}
+            {prevPath ? (
+              <Path
+                d={prevPath}
+                fill={t.ts}
+                fillOpacity={0.14}
+                stroke={t.ts}
+                strokeOpacity={0.6}
+                strokeWidth={2}
+                strokeLinejoin="round"
+              />
+            ) : null}
+            {currentPath ? (
+              <Path
+                d={currentPath}
+                fill={ACCT}
+                fillOpacity={0.28}
+                stroke={ACCT}
+                strokeWidth={2}
+                strokeLinejoin="round"
+              />
+            ) : null}
           </Svg>
 
-          {/* Labels sit OUTSIDE the petals, each radially aligned to its axis. */}
+          {/* Labels sit fully OUTSIDE the hexagon. The top pair (Chest / Back)
+              is centered directly above its vertex, the bottom pair (Core /
+              Shoulders) directly below, and the side pair (Legs / Arms) fills
+              the strip between its vertex and the card edge. */}
           {points.map(p => {
-            const { x, y } = polar(cx, cy, labelR, p.angle);
-            const left = Math.max(2, Math.min(x - LABEL_W / 2, S - LABEL_W - 2));
-            const top = y - LABEL_H / 2;
+            const v = polar(cx, cy, R, p.angle);
+            const rad = (p.angle * Math.PI) / 180;
+            const sin = Math.sin(rad);
+            // Top/bottom labels center on their vertex pushed PAIR_SPREAD px
+            // away from the vertical midline, so the two labels of a pair sit
+            // clearly apart instead of crowding the middle.
+            const spreadX = v.x + Math.sign(v.x - cx) * PAIR_SPREAD;
+            let left: number;
+            let top: number;
+            let width: number;
+            if (sin < -0.5) {
+              // top pair — whole box above the vertex
+              width = LABEL_W;
+              left = Math.max(2, Math.min(spreadX - LABEL_W / 2, S - LABEL_W - 2));
+              top = v.y - GAP_V - LABEL_H;
+            } else if (sin > 0.5) {
+              // bottom pair — whole box below the vertex
+              width = LABEL_W;
+              left = Math.max(2, Math.min(spreadX - LABEL_W / 2, S - LABEL_W - 2));
+              top = v.y + GAP_V;
+            } else if (Math.cos(rad) > 0) {
+              // right side — from just past the vertex to the card edge
+              left = v.x + GAP_SIDE;
+              width = S - left - 2;
+              top = v.y - LABEL_H / 2;
+            } else {
+              // left side — from the card edge to just short of the vertex
+              left = 2;
+              width = v.x - GAP_SIDE - 2;
+              top = v.y - LABEL_H / 2;
+            }
             return (
               <View
                 key={`label-${p.group}`}
                 pointerEvents="none"
-                style={[styles.label, { width: LABEL_W, height: LABEL_H, left, top }]}
+                style={[styles.label, { width, height: LABEL_H, left, top }]}
               >
-                <Text style={[styles.labelValue, { color: t.ts }]} numberOfLines={1}>
+                <Text
+                  style={[styles.labelValue, { color: t.ts }]}
+                  numberOfLines={1}
+                  // Long volume strings ("22.5k lbs ▲") shrink instead of
+                  // ellipsizing or spilling toward the grid.
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.65}
+                >
                   {p.display}
+                  {p.trend ? (
+                    // Direction is carried by the glyph itself; color is only a
+                    // secondary cue (ACCT highlights gains, muted keeps dips calm).
+                    <Text style={[styles.labelTrend, { color: p.trend === "up" ? ACCT : t.ts }]}>
+                      {p.trend === "up" ? " ▲" : " ▼"}
+                    </Text>
+                  ) : null}
                 </Text>
-                <Text style={[styles.labelName, { color: t.tp }]} numberOfLines={1}>
+                <Text
+                  style={[styles.labelName, { color: t.tp }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.7}
+                >
                   {p.group}
                 </Text>
               </View>
             );
           })}
         </View>
+
+        {prevPath ? (
+          <View style={styles.legendRow}>
+            <View style={[styles.legendDot, { backgroundColor: ACCT }]} />
+            <Text style={[styles.legendText, { color: t.ts }]}>Current Week</Text>
+            <View style={[styles.legendDot, styles.legendGap, { backgroundColor: t.ts }]} />
+            <Text style={[styles.legendText, { color: t.ts }]}>Previous Week</Text>
+          </View>
+        ) : null}
       </View>
     </NeuCard>
   );
@@ -336,6 +483,10 @@ const styles = StyleSheet.create({
     fontSize: 18,
     flexShrink: 1,
   },
+  caption: {
+    fontFamily: FontFamily.regular,
+    fontSize: 12,
+  },
   chartWrap: {
     alignSelf: "center",
     marginTop: 8,
@@ -350,10 +501,33 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: "center",
   },
+  labelTrend: {
+    fontFamily: FontFamily.bold,
+    fontSize: 11,
+  },
   labelName: {
     fontFamily: FontFamily.bold,
     fontSize: 14,
     marginTop: 1,
     textAlign: "center",
+  },
+  legendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    marginTop: 8,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 5,
+  },
+  legendGap: {
+    marginLeft: 14,
+  },
+  legendText: {
+    fontFamily: FontFamily.regular,
+    fontSize: 12,
   },
 });

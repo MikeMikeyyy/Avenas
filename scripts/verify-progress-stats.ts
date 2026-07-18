@@ -20,6 +20,7 @@ import {
   computeMuscleGroupStats,
   getRangeOption,
   rangeWindow,
+  previousComparableWindow,
   filterByDateWindow,
   bucketMetricByDay,
   bucketMetricByRollingWeeks,
@@ -164,6 +165,33 @@ eq(rangeWindow("last3Months", today), { startYMD: "2026-03-01", endYMD: "2026-05
 eq(rangeWindow("year", today),        { startYMD: "2025-06-01", endYMD: "2026-05-15" }, "rangeWindow year: 1st of month-11..today");
 // Sunday is treated as the END of the week (mondayOf maps Sun -> previous Mon).
 eq(rangeWindow("thisWeek", new Date(2026, 4, 17)), { startYMD: "2026-05-11", endYMD: "2026-05-17" }, "rangeWindow thisWeek: Sunday -> full Mon..Sun");
+
+// ── previousComparableWindow ──────────────────────────────────────────────────
+// Same length, shifted back a whole number of weeks (weekday-aligned), never
+// overlapping the current window. Feeds the Strength radar's trend arrows.
+{
+  // Partial thisWeek (Mon..Fri, 5 days) -> last Mon..Fri, NOT last Wed..Sun.
+  eq(previousComparableWindow("2026-05-11", "2026-05-15"),
+     { startYMD: "2026-05-04", endYMD: "2026-05-08" },
+     "prevWindow: partial week shifts 7 days (weekday-aligned)");
+  // Full lastWeek -> the week before it.
+  eq(previousComparableWindow("2026-05-04", "2026-05-10"),
+     { startYMD: "2026-04-27", endYMD: "2026-05-03" },
+     "prevWindow: full week -> prior full week");
+  // thisMonth (26 days) -> shift 28 (next multiple of 7), still Monday-aligned.
+  eq(previousComparableWindow("2026-04-20", "2026-05-15"),
+     { startYMD: "2026-03-23", endYMD: "2026-04-17" },
+     "prevWindow: rolling month shifts 4 whole weeks");
+  // last3Months (76 days) -> shift 77; equal length, no overlap.
+  eq(previousComparableWindow("2026-03-01", "2026-05-15"),
+     { startYMD: "2025-12-14", endYMD: "2026-02-27" },
+     "prevWindow: 3M shifts 11 whole weeks across year boundary");
+  {
+    const cur = rangeWindow("year", today);
+    const prev = previousComparableWindow(cur.startYMD, cur.endYMD);
+    check(prev.endYMD < cur.startYMD, "prevWindow: year window never overlaps the current one");
+  }
+}
 
 // ── filterByDateWindow ────────────────────────────────────────────────────────
 {
@@ -320,6 +348,27 @@ if (observesDST) {
   const pts = collectExerciseHistory(hist, "Plank");
   const prs = computePRs(pts, hist, "Plank");
   eq([prs.heaviest, prs.bestSetVolume, prs.bestSessionVolume, prs.oneRepMax], [null, null, null, null], "PR: empty history -> all null");
+}
+{
+  // Day scoping: the same exercise on two different workout days keeps
+  // separate histories/PRs when dayName is passed (case-insensitive trim),
+  // and merges all days when it is omitted.
+  const hist = [
+    workout({ id: "push1", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", workoutName: "Push", exercises: [
+      ex("Lateral Raise", [set("10", "12")]),
+    ]}),
+    workout({ id: "arms1", date: "2026-05-07", completedAt: "2026-05-07T10:00:00.000Z", workoutName: "Arms", exercises: [
+      ex("Lateral Raise", [set("14", "8")]), // heavier than any Push set
+    ]}),
+  ];
+  const pushPts = collectExerciseHistory(hist, "Lateral Raise", " push ");
+  eq(pushPts.map(p => p.workoutId), ["push1"], "exHistory day-scope: only the matching day's sessions (case-insensitive trim)");
+  const armsPts = collectExerciseHistory(hist, "Lateral Raise", "Arms");
+  eq(armsPts.map(p => p.workoutId), ["arms1"], "exHistory day-scope: the other day sees only its own sessions");
+  eq(collectExerciseHistory(hist, "Lateral Raise").length, 2, "exHistory day-scope: omitted dayName merges all days");
+  const pushPrs = computePRs(pushPts, hist, "Lateral Raise", "Push");
+  eq(pushPrs.heaviest?.value, 10, "PR day-scope: heaviest ignores the other day's heavier set");
+  approx(pushPrs.oneRepMax!.value, 10 * (1 + 12 / 30), "PR day-scope: the 1RM raw-set walk is day-filtered too");
 }
 
 // ── program scope helpers ─────────────────────────────────────────────────────

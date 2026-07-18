@@ -57,7 +57,6 @@ export default function RecipientPickerSheet({ visible, programName, clients, on
   };
 
   const canSend = sendToAll || selected.size > 0;
-  const recipientCount = sendToAll ? clients.length : selected.size;
 
   const ctaLabel = useMemo(() => {
     if (!canSend) return "Choose recipients";

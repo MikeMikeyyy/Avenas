@@ -238,6 +238,35 @@ export function rangeWindow(range: RangeKey, today: Date): { startYMD: string; e
 }
 
 /**
+ * The comparison window immediately preceding [startYMD, endYMD]: same length,
+ * shifted back by the smallest whole number of weeks that clears the window.
+ * Keeping the shift a multiple of 7 preserves weekday alignment, so a partial
+ * "this week" (Mon→Wed) compares against last Mon→Wed rather than a weekend,
+ * and month-scale windows keep the user's training-day rhythm. Feeds the
+ * Strength radar's per-group trend arrows.
+ */
+export function previousComparableWindow(
+  startYMD: string,
+  endYMD: string,
+): { startYMD: string; endYMD: string } {
+  const start = ymdToDate(startYMD);
+  const end = ymdToDate(endYMD);
+  const lenDays = calendarDaysBetween(start, end) + 1;
+  const shift = Math.ceil(lenDays / 7) * 7;
+  return { startYMD: toYMD(addDays(start, -shift)), endYMD: toYMD(addDays(end, -shift)) };
+}
+
+/**
+ * Inclusive day count of a [startYMD, endYMD] window (both ends counted).
+ * The previous comparable window has the same length by construction, so one
+ * call describes both — the Strength radar uses it to scale its per-week
+ * full-scale benchmarks to the active range.
+ */
+export function windowLengthDays(startYMD: string, endYMD: string): number {
+  return calendarDaysBetween(ymdToDate(startYMD), ymdToDate(endYMD)) + 1;
+}
+
+/**
  * Filter workouts to those whose `date` falls within [startYMD, endYMD]
  * inclusive. "YYYY-MM-DD" strings sort lexicographically in date order, so a
  * plain string compare is correct and avoids Date construction.
@@ -447,14 +476,23 @@ export function bucketVolumeByMonth(
 /**
  * One ExerciseDataPoint per workout that contains `exerciseName` (case-insensitive trim).
  * Sorted ascending by completedAt so it can feed a left-to-right line chart.
+ *
+ * `dayName` (optional, case-insensitive trim) restricts the walk to workouts
+ * whose `workoutName` matches — the Progress drill-down tracks progress per
+ * (day, exercise) pair, so an exercise programmed on two days (lateral raises
+ * on both Push and Arms) never mixes the two contexts' numbers. Omit it for
+ * the day-agnostic view (e.g. the post-workout summary's PR check).
  */
 export function collectExerciseHistory(
   workouts: CompletedWorkout[],
   exerciseName: string,
+  dayName?: string,
 ): ExerciseDataPoint[] {
   const want = key(exerciseName);
+  const wantDay = dayName == null ? null : key(dayName);
   const points: ExerciseDataPoint[] = [];
   for (const w of workouts) {
+    if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
     let topWeight = 0;
     let topReps = 0;
     let bestSetVolume = 0;
@@ -526,7 +564,7 @@ function epley(weight: number, reps: number): number {
  * 1RM PR walks the entire set list (not just the session's top set) so that a
  * lighter-but-higher-rep set can take the 1RM crown.
  */
-export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exerciseName: string): PRs {
+export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exerciseName: string, dayName?: string): PRs {
   const heaviest = history.reduce<{ p: ExerciseDataPoint; reps: number } | null>((acc, p) => {
     if (!acc || p.topWeight > acc.p.topWeight) return { p, reps: p.topReps };
     return acc;
@@ -541,10 +579,14 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
     return acc;
   }, null);
 
-  // 1RM walks raw sets.
+  // 1RM walks raw sets. Same optional day scoping as collectExerciseHistory —
+  // `history` arrives already day-filtered, so the raw walk must match or a
+  // set from the other day's session could take the 1RM crown.
   const want = key(exerciseName);
+  const wantDay = dayName == null ? null : key(dayName);
   let oneRm: { value: number; workoutId: string; date: string; weight: number; reps: number; completedAt: string } | null = null;
   for (const w of workouts) {
+    if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
     for (const ex of w.exercises) {
       if (key(ex.name) !== want) continue;
       for (const s of ex.sets) {

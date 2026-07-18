@@ -10,27 +10,38 @@ import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { collectLoggedExercisesForDay, sessionCountForDay } from "../utils/progressStats";
 import type { CompletedWorkout } from "../constants/programs";
-import type { LoggedExerciseRow } from "../constants/progress";
+import type { ExerciseSelection, LoggedExerciseRow } from "../constants/progress";
 
 interface Props {
   /** Unique non-Rest day names from the in-scope program(s). */
   days: string[];
   /** Workouts already filtered to the active scope. */
   workouts: CompletedWorkout[];
-  /** Currently selected exercise name (case-insensitive), or null. */
-  selectedExercise: string | null;
-  onSelectExercise: (name: string) => void;
+  /**
+   * Currently selected (day, exercise) pair (both case-insensitive), or null.
+   * The day is part of the identity: the same exercise under a different day
+   * row is a different selection and does NOT highlight.
+   */
+  selectedExercise: ExerciseSelection | null;
+  onSelectExercise: (day: string, name: string) => void;
 }
 
+// Lowercase-trim match used across the codebase for exercise/day names.
+const norm = (s: string) => s.trim().toLowerCase();
+
 // Accordion panel — animates height between 0 and the children's measured
-// natural height. Measures once via a hidden absolute layer, then re-uses the
-// captured value. Same pattern as programs.tsx's ExpandablePanel.
+// natural height. The content view is absolutely positioned, so it always lays
+// out at its natural height even while the animated container clips it; its
+// onLayout re-measures on EVERY content change, not just the first. That
+// re-measure is load-bearing here: the Progress tab stays mounted for days
+// while new workouts land, so a measure-once panel (the pattern programs.tsx
+// uses for its static content) freezes at the row count it had on first render
+// and clips newly logged exercises out of view.
 function ExpandablePanel({ expanded, children }: { expanded: boolean; children: React.ReactNode }) {
   const height = useSharedValue(0);
-  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+  const [measuredHeight, setMeasuredHeight] = useState(0);
 
   useEffect(() => {
-    if (measuredHeight === null) return;
     height.value = withTiming(expanded ? measuredHeight : 0, {
       duration: 280,
       easing: ReEasing.out(ReEasing.cubic),
@@ -40,25 +51,17 @@ function ExpandablePanel({ expanded, children }: { expanded: boolean; children: 
   const style = useAnimatedStyle(() => ({ height: height.value, overflow: "hidden" as const }));
 
   return (
-    <View>
-      {measuredHeight === null && (
-        <View
-          style={{ position: "absolute", left: 0, right: 0, top: 0, opacity: 0 }}
-          pointerEvents="none"
-          onLayout={e => {
-            const h = e.nativeEvent.layout.height;
-            if (h > 0) setMeasuredHeight(h);
-          }}
-        >
-          {children}
-        </View>
-      )}
-      <Reanimated.View style={style}>
-        <View style={{ position: "absolute", left: 0, right: 0, top: 0 }}>
-          {children}
-        </View>
-      </Reanimated.View>
-    </View>
+    <Reanimated.View style={style}>
+      <View
+        style={{ position: "absolute", left: 0, right: 0, top: 0 }}
+        onLayout={e => {
+          const h = e.nativeEvent.layout.height;
+          if (h > 0) setMeasuredHeight(prev => (prev === h ? prev : h));
+        }}
+      >
+        {children}
+      </View>
+    </Reanimated.View>
   );
 }
 
@@ -159,8 +162,8 @@ function ExpandedExercises({
 }: {
   workouts: CompletedWorkout[];
   day: string;
-  selectedExercise: string | null;
-  onSelectExercise: (name: string) => void;
+  selectedExercise: ExerciseSelection | null;
+  onSelectExercise: (day: string, name: string) => void;
   textPrimary: string;
   textSecondary: string;
   divider: string;
@@ -180,12 +183,17 @@ function ExpandedExercises({
     );
   }
 
-  const selKey = selectedExercise?.trim().toLowerCase() ?? "";
+  // Highlight only within the selection's own day row — the same exercise
+  // name under another day is a different (day, exercise) pair.
+  const selKey =
+    selectedExercise && norm(selectedExercise.day) === norm(day)
+      ? norm(selectedExercise.name)
+      : "";
 
   return (
     <View style={[styles.expandedBody, { borderTopColor: divider }]}>
       {rows.map((r, i) => {
-        const k = r.name.trim().toLowerCase();
+        const k = norm(r.name);
         const selected = k === selKey;
         return (
           <TouchableOpacity
@@ -193,7 +201,7 @@ function ExpandedExercises({
             activeOpacity={0.7}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onSelectExercise(r.name);
+              onSelectExercise(day, r.name);
             }}
             style={[styles.exRow, i > 0 && { marginTop: 2 }]}
             accessibilityRole="button"

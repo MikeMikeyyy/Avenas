@@ -5,6 +5,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getJSON, removeKey, setJSON } from "./storage";
+import { formatStoredDate } from "./dates";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 
@@ -178,16 +179,13 @@ export async function acceptSharedProgramBatch(batchKey: string): Promise<string
     } : p);
     await setJSON(PROGRAMS_KEY, updated);
   } else {
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const now = new Date();
-    const todayStr = `${String(now.getDate()).padStart(2, "0")} ${months[now.getMonth()]} ${now.getFullYear()}`;
     importedId = `program_${Date.now()}`;
     const imported: SavedProgram = {
       ...snap,
       id: importedId,
       status: "created",
       currentWeek: 0,
-      startDate: todayStr,
+      startDate: formatStoredDate(new Date()),
       cycleOffset: undefined,
       completedDate: undefined,
     };
@@ -251,16 +249,13 @@ export async function acceptSharedProgram(shareId: string): Promise<string | nul
     await setJSON(PROGRAMS_KEY, updated);
   } else {
     // First accept (or the local program was deleted) — insert a fresh one.
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const now = new Date();
-    const todayStr = `${String(now.getDate()).padStart(2, "0")} ${months[now.getMonth()]} ${now.getFullYear()}`;
     importedId = `program_${Date.now()}`;
     const imported: SavedProgram = {
       ...snap,
       id: importedId,
       status: "created",
       currentWeek: 0,
-      startDate: todayStr,
+      startDate: formatStoredDate(new Date()),
       cycleOffset: undefined,
       completedDate: undefined,
     };
@@ -435,15 +430,12 @@ export async function applyReturnedProgram(id: string): Promise<void> {
     } : p);
   } else {
     // Original was deleted — import as a fresh "created" program so the user doesn't lose the edits.
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const today = new Date();
-    const startDate = `${String(today.getDate()).padStart(2, "0")} ${months[today.getMonth()]} ${today.getFullYear()}`;
     const imported: SavedProgram = {
       ...snap,
       id: `program_${Date.now()}`,
       status: "created",
       currentWeek: 0,
-      startDate,
+      startDate: formatStoredDate(new Date()),
       cycleOffset: undefined,
       completedDate: undefined,
     };

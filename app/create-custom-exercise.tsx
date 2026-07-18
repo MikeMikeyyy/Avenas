@@ -20,6 +20,7 @@ import Svg, { Path } from "react-native-svg";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
+import { scheduleCloudPush } from "../lib/syncManager";
 import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import * as ImagePicker from "expo-image-picker";
@@ -223,6 +224,7 @@ export default function CreateCustomExerciseScreen() {
         }
         await AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify([...current, updated]));
       }
+      scheduleCloudPush(); // custom exercises (and cascaded program renames) are synced
       router.back();
     } catch (e) {
       Alert.alert("Save failed", e instanceof Error ? e.message : String(e));

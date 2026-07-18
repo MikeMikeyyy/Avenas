@@ -38,74 +38,56 @@ export default function NeuCard({
 
   const fillStyle = fill ? { flex: 1 } : undefined;
 
-  // Dark mode: clean single shadow, no light highlight
-  if (dark) {
-    return (
-      <View
-        style={[
-          {
-            borderRadius: radius,
-            backgroundColor: resolvedBg,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.35,
-            shadowRadius: 8,
-            elevation: 4,
-          },
-          fillStyle,
-          style,
-        ]}
-      >
-        <View
-          style={[
-            {
-              borderRadius: radius,
-              backgroundColor: resolvedBg,
-              overflow: "hidden",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.2)",
-            },
-            fillStyle,
-            innerStyle,
-          ]}
-        >
-          {children}
-        </View>
-      </View>
-    );
-  }
-
-  // Light mode: full neumorphic effect
+  // Both modes MUST render the same 3-level view tree. A live theme toggle
+  // reconciles the existing native views in place; if the tree depth differed
+  // per mode (as it originally did), Fabric would repurpose views across roles
+  // and leave children misplaced until the next full reload.
   const shadowA = isInset ? SHADOW_LIGHT : SHADOW_DARK;
   const shadowB = isInset ? SHADOW_DARK  : SHADOW_LIGHT;
 
+  // Outer: dark mode = clean single drop shadow; light mode = bottom-right depth
+  const outerShadow = dark
+    ? {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        elevation: 4,
+      }
+    : {
+        shadowColor: shadowA,
+        shadowOffset: { width: sm ? 3 : 4, height: sm ? 3 : 4 },
+        shadowOpacity: isInset ? 1 : 0.5,
+        shadowRadius: isInset ? 5 : sm ? 5 : 8,
+      };
+
+  // Middle: light mode = top-left highlight; dark mode = no highlight (opacity 0)
+  const midShadow = dark
+    ? { shadowOpacity: 0 }
+    : {
+        shadowColor: shadowB,
+        shadowOffset: { width: sm ? -2 : -3, height: sm ? -2 : -3 },
+        shadowOpacity: 1,
+        shadowRadius: isInset ? 5 : sm ? 3 : 4,
+      };
+
+  const borderColor = dark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)";
+
   return (
-    // Dark shadow wrapper (bottom-right depth)
+    // Outer shadow wrapper
     <View
       style={[
-        {
-          borderRadius: radius,
-          backgroundColor: resolvedBg,
-          shadowColor: shadowA,
-          shadowOffset: { width: sm ? 3 : 4, height: sm ? 3 : 4 },
-          shadowOpacity: isInset ? 1 : 0.5,
-          shadowRadius: isInset ? 5 : sm ? 5 : 8,
-        },
+        { borderRadius: radius, backgroundColor: resolvedBg },
+        outerShadow,
         fillStyle,
         style,
       ]}
     >
-      {/* White/light shadow wrapper (top-left highlight) */}
+      {/* Highlight shadow wrapper (inert in dark mode, but kept for tree-shape stability) */}
       <View
         style={[
-          {
-            borderRadius: radius,
-            backgroundColor: resolvedBg,
-            shadowColor: shadowB,
-            shadowOffset: { width: sm ? -2 : -3, height: sm ? -2 : -3 },
-            shadowOpacity: 1,
-            shadowRadius: isInset ? 5 : sm ? 3 : 4,
-          },
+          { borderRadius: radius, backgroundColor: resolvedBg },
+          midShadow,
           fillStyle,
         ]}
       >
@@ -117,7 +99,7 @@ export default function NeuCard({
               backgroundColor: resolvedBg,
               overflow: "hidden",
               borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.85)",
+              borderColor,
             },
             fillStyle,
             innerStyle,

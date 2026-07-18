@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
+import { scheduleCloudPush } from "../../lib/syncManager";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
@@ -21,6 +22,7 @@ import PlusIcon from "../icons/PlusIcon";
 import TrashIcon from "../TrashIcon";
 import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
+import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -31,7 +33,6 @@ import {
   backfillAcceptedProgramIds,
   batchKeyOf,
   loadAssignedPT,
-  saveAssignedPT,
   loadClients,
   loadSentPrograms,
   loadSharedPrograms,
@@ -42,9 +43,10 @@ import {
   type SentProgram,
   type SharedProgram,
 } from "../../utils/trainerStore";
-import { getMyConnections, disconnect as disconnectConnection } from "../../lib/connections";
+import { getMyConnections } from "../../lib/connections";
 import Avatar from "../Avatar";
 import { getJSON } from "../../utils/storage";
+import { isActiveNow, presenceLabel } from "../../utils/presence";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 
 function fmtAgo(iso: string): string {
@@ -76,11 +78,10 @@ export default function MyPTHome() {
   const unreadMessages = useUnreadMessages();
 
   const [pt, setPT] = useState<AssignedPT | null>(null);
-  // Count of incoming connection requests (manage-button badge) and a lookup from
-  // a real connection's account id → its connection row id, so removing the shown
-  // trainer severs the real connection rather than only a local entry.
-  const [pendingIncoming, setPendingIncoming] = useState(0);
-  const connByOtherId = useRef<Record<string, string>>({});
+  // Live "last active" for the connected trainer + the manage-button badge
+  // count. Disconnecting a real connection lives on the Connect screen
+  // (app/connect.tsx). A local/mock trainer isn't in the map → no presence row.
+  const { presenceById, pendingIncoming } = useConnectionPresence();
   const [received, setReceived] = useState<SharedProgram[]>([]);
   const [sent, setSent] = useState<SentProgram[]>([]);
   const [expandedReceived, setExpandedReceived] = useState<Set<string>>(new Set());
@@ -157,15 +158,11 @@ export default function MyPTHome() {
       let trainer: AssignedPT | null = p;
       try {
         const conns = await getMyConnections();
-        const map: Record<string, string> = {};
         const accepted = conns.filter(c => c.status === "accepted");
-        for (const c of accepted) map[c.otherId] = c.connectionId;
-        connByOtherId.current = map;
         const trainerConn = accepted.find(c => c.accountType === "pt");
         if (trainerConn) {
           trainer = { id: trainerConn.otherId, name: trainerConn.name || "Trainer", initials: makeInitials(trainerConn.name || "Trainer"), photoUri: trainerConn.photoUri };
         }
-        if (!cancelled) setPendingIncoming(conns.filter(c => c.status === "pending" && c.direction === "incoming").length);
       } catch { /* keep the local trainer */ }
       if (cancelled) return;
       setPT(trainer);
@@ -181,49 +178,13 @@ export default function MyPTHome() {
     router.push({ pathname: "/trainer/chat/[id]", params: { id: pt.id, name: pt.name, initials: pt.initials } });
   };
 
-  const removeTrainer = useCallback(() => {
-    if (!pt) {
-      Alert.alert("No trainer", "You haven't connected a trainer yet.");
-      return;
-    }
-    const connId = connByOtherId.current[pt.id];
-    Alert.alert(
-      connId ? "Disconnect" : "Remove Trainer",
-      connId ? `Disconnect from ${pt.name}? You'll stop seeing each other.` : `Remove ${pt.name}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: connId ? "Disconnect" : "Remove",
-          style: "destructive",
-          onPress: async () => {
-            if (connId) {
-              delete connByOtherId.current[pt.id];
-              try { await disconnectConnection(connId); } catch { /* keep UI responsive */ }
-            } else {
-              await saveAssignedPT(null);
-            }
-            setPT(null);
-          },
-        },
-      ],
-    );
-  }, [pt]);
 
-  // "+" entry point — mirrors the trainer view: connect someone new, or remove
-  // a person you're connected with.
-  const openManage = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert("Manage", undefined, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Connect Someone", onPress: () => router.push("/connect") },
-      { text: "Remove a Trainer", style: "destructive", onPress: removeTrainer },
-    ]);
-  }, [router, removeTrainer]);
 
   const handleApplyReturned = useCallback(async (entry: SentProgram) => {
     if (entry.appliedAtISO) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await applyReturnedProgram(entry.id);
+    scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
     const appliedAt = new Date().toISOString();
     setSent(prev => prev.map(s => s.id === entry.id ? { ...s, appliedAtISO: appliedAt } : s));
     Alert.alert("Program Updated", `"${entry.programName}" in your programs was updated with your trainer's edits.`);
@@ -270,6 +231,7 @@ export default function MyPTHome() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const key = batchKeyOf(share);
     const importedId = await acceptSharedProgramBatch(key);
+    scheduleCloudPush(); // the accept materialised/updated @avenas/programs (a synced key)
     const acceptedAt = new Date().toISOString();
     setReceived(prev => prev.map(r => batchKeyOf(r) === key
       ? { ...r, acceptedAtISO: acceptedAt, acceptedProgramId: importedId ?? undefined }
@@ -293,7 +255,7 @@ export default function MyPTHome() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 140 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top, paddingBottom: insets.bottom + 140 }}
       >
         <View style={styles.topPills}>
           <BounceButton
@@ -358,6 +320,16 @@ export default function MyPTHome() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.ptLabel, { color: t.ts }]}>YOUR TRAINER</Text>
                 <Text style={[styles.ptName, { color: t.tp }]}>{pt.name}</Text>
+                {(() => {
+                  const lastActive = presenceById.get(pt.id);
+                  if (!lastActive) return null; // not connected, never active, or sharing off
+                  return (
+                    <View style={styles.presenceRow}>
+                      <View style={[styles.presenceDot, { backgroundColor: isActiveNow(lastActive) ? ACCT : t.ts }]} />
+                      <Text style={[styles.presenceText, { color: t.ts }]}>{presenceLabel(lastActive)}</Text>
+                    </View>
+                  );
+                })()}
               </View>
               <BounceButton onPress={openChat} accessibilityLabel="Chat with trainer">
                 <View style={[styles.chatBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
@@ -738,7 +710,7 @@ const styles = StyleSheet.create({
   trainersBtn:  { flexDirection: "row", alignItems: "center", gap: 8, height: 40, borderRadius: 20, paddingHorizontal: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   trainersBtnText: { fontFamily: FontFamily.semibold, fontSize: 13 },
   circleBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  title:        { fontFamily: FontFamily.bold, fontSize: 32 },
+  title:        { fontFamily: FontFamily.bold, fontSize: 28 },
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
   emptyInner:   { padding: 28, alignItems: "center", gap: 12 },
   emptyIcon:    { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center" },
@@ -751,6 +723,9 @@ const styles = StyleSheet.create({
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 18 },
   ptLabel:      { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 1 },
   ptName:       { fontFamily: FontFamily.bold, fontSize: 18, marginTop: 2 },
+  presenceRow:  { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  presenceDot:  { width: 6, height: 6, borderRadius: 3 },
+  presenceText: { fontFamily: FontFamily.regular, fontSize: 12 },
   chatBtn:      { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   itemRow:      { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   itemName:     { fontFamily: FontFamily.semibold, fontSize: 14 },

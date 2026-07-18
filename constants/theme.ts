@@ -32,9 +32,31 @@ export type AppTheme = typeof APP_LIGHT;
 // The single source for the app's green accent — import this, never hardcode.
 export const ACCT = "#1deca0";
 
+// Deeper green for small text/lines that sit over aurora-tinted LIGHT
+// backgrounds — ACCT itself washes out over the mint glow. Dark mode keeps ACCT.
+export const ACCT_DEEP = "#0c9f6e";
+
 // ─── Danger ───────────────────────────────────────────────────────────────────
 // Destructive actions (block, delete). Import this, never hardcode a red literal.
 export const DANGER = "#E5484D";
+
+// ─── Aurora (soft pastel gradient system) ─────────────────────────────────────
+// Bubbly pastel accents built around the brand green, with an aqua and a blush
+// counterpoint. Base colors are full-strength; surfaces fade them via gradient
+// stop opacity so the same hex works in light and dark mode.
+export const AURORA = {
+  mint:  ACCT,
+  aqua:  "#45c4f5",
+  blush: "#ff9ec2",
+} as const;
+
+// Gradient orb buttons (Home quick actions). `glow` doubles as the shadow color.
+export const ORB_GRADS = {
+  green: { colors: ["#84f4cc", "#0fd692"] as const, glow: "#12c987" },
+  aqua:  { colors: ["#9ce0ff", "#3eb8f2"] as const, glow: "#3eb8f2" },
+  blush: { colors: ["#ffc7db", "#f77fae"] as const, glow: "#f77fae" },
+} as const;
+
 
 // ─── Slate button ─────────────────────────────────────────────────────────────
 // Dark slate-black for primary non-accent buttons (light mode bg).

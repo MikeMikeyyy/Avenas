@@ -3,8 +3,8 @@
 // lib/cloud.changePassword). Accounts that only sign in with Google/Apple have
 // no password here, so they get an explanation instead of the form.
 
-import { useState } from "react";
-import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
+import { useEffect, useState } from "react";
+import { Alert, View, Text, StyleSheet, Switch, TextInput, TouchableOpacity } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -15,8 +15,9 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
-import { APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { changePassword } from "../lib/cloud";
+import { getShareActivity, setShareActivity } from "../lib/connections";
 
 const MIN_PASSWORD = 8;
 
@@ -44,6 +45,29 @@ export default function PrivacySecurityScreen() {
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Activity-status privacy (profiles.share_activity, migration 0009). The
+  // switch stays disabled until the server value loads so a blind flip can't
+  // fight the fetch; writes are optimistic with revert + alert on failure —
+  // a silently-failed "hide me" would leave the user wrongly believing
+  // they're hidden.
+  const [shareActivity, setShareActivityState] = useState(true);
+  const [shareLoaded, setShareLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    getShareActivity()
+      .then(v => { if (!cancelled) { setShareActivityState(v); setShareLoaded(true); } })
+      .catch(() => { /* offline / signed out — leave the toggle disabled */ });
+    return () => { cancelled = true; };
+  }, []);
+  const onToggleShareActivity = (value: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShareActivityState(value);
+    setShareActivity(value).catch(() => {
+      setShareActivityState(!value);
+      Alert.alert("Couldn't update", "Your activity status setting wasn't saved. Check your connection and try again.");
+    });
+  };
 
   const longEnough = next.length >= MIN_PASSWORD;
   const matches = next.length > 0 && next === confirm;
@@ -88,6 +112,25 @@ export default function PrivacySecurityScreen() {
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 64, paddingBottom: insets.bottom + 32 }]}
       >
         <Text style={[styles.title, { color: t.tp }]}>Privacy & Security</Text>
+
+        <Text style={[styles.label, { color: t.ts }]}>ACTIVITY</Text>
+        <NeuCard dark={isDark} radius={16}>
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.toggleTitle, { color: t.tp }]}>Show Activity Status</Text>
+              <Text style={[styles.toggleBody, { color: t.ts }]}>
+                People you&apos;re connected with can see when you were last active on Avenas. When this is off, they see nothing at all.
+              </Text>
+            </View>
+            <Switch
+              value={shareActivity}
+              onValueChange={onToggleShareActivity}
+              disabled={!shareLoaded}
+              trackColor={{ false: t.div, true: ACCT }}
+              thumbColor="#fff"
+            />
+          </View>
+        </NeuCard>
 
         {oauthOnly ? (
           <NeuCard dark={isDark} radius={18} style={{ marginTop: 24 }}>
@@ -186,6 +229,9 @@ const styles = StyleSheet.create({
   ctaDisabled: { opacity: 0.4 },
   cta:         { borderRadius: 28, paddingVertical: 17, alignItems: "center", justifyContent: "center" },
   ctaText:     { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 0.3 },
+  toggleRow:   { flexDirection: "row", alignItems: "center", gap: 14, padding: 16 },
+  toggleTitle: { fontFamily: FontFamily.semibold, fontSize: 15 },
+  toggleBody:  { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, marginTop: 4 },
   noteInner:   { padding: 24, alignItems: "center", gap: 8 },
   noteTitle:   { fontFamily: FontFamily.bold, fontSize: 17 },
   noteBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },

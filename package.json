@@ -9,10 +9,11 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts",
+    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts && npx tsx scripts/verify-workout-summary.ts",
     "verify:stats": "npx tsx scripts/verify-progress-stats.ts"
   },
   "dependencies": {
+    "@bacons/apple-targets": "^4.0.7",
     "@callstack/liquid-glass": "^0.7.1",
     "@expo-google-fonts/nunito": "^0.4.2",
     "@expo/vector-icons": "^15.0.3",

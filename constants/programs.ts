@@ -3,9 +3,24 @@ export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
 export const WORKOUT_HISTORY_KEY = "@avenas/workout_history";
 export const WORKOUT_DAY_OVERRIDE_KEY = "@avenas/today_workout_override";
 export const WORKOUT_DRAFT_KEY = "@avenas/workout_draft";
+export const WORKOUT_VIEW_MODE_KEY = "@avenas/workout_view_mode"; // "focus" | "list"
 export const LOG_DRAFT_KEY_PREFIX = "@avenas/log_draft:";
 export const logDraftKey = (date: string, workoutName: string) =>
   `${LOG_DRAFT_KEY_PREFIX}${date}:${workoutName}`;
+// One-shot flag: has the user seen the "tap a day to switch Training/Rest"
+// coach mark in the program builder. Local-only UI preference (never synced).
+export const CYCLE_COACHMARK_KEY = "@avenas/cycle_pattern_coachmark_seen";
+// How many working sets a newly added exercise starts with (the exercise
+// picker's "sets" stepper). Local-only UI preference (never synced).
+export const DEFAULT_SET_COUNT_KEY = "@avenas/builder_default_sets";
+// "1" when typing a set value on the Workout screen should fill down into the
+// not-yet-done sets below it (the program builder and log-workout always fill
+// down). Settings toggle, off by default. Local-only UI preference (never synced).
+export const WORKOUT_AUTOFILL_KEY = "@avenas/workout_autofill";
+// "0" disables the iOS lock-screen / Dynamic Island Live Activity during a
+// workout. Settings toggle, ON by default (any value other than "0" counts as
+// enabled). Local-only, never synced. No-op in Expo Go / Android / iOS < 17.
+export const LIVE_ACTIVITY_KEY = "@avenas/live_activity";
 
 export type CompletedSet = {
   type: "warmup" | "working";

@@ -16,6 +16,7 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { scheduleCloudPush } from "../lib/syncManager";
 
 import FadeScreen from "../components/FadeScreen";
 import NeuCard from "../components/NeuCard";
@@ -159,6 +160,7 @@ export default function ProgramViewScreen() {
     if (!share || accepted) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await acceptSharedProgram(share.id);
+    scheduleCloudPush(); // the accept materialised/updated @avenas/programs (a synced key)
     await reload();
     Alert.alert("Program Added", `"${share.programName}" was added to your programs.`);
   }, [share, accepted, reload]);
@@ -167,6 +169,7 @@ export default function ProgramViewScreen() {
     if (!sent || sentApplied) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await applyReturnedProgram(sent.id);
+    scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
     await reload();
     Alert.alert("Program Updated", `"${sent.programName}" in your programs was updated with your trainer's edits.`);
   }, [sent, sentApplied, reload]);

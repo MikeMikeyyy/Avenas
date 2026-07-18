@@ -1,9 +1,10 @@
-import { Alert, View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
+import { Alert, Platform, View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
@@ -12,10 +13,10 @@ import { useUnit } from "../contexts/UnitContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { removeKey } from "../utils/storage";
-import { supabase } from "../lib/supabase";
 import { signOut } from "../lib/auth";
 import { deleteAccount } from "../lib/cloud";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
+import { WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY } from "../constants/programs";
 import PeopleIcon from "../components/icons/PeopleIcon";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -30,7 +31,10 @@ type BaseItem     = { icon: string; label: string; renderIcon?: (c: string) => R
 type NavigateItem = BaseItem & { route?: string; onPress?: () => void };
 type ToggleItem   = BaseItem & { toggle: true };
 type UnitItem     = BaseItem & { unitToggle: true };
-type SettingsItem = NavigateItem | ToggleItem | UnitItem;
+type ViewModeItem = BaseItem & { viewToggle: true };
+type AutofillItem = BaseItem & { autofillToggle: true };
+type LiveActivityItem = BaseItem & { liveActivityToggle: true };
+type SettingsItem = NavigateItem | ToggleItem | UnitItem | ViewModeItem | AutofillItem | LiveActivityItem;
 
 // In-app rating prompt (Apple allows max 3 per year). Silently no-ops when the
 // native prompt is unavailable (simulator, or after the yearly limit) instead
@@ -66,6 +70,12 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
     title: "App",
     items: [
       { icon: "moon-outline",           label: "Dark Mode", toggle: true },
+      { icon: "eye-outline",            label: "Workout Focus Mode", viewToggle: true },
+      { icon: "arrow-down-circle-outline", label: "Auto-Fill Sets", autofillToggle: true },
+      // iOS-only: the lock-screen / Dynamic Island workout card (Live Activity).
+      ...(Platform.OS === "ios"
+        ? [{ icon: "phone-portrait-outline", label: "Lock Screen Workout", liveActivityToggle: true } as SettingsItem]
+        : []),
       { icon: "", label: "Units", unitToggle: true, renderIcon: (c: string) => (
         <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
           <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.535 19.5 8.3025 19.4489 8.1118C19.3102 7.5941 18.9059 7.1898 18.3882 7.0511C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.0511C16.0941 7.1898 15.6898 7.5941 15.5511 8.1118C15.5 8.3025 15.5 8.535 15.5 9Z" stroke={c} strokeWidth="1.5" />
@@ -108,6 +118,51 @@ export default function SettingsScreen() {
   const initials = initialsFromName(profile.name);
   const displayName = profile.name.trim() || "Your Profile";
   const displayEmail = profile.email.trim() || "Set up your profile";
+
+  // Workout view-mode preference ("focus" | "list"), shared with the Workout
+  // screen via WORKOUT_VIEW_MODE_KEY. The Workout screen re-reads this on focus.
+  const [focusView, setFocusView] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(WORKOUT_VIEW_MODE_KEY)
+      .then(v => setFocusView(v === "focus"))
+      .catch(() => {});
+  }, []);
+  const toggleFocusView = (next: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setFocusView(next);
+    AsyncStorage.setItem(WORKOUT_VIEW_MODE_KEY, next ? "focus" : "list").catch(() => {});
+  };
+
+  // Auto-fill sets preference: typing a value in a set on the Workout screen
+  // fills the not-yet-done sets below it. The Workout screen re-reads this on
+  // focus (same pattern as the view mode above). Off by default.
+  const [autofillSets, setAutofillSets] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(WORKOUT_AUTOFILL_KEY)
+      .then(v => setAutofillSets(v === "1"))
+      .catch(() => {});
+  }, []);
+  const toggleAutofillSets = (next: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setAutofillSets(next);
+    AsyncStorage.setItem(WORKOUT_AUTOFILL_KEY, next ? "1" : "0").catch(() => {});
+  };
+
+  // Lock-screen workout (iOS Live Activity) preference. ON by default — any
+  // stored value other than "0" counts as enabled. The Workout screen re-reads
+  // this on focus (same pattern as the toggles above). Only takes effect in a
+  // dev/production build; Expo Go has no Live Activity support.
+  const [liveActivity, setLiveActivity] = useState(true);
+  useEffect(() => {
+    AsyncStorage.getItem(LIVE_ACTIVITY_KEY)
+      .then(v => setLiveActivity(v !== "0"))
+      .catch(() => {});
+  }, []);
+  const toggleLiveActivity = (next: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLiveActivity(next);
+    AsyncStorage.setItem(LIVE_ACTIVITY_KEY, next ? "1" : "0").catch(() => {});
+  };
 
   // Dev-only: wipe the local profile + onboarding/terms flags and replay the
   // intro deck. Hidden in production via the __DEV__ guard at the render site.
@@ -315,6 +370,51 @@ export default function SettingsScreen() {
                           <Reanimated.Text style={[styles.unitBtnText, lbsLabelColor]}>lbs</Reanimated.Text>
                         </TouchableOpacity>
                       </View>
+                    </View>
+                  ) : "viewToggle" in item ? (
+                    <View style={styles.row}>
+                      <View style={styles.rowLeft}>
+                        {item.renderIcon
+                          ? item.renderIcon(t.icon)
+                          : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
+                        <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
+                      </View>
+                      <Switch
+                        value={focusView}
+                        onValueChange={toggleFocusView}
+                        trackColor={{ false: t.div, true: ACCT }}
+                        thumbColor="#fff"
+                      />
+                    </View>
+                  ) : "autofillToggle" in item ? (
+                    <View style={styles.row}>
+                      <View style={styles.rowLeft}>
+                        {item.renderIcon
+                          ? item.renderIcon(t.icon)
+                          : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
+                        <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
+                      </View>
+                      <Switch
+                        value={autofillSets}
+                        onValueChange={toggleAutofillSets}
+                        trackColor={{ false: t.div, true: ACCT }}
+                        thumbColor="#fff"
+                      />
+                    </View>
+                  ) : "liveActivityToggle" in item ? (
+                    <View style={styles.row}>
+                      <View style={styles.rowLeft}>
+                        {item.renderIcon
+                          ? item.renderIcon(t.icon)
+                          : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
+                        <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
+                      </View>
+                      <Switch
+                        value={liveActivity}
+                        onValueChange={toggleLiveActivity}
+                        trackColor={{ false: t.div, true: ACCT }}
+                        thumbColor="#fff"
+                      />
                     </View>
                   ) : "toggle" in item ? (
                     <View style={styles.row}>

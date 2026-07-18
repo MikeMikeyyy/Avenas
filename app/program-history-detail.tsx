@@ -18,7 +18,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import {
   PROGRAMS_KEY,
   WORKOUT_HISTORY_KEY,
@@ -101,7 +101,7 @@ export default function ProgramHistoryDetailScreen() {
     }, [programId])
   );
 
-  const { weekSections, startDate } = useMemo(() => {
+  const { weekSections } = useMemo(() => {
     if (!program) return { weekSections: [], startDate: new Date() };
 
     const start = parseStoredDate(program.startDate);

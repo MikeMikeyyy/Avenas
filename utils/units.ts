@@ -52,8 +52,10 @@ export function formatWeightForDisplay(storedKg: string, isKg: boolean): string 
 
 /**
  * A value the user TYPED in their unit → the canonical-kg string to store.
- * Call this once, at commit (save/finish), never per keystroke — converting
- * mid-edit would eat a trailing "." and break decimal entry.
+ * Never feed the result back into the display of the field being edited —
+ * round-tripping mid-edit would eat a trailing "." and break decimal entry.
+ * Committing per keystroke is fine as long as the edited field keeps its own
+ * text buffer (see WeightSetInput in new-program.tsx).
  *   - kg mode: stored as typed.
  *   - lb mode: lb × KG_PER_LB, kept to 3 dp so it round-trips back to the typed
  *     lb value for display.

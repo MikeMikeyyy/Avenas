@@ -8,11 +8,12 @@
 // react-native-keyboard-controller, so they track the interactive drag-to-dismiss
 // frame-by-frame instead of snapping the way KeyboardAvoidingView did.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Pressable, Platform, Alert,
+  NativeSyntheticEvent, NativeScrollEvent,
 } from "react-native";
-import Animated, { useAnimatedStyle, interpolate, Extrapolation } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, interpolate, Extrapolation, ZoomIn, ZoomOut } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
@@ -55,6 +56,12 @@ export default function ChatThreadScreen() {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]); // newest-first
   const [input, setInput] = useState("");
+  // Jump-to-latest: on the INVERTED list, offset 0 is the newest message, so
+  // "scrolled up into history" is simply a large contentOffset.y. The ref
+  // mirrors the state so the scroll handler only re-renders on show/hide flips.
+  const listRef = useRef<FlatList<ChatItem>>(null);
+  const [showJump, setShowJump] = useState(false);
+  const showJumpRef = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   // null = no report sheet open; the variant drives the reason picker's title.
   const [report, setReport] = useState<{ kind: "user" } | { kind: "message"; msg: ChatMessage } | null>(null);
@@ -157,9 +164,24 @@ export default function ChatThreadScreen() {
     setInput("");
     const msg = await appendMessage(contactId, text);
     setMessages(prev => [msg, ...prev]); // prepend → bottom of inverted list
+    // If the user had scrolled into history, bring their new message into view.
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, [input, contactId]);
 
   const canSend = input.trim().length > 0;
+
+  const onListScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const show = e.nativeEvent.contentOffset.y > 300;
+    if (show !== showJumpRef.current) {
+      showJumpRef.current = show;
+      setShowJump(show);
+    }
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
 
   // Interleave day dividers. messages is newest-first; we append a divider after
   // a message whenever the next (older) message falls on a different calendar day
@@ -229,8 +251,11 @@ export default function ChatThreadScreen() {
           {/* Messages */}
           <View style={{ flex: 1 }}>
             <FlatList
+              ref={listRef}
               data={items}
               inverted
+              onScroll={onListScroll}
+              scrollEventThrottle={32}
               // flex:1 makes the scroll surface fill the whole page; without it the
               // list collapses to its content height, so with one message only the
               // bubble area was draggable. alwaysBounceVertical lets the drag (and
@@ -262,6 +287,23 @@ export default function ChatThreadScreen() {
               <View style={styles.empty} pointerEvents="none">
                 <Text style={[styles.emptyText, { color: t.ts }]}>No messages yet — say hi 👋</Text>
               </View>
+            )}
+            {/* Jump back to the latest message once scrolled into history.
+                Scale-only entrance — opacity on a GlassView ancestor is not allowed. */}
+            {showJump && (
+              <Animated.View entering={ZoomIn.duration(180)} exiting={ZoomOut.duration(140)} style={styles.jumpWrap}>
+                <TouchableOpacity onPress={jumpToLatest} activeOpacity={0.8} accessibilityLabel="Scroll to latest message" accessibilityRole="button">
+                  {isGlassEffectAPIAvailable() ? (
+                    <GlassView glassEffectStyle="regular" style={styles.jumpBtn}>
+                      <Ionicons name="chevron-down" size={22} color={t.tp} />
+                    </GlassView>
+                  ) : (
+                    <View style={[styles.jumpBtn, styles.jumpBtnFallback, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+                      <Ionicons name="chevron-down" size={22} color={t.tp} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </Animated.View>
             )}
           </View>
 
@@ -330,6 +372,10 @@ const styles = StyleSheet.create({
   dayWrap:    { alignItems: "center", marginVertical: 10 },
   dayPill:    { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   dayText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
+
+  jumpWrap:        { position: "absolute", right: 16, bottom: 12 },
+  jumpBtn:         { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  jumpBtnFallback: { shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4 },
 
   inputBar:   { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1 },
   inputBox:   { flex: 1, borderRadius: 22, borderWidth: 1, paddingHorizontal: 16, paddingVertical: Platform.OS === "ios" ? 10 : 4, maxHeight: 120, justifyContent: "center" },

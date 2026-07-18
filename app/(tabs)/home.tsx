@@ -14,7 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
@@ -30,9 +30,10 @@ import {
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
 import { toYMD, fmtDuration } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
-import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday } from "../../utils/workout";
+import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
+import InsightsCard from "../../components/InsightsCard";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
 
@@ -96,13 +97,14 @@ type QuickAction = {
   id: string;
   label: string;
   route?: string;
+  grad: keyof typeof ORB_GRADS;
   renderIcon: (c: string) => React.ReactElement;
 };
 
 const QUICK_ACTIONS: QuickAction[] = [
-  { id: "log",      label: "New\nProgram",  route: "/new-program", renderIcon: (c: string) => <Ionicons name="add-outline" size={26} color={c} /> },
-  { id: "programs", label: "My\nPrograms",  route: "/programs", renderIcon: (c: string) => <Ionicons name="list-outline" size={22} color={c} /> },
-  { id: "journal",  label: "View\nJournal", route: "/journal",  renderIcon: (c: string) => (
+  { id: "log",      label: "New\nProgram",  route: "/new-program", grad: "green", renderIcon: (c: string) => <Ionicons name="add-outline" size={26} color={c} /> },
+  { id: "programs", label: "My\nPrograms",  route: "/programs", grad: "aqua", renderIcon: (c: string) => <Ionicons name="list-outline" size={22} color={c} /> },
+  { id: "journal",  label: "View\nJournal", route: "/journal",  grad: "blush", renderIcon: (c: string) => (
     <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
       <Path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <Path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -264,7 +266,7 @@ export default function HomeScreen() {
   const [workoutDates, setWorkoutDates] = useState<string[]>([]);
   const [workoutHistory, setWorkoutHistory] = useState<CompletedWorkout[]>([]);
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
-  const [todayOverride, setTodayOverride] = useState<{ date: string; workoutName: string } | null>(null);
+  const [todayOverride, setTodayOverride] = useState<DayOverride | null>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
 
   // Re-read the preference and active program. Stale-override filtering is left
@@ -412,7 +414,7 @@ export default function HomeScreen() {
     : null) ?? getTier(streakDays).color;
 
   return (
-    <FadeScreen style={{ backgroundColor: t.bg }}>
+    <FadeScreen once style={{ backgroundColor: t.bg }}>
       {/* Gradient blur — sits behind all header elements. Blur is strongest at the top (opaque mask) and fades to nothing at the bottom (transparent mask). Content scrolling into this zone blurs out naturally. */}
       <Animated.View
         pointerEvents="none"
@@ -446,7 +448,7 @@ export default function HomeScreen() {
         </View>
 
         {(() => {
-          const resolved = resolveWorkoutForDate(activeProgram, todayOverride, effectiveToday);
+          const resolved = resolveWorkoutForDate(activeProgram, todayOverride, effectiveToday, programs);
           const todaysWorkout = resolved
             ? { name: resolved.name, exerciseCount: resolved.exercises.length }
             : null;
@@ -481,9 +483,10 @@ export default function HomeScreen() {
                     <Text style={[styles.workoutName, { color: t.tp }]}>REST DAY</Text>
                     <Text style={[styles.metaText, { color: t.ts, fontStyle: "italic", marginTop: -8 }]}>{restDayQuote}</Text>
                   </>
-                ) : programs.length === 0 ? (
+                ) : (
                   <>
-                    <Text style={[styles.metaText, { color: t.ts }]}>No programs yet. Start a custom session or create a program.</Text>
+                    <Text style={[styles.workoutName, { color: t.tp }]}>NO ACTIVE PROGRAM</Text>
+                    <Text style={[styles.metaText, { color: t.ts, marginTop: -8 }]}>Create a program and set it to active or start a custom workout.</Text>
                     <BounceButton onPress={() => router.push("/(tabs)/workout")}>
                       <View style={[styles.startBtnDark, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
                         <View style={[styles.startBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
@@ -498,8 +501,6 @@ export default function HomeScreen() {
                       </View>
                     </BounceButton>
                   </>
-                ) : (
-                  <Text style={[styles.metaText, { color: t.ts }]}>No active program. Set one in My Programs.</Text>
                 )}
               </View>
             </NeuCard>
@@ -542,11 +543,20 @@ export default function HomeScreen() {
                     accessibilityLabel={a.label.replace("\n", " ")}
                     accessibilityRole="button"
                   >
-                    <NeuCard dark={isDark} radius={28} style={styles.quickIcon}>
-                      <View style={styles.quickIconInner}>
-                        {a.renderIcon(t.icon)}
-                      </View>
-                    </NeuCard>
+                    <View style={[styles.quickOrbGlow, {
+                      backgroundColor: ORB_GRADS[a.grad].glow,
+                      shadowColor: ORB_GRADS[a.grad].glow,
+                      shadowOpacity: isDark ? 0.45 : 0.55,
+                    }]}>
+                      <LinearGradient
+                        colors={ORB_GRADS[a.grad].colors}
+                        start={{ x: 0.1, y: 0 }}
+                        end={{ x: 0.9, y: 1 }}
+                        style={[styles.quickOrb, { borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.65)" }]}
+                      >
+                        {a.renderIcon("#fff")}
+                      </LinearGradient>
+                    </View>
                   </BounceButton>
                   <Text style={[styles.quickLabel, { color: t.ts }]}>{a.label}</Text>
                 </View>
@@ -557,6 +567,10 @@ export default function HomeScreen() {
 
         <ActivityCalendar isDark={isDark} workoutDates={workoutDates} activeProgram={activeProgram} />
 
+        <InsightsCard isDark={isDark} />
+
+        {activeProgram && (
+        <>
         <Text style={[styles.sectionTitle, { color: t.tp, marginTop: 16 }]}>This Week's Schedule</Text>
         <NeuCard dark={isDark} style={styles.weekCard}>
           <View style={styles.weekCardInner}>
@@ -564,9 +578,14 @@ export default function HomeScreen() {
             <View style={styles.weekDaysCol}>
               {weeklyStats.weekDays.map((day, i) => (
                 <View key={toYMD(day.date)} style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}>
-                  <Text style={[styles.weekDayLabel, { color: day.isToday ? t.tp : t.ts, fontFamily: day.isToday ? FontFamily.bold : FontFamily.semibold }]}>
-                    {day.label}
-                  </Text>
+                  <View style={styles.weekDayLabelCol}>
+                    <View>
+                      <Text style={[styles.weekDayLabel, { color: day.isToday ? t.tp : t.ts, fontFamily: day.isToday ? FontFamily.bold : FontFamily.semibold }]}>
+                        {day.label}
+                      </Text>
+                      {day.isToday && <View pointerEvents="none" style={styles.weekTodayOutline} />}
+                    </View>
+                  </View>
                   <Text style={[styles.weekDayName, { color: day.isRest ? t.ts : day.completed ? t.ts : t.tp, opacity: day.isRest ? 0.4 : day.completed ? 0.4 : 1 }]}>
                     {day.workoutName}
                   </Text>
@@ -574,12 +593,12 @@ export default function HomeScreen() {
               ))}
             </View>
 
-            {/* Divider */}
-            <View style={[styles.weekVDivider, { backgroundColor: t.div }]} />
+            {/* Divider — t.div matches the dark card bg exactly, so dark mode needs translucent white */}
+            <View style={[styles.weekVDivider, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]} />
 
             {/* Right: circular progress + stats */}
             <View style={styles.weekCircleCol}>
-              <Text style={[styles.weekCircleLabelTop, { color: "#000", alignSelf: "center" }]}>Completed Workouts</Text>
+              <Text style={[styles.weekCircleLabelTop, { color: t.tp, alignSelf: "center" }]}>Completed Workouts</Text>
               <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <View style={[styles.weekCircleBtn, {
                 backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
@@ -653,7 +672,7 @@ export default function HomeScreen() {
                   <Text style={[styles.weekStatValue, { color: t.tp }]}>{weeklyStats.totalMinutes}</Text>
                   <Text style={[styles.weekStatLabel, { color: t.ts }]}>Total Mins</Text>
                 </View>
-                <View style={[styles.weekStatVDivider, { backgroundColor: t.div }]} />
+                <View style={[styles.weekStatVDivider, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]} />
                 <View style={styles.weekStatItem}>
                   <Text style={[styles.weekStatValue, { color: t.tp }]}>{formatVolume(toDisplayWeight(weeklyStats.totalVolumeKg, isKg))}</Text>
                   <Text style={[styles.weekStatLabel, { color: t.ts }]}>{isKg ? "kg Lifted" : "Lbs Lifted"}</Text>
@@ -662,6 +681,8 @@ export default function HomeScreen() {
             </View>
           </View>
         </NeuCard>
+        </>
+        )}
 
         {recentWorkouts.length > 0 && (
           <Text style={[styles.sectionTitle, { color: t.tp }]}>Recent Activity</Text>
@@ -776,8 +797,8 @@ const styles = StyleSheet.create({
   quickRow: { flexDirection: "row", gap: 12, marginBottom: 28 },
   quickCard: { borderRadius: 20 },
   quickInner: { alignItems: "center", paddingVertical: 18, paddingHorizontal: 8, gap: 10 },
-  quickIcon: { width: 56, height: 56, borderRadius: 28 },
-  quickIconInner: { width: 56, height: 56, alignItems: "center", justifyContent: "center" },
+  quickOrbGlow: { width: 56, height: 56, borderRadius: 28, shadowOffset: { width: 0, height: 5 }, shadowRadius: 10 },
+  quickOrb: { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   quickLabel: { fontFamily: FontFamily.regular, fontSize: 14, color: TS, textAlign: "center", lineHeight: 18 },
   sectionTitle: { fontFamily: FontFamily.bold, fontSize: 18, color: TP, marginBottom: 12 },
   weekRow:             { flexDirection: "row", gap: 12, marginBottom: 28 },
@@ -796,7 +817,10 @@ const styles = StyleSheet.create({
   weekStatLabel:       { fontFamily: FontFamily.regular, fontSize: 12, color: TS },
   weekHDivider:        { height: 1, marginHorizontal: 14, marginBottom: 2 },
   weekDayRow:          { flexDirection: "row", alignItems: "center", paddingLeft: 0, paddingRight: 8, paddingVertical: 7, gap: 8 },
-  weekDayLabel:        { fontFamily: FontFamily.semibold, fontSize: 12, width: 34 },
+  weekDayLabelCol:     { width: 34, alignItems: "flex-start" },
+  weekDayLabel:        { fontFamily: FontFamily.semibold, fontSize: 12 },
+  // today outline: absolute + negative insets so it hugs the label without shifting the 34px column
+  weekTodayOutline:    { position: "absolute", top: -3, bottom: -3, left: -6, right: -6, borderWidth: 1, borderColor: ACCT, borderRadius: 9, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 3 },
   weekDayName:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 13, color: TP },
   weekTodayDot:        { width: 6, height: 6, borderRadius: 3 },
   weekCircleCard:      { borderRadius: 20 },

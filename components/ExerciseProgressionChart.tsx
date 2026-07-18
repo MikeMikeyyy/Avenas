@@ -12,7 +12,6 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
-import DropdownPicker from "./DropdownPicker";
 import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
@@ -21,16 +20,19 @@ import { MONTH_NAMES } from "../utils/dates";
 import type {
   ExerciseDataPoint,
   ExerciseMetricKey,
-  ExerciseRangeKey,
   PRs,
 } from "../constants/progress";
-import {
-  EXERCISE_METRIC_OPTIONS,
-  EXERCISE_RANGE_OPTIONS,
-} from "../constants/progress";
+import { EXERCISE_METRIC_OPTIONS } from "../constants/progress";
 
 interface Props {
   exerciseName: string;
+  /**
+   * Workout-day label the `history`/`prs` are scoped to (progress is tracked
+   * per (day, exercise) pair — see ExerciseSelection). Shown in the header so
+   * "Lateral Raises on Push" and "Lateral Raises on Arms" read as distinct,
+   * and forwarded to the full-history page so it stays on the same slice.
+   */
+  dayName?: string;
   history: ExerciseDataPoint[];
   prs: PRs;
   /** "kg" | "lbs" */
@@ -68,6 +70,30 @@ function metricValue(p: ExerciseDataPoint, m: ExerciseMetricKey): number {
   }
 }
 
+// Build an axis pinned to an EXACT max (not rounded up to a "nice" number) —
+// the progression chart's first-point-centered scaling needs precise point
+// placement, and niceAxis's round-up would leave the line anywhere between
+// 50% and ~100% depending on where the value falls under the next nice
+// ceiling. Tick labels mirror niceAxis's "k"-suffix rules so the two styles
+// read the same.
+function exactAxis(exactMax: number) {
+  const stepValue = exactMax / 4;
+  const fmtTick = (v: number): string => {
+    if (v === 0) return "0";
+    if (exactMax >= 1000) {
+      const n = v / 1000;
+      return Number.isInteger(n) ? `${n}k` : `${n.toFixed(1)}k`;
+    }
+    if (exactMax >= 10) return Number.isInteger(v) ? `${v}` : `${Math.round(v)}`;
+    return Number.isInteger(v) ? `${v}` : v.toFixed(1);
+  };
+  return {
+    max: exactMax,
+    stepValue,
+    labels: [0, 1, 2, 3, 4].map(i => fmtTick(stepValue * i)),
+  };
+}
+
 // Format the focused-point header per metric. `unit` is appended only to the
 // weight-based metrics; totalReps shows a "reps" suffix instead. For Best
 // Set the user wants the weight × reps combination that produced the best
@@ -88,105 +114,94 @@ function formatFocused(p: ExerciseDataPoint, m: ExerciseMetricKey, unit: string)
 
 /**
  * Per-exercise weight-progression line chart with PR tiles below.
- * - Y-axis uses niceAxis(maxTopWeight) for clean ticks.
+ * - Y-axis uses first-point-centered exact scaling (see `axis`): the first
+ *   visible session sits on the middle gridline until the trend outgrows it,
+ *   then the peak anchors at 90% of the plot.
  * - Tapping a point highlights it and shows date/weight/reps above the chart.
  * - Tapping a PR tile routes to that PR's source workout via /workout-detail.
  */
-export default function ExerciseProgressionChart({ exerciseName, history, prs, unit }: Props) {
+export default function ExerciseProgressionChart({ exerciseName, dayName, history, prs, unit }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
 
-  // Time-range filter (independent of the volume chart's range above).
-  // Default to "year" so users see the broadest view first.
-  const [range, setRange] = useState<ExerciseRangeKey>("year");
-
   // Which metric the chart plots. Default to the original behavior (heaviest
   // working set per session).
   const [metric, setMetric] = useState<ExerciseMetricKey>("topWeight");
 
-  const rangeOption = useMemo(
-    () => EXERCISE_RANGE_OPTIONS.find(r => r.key === range) ?? EXERCISE_RANGE_OPTIONS[2],
-    [range],
-  );
-
-  // Filter raw history to the selected time window. Each ExerciseDataPoint
-  // carries `date` as "YYYY-MM-DD"; we parse manually to avoid UTC drift.
-  const filteredHistory = useMemo(() => {
-    const cutoff = new Date();
-    cutoff.setHours(0, 0, 0, 0);
-    cutoff.setDate(cutoff.getDate() - rangeOption.days);
-    const cutoffMs = cutoff.getTime();
-    return history.filter(p => {
-      const [y, m, d] = p.date.split("-").map(Number);
-      if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
-      return new Date(y, m - 1, d).getTime() >= cutoffMs;
-    });
-  }, [history, rangeOption.days]);
+  // Every session passed in is plotted — no time-range filter, deliberately.
+  // The parent already scopes `history` to the selected program (bounded by
+  // its start/completed dates) and workout day, and the whole point of this
+  // chart is the full progression across that program's duration. Neither the
+  // page-level Volume range nor any local dropdown should slice it.
 
   // Clear focus when the underlying data slice or active metric changes.
   useEffect(() => {
     setFocusedIndex(null);
-  }, [exerciseName, filteredHistory.length, metric]);
+  }, [exerciseName, dayName, history.length, metric]);
+
+  // Label style: compact "M/D" for short spans; once the plotted history
+  // crosses ~3 calendar months, month names read better.
+  const monthLabels = useMemo(() => {
+    if (history.length < 2) return false;
+    const [y1, m1] = history[0].date.split("-").map(Number);
+    const [y2, m2] = history[history.length - 1].date.split("-").map(Number);
+    if (![y1, m1, y2, m2].every(Number.isFinite)) return false;
+    return (y2 - y1) * 12 + (m2 - m1) >= 3;
+  }, [history]);
 
   const axis = useMemo(() => {
-    const max = filteredHistory.reduce((m, p) => {
+    const max = history.reduce((m, p) => {
       const v = metricValue(p, metric);
       return v > m ? v : m;
     }, 0);
 
-    // For a single data point, build a custom axis with max = exactly 2× the
-    // value so the dot lands on the middle gridline (50% chart height). This
-    // beats `niceAxis(value * 2)` which would round up to the next nice
-    // number and leave the dot anywhere from 30%–50% depending on the value.
-    // Per-metric, since every metric has its own scale (kg, reps, kg·reps),
-    // this centers each metric's lone dot consistently.
-    if (filteredHistory.length === 1 && max > 0) {
-      const exactMax = max * 2;
-      const stepValue = exactMax / 4;
-      // Lightweight formatter mirroring niceAxis's "k" suffix rules so the
-      // labels feel consistent with the multi-point view.
-      const fmtTick = (v: number): string => {
-        if (v === 0) return "0";
-        if (exactMax >= 1000) {
-          const n = v / 1000;
-          return Number.isInteger(n) ? `${n}k` : `${n.toFixed(1)}k`;
-        }
-        if (exactMax >= 10) return Number.isInteger(v) ? `${v}` : `${Math.round(v)}`;
-        return Number.isInteger(v) ? `${v}` : v.toFixed(1);
-      };
-      return {
-        max: exactMax,
-        stepValue,
-        labels: [0, 1, 2, 3, 4].map(i => fmtTick(stepValue * i)),
-      };
-    }
+    // Empty history → niceAxis's default empty axis (clean 0–100 grid).
+    if (max <= 0) return niceAxis(max, 4);
 
-    return niceAxis(max, 4);
-  }, [filteredHistory, metric]);
+    // First-point-centered scaling, uniform across all four metrics (each has
+    // its own scale — kg, reps, kg·reps — so only an exact axis can place
+    // them consistently; niceAxis's round-up left the line anywhere from the
+    // middle to flush with the top depending on the value):
+    //   - The FIRST session anchors the middle gridline (axis max =
+    //     2× its value): a lone dot sits dead-center, a flat run stays
+    //     centered, and later, higher sessions climb from the center toward
+    //     the top — the incline reads immediately.
+    //   - Once the trend outgrows that anchor (peak > 2× first), the peak
+    //     takes over and sits at 90% of the plot, with earlier sessions
+    //     falling to the middle/bottom. The 0.9 also hands the regimes over
+    //     smoothly: at peak = 2×first the first point reads 50% → 45%.
+    // Every point is positive here (collectExerciseHistory drops zero-volume
+    // sessions), so `first` can't be 0.
+    const first = metricValue(history[0], metric);
+    return exactAxis(max <= first * 2 ? first * 2 : max / 0.9);
+  }, [history, metric]);
 
-  const focused = focusedIndex != null ? filteredHistory[focusedIndex] ?? null : null;
+  const focused = focusedIndex != null ? history[focusedIndex] ?? null : null;
 
+  // Day context leads the subline (e.g. "Push · Sessions logged · 4") so two
+  // day-scoped charts for the same exercise name are visually distinct.
   const headerLabel = (() => {
-    if (focused) return formatFocused(focused, metric, unit);
-    if (filteredHistory.length === 0) return "No sessions in range";
-    return `Sessions logged · ${filteredHistory.length}`;
+    const day = dayName?.trim() ? `${dayName.trim()} · ` : "";
+    if (focused) return `${day}${formatFocused(focused, metric, unit)}`;
+    if (history.length === 0) return `${day}No sessions yet`;
+    return `${day}Sessions logged · ${history.length}`;
   })();
 
-  // Target ~5 visible x-axis labels regardless of how many points exist in
-  // the window. Stride 1 → every point labelled; larger strides space them out.
-  const stride = Math.max(1, Math.ceil(filteredHistory.length / 5));
+  // Target ~5 visible x-axis labels regardless of how many points exist.
+  // Stride 1 → every point labelled; larger strides space them out.
+  const stride = Math.max(1, Math.ceil(history.length / 5));
 
   const data = useMemo(
     () =>
-      filteredHistory.map((p, i) => {
-        // For the year view, label with the short month name (e.g. "Mar")
-        // since data spans months; otherwise use compact "M/D".
+      history.map((p, i) => {
+        // Month-spanning history labels with the short month name (e.g.
+        // "Mar"); shorter spans use compact "M/D".
         const labelText = (() => {
           if (i % stride !== 0) return "";
-          if (range === "year") {
+          if (monthLabels) {
             const [, m] = p.date.split("-").map(Number);
             if (!Number.isFinite(m)) return "";
             return MONTH_NAMES[(m - 1) % 12].slice(0, 3);
@@ -206,7 +221,7 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
           },
         };
       }),
-    [filteredHistory, focusedIndex, stride, range, metric],
+    [history, focusedIndex, stride, monthLabels, metric],
   );
 
   const cardWidth = Math.min(screenWidth - 40, 420);
@@ -276,27 +291,19 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
     <NeuCard dark={isDark} radius={20} style={{ marginHorizontal: 20, marginTop: 16 }}>
       <View style={styles.inner}>
         <View style={styles.headerRow}>
-          <View style={{ flex: 1, marginRight: 12 }}>
+          <View style={{ flex: 1 }}>
             <Text style={[styles.title, { color: t.tp }]} numberOfLines={1}>{exerciseName}</Text>
             <Text style={[styles.headerValue, { color: focused ? ACCT : t.ts }]} numberOfLines={1}>
               {headerLabel}
             </Text>
           </View>
-          <DropdownPicker<ExerciseRangeKey>
-            value={range}
-            options={EXERCISE_RANGE_OPTIONS}
-            onChange={setRange}
-            sheetTitle="Time range"
-          />
         </View>
 
-        {filteredHistory.length === 0 ? (
+        {history.length === 0 ? (
           <View style={styles.empty}>
             <DumbbellIcon size={28} color={t.ts} />
             <Text style={[styles.emptyText, { color: t.ts }]}>
-              {history.length === 0
-                ? "No working sets logged for this exercise yet."
-                : `No sessions in ${rangeOption.label.toLowerCase()} — try a longer range.`}
+              No working sets logged for this exercise yet.
             </Text>
           </View>
         ) : (
@@ -369,7 +376,7 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
                   const left = i === 0 ? 0 : dotX - spacing / 2;
                   const right = i === data.length - 1 ? CHART_WIDTH : dotX + spacing / 2;
                   const width = Math.max(0, right - left);
-                  const p = filteredHistory[i];
+                  const p = history[i];
                   return (
                     <TouchableOpacity
                       key={`hit-${i}`}
@@ -451,10 +458,8 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
     {/* Section header for the PR block. */}
     <Text style={[styles.prHeader, { color: t.tp }]}>Personal Records</Text>
 
-    {/* PR tiles — sit BELOW the chart card in a 2×2 grid. Always shown
-        (PRs are derived from the full scoped history, not the chart's
-        time-range filter), so they remain useful even when the range slice
-        has no sessions. */}
+    {/* PR tiles — sit BELOW the chart card in a 2×2 grid, derived from the
+        same full scoped history the chart plots. */}
     <View style={styles.prGrid}>
       <View style={styles.prRow}>
         <PRTile
@@ -508,7 +513,10 @@ export default function ExerciseProgressionChart({ exerciseName, history, prs, u
     <BounceButton
       style={styles.historyBtnWrap}
       onPress={() => {
-        router.push({ pathname: "/exercise-history", params: { exerciseName } });
+        router.push({
+          pathname: "/exercise-history",
+          params: { exerciseName, ...(dayName ? { dayName } : {}) },
+        });
       }}
       accessibilityRole="button"
       accessibilityLabel={`See full history for ${exerciseName}`}

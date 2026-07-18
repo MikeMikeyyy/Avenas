@@ -1,5 +1,4 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, Easing as ReEasing } from "react-native-reanimated";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -8,66 +7,21 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { PROGRAMS_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
-import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT } from "../constants/theme";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
-import TrashIcon from "../components/TrashIcon";
-import DumbbellIcon from "../components/DumbbellIcon";
-import { parseStoredDate } from "../utils/dates";
+import AuroraBackdrop from "../components/AuroraBackdrop";
+import { formatStoredDate, parseStoredDate } from "../utils/dates";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
-import SendIcon from "../components/icons/SendIcon";
 import { appendSentProgram, loadAssignedPT, removeSharedProgramByLocalId, type AssignedPT, type SentProgram } from "../utils/trainerStore";
 
-// Accordion panel — animates height from 0 ↔ measured natural height.
-// Measures once via a hidden layout layer, then re-uses that height.
-function ExpandablePanel({ expanded, children }: { expanded: boolean; children: React.ReactNode }) {
-  const height = useSharedValue(0);
-  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (measuredHeight === null) return;
-    height.value = withTiming(expanded ? measuredHeight : 0, {
-      duration: 300,
-      easing: ReEasing.out(ReEasing.cubic),
-    });
-  }, [expanded, measuredHeight]);
-
-  const style = useAnimatedStyle(() => ({
-    height: height.value,
-    overflow: "hidden",
-  }));
-
-  return (
-    <View>
-      {measuredHeight === null && (
-        <View
-          style={{ position: "absolute", left: 0, right: 0, top: 0, opacity: 0 }}
-          pointerEvents="none"
-          onLayout={e => { const h = e.nativeEvent.layout.height; if (h > 0) setMeasuredHeight(h); }}
-        >
-          {children}
-        </View>
-      )}
-      <Reanimated.View style={style}>
-        <View style={{ position: "absolute", left: 0, right: 0, top: 0 }}>
-          {children}
-        </View>
-      </Reanimated.View>
-    </View>
-  );
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const result: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) result.push(arr.slice(i, i + size));
-  return result;
-}
-
+// Warmup-set accent (matches the orange used for warmup sets across the app).
+const WARMUP_ORANGE = "#ffbf0f";
 
 // ─── Set Workout Picker ────────────────────────────────────────────────────────
 
@@ -76,7 +30,9 @@ interface SetWorkoutPickerProps {
   program: SavedProgram;
   isDark: boolean;
   onConfirm: (dayIndex: number) => void;
-  onClose: () => void;
+  // reopenMenu=true when dismissed via back/swipe/backdrop (return to the action
+  // menu); false after a confirmed day (exit straight to the programs list).
+  onClose: (reopenMenu: boolean) => void;
 }
 
 function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetWorkoutPickerProps) {
@@ -106,7 +62,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
           Animated.parallel([
             Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
             Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); });
+          ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(true); });
         } else {
           Animated.parallel([
             Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
@@ -117,11 +73,11 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
     })
   ).current;
 
-  const dismiss = () => {
+  const dismiss = (reopenMenu: boolean) => {
     Animated.parallel([
       Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); });
+    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(reopenMenu); });
   };
 
   useEffect(() => {
@@ -137,13 +93,13 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
   const handleConfirm = () => {
     if (selected === null) return;
     onConfirm(selected);
-    dismiss();
+    dismiss(false);   // confirmed → exit to the programs list, not back to the menu
   };
 
   return (
-    <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
+    <Modal visible={visible} animationType="none" transparent onRequestClose={() => dismiss(true)}>
       <View style={styles.swBackdrop}>
-        <TouchableWithoutFeedback onPress={dismiss}>
+        <TouchableWithoutFeedback onPress={() => dismiss(true)}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
         </TouchableWithoutFeedback>
         <Animated.View style={[styles.swSheet, { backgroundColor: t.bg, height: sheetHeight, transform: [{ translateY: slideY }] }]}>
@@ -152,17 +108,17 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
             <View style={styles.swHandleArea}>
               <View style={styles.swHandle} />
             </View>
-            {/* Header */}
+            {/* Header — back chevron returns to the action menu */}
             <View style={[styles.swHeader, { borderBottomColor: t.div }]}>
+            <TouchableOpacity onPress={() => dismiss(true)} style={styles.swBack} activeOpacity={0.7} accessibilityLabel="Back" accessibilityRole="button">
+              <Ionicons name="chevron-back" size={24} color={t.tp} />
+            </TouchableOpacity>
             <View style={{ flex: 1 }}>
               <Text style={[styles.swTitle, { color: t.tp }]}>Which day is it today?</Text>
               <Text style={[styles.swSubtitle, { color: t.ts }]} numberOfLines={2}>
                 Pick where you are in your '{program.name}' cycle
               </Text>
             </View>
-            <TouchableOpacity onPress={dismiss} style={styles.swClose} activeOpacity={0.7}>
-              <Ionicons name="close" size={22} color={t.tp} />
-            </TouchableOpacity>
           </View>
           </View>
           {/* Day list */}
@@ -245,22 +201,15 @@ function ActiveBadge() {
 interface ActiveProgramCardProps {
   program: SavedProgram;
   isDark: boolean;
-  onEdit: () => void;
-  onSetWorkout: () => void;
-  onComplete: () => void;
-  onCopy: () => void;
+  onOpenActions: () => void;
 }
 
-const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onEdit, onSetWorkout, onComplete, onCopy }: ActiveProgramCardProps) {
+const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onOpenActions }: ActiveProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
-  const btnContent = isDark ? APP_DARK.bg : "#fff";
-  const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
-  const [isExpanded, setIsExpanded] = useState(false);
 
   return (
     <NeuCard dark={isDark} style={styles.activeProgramCard}>
-      <TouchableOpacity activeOpacity={0.8} onPress={() => setIsExpanded(v => !v)}>
+      <TouchableOpacity activeOpacity={0.8} onPress={onOpenActions} accessibilityLabel={`${program.name} options`} accessibilityRole="button">
         <View style={styles.activeProgramInner}>
           <View style={styles.rowBetween}>
             <Text style={[styles.activeProgramName, { color: t.tp }]} numberOfLines={1}>
@@ -268,7 +217,7 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <ActiveBadge />
-              <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={16} color={t.ts} />
+              <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
             </View>
           </View>
 
@@ -305,41 +254,6 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
           </View>
         </View>
       </TouchableOpacity>
-
-      <ExpandablePanel expanded={isExpanded}>
-        <View style={[styles.cardActions, { borderTopColor: t.div }]}>
-          <View style={[styles.activeBtnRow, { marginBottom: 10 }]}>
-            <BounceButton style={{ flex: 1 }} onPress={onSetWorkout} accessibilityLabel="Set workout day" accessibilityRole="button">
-              <View style={[styles.activePrimaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
-                <View style={[styles.activePrimaryBtn, { backgroundColor: btnBg }]}>
-                  <Ionicons name="calendar-outline" size={16} color={btnContent} />
-                  <Text style={[styles.activePrimaryBtnText, { color: btnContent }]}>Set Workout</Text>
-                </View>
-              </View>
-            </BounceButton>
-            <BounceButton style={{ flex: 1 }} onPress={onEdit} accessibilityLabel="Edit program" accessibilityRole="button">
-              <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                <Ionicons name="create-outline" size={16} color={t.tp} />
-                <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Edit</Text>
-              </NeuCard>
-            </BounceButton>
-          </View>
-          <View style={styles.activeBtnRow}>
-            <BounceButton style={{ flex: 1 }} onPress={onComplete}>
-              <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                <Ionicons name="checkmark-circle-outline" size={16} color={ACCT} />
-                <Text style={[styles.activeSecondaryBtnText, { color: ACCT }]}>Mark Complete</Text>
-              </NeuCard>
-            </BounceButton>
-            <BounceButton style={{ flex: 1 }} onPress={onCopy}>
-              <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                <Ionicons name="copy-outline" size={16} color={t.tp} />
-                <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Duplicate</Text>
-              </NeuCard>
-            </BounceButton>
-          </View>
-        </View>
-      </ExpandablePanel>
     </NeuCard>
   );
 });
@@ -349,21 +263,11 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
 interface ProgramCardProps {
   program: SavedProgram;
   isDark: boolean;
-  isExpanded: boolean;
-  onToggle: () => void;
-  onMakeActive: () => void;
-  onDuplicate: () => void;
-  onCopy: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-  onSend?: () => void;
+  onOpenActions: () => void;
 }
 
-const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpanded, onToggle, onMakeActive, onDuplicate, onCopy, onEdit, onDelete, onSend }: ProgramCardProps) {
+const ProgramCard = React.memo(function ProgramCard({ program, isDark, onOpenActions }: ProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
-  const btnContent = isDark ? APP_DARK.bg : "#fff";
-  const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
 
   const computedWeek = getCurrentWeek(program);
   const filledWeeks = program.status === "completed" ? program.currentWeek : computedWeek;
@@ -383,7 +287,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
 
   return (
     <NeuCard dark={isDark} style={styles.programCard}>
-      <TouchableOpacity activeOpacity={0.8} onPress={onToggle}>
+      <TouchableOpacity activeOpacity={0.8} onPress={onOpenActions} accessibilityLabel={`${program.name} options`} accessibilityRole="button">
         <View style={styles.programCardInner}>
           <View style={styles.rowBetween}>
             <Text style={[styles.programName, { color: t.tp }]} numberOfLines={1}>{program.name}</Text>
@@ -391,7 +295,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
               <View style={[styles.statusBadge, { backgroundColor: isDark ? `${statusColor}22` : `${statusColor}18` }]}>
                 <Text style={[styles.statusBadgeText, { color: statusColor }]}>{statusLabel}</Text>
               </View>
-              <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={16} color={t.ts} />
+              <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
             </View>
           </View>
 
@@ -434,79 +338,126 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, isExpande
           </View>
         </View>
       </TouchableOpacity>
-
-      <ExpandablePanel expanded={isExpanded}>
-        <View style={[styles.cardActions, { borderTopColor: t.div }]}>
-          {program.status === "completed" ? (
-            <>
-              <View style={styles.activeBtnRow}>
-                <BounceButton style={{ flex: 1 }} onPress={onDuplicate}>
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                    <Ionicons name="copy-outline" size={16} color={t.tp} />
-                    <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Duplicate</Text>
-                  </NeuCard>
-                </BounceButton>
-                <BounceButton style={{ flex: 1 }} onPress={onDelete}>
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                    <TrashIcon size={16} color="#E53935" />
-                    <Text style={styles.deleteBtnText}>Delete</Text>
-                  </NeuCard>
-                </BounceButton>
-              </View>
-              {onSend && (
-                <BounceButton style={{ marginTop: 10 }} onPress={onSend}>
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                    <SendIcon size={16} color={ACCT} />
-                    <Text style={[styles.activeSecondaryBtnText, { color: ACCT }]}>Send to Trainer</Text>
-                  </NeuCard>
-                </BounceButton>
-              )}
-            </>
-          ) : (
-            <>
-              <BounceButton onPress={onMakeActive} style={{ marginBottom: 10 }}>
-                <View style={[styles.activePrimaryBtnWrap, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                  <View style={[styles.activePrimaryBtn, { backgroundColor: ACCT }]}>
-                    <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
-                    <Text style={[styles.activePrimaryBtnText, { color: "#fff" }]}>Make Active Program</Text>
-                  </View>
-                </View>
-              </BounceButton>
-              <View style={styles.activeBtnRow}>
-                <BounceButton style={{ flex: 1 }} onPress={onCopy}>
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                    <Ionicons name="copy-outline" size={16} color={t.tp} />
-                    <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Duplicate</Text>
-                  </NeuCard>
-                </BounceButton>
-                <BounceButton style={{ flex: 1 }} onPress={onEdit}>
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                    <Ionicons name="create-outline" size={16} color={t.tp} />
-                    <Text style={[styles.activeSecondaryBtnText, { color: t.tp }]}>Edit</Text>
-                  </NeuCard>
-                </BounceButton>
-                <BounceButton style={{ flex: 1 }} onPress={onDelete}>
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                    <TrashIcon size={16} color="#E53935" />
-                    <Text style={styles.deleteBtnText}>Delete</Text>
-                  </NeuCard>
-                </BounceButton>
-              </View>
-              {onSend && (
-                <BounceButton style={{ marginTop: 10 }} onPress={onSend}>
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.activeSecondaryBtnInner}>
-                    <SendIcon size={16} color={ACCT} />
-                    <Text style={[styles.activeSecondaryBtnText, { color: ACCT }]}>Send to Trainer</Text>
-                  </NeuCard>
-                </BounceButton>
-              )}
-            </>
-          )}
-        </View>
-      </ExpandablePanel>
     </NeuCard>
   );
 });
+
+// ─── Program Actions Sheet ──────────────────────────────────────────────────────
+// Bottom-sheet popup opened by tapping a program card. Shows the status-appropriate
+// actions (Set Workout / Edit / Mark Complete / Duplicate / Make Inactive for the
+// active program; Make Active / Edit / Duplicate / Delete otherwise). Replaces the
+// old inline dropdown so tapping a card no longer expands it.
+
+interface ProgramAction {
+  key: string;
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>["name"];
+  onPress: () => void;
+  primary?: boolean;      // filled accent button
+  destructive?: boolean;  // red icon + text
+  tint?: string;          // custom icon/text colour
+}
+
+function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
+  visible: boolean;
+  program: SavedProgram | null;
+  actions: ProgramAction[];
+  isDark: boolean;
+  onClose: () => void;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const insets = useSafeAreaInsets();
+  const slideY = useRef(new Animated.Value(600)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) {
+          slideY.setValue(g.dy);
+          backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300));
+        }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.8) {
+          Animated.parallel([
+            Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
+            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+          ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); });
+        } else {
+          Animated.parallel([
+            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
+            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+    })
+  ).current;
+
+  // Close animates out; `after` (an action) runs once the sheet is gone so any
+  // navigation / alert / follow-up sheet appears cleanly.
+  const close = (after?: () => void) => {
+    Animated.parallel([
+      Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); after?.(); });
+  };
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  if (!program) return null;
+
+  return (
+    <Modal visible={visible} animationType="none" transparent onRequestClose={() => close()}>
+      <View style={styles.swBackdrop}>
+        <TouchableWithoutFeedback onPress={() => close()}>
+          <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
+        </TouchableWithoutFeedback>
+        <Animated.View style={[styles.paSheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 16, transform: [{ translateY: slideY }] }]}>
+          <View {...panResponder.panHandlers}>
+            <View style={styles.swHandleArea}>
+              <View style={styles.swHandle} />
+            </View>
+            <View style={[styles.paHeader, { borderBottomColor: t.div }]}>
+              <Text style={[styles.paTitle, { color: t.tp }]} numberOfLines={1}>{program.name}</Text>
+              <TouchableOpacity onPress={() => close()} style={styles.swClose} activeOpacity={0.7}>
+                <Ionicons name="close" size={22} color={t.tp} />
+              </TouchableOpacity>
+            </View>
+          </View>
+          <View style={styles.paList}>
+            {actions.map((a) => (
+              <BounceButton key={a.key} onPress={() => close(a.onPress)} accessibilityLabel={a.label} accessibilityRole="button">
+                {a.primary ? (
+                  <View style={[styles.activePrimaryBtnWrap, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                    <View style={[styles.activePrimaryBtn, { backgroundColor: ACCT }]}>
+                      <Ionicons name={a.icon} size={16} color="#fff" />
+                      <Text style={[styles.activePrimaryBtnText, { color: "#fff" }]}>{a.label}</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <NeuCard dark={isDark} radius={14} innerStyle={styles.paRowInner}>
+                    <Ionicons name={a.icon} size={18} color={a.destructive ? "#E53935" : (a.tint ?? t.tp)} />
+                    <Text style={[styles.paRowText, { color: a.destructive ? "#E53935" : (a.tint ?? t.tp) }]}>{a.label}</Text>
+                  </NeuCard>
+                )}
+              </BounceButton>
+            ))}
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -521,24 +472,21 @@ export default function ProgramsScreen() {
 
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [setWorkoutOpen, setSetWorkoutOpen] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [actionsProgram, setActionsProgram] = useState<SavedProgram | null>(null);
   const { focus } = useLocalSearchParams<{ focus?: string }>();
   const scrollRef = useRef<ScrollView | null>(null);
   const cardOffsets = useRef<Record<string, number>>({});
   const focusHandled = useRef<string | null>(null);
 
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-
-  const todayFormatted = () => {
-    const d = new Date();
-    return `${String(d.getDate()).padStart(2, "0")} ${months[d.getMonth()]} ${d.getFullYear()}`;
-  };
+  const todayFormatted = () => formatStoredDate(new Date());
 
   const handleMakeActive = async (program: SavedProgram) => {
     const todayStr = todayFormatted();
     const updated = programs.map(p => {
       if (p.id === program.id) {
-        return { ...p, status: "active" as const, startDate: todayStr, currentWeek: 1 };
+        // A (re-)activation is a fresh run from today: any cycleOffset left over
+        // from a previous run's "set workout day" would shift day 1 arbitrarily.
+        return { ...p, status: "active" as const, startDate: todayStr, currentWeek: 1, cycleOffset: undefined };
       }
       if (p.status === "active") {
         const week = getCurrentWeek(p);
@@ -550,7 +498,24 @@ export default function ProgramsScreen() {
       return p;
     });
     setPrograms(updated);
-    setExpandedId(null);
+    await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    // A same-day change-day override belongs to the PREVIOUS active program —
+    // without this the workout tab keeps showing that program's day until the
+    // date rolls over.
+    AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
+    scheduleCloudPush();
+  };
+
+  // Deactivate the active program without completing it — drops it back to paused
+  // (or "created" if it never got past week 1) so no program is active.
+  const handleMakeInactive = async (program: SavedProgram) => {
+    const week = getCurrentWeek(program);
+    const updated = programs.map(p =>
+      p.id === program.id
+        ? { ...p, status: week > 1 ? ("paused" as const) : ("created" as const), currentWeek: week }
+        : p
+    );
+    setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     scheduleCloudPush();
   };
@@ -574,7 +539,6 @@ export default function ProgramsScreen() {
               : p
           );
           setPrograms(updated);
-          setExpandedId(null);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
           scheduleCloudPush();
         },
@@ -595,7 +559,6 @@ export default function ProgramsScreen() {
     };
     const updated = [...programs, copy];
     setPrograms(updated);
-    setExpandedId(null);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     scheduleCloudPush();
     Alert.alert("Program Duplicated", `"${program.name}" has been duplicated. Find it in your program list to start or edit.`);
@@ -613,7 +576,6 @@ export default function ProgramsScreen() {
           onPress: async () => {
             const updated = programs.filter(p => p.id !== program.id);
             setPrograms(updated);
-            setExpandedId(null);
             await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
             scheduleCloudPush();
             // Clear any SharedProgram entries that pointed at this local program
@@ -643,20 +605,6 @@ export default function ProgramsScreen() {
     scheduleCloudPush();
   };
 
-  // DEV SEED — remove after testing
-  useEffect(() => {
-    AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
-      if (!raw) return;
-      const programs: SavedProgram[] = JSON.parse(raw);
-      const needsPatch = programs.some(p => p.name === "TEST" && (p.currentWeek !== 3 || p.status !== "paused"));
-      if (!needsPatch) return;
-      const patched = programs.map(p =>
-        p.name === "TEST" ? { ...p, currentWeek: 3, status: "paused" as const } : p
-      );
-      AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(patched));
-    }).catch(() => {});
-  }, []);
-
   // Honor ?focus=<programId>: expand and scroll that program into view once after
   // the cards have laid out. We track the last handled focus value in a ref so we
   // don't re-scroll on every render or when the user manually scrolls away.
@@ -665,8 +613,6 @@ export default function ProgramsScreen() {
     if (focusHandled.current === focus) return;
     if (programs.length === 0) return;
     if (!programs.some(p => p.id === focus)) return;
-
-    setExpandedId(focus);
 
     let cancelled = false;
     const tryScroll = (attempt: number) => {
@@ -729,8 +675,48 @@ export default function ProgramsScreen() {
     sum + (p.status === "completed" ? p.totalWeeks : getCurrentWeek(p)), 0);
   const completedCount = programs.filter((p) => p.status === "completed").length;
 
+  // Status-appropriate action buttons for the tapped program, shown in the popup
+  // sheet. Each onPress runs after the sheet closes (see ProgramActionsSheet.close).
+  const buildActions = (program: SavedProgram): ProgramAction[] => {
+    const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: "create-outline", onPress: () => router.push({ pathname: "/new-program", params: { id: program.id } }) };
+    const duplicateAction: ProgramAction = { key: "duplicate", label: "Duplicate Program", icon: "copy-outline", onPress: () => handleDuplicateProgram(program) };
+    const deleteAction: ProgramAction = { key: "delete", label: "Delete", icon: "trash-outline", destructive: true, onPress: () => handleDeleteProgram(program) };
+    const sendAction: ProgramAction | null = canSendToPT ? { key: "send", label: "Send to Trainer", icon: "paper-plane-outline", tint: ACCT, onPress: () => handleSendToPT(program) } : null;
+
+    let list: ProgramAction[];
+    if (program.status === "active") {
+      list = [
+        { key: "setworkout", label: "Set Workout Date", icon: "calendar-outline", primary: true, onPress: () => {
+          if (isRunning) {
+            Alert.alert("Workout In Progress", "Please end or discard your current workout before changing the workout day.", [{ text: "OK" }]);
+          } else {
+            setSetWorkoutOpen(true);
+          }
+        } },
+        editAction,
+        { key: "complete", label: "Mark Complete", icon: "checkmark-circle-outline", tint: ACCT, onPress: handleCompleteProgram },
+        { key: "inactive", label: "Make Inactive", icon: "pause-circle-outline", tint: WARMUP_ORANGE, onPress: () => handleMakeInactive(program) },
+        duplicateAction,
+      ];
+    } else if (program.status === "completed") {
+      list = [duplicateAction, deleteAction];
+    } else {
+      list = [
+        { key: "makeactive", label: "Make Active Program", icon: "checkmark-circle-outline", primary: true, onPress: () => handleMakeActive(program) },
+        editAction,
+        duplicateAction,
+        deleteAction,
+      ];
+    }
+    if (sendAction) list.push(sendAction);
+    return list;
+  };
+
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
+      {/* Pastel glow matching the aqua My Programs orb on Home */}
+      <AuroraBackdrop dark={isDark} tint="aqua" />
+
       <TouchableOpacity
         onPress={() => router.back()}
         style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
@@ -799,20 +785,7 @@ export default function ProgramsScreen() {
               <ActiveProgramCard
                 program={activeProgram}
                 isDark={isDark}
-                onEdit={() => router.push({ pathname: "/new-program", params: { id: activeProgram.id } })}
-                onSetWorkout={() => {
-                  if (isRunning) {
-                    Alert.alert(
-                      "Workout In Progress",
-                      "Please end or discard your current workout before changing the workout day.",
-                      [{ text: "OK" }]
-                    );
-                  } else {
-                    setSetWorkoutOpen(true);
-                  }
-                }}
-                onComplete={handleCompleteProgram}
-                onCopy={() => handleDuplicateProgram(activeProgram)}
+                onOpenActions={() => setActionsProgram(activeProgram)}
               />
             </View>
           </>
@@ -842,19 +815,20 @@ export default function ProgramsScreen() {
             <ProgramCard
               program={p}
               isDark={isDark}
-              isExpanded={expandedId === p.id}
-              onToggle={() => setExpandedId(expandedId === p.id ? null : p.id)}
-              onMakeActive={() => handleMakeActive(p)}
-              onDuplicate={() => handleDuplicateProgram(p)}
-              onCopy={() => handleDuplicateProgram(p)}
-              onEdit={() => router.push({ pathname: "/new-program", params: { id: p.id } })}
-              onDelete={() => handleDeleteProgram(p)}
-              onSend={canSendToPT ? () => handleSendToPT(p) : undefined}
+              onOpenActions={() => setActionsProgram(p)}
             />
             </View>
           ))
         )}
       </ScrollView>
+
+      <ProgramActionsSheet
+        visible={actionsProgram !== null}
+        program={actionsProgram}
+        actions={actionsProgram ? buildActions(actionsProgram) : []}
+        isDark={isDark}
+        onClose={() => setActionsProgram(null)}
+      />
 
       {activeProgram && setWorkoutOpen && (
         <SetWorkoutPicker
@@ -862,7 +836,12 @@ export default function ProgramsScreen() {
           program={activeProgram}
           isDark={isDark}
           onConfirm={handleSetWorkoutDay}
-          onClose={() => setSetWorkoutOpen(false)}
+          onClose={(reopenMenu) => {
+            setSetWorkoutOpen(false);
+            // Back/swipe/backdrop → return to the program's action menu; a confirmed
+            // day exits straight to the programs list.
+            if (reopenMenu && activeProgram) setActionsProgram(activeProgram);
+          }}
         />
       )}
     </View>
@@ -922,6 +901,14 @@ const styles = StyleSheet.create({
   cycleChip:          { alignItems: "center", paddingVertical: 6, paddingHorizontal: 8, borderRadius: 8, minWidth: 60 },
   cycleChipText:      { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
 
+  // Program Actions Sheet
+  paSheet:            { borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden" },
+  paHeader:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
+  paTitle:            { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },
+  paList:             { paddingHorizontal: 20, paddingTop: 16, gap: 10 },
+  paRowInner:         { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingHorizontal: 16 },
+  paRowText:          { fontFamily: FontFamily.bold, fontSize: 15, letterSpacing: 0.2 },
+
   // Set Workout Picker
   swBackdrop:         { flex: 1, justifyContent: "flex-end" },
   swOverlay:          { backgroundColor: "rgba(0,0,0,0.45)" },
@@ -932,6 +919,7 @@ const styles = StyleSheet.create({
   swTitle:            { fontFamily: FontFamily.bold, fontSize: 18, marginBottom: 4 },
   swSubtitle:         { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
   swClose:            { width: 36, height: 36, alignItems: "center", justifyContent: "center", marginTop: -4 },
+  swBack:             { width: 32, height: 32, alignItems: "center", justifyContent: "center", marginLeft: -6, marginTop: -2 },
   swDayRow:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, gap: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   swDayBadge:         { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   swDayBadgeText:     { fontFamily: FontFamily.bold, fontSize: 13 },

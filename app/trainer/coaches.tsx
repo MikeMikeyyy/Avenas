@@ -122,7 +122,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 18,
+    marginBottom: 32,
   },
   screenTitle: {
     fontFamily: FontFamily.bold,

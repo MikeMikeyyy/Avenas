@@ -215,8 +215,8 @@ export default function ClientDetailScreen() {
         </View>
 
         <TouchableOpacity onPress={openChat} activeOpacity={0.8} accessibilityLabel="Chat with client" accessibilityRole="button">
-          <View style={[styles.chatBtn, { backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-            <ChatIcon size={18} color={APP_LIGHT.tp} />
+          <View style={[styles.chatBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+            <ChatIcon size={18} color={t.tp} />
           </View>
         </TouchableOpacity>
       </View>
