@@ -30,7 +30,7 @@ import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   getCurrentWeek, type SavedProgram, type CompletedWorkout,
@@ -593,7 +593,7 @@ export default function JournalScreen() {
   const handleCalendarDayPress = useCallback((date: string, workoutId?: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (workoutId) {
-      router.push({ pathname: "/workout-detail", params: { id: workoutId } });
+      router.navigate({ pathname: "/workout-detail", params: { id: workoutId } });
     } else {
       setSelectedDate(date);
       setWorkoutPickerVisible(true);
@@ -605,7 +605,7 @@ export default function JournalScreen() {
     addToProgramId?: string,
     fromProgramId?: string,
   ) => {
-    router.push({
+    router.navigate({
       pathname: "/log-workout",
       params: {
         date: selectedDate,
@@ -739,7 +739,7 @@ export default function JournalScreen() {
             {activeProgram && (
               <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Active Program</Text>
             )}
-            <BounceButton onPress={() => router.push("/program-history")}>
+            <BounceButton onPress={() => router.navigate("/program-history")}>
               <NeuCard dark={isDark} radius={20} innerStyle={styles.allProgramsBtnInner}>
                 <Text style={[styles.allProgramsText, { color: t.tp }]}>All Programs</Text>
                 <Ionicons name="chevron-forward" size={14} color={t.tp} />
@@ -749,7 +749,7 @@ export default function JournalScreen() {
           {activeProgram && (
             <BounceButton
               style={{ marginBottom: 10 }}
-              onPress={() => router.push({ pathname: "/program-history-detail", params: { programId: activeProgram.id } })}
+              onPress={() => router.navigate({ pathname: "/program-history-detail", params: { programId: activeProgram.id } })}
             >
               <NeuCard dark={isDark} style={styles.activeProgramCard}>
                 <View style={styles.apCardInner}>
@@ -795,12 +795,23 @@ export default function JournalScreen() {
         {timeline.length === 0 && (
           <NeuCard dark={isDark} style={styles.emptyCard}>
             <View style={styles.emptyInner}>
-              <View style={[styles.emptyIconWrap, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.12)" }]}>
-                <Svg width={32} height={32} viewBox="0 0 24 24" fill="none">
-                  <Path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke={ACCT} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                  <Path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke={ACCT} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                  <Path d="M9 7h6M9 11h4" stroke={ACCT} strokeWidth="1.5" strokeLinecap="round" />
-                </Svg>
+              <View style={[styles.emptyOrbGlow, {
+                backgroundColor: ORB_GRADS.blush.glow,
+                shadowColor: ORB_GRADS.blush.glow,
+                shadowOpacity: isDark ? 0.45 : 0.55,
+              }]}>
+                <LinearGradient
+                  colors={ORB_GRADS.blush.colors}
+                  start={{ x: 0.1, y: 0 }}
+                  end={{ x: 0.9, y: 1 }}
+                  style={[styles.emptyOrb, { borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.65)" }]}
+                >
+                  <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+                    <Path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <Path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <Path d="M9 7h6M9 11h4" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" />
+                  </Svg>
+                </LinearGradient>
               </View>
               <Text style={[styles.emptyTitle, { color: t.tp }]}>Nothing here yet</Text>
               <Text style={[styles.emptyBody, { color: t.ts }]}>Completed workouts and journal entries will appear here.</Text>
@@ -815,7 +826,7 @@ export default function JournalScreen() {
             const progInfo   = progInfoOf(w);
             const sessionNum = sessionNumbers[w.id] ?? 1;
             return (
-              <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.push({ pathname: "/workout-detail", params: { id: w.id } })}>
+              <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}>
                 <NeuCard dark={isDark} style={[styles.entryCard, { marginBottom: 0 }]}>
                   <View style={styles.workoutCardInner}>
                     <View style={styles.workoutTopRow}>
@@ -930,7 +941,8 @@ const styles = StyleSheet.create({
 
   emptyCard:    { borderRadius: 24, marginBottom: 20 },
   emptyInner:   { padding: 32, alignItems: "center", gap: 12 },
-  emptyIconWrap:{ width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 4 },
+  emptyOrbGlow: { width: 56, height: 56, borderRadius: 28, shadowOffset: { width: 0, height: 5 }, shadowRadius: 10, marginBottom: 4 },
+  emptyOrb:     { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 18, color: TP, textAlign: "center" },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 14, color: TS, textAlign: "center", lineHeight: 20 },
 

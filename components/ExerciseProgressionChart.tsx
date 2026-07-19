@@ -7,11 +7,13 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { LineChart } from "react-native-gifted-charts";
+import { LinearGradient, Stop } from "react-native-svg";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
+import SegmentedControl from "./SegmentedControl";
 import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
@@ -94,23 +96,39 @@ function exactAxis(exactMax: number) {
   };
 }
 
-// Format the focused-point header per metric. `unit` is appended only to the
-// weight-based metrics; totalReps shows a "reps" suffix instead. For Best
-// Set the user wants the weight × reps combination that produced the best
-// volume, not just the product.
-function formatFocused(p: ExerciseDataPoint, m: ExerciseMetricKey, unit: string): string {
-  const d = fmtShortDate(p.date);
+// Main line of the focused-point tooltip, per metric. The weight-based
+// metrics show the weight × reps pair that produced the value; totalReps
+// shows a "reps" suffix instead of the unit.
+function tooltipValue(p: ExerciseDataPoint, m: ExerciseMetricKey, unit: string): string {
   switch (m) {
     case "topWeight":
-      return `${d}  ·  ${fmtNum(p.topWeight)} ${unit} × ${p.topReps}`;
+      return `${fmtNum(p.topWeight)} ${unit} × ${p.topReps}`;
     case "bestSetVolume":
-      return `${d}  ·  ${fmtNum(p.bestSetWeight)} ${unit} × ${p.bestSetReps}`;
+      return `${fmtNum(p.bestSetWeight)} ${unit} × ${p.bestSetReps}`;
     case "sessionVolume":
-      return `${d}  ·  ${fmtNum(p.sessionVolume)} ${unit}`;
+      return `${fmtNum(p.sessionVolume)} ${unit}`;
     case "totalReps":
-      return `${d}  ·  ${p.totalReps} reps`;
+      return `${p.totalReps} reps`;
   }
 }
+
+// "2026-09-09" → "Sep 9, 2026" — the tooltip's date line.
+function fmtTooltipDate(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (![y, m, d].every(Number.isFinite)) return ymd;
+  return `${MONTH_NAMES[(m - 1) % 12]} ${d}, ${y}`;
+}
+
+// Focused-dot ring and tooltip geometry. The tooltip is a near-black floating
+// card (same in both themes, like iOS chart callouts) with a caret pointing
+// down at the focused dot.
+const FOCUSED_DOT_SIZE = 18;
+const TOOLTIP_W = 140;
+const TOOLTIP_BG = "#1C1D24";
+// gifted-charts pads the top of its plot: point y = (height + 10) − the
+// value's share of `height` (extendedContainerHeight = height + overflowTop(0)
+// + 10 in gifted-charts-core). Keep in sync if the library changes.
+const GIFTED_TOP_PAD = 10;
 
 /**
  * Per-exercise weight-progression line chart with PR tiles below.
@@ -182,10 +200,11 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
   const focused = focusedIndex != null ? history[focusedIndex] ?? null : null;
 
   // Day context leads the subline (e.g. "Push · Sessions logged · 4") so two
-  // day-scoped charts for the same exercise name are visually distinct.
+  // day-scoped charts for the same exercise name are visually distinct. The
+  // subline stays put on focus — the focused point's numbers live in the
+  // floating tooltip over the chart instead.
   const headerLabel = (() => {
     const day = dayName?.trim() ? `${dayName.trim()} · ` : "";
-    if (focused) return `${day}${formatFocused(focused, metric, unit)}`;
     if (history.length === 0) return `${day}No sessions yet`;
     return `${day}Sessions logged · ${history.length}`;
   })();
@@ -212,9 +231,18 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
           value: metricValue(p, metric),
           label: labelText,
           showStrip: i === focusedIndex,
-          // Highlight the focused dot with a brighter ACCT.
-          dataPointColor: i === focusedIndex ? ACCT : `${ACCT}E6`,
-          dataPointRadius: i === focusedIndex ? 5 : 3,
+          dataPointColor: `${ACCT}E6`,
+          dataPointRadius: 3,
+          // Focused dot: an enlarged ACCT ring with a white core. Rendered
+          // via customDataPoint so gifted-charts positions it exactly on the
+          // line (dataPointWidth/Height feed its centering math).
+          ...(i === focusedIndex
+            ? {
+                customDataPoint: () => <View style={styles.focusedDot} />,
+                dataPointWidth: FOCUSED_DOT_SIZE,
+                dataPointHeight: FOCUSED_DOT_SIZE,
+              }
+            : null),
           onPress: () => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             setFocusedIndex(prev => (prev === i ? null : i));
@@ -283,7 +311,7 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push({ pathname: "/workout-detail", params: { id: workoutId } });
+    router.navigate({ pathname: "/workout-detail", params: { id: workoutId } });
   };
 
   return (
@@ -293,7 +321,7 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.title, { color: t.tp }]} numberOfLines={1}>{exerciseName}</Text>
-            <Text style={[styles.headerValue, { color: focused ? ACCT : t.ts }]} numberOfLines={1}>
+            <Text style={[styles.headerValue, { color: t.ts }]} numberOfLines={1}>
               {headerLabel}
             </Text>
           </View>
@@ -314,10 +342,25 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
                 thickness={2.5}
                 curved
                 areaChart
-                startFillColor={ACCT}
-                endFillColor={ACCT}
-                startOpacity={0.25}
-                endOpacity={0.02}
+
+                // Custom under-line gradient. A single linear gradient spans
+                // the area path's bounding box (top of the line's highest
+                // point → x-axis), so a per-column fade that tracks the line
+                // isn't possible — instead the fade runs the FULL height.
+                // Shape: modest green at the line that sheds most of its
+                // color in the first third (no solid band), then a long
+                // faint tail that only reaches zero at the x-axis. The id
+                // must match areaGradientId (gifted-charts fills the area
+                // path with url(#<areaGradientId>)).
+                areaGradientId="exerciseAreaGrad"
+                areaGradientComponent={() => (
+                  <LinearGradient id="exerciseAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset="0" stopColor={ACCT} stopOpacity="0.22" />
+                    <Stop offset="0.3" stopColor={ACCT} stopOpacity="0.08" />
+                    <Stop offset="0.7" stopColor={ACCT} stopOpacity="0.03" />
+                    <Stop offset="1" stopColor={ACCT} stopOpacity="0" />
+                  </LinearGradient>
+                )}
                 isAnimated
                 animationDuration={400}
                 yAxisThickness={1}
@@ -415,43 +458,55 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
                   );
                 })}
               </View>
+
+              {/*
+                Floating tooltip over the focused dot: value line + date on a
+                near-black card with a caret pointing down at the dot. A
+                zero-size anchor is pinned to the dot's center (same x math as
+                the labels/hit columns; y mirrors gifted-charts' point
+                placement — see GIFTED_TOP_PAD) and the card hangs above it.
+                The card clamps to the wrapper's edges so edge dots don't push
+                it outside the NeuCard; the caret stays centered on the dot.
+              */}
+              {focused && focusedIndex != null ? (() => {
+                const dotX = Y_AXIS_LABEL_WIDTH + initialSpacing + focusedIndex * spacing;
+                const dotY =
+                  GIFTED_TOP_PAD +
+                  CHART_HEIGHT -
+                  (metricValue(focused, metric) / axis.max) * CHART_HEIGHT;
+                const cardLeft = Math.min(
+                  Math.max(dotX - TOOLTIP_W / 2, -6),
+                  WRAPPER_WIDTH - TOOLTIP_W + 6,
+                );
+                return (
+                  <View
+                    pointerEvents="none"
+                    style={[styles.tooltipAnchor, { left: dotX, top: dotY }]}
+                  >
+                    <View style={[styles.tooltipCard, { left: cardLeft - dotX }]}>
+                      <Text style={styles.tooltipValue} numberOfLines={1}>
+                        {tooltipValue(focused, metric, unit)}
+                      </Text>
+                      <Text style={styles.tooltipDate} numberOfLines={1}>
+                        {fmtTooltipDate(focused.date)}
+                      </Text>
+                    </View>
+                    <View style={styles.tooltipCaret} />
+                  </View>
+                );
+              })() : null}
             </View>
         )}
 
-        {/* Metric selector — Heaviest / Best Set / Volume / Reps. Same
-            discrete-button pattern as VolumeBarChart's metric row above:
-            inactive buttons are NeuCard pills, the active one is an
-            ACCT-filled pill with a matching shadow glow. */}
-        <View style={styles.metricRow}>
-          {EXERCISE_METRIC_OPTIONS.map(opt => {
-            const active = opt.key === metric;
-            return (
-              <BounceButton
-                key={opt.key}
-                style={styles.metricBtnWrap}
-                onPress={() => setMetric(opt.key)}
-                accessibilityRole="button"
-                accessibilityLabel={`Show ${opt.label}`}
-              >
-                {active ? (
-                  <View style={styles.metricBtnActive}>
-                    <Text style={[styles.metricBtnLabel, { color: "#fff" }]} numberOfLines={1}>
-                      {opt.label}
-                    </Text>
-                  </View>
-                ) : (
-                  <NeuCard dark={isDark} radius={12} shadowSize="sm">
-                    <View style={styles.metricBtn}>
-                      <Text style={[styles.metricBtnLabel, { color: t.tp }]} numberOfLines={1}>
-                        {opt.label}
-                      </Text>
-                    </View>
-                  </NeuCard>
-                )}
-              </BounceButton>
-            );
-          })}
-        </View>
+        {/* Metric selector — iOS-style segmented control with a sliding
+            thumb (Heaviest / Best Set / Volume / Reps). Same control as
+            VolumeBarChart's metric row so the two charts feel consistent. */}
+        <SegmentedControl<ExerciseMetricKey>
+          options={EXERCISE_METRIC_OPTIONS}
+          value={metric}
+          onChange={setMetric}
+          style={{ marginTop: 16 }}
+        />
       </View>
     </NeuCard>
 
@@ -513,7 +568,7 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
     <BounceButton
       style={styles.historyBtnWrap}
       onPress={() => {
-        router.push({
+        router.navigate({
           pathname: "/exercise-history",
           params: { exerciseName, ...(dayName ? { dayName } : {}) },
         });
@@ -573,40 +628,6 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: "row", alignItems: "flex-start" },
   title: { fontFamily: FontFamily.bold, fontSize: 18 },
   headerValue: { fontFamily: FontFamily.semibold, fontSize: 13, marginTop: 2 },
-
-  // Metric selector row — Heaviest / Best Set / Volume / Reps. Mirror of the
-  // VolumeBarChart metric row so the two charts feel visually consistent.
-  metricRow: {
-    flexDirection: "row",
-    marginTop: 16,
-    gap: 8,
-  },
-  metricBtnWrap: {
-    flex: 1,
-  },
-  metricBtn: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-  },
-  metricBtnActive: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-    borderRadius: 12,
-    backgroundColor: ACCT,
-    shadowColor: ACCT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  metricBtnLabel: {
-    fontFamily: FontFamily.semibold,
-    fontSize: 13,
-  },
 
   empty: {
     alignItems: "center",
@@ -688,6 +709,69 @@ const styles = StyleSheet.create({
     position: "relative",
     height: 14,
     marginTop: 2,
+  },
+  // Focused data point — enlarged ACCT ring with a white core. Rendered by
+  // gifted-charts (customDataPoint) so it sits exactly on the line.
+  focusedDot: {
+    width: FOCUSED_DOT_SIZE,
+    height: FOCUSED_DOT_SIZE,
+    borderRadius: FOCUSED_DOT_SIZE / 2,
+    backgroundColor: "#fff",
+    borderWidth: 4.5,
+    borderColor: ACCT,
+    shadowColor: ACCT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  // Zero-size anchor pinned to the focused dot's center; the card and caret
+  // hang off it with absolute offsets so the tooltip floats above the dot.
+  tooltipAnchor: {
+    position: "absolute",
+    width: 0,
+    height: 0,
+    zIndex: 10,
+  },
+  tooltipCard: {
+    position: "absolute",
+    bottom: 21,
+    width: TOOLTIP_W,
+    alignItems: "center",
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: TOOLTIP_BG,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  // Rotated square whose lower corner reads as the caret. Renders after the
+  // card so its top half overlaps the card's bottom edge seamlessly. The
+  // rotated tip lands ~4px clear of the focused ring's top edge (ring radius
+  // 9 + glow), so the caret hovers just above the dot instead of touching it.
+  tooltipCaret: {
+    position: "absolute",
+    bottom: 16,
+    left: -6,
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    backgroundColor: TOOLTIP_BG,
+    transform: [{ rotate: "45deg" }],
+  },
+  tooltipValue: {
+    fontFamily: FontFamily.bold,
+    fontSize: 15,
+    color: "#fff",
+  },
+  tooltipDate: {
+    fontFamily: FontFamily.semibold,
+    fontSize: 12,
+    color: "rgba(255,255,255,0.55)",
+    marginTop: 1,
   },
   xLabel: {
     position: "absolute",

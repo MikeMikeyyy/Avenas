@@ -678,7 +678,7 @@ export default function ProgramsScreen() {
   // Status-appropriate action buttons for the tapped program, shown in the popup
   // sheet. Each onPress runs after the sheet closes (see ProgramActionsSheet.close).
   const buildActions = (program: SavedProgram): ProgramAction[] => {
-    const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: "create-outline", onPress: () => router.push({ pathname: "/new-program", params: { id: program.id } }) };
+    const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: "create-outline", onPress: () => router.navigate({ pathname: "/new-program", params: { id: program.id } }) };
     const duplicateAction: ProgramAction = { key: "duplicate", label: "Duplicate Program", icon: "copy-outline", onPress: () => handleDuplicateProgram(program) };
     const deleteAction: ProgramAction = { key: "delete", label: "Delete", icon: "trash-outline", destructive: true, onPress: () => handleDeleteProgram(program) };
     const sendAction: ProgramAction | null = canSendToPT ? { key: "send", label: "Send to Trainer", icon: "paper-plane-outline", tint: ACCT, onPress: () => handleSendToPT(program) } : null;
@@ -794,7 +794,7 @@ export default function ProgramsScreen() {
         {/* All programs */}
         <View style={[styles.rowBetween, { marginBottom: 12 }]}>
           <Text style={[styles.sectionLabel, { color: t.ts, marginBottom: 0 }]}>ALL PROGRAMS</Text>
-          <BounceButton onPress={() => router.push("/new-program")} accessibilityLabel="Create new program" accessibilityRole="button">
+          <BounceButton onPress={() => router.navigate("/new-program")} accessibilityLabel="Create new program" accessibilityRole="button">
             <View style={styles.newProgramBtn}>
               <Ionicons name="add" size={14} color="#fff" />
               <Text style={styles.newProgramBtnText}>New</Text>

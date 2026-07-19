@@ -3,11 +3,12 @@
 // Lists everyone you've added (clients/coaches for a trainer; trainers for a
 // gym user) with a last-message preview, newest first. The "+" opens the
 // broadcast composer (message several people at once). Tapping a row opens that
-// 1:1 thread. All data is local/mock (utils/chatStore).
+// 1:1 thread. Real connections message through the backend; mock-roster people
+// stay local (utils/chatStore routes per contact).
 
 import { useCallback, useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -24,10 +25,11 @@ import BounceButton from "../../components/BounceButton";
 import PlusIcon from "../../components/icons/PlusIcon";
 import ChatIcon from "../../components/icons/ChatIcon";
 import MessageComposeSheet from "../../components/trainer/MessageComposeSheet";
+import Avatar from "../../components/Avatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
-import { loadChatContacts, ensureSeededContacts, broadcastMessage, loadReads, countUnreadInThread } from "../../utils/chatStore";
+import { loadChatContacts, loadAllThreads, broadcastMessage, loadReads, countUnreadInThread } from "../../utils/chatStore";
 import { makeInitials } from "../../utils/trainerStore";
 import { getMyConnections } from "../../lib/connections";
 import UnreadBadge from "../../components/UnreadBadge";
@@ -94,6 +96,7 @@ export default function MessagesScreen() {
           name: c.name || "User",
           initials: makeInitials(c.name || "User"),
           subtitle: accountType === "pt" ? (c.accountType === "pt" ? "Coach" : "Client") : "Trainer",
+          photoUri: c.photoUri,
         }));
       const realIds = new Set(real.map(c => c.id));
       return [...real, ...local.filter(l => !realIds.has(l.id))];
@@ -104,7 +107,7 @@ export default function MessagesScreen() {
 
   const load = useCallback(async () => {
     const all = await gatherContacts();
-    const [threads, reads, blocked, hidden] = await Promise.all([ensureSeededContacts(all), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
+    const [threads, reads, blocked, hidden] = await Promise.all([loadAllThreads(), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
     const people = all.filter(p => !blocked.has(p.id)); // blocked users disappear from chat
     setContacts(people);
     setRows(buildRows(people, threads, reads, hidden));
@@ -115,7 +118,7 @@ export default function MessagesScreen() {
       let cancelled = false;
       (async () => {
         const all = await gatherContacts();
-        const [threads, reads, blocked, hidden] = await Promise.all([ensureSeededContacts(all), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
+        const [threads, reads, blocked, hidden] = await Promise.all([loadAllThreads(), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
         if (cancelled) return;
         const people = all.filter(p => !blocked.has(p.id));
         setContacts(people);
@@ -127,16 +130,24 @@ export default function MessagesScreen() {
 
   const openThread = (c: ChatContact) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push({ pathname: "/trainer/chat/[id]", params: { id: c.id, name: c.name, initials: c.initials } });
+    router.navigate({ pathname: "/trainer/chat/[id]", params: { id: c.id, name: c.name, initials: c.initials, photo: c.photoUri ?? "" } });
   };
 
   const handleSend = async (ids: string[], text: string) => {
     setComposeOpen(false);
-    await broadcastMessage(ids, text);
+    try {
+      await broadcastMessage(ids, text);
+    } catch (err) {
+      // Backend send failed (offline / connection severed) — say so instead of
+      // showing a message the recipients will never receive.
+      if (__DEV__) console.warn("[avenas] broadcast message", err);
+      Alert.alert("Message not sent", "Check your connection and try again.");
+      return;
+    }
     await load();
     if (ids.length === 1) {
       const c = contacts.find(x => x.id === ids[0]);
-      if (c) router.push({ pathname: "/trainer/chat/[id]", params: { id: c.id, name: c.name, initials: c.initials } });
+      if (c) router.navigate({ pathname: "/trainer/chat/[id]", params: { id: c.id, name: c.name, initials: c.initials, photo: c.photoUri ?? "" } });
     }
   };
 
@@ -248,9 +259,13 @@ export default function MessagesScreen() {
             <BounceButton key={r.id} style={{ marginBottom: 10 }} onPress={() => openThread(r)} accessibilityLabel={`Open chat with ${r.name}`}>
               <NeuCard dark={isDark} radius={16}>
                 <View style={styles.row}>
-                  <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                    <Text style={[styles.avatarText, { color: ACCT }]}>{r.initials}</Text>
-                  </View>
+                  <Avatar
+                    uri={r.photoUri}
+                    initials={r.initials}
+                    size={48}
+                    backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                    textStyle={[styles.avatarText, { color: ACCT }]}
+                  />
                   <View style={{ flex: 1 }}>
                     <View style={styles.rowTop}>
                       <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{r.name}</Text>
@@ -295,7 +310,6 @@ const styles = StyleSheet.create({
   noMatch:     { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
 
   row:         { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  avatar:      { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   avatarText:  { fontFamily: FontFamily.bold, fontSize: 16 },
   rowTop:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   name:        { flex: 1, fontFamily: FontFamily.bold, fontSize: 16 },

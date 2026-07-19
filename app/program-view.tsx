@@ -176,7 +176,7 @@ export default function ProgramViewScreen() {
 
   const handleEdit = useCallback(() => {
     if (!share) return;
-    router.push({ pathname: "/new-program", params: { sharedId: share.id } });
+    router.navigate({ pathname: "/new-program", params: { sharedId: share.id } });
   }, [router, share]);
 
   const handleDelete = useCallback(() => {
@@ -523,7 +523,7 @@ export default function ProgramViewScreen() {
                 sentReturned ? (
                   <BounceButton
                     style={{ flex: 1 }}
-                    onPress={() => router.push({ pathname: "/programs", params: { focus: sent!.programId } })}
+                    onPress={() => router.navigate({ pathname: "/programs", params: { focus: sent!.programId } })}
                   >
                     <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                       <Text style={styles.primaryBtnText}>Open in My Programs</Text>
@@ -546,7 +546,7 @@ export default function ProgramViewScreen() {
                 ) : (
                   <BounceButton
                     style={{ flex: 1 }}
-                    onPress={() => router.push(
+                    onPress={() => router.navigate(
                       share?.acceptedProgramId
                         ? { pathname: "/programs", params: { focus: share.acceptedProgramId } }
                         : "/programs"

@@ -1,4 +1,5 @@
-import { Stack } from "expo-router";
+import { Stack, useRouter, type Href } from "expo-router";
+import * as Notifications from "expo-notifications";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
@@ -20,6 +21,7 @@ import WorkoutActiveBar from "../components/WorkoutActiveBar";
 import { flushCloudPush } from "../lib/syncManager";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
+import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -38,6 +40,25 @@ function AppShell() {
   const { isDark } = useTheme();
   const { loaded: profileLoaded } = useUserProfile();
   const { loaded: authLoaded } = useAuth();
+  const router = useRouter();
+
+  // Local notifications: install the foreground-presentation handler once, then
+  // rebuild the pending 7-day schedule on launch and on every background —
+  // leaving the app is when the schedule must reflect the state left behind
+  // (workout done → today's reminder gone; program changed → new days).
+  useEffect(() => {
+    initNotifications();
+    resyncScheduledNotifications();
+  }, []);
+
+  // Tapping a notification (push or local) routes to the screen in its data.url
+  // (e.g. a message push opens that chat). Covers cold starts too — the hook
+  // replays the response that launched the app.
+  const notifResponse = Notifications.useLastNotificationResponse();
+  useEffect(() => {
+    const url = notifResponse?.notification.request.content.data?.url;
+    if (typeof url === "string" && url.startsWith("/")) router.navigate(url as Href);
+  }, [notifResponse, router]);
 
   // Hold the native splash until both the profile flag and the auth session are
   // read, so app/index.tsx can redirect to the right first screen (login vs
@@ -58,6 +79,7 @@ function AppShell() {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "background" || state === "inactive") {
         flushCloudPush();
+        resyncScheduledNotifications();
         if (beat) { clearInterval(beat); beat = null; }
       } else if (state === "active") {
         void touchLastActive();

@@ -91,7 +91,9 @@ export default function CompleteProfileScreen() {
   // half-set-up account would be sent straight to Home (no profile) on next launch.
   const onBack = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    try { await signOut(); } catch { /* navigate back regardless */ }
+    // force: abandoning a half-created account; there's no data of its own to
+    // back up, and being stuck on this screen would be worse than a stale push.
+    try { await signOut({ force: true }); } catch { /* navigate back regardless */ }
     if (from === "signup") { router.replace("/signup"); return; }
     if (from === "login") { router.replace("/login"); return; }
     // No recorded origin (e.g. deep link): fall back to the start page.
@@ -109,7 +111,7 @@ export default function CompleteProfileScreen() {
       setAccountType(role);
       setIsKg(kg);
       await pushProfile(userId, { name: trimmed, email, accountType: role, unit: kg ? "kg" : "lb" });
-      router.push({ pathname: "/accept-terms", params: { name: trimmed, email } });
+      router.navigate({ pathname: "/accept-terms", params: { name: trimmed, email } });
     } catch (e) {
       Alert.alert("Couldn't save profile", e instanceof Error ? e.message : "Please try again.");
     } finally {

@@ -84,7 +84,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
 
   const handleConnectCoach = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push("/connect");
+    router.navigate("/connect");
   }, [router]);
 
   const handleRemoveCoach = useCallback((coach: AssignedPT) => {
@@ -296,7 +296,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                   <TouchableOpacity
                     key={r.id}
                     activeOpacity={0.85}
-                    onPress={() => router.push({ pathname: "/program-view", params: { sharedId: r.id } })}
+                    onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: r.id } })}
                     accessibilityRole="button"
                     accessibilityLabel={`View ${r.programName}`}
                     style={{ marginBottom: 10 }}

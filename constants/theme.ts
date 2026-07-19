@@ -51,12 +51,21 @@ export const AURORA = {
 } as const;
 
 // Gradient orb buttons (Home quick actions). `glow` doubles as the shadow color.
+// Green is deliberately softer than raw ACCT — at full saturation it shouts
+// over its aqua/blush siblings, so it's pulled toward their pastel weight.
 export const ORB_GRADS = {
-  green: { colors: ["#84f4cc", "#0fd692"] as const, glow: "#12c987" },
+  green: { colors: ["#a5f0d3", "#43dda6"] as const, glow: "#43dda6" },
   aqua:  { colors: ["#9ce0ff", "#3eb8f2"] as const, glow: "#3eb8f2" },
   blush: { colors: ["#ffc7db", "#f77fae"] as const, glow: "#f77fae" },
 } as const;
 
+
+// ─── Bubble pill ──────────────────────────────────────────────────────────────
+// Small floating pill controls that sit on cards (SegmentedControl thumb,
+// DropdownPicker triggers): white with a soft drop shadow in light mode, a
+// lifted navy one step above NEU_BG_DARK in dark mode.
+export const BUBBLE_LIGHT = "#FFFFFF";
+export const BUBBLE_DARK  = "#363C5E";
 
 // ─── Slate button ─────────────────────────────────────────────────────────────
 // Dark slate-black for primary non-accent buttons (light mode bg).

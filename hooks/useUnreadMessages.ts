@@ -2,13 +2,13 @@
 // badge on the Trainer hub's Messages button. Refreshes on screen focus, so it
 // updates after you read a thread (markThreadRead) and return to the hub.
 //
-// Mirrors app/trainer/messages.tsx's load (same seeding + blocked/hidden filter),
-// so this total always equals the sum of the per-row badges in the list.
+// Mirrors app/trainer/messages.tsx's load (same thread source + blocked/hidden
+// filter), so this total always equals the sum of the per-row badges in the list.
 
 import { useCallback, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import { useAccountType } from "../contexts/AccountTypeContext";
-import { loadChatContacts, ensureSeededContacts, loadReads, countUnreadInThread } from "../utils/chatStore";
+import { loadChatContacts, loadAllThreads, loadReads, countUnreadInThread } from "../utils/chatStore";
 import { makeInitials } from "../utils/trainerStore";
 import { getMyConnections } from "../lib/connections";
 import { loadBlockedIds, loadHiddenMessageIds } from "../utils/moderation";
@@ -37,13 +37,14 @@ export function useUnreadMessages(): number {
               name: c.name || "User",
               initials: makeInitials(c.name || "User"),
               subtitle: accountType === "pt" ? (c.accountType === "pt" ? "Coach" : "Client") : "Trainer",
+              photoUri: c.photoUri,
             }));
           const realIds = new Set(real.map(c => c.id));
           contacts = [...real, ...local.filter(l => !realIds.has(l.id))];
         } catch { /* offline → fall back to local roster */ }
 
         const [threads, reads, blocked, hidden] = await Promise.all([
-          ensureSeededContacts(contacts),
+          loadAllThreads(),
           loadReads(),
           loadBlockedIds(),
           loadHiddenMessageIds(),

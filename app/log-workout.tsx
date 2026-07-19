@@ -19,6 +19,7 @@ import NeuCard, { NEU_BG, NEU_BG_DARK } from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import CollapsibleCard from "../components/CollapsibleCard";
 import FadeScreen from "../components/FadeScreen";
+import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
@@ -1252,6 +1253,8 @@ export default function LogWorkoutScreen() {
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
+      {/* Blush glow — carries the Journal flow's tint into the log screen */}
+      <AuroraBackdrop dark={isDark} tint="blush" />
       {/* Top gradient blur */}
       <View pointerEvents="none" style={[s.topGradient, { height: insets.top + 10 }]}>
         <MaskedView

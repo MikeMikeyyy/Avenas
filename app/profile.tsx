@@ -15,8 +15,10 @@ import * as ImagePicker from "expo-image-picker";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { useAuth } from "../contexts/AuthContext";
+import { useAccountType } from "../contexts/AccountTypeContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import SegmentedControl from "../components/SegmentedControl";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
@@ -34,6 +36,7 @@ export default function ProfileScreen() {
 
   const { session } = useAuth();
   const { profile, setProfile } = useUserProfile();
+  const { accountType, setAccountType } = useAccountType();
   const userId = session?.user.id;
   const currentEmail = session?.user.email ?? profile.email;
 
@@ -216,6 +219,21 @@ export default function ProfileScreen() {
         {emailChanged ? (
           <Text style={[styles.hint, { color: t.ts }]}>Changing your email needs a confirmation link sent to the new address.</Text>
         ) : null}
+
+        {/* Applies immediately (not staged behind Save) — it's a local mode
+            switch, same behavior it had on the Settings screen. */}
+        <Text style={[styles.label, { color: t.ts }]}>ACCOUNT TYPE</Text>
+        <SegmentedControl
+          options={[
+            { key: "gym_user", label: "Gym User" },
+            { key: "pt", label: "Trainer" },
+          ]}
+          value={accountType}
+          onChange={setAccountType}
+        />
+        <Text style={[styles.hint, { color: t.ts }]}>
+          Trainers get a coaching hub with clients, program sharing, and messaging.
+        </Text>
 
         <BounceButton style={{ marginTop: 32 }} onPress={onSave} accessibilityRole="button" accessibilityLabel="Save changes">
           <View style={[styles.ctaWrap, { backgroundColor: btnBg, shadowColor: btnShadow }, (!canSave || busy) && styles.ctaDisabled]}>

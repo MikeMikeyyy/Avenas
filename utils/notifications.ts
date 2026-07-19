@@ -14,7 +14,17 @@ import {
   DEFAULT_NOTIFICATION_PREFS,
   type NotificationPrefs,
   type NotificationCategory,
+  type ReminderTime,
 } from "../constants/notifications";
+
+/** A stored reminder time, validated (records written before the field existed,
+ *  or corrupted ones, fall back to the default). */
+function validTime(t: Partial<ReminderTime> | undefined): ReminderTime {
+  const d = DEFAULT_NOTIFICATION_PREFS.workoutReminderTime;
+  if (!t || typeof t.hour !== "number" || typeof t.minute !== "number") return d;
+  if (t.hour < 0 || t.hour > 23 || t.minute < 0 || t.minute > 59) return d;
+  return { hour: Math.floor(t.hour), minute: Math.floor(t.minute) };
+}
 
 /** Merge a stored (possibly older / partial) blob over the current defaults so
  *  newly-added categories appear as their default rather than `undefined`. */
@@ -22,6 +32,7 @@ function withDefaults(stored: Partial<NotificationPrefs> | null): NotificationPr
   return {
     master: stored?.master ?? DEFAULT_NOTIFICATION_PREFS.master,
     categories: { ...DEFAULT_NOTIFICATION_PREFS.categories, ...(stored?.categories ?? {}) },
+    workoutReminderTime: validTime(stored?.workoutReminderTime),
   };
 }
 

@@ -15,11 +15,15 @@ import BounceButton from "../../../components/BounceButton";
 import ProgressView from "../../../components/progress/ProgressView";
 import ClientJournalView from "../../../components/journal/ClientJournalView";
 import ProgramPickerSheet from "../../../components/trainer/ProgramPickerSheet";
+import SimpleSheet from "../../../components/trainer/SimpleSheet";
+import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
 import ChatIcon from "../../../components/icons/ChatIcon";
 import SendIcon from "../../../components/icons/SendIcon";
 import TrashIcon from "../../../components/TrashIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constants/theme";
 import { useTheme } from "../../../contexts/ThemeContext";
+import { useAccountType } from "../../../contexts/AccountTypeContext";
+import type { ReportReason } from "../../../constants/chat";
 import {
   appendSharedPrograms,
   loadClientData,
@@ -33,6 +37,9 @@ import {
 } from "../../../utils/trainerStore";
 import { getMyConnections } from "../../../lib/connections";
 import Avatar from "../../../components/Avatar";
+import UnreadBadge from "../../../components/UnreadBadge";
+import { loadThread, loadReads, countUnreadInThread } from "../../../utils/chatStore";
+import { loadHiddenMessageIds, blockContact, unaddContact, reportUser } from "../../../utils/moderation";
 import { getJSON } from "../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
 
@@ -53,14 +60,21 @@ export default function ClientDetailScreen() {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
 
+  const { accountType } = useAccountType();
+
   const [client, setClient] = useState<Client | null>(null);
   const [data, setData] = useState<ClientData>({ workoutHistory: [], programs: [], journal: [] });
+  const [unreadFromClient, setUnreadFromClient] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<Tab>("progress");
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   const [shared, setShared] = useState<SharedProgram[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
   const [tabsWidth, setTabsWidth] = useState(0);
+  // Client options sheet (Report / Block / Remove — Apple Guideline 1.2, same
+  // menu the chat screen offers) + the report-reason picker it can open.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const TABS: readonly Tab[] = useMemo(() => ["progress", "journal", "programs"] as const, []);
   const tabIndex = TABS.indexOf(tab);
@@ -85,11 +99,14 @@ export default function ClientDetailScreen() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     (async () => {
-      const [list, d, progs, sharedAll] = await Promise.all([
+      const [list, d, progs, sharedAll, thread, reads, hidden] = await Promise.all([
         loadClients(),
         id ? loadClientData(id) : Promise.resolve({ workoutHistory: [], programs: [], journal: [] } as ClientData),
         getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
         loadSharedPrograms(),
+        id ? loadThread(id) : Promise.resolve([]),
+        loadReads(),
+        loadHiddenMessageIds(),
       ]);
       let found: Client | null = list.find(c => c.id === id) ?? null;
       if (!found && id) {
@@ -117,6 +134,9 @@ export default function ClientDetailScreen() {
       setData(d);
       setMyPrograms(Array.isArray(progs) ? progs : []);
       setShared(sharedAll);
+      // Unread count from this person for the chat button badge. Re-runs on
+      // focus, so opening the chat (which marks the thread read) clears it.
+      setUnreadFromClient(id ? countUnreadInThread(thread.filter(m => !hidden.has(m.id)), reads[id]) : 0);
       setLoaded(true);
     })();
     return () => { cancelled = true; };
@@ -166,7 +186,68 @@ export default function ClientDetailScreen() {
 
   const openChat = () => {
     if (!client) return;
-    router.push({ pathname: "/trainer/chat/[id]", params: { id: client.id, name: client.name, initials: client.initials } });
+    router.navigate({ pathname: "/trainer/chat/[id]", params: { id: client.id, name: client.name, initials: client.initials, photo: client.photoUri ?? "" } });
+  };
+
+  // Report / Block / Remove — mirrors the chat screen's conversation-options
+  // menu so moderation is reachable from the client page too.
+  const onReportUser = () => { setMenuOpen(false); setReportOpen(true); };
+
+  const onBlock = () => {
+    if (!client) return;
+    setMenuOpen(false);
+    Alert.alert(
+      `Block ${client.name}?`,
+      "They'll be removed from your connections and can no longer message you. You can unblock them later in Settings.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Block", style: "destructive", onPress: async () => {
+          const { severed } = await blockContact(client, accountType);
+          router.back();
+          if (!severed) Alert.alert(`${client.name} is blocked`, "We couldn't reach the server to sever the connection. It will finish when you're back online.");
+        } },
+      ],
+    );
+  };
+
+  const onUnadd = () => {
+    if (!client) return;
+    setMenuOpen(false);
+    Alert.alert(
+      `Remove ${client.name}?`,
+      "This removes your connection. Any programs already shared stay in their library.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: async () => {
+          const { severed } = await unaddContact(client.id, accountType);
+          if (severed) {
+            router.back();
+          } else {
+            // Unlike block, nothing filters an un-added person out while
+            // offline — the connection is genuinely still up, so say so.
+            Alert.alert("Couldn't remove connection", "We couldn't reach the server, so the connection wasn't removed. Check your internet and try again.");
+          }
+        } },
+      ],
+    );
+  };
+
+  const submitReport = async (reason: ReportReason) => {
+    setReportOpen(false);
+    if (!client) return;
+    await reportUser(client, reason);
+    Alert.alert(
+      "Report received",
+      `Thanks — we review reports within 24 hours. Would you also like to block ${client.name}?`,
+      [
+        { text: "Not now", style: "cancel" },
+        { text: "Block", style: "destructive", onPress: async () => {
+          const { severed } = await blockContact(client, accountType);
+          router.back();
+          if (!severed) Alert.alert(`${client.name} is blocked`, "We couldn't reach the server to sever the connection. It will finish when you're back online.");
+        } },
+      ],
+    );
   };
 
   if (!loaded) {
@@ -214,9 +295,24 @@ export default function ClientDetailScreen() {
           <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
         </View>
 
+        <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Client options" accessibilityRole="button">
+          {isGlassEffectAPIAvailable() ? (
+            <GlassView glassEffectStyle="regular" style={styles.iconBtn}>
+              <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+            </GlassView>
+          ) : (
+            <View style={[styles.iconBtn, { backgroundColor: isDark ? t.div : "#fff" }]}>
+              <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+            </View>
+          )}
+        </TouchableOpacity>
+
         <TouchableOpacity onPress={openChat} activeOpacity={0.8} accessibilityLabel="Chat with client" accessibilityRole="button">
-          <View style={[styles.chatBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-            <ChatIcon size={18} color={t.tp} />
+          <View>
+            <View style={[styles.chatBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+              <ChatIcon size={18} color={t.tp} />
+            </View>
+            <UnreadBadge count={unreadFromClient} style={styles.msgBadge} />
           </View>
         </TouchableOpacity>
       </View>
@@ -288,7 +384,7 @@ export default function ClientDetailScreen() {
               </View>
             </BounceButton>
 
-            <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 4 }]}>{client.name.split(" ")[0]}'s Programs</Text>
+            <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 4 }]}>{`${client.name.split(" ")[0]}'s Programs`}</Text>
             {data.programs.length === 0 ? (
               <NeuCard dark={isDark} radius={16}>
                 <Text style={[styles.empty, { color: t.ts }]}>This client has no programs yet.</Text>
@@ -387,6 +483,34 @@ export default function ClientDetailScreen() {
         onPick={handleShare}
         onClose={() => setShareOpen(false)}
       />
+
+      {/* Client options — Report / Block / Remove (same menu as the chat screen) */}
+      <SimpleSheet visible={menuOpen} onClose={() => setMenuOpen(false)}>
+        <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+        <View style={styles.menu}>
+          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onReportUser} accessibilityRole="button" accessibilityLabel={`Report ${client.name}`}>
+            <Ionicons name="flag-outline" size={20} color={t.tp} />
+            <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>
+          </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onBlock} accessibilityRole="button" accessibilityLabel={`Block ${client.name}`}>
+            <Ionicons name="ban-outline" size={20} color={DANGER} />
+            <Text style={[styles.menuText, { color: DANGER }]}>Block</Text>
+          </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onUnadd} accessibilityRole="button" accessibilityLabel={`Remove ${client.name}`}>
+            <Ionicons name="person-remove-outline" size={20} color={t.tp} />
+            <Text style={[styles.menuText, { color: t.tp }]}>Remove connection</Text>
+          </TouchableOpacity>
+        </View>
+      </SimpleSheet>
+
+      <ReportReasonSheet
+        visible={reportOpen}
+        title={`Report ${client.name}`}
+        onSubmit={submitReport}
+        onClose={() => setReportOpen(false)}
+      />
     </View>
   );
 }
@@ -396,6 +520,7 @@ const styles = StyleSheet.create({
   headerCenter:  { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   iconBtn:       { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   chatBtn:       { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  msgBadge:      { position: "absolute", top: -5, right: -5 },
   avatar:        { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   avatarText:    { fontFamily: FontFamily.bold, fontSize: 13 },
   name:          { fontFamily: FontFamily.bold, fontSize: 18, flex: 1 },
@@ -419,4 +544,10 @@ const styles = StyleSheet.create({
   statusText:    { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3 },
   shareBtn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 14, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   shareBtnText:  { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
+  // Options sheet — mirrors the chat screen's menu styles.
+  menuName:      { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
+  menu:          { paddingHorizontal: 16, paddingTop: 4 },
+  menuRow:       { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
+  menuDivider:   { height: 1, marginHorizontal: 8 },
+  menuText:      { fontFamily: FontFamily.semibold, fontSize: 16 },
 });

@@ -32,6 +32,7 @@ import BounceButton from "../components/BounceButton";
 import CollapsibleCard from "../components/CollapsibleCard";
 import ExercisePicker from "../components/ExercisePicker";
 import FadeScreen from "../components/FadeScreen";
+import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import TimeEditSheet from "../components/TimeEditSheet";
 import { computeDurationMins, completedAtISO } from "../components/TimeWheelPicker";
@@ -50,7 +51,9 @@ import { useTheme } from "../contexts/ThemeContext";
 
 const WARMUP_ORANGE = "#ffbf0f";
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const DAY_FULL    = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+// Abbreviated on purpose: with the full name, "Wednesday" was the one day whose
+// chip row didn't fit on a single line and pushed the duration chip down.
+const DAY_SHORT   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 function fmtDuration(secs: number): string {
   if (secs < 60) return `${secs}s`;
@@ -63,7 +66,7 @@ function fmtDuration(secs: number): string {
 
 function workoutMetaParts(completedIso: string, durationSeconds: number): { date: string; time: string; duration: string | null } {
   const d = new Date(completedIso);
-  const dateStr = `${DAY_FULL[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
+  const dateStr = `${DAY_SHORT[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
   const endTime = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
   if (durationSeconds > 0) {
     const startTime = new Date(d.getTime() - durationSeconds * 1000)
@@ -73,30 +76,43 @@ function workoutMetaParts(completedIso: string, durationSeconds: number): { date
   return { date: dateStr, time: endTime, duration: null };
 }
 
-// Icon-led date / time-range / duration row under the workout title. `color`
-// carries the edit-mode state: secondary when viewing, ACCT (with a trailing
-// pencil) when the row is tappable to edit the session time.
-function WorkoutMetaRow({ completedIso, durationSeconds, color, pencil = false }: {
-  completedIso: string; durationSeconds: number; color: string; pencil?: boolean;
+// Date / time-range / duration chips under the workout title. Each stat sits in
+// its own soft pill so the session summary reads at a glance; in edit mode the
+// pills tint ACCT and a solid green Edit chip joins them, so "tap to change the
+// time" is unmistakable (the old treatment was small text that merely turned
+// green).
+function WorkoutMetaRow({ completedIso, durationSeconds, isDark, editable = false }: {
+  completedIso: string; durationSeconds: number; isDark: boolean; editable?: boolean;
 }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
   const parts = workoutMetaParts(completedIso, durationSeconds);
+  const chipBg = editable
+    ? `${ACCT}22`
+    : isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)";
+  // Values stay primary-text in BOTH modes — ACCT green text on the pale green
+  // wash is unreadable in light mode. Editability is signalled by the tinted
+  // background, the green icons, and the solid Edit chip instead.
+  const textColor = t.tp;
+  const iconColor = editable ? ACCT : t.ts;
+  const items: { icon: React.ComponentProps<typeof Ionicons>["name"]; label: string }[] = [
+    { icon: "calendar-outline", label: parts.date },
+    { icon: "time-outline", label: parts.time },
+    ...(parts.duration !== null ? [{ icon: "stopwatch-outline" as const, label: parts.duration }] : []),
+  ];
   return (
     <View style={styles.metaRow}>
-      <View style={styles.metaItem}>
-        <Ionicons name="calendar-outline" size={13} color={color} />
-        <Text style={[styles.metaText, { color }]}>{parts.date}</Text>
-      </View>
-      <View style={styles.metaItem}>
-        <Ionicons name="time-outline" size={14} color={color} />
-        <Text style={[styles.metaText, { color }]}>{parts.time}</Text>
-      </View>
-      {parts.duration !== null && (
-        <View style={styles.metaItem}>
-          <Ionicons name="stopwatch-outline" size={14} color={color} />
-          <Text style={[styles.metaText, { color }]}>{parts.duration}</Text>
+      {items.map(it => (
+        <View key={it.icon} style={[styles.metaChip, { backgroundColor: chipBg }]}>
+          <Ionicons name={it.icon} size={13} color={iconColor} />
+          <Text style={[styles.metaText, { color: textColor }]}>{it.label}</Text>
+        </View>
+      ))}
+      {editable && (
+        <View style={[styles.metaChip, styles.metaEditChip]}>
+          <Ionicons name="pencil" size={12} color="#fff" />
+          <Text style={[styles.metaText, { color: "#fff" }]}>Edit</Text>
         </View>
       )}
-      {pencil && <Ionicons name="pencil" size={13} color={color} />}
     </View>
   );
 }
@@ -428,6 +444,9 @@ export default function WorkoutDetailScreen() {
   const [timeSheetOpen, setTimeSheetOpen]   = useState(false);
   const [reorderOpen, setReorderOpen]       = useState(false);
   const [changingExIdx, setChangingExIdx]   = useState<number | null>(null);
+  // Add-exercise flow (edit mode): shares the ExercisePicker with change-exercise;
+  // this flag switches it to multi-select append.
+  const [addingExercise, setAddingExercise] = useState(false);
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [collapsingSet, setCollapsingSet]   = useState<{ exIdx: number; setIdx: number } | null>(null);
   const [justAddedSet, setJustAddedSet]     = useState<{ exIdx: number; setIdx: number } | null>(null);
@@ -487,11 +506,37 @@ export default function WorkoutDetailScreen() {
     setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name: newName }));
   };
 
+  // Append exercises picked from the ExercisePicker, each starting with one
+  // empty working set (same default as log-workout). The isometric flags array
+  // must grow in lockstep — it's index-aligned with editedExercises.
+  const addExercises = (names: string[]) => {
+    if (names.length === 0) return;
+    setEditedExercises(prev => [
+      ...prev,
+      ...names.map(name => ({
+        name,
+        sets: [{ type: "working" as const, weight: "", reps: "", done: false }],
+        notes: "",
+      })),
+    ]);
+    setEditedIsIsometric(prev => [...prev, ...names.map(() => false)]);
+  };
+
   const handleSave = async () => {
     if (!workout) return;
     const updated = {
       ...workout,
-      exercises: exToKg(editedExercises),  // display units → canonical kg
+      // display units → canonical kg. A filled set on a logged workout was
+      // performed, so mark it done on save — progress stats only count done
+      // working sets, and this edit view has no checkbox (sets added here or
+      // via Add Set start done:false and would otherwise never count). A set
+      // left empty stays not-done and is ignored by stats.
+      exercises: exToKg(editedExercises).map(ex => ({
+        ...ex,
+        sets: ex.sets.map(s =>
+          !s.done && (s.weight.trim() || s.reps.trim()) ? { ...s, done: true } : s,
+        ),
+      })),
       completedAt: editedCompletedAt || workout.completedAt,
       durationSeconds: editedDurationSeconds,
     };
@@ -637,6 +682,8 @@ export default function WorkoutDetailScreen() {
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
+      {/* Blush glow — carries the Journal flow's tint into this detail screen */}
+      <AuroraBackdrop dark={isDark} tint="blush" />
       {/* Top gradient blur */}
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView
@@ -724,7 +771,7 @@ export default function WorkoutDetailScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40, paddingHorizontal: 20 }}
+        contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + (isEditing ? 100 : 40), paddingHorizontal: 20 }}
       >
         {/* Nav title — scrolls with content */}
         <View style={styles.scrollTitleRow}>
@@ -744,10 +791,10 @@ export default function WorkoutDetailScreen() {
                   activeOpacity={0.7}
                   style={{ alignSelf: "flex-start" }}
                 >
-                  <WorkoutMetaRow completedIso={editedCompletedAt || workout.completedAt} durationSeconds={editedDurationSeconds} color={ACCT} pencil />
+                  <WorkoutMetaRow completedIso={editedCompletedAt || workout.completedAt} durationSeconds={editedDurationSeconds} isDark={isDark} editable />
                 </TouchableOpacity>
               ) : (
-                <WorkoutMetaRow completedIso={workout.completedAt} durationSeconds={workout.durationSeconds} color={t.ts} />
+                <WorkoutMetaRow completedIso={workout.completedAt} durationSeconds={workout.durationSeconds} isDark={isDark} />
               )}
             </View>
 
@@ -1061,16 +1108,42 @@ export default function WorkoutDetailScreen() {
                 </CollapsibleCard>
               );
             })}
+
           </>
         )}
       </ScrollView>
+
+      {/* Add an exercise to this logged workout — the same floating round green
+          + used by the workout / log-workout screens, pinned bottom-left while
+          editing. History edits never touch the program — only this
+          CompletedWorkout. */}
+      {isEditing && (
+        <View style={{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 6 }}>
+          <BounceButton
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}
+            accessibilityLabel="Add exercise"
+            accessibilityRole="button"
+          >
+            <View style={styles.addRoundWrap}>
+              <View style={styles.addRoundBtn}>
+                <Ionicons name="add" size={24} color="#fff" />
+              </View>
+            </View>
+          </BounceButton>
+        </View>
+      )}
       <ExercisePicker
-        visible={changingExIdx !== null}
-        subtitle="CHANGE EXERCISE"
+        visible={changingExIdx !== null || addingExercise}
+        subtitle={addingExercise ? "ADD EXERCISES" : "CHANGE EXERCISE"}
         customExercises={customExercises}
         onSelectMultiple={names => {
-          if (names.length > 0 && changingExIdx !== null) changeExercise(changingExIdx, names[0]);
-          setChangingExIdx(null);
+          if (addingExercise) {
+            addExercises(names);
+            setAddingExercise(false);
+          } else {
+            if (names.length > 0 && changingExIdx !== null) changeExercise(changingExIdx, names[0]);
+            setChangingExIdx(null);
+          }
         }}
         onDeleteCustom={name => {
           const next = customExercises.filter(e => e.name !== name);
@@ -1079,7 +1152,7 @@ export default function WorkoutDetailScreen() {
         }}
         onEditCustom={() => {}}
         onCreateCustom={() => {}}
-        onClose={() => setChangingExIdx(null)}
+        onClose={() => { setChangingExIdx(null); setAddingExercise(false); }}
         isDark={isDark}
       />
       <DetailReorderSheet
@@ -1129,9 +1202,10 @@ const styles = StyleSheet.create({
   navBtn:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
 
   title: { fontFamily: FontFamily.bold, fontSize: 26, marginBottom: 4 },
-  metaRow:  { flexDirection: "row", alignItems: "center", flexWrap: "wrap", columnGap: 14, rowGap: 4, marginTop: 2 },
-  metaItem: { flexDirection: "row", alignItems: "center", gap: 5 },
-  metaText: { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
+  metaRow:      { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  metaChip:     { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
+  metaEditChip: { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
+  metaText:     { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
 
   exHeader:    { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 },
   exNumBadge:  { width: 32, height: 32 },
@@ -1153,6 +1227,8 @@ const styles = StyleSheet.create({
   inputCell:    { flex: 1, alignItems: "center", justifyContent: "center" },
   checkCol:     { width: 32, alignItems: "center", justifyContent: "center" },
   removeSetBtn: { width: 24, height: 24, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  addRoundWrap: { borderRadius: 24, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  addRoundBtn:  { width: 44, height: 44, borderRadius: 22, backgroundColor: ACCT, alignItems: "center", justifyContent: "center" },
 
   inputBox:  { width: 80, height: 40, borderRadius: 10, justifyContent: "center" },
   inputText: { fontFamily: FontFamily.bold, fontSize: 15, textAlign: "center", flex: 1, paddingVertical: 0 },

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { Redirect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
 
@@ -17,10 +17,17 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { supabase } from "../lib/supabase";
 import { cloudCounts, pullAllFromCloud, pushAllLocalDataToCloud, syncOnLogin, type SyncCounts } from "../lib/cloud";
-import { oauthRedirectTo, signInWithProvider } from "../lib/auth";
+import { oauthRedirectTo, signInWithProvider, signOut as authSignOut } from "../lib/auth";
 import GoogleIcon from "../components/icons/GoogleIcon";
 
 export default function CloudTestScreen() {
+  // Dev harness only. The Settings row is already __DEV__-gated; this guard
+  // also blocks the avenas://cloud-test deep link in production builds.
+  if (!__DEV__) return <Redirect href="/settings" />;
+  return <CloudTestInner />;
+}
+
+function CloudTestInner() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -62,9 +69,11 @@ export default function CloudTestScreen() {
     return "Signed in.";
   });
   const signOut = () => run("Signing out", async () => {
-    await supabase.auth.signOut();
+    // Guarded sign-out: backs up first and throws (surfaced in the status line)
+    // if the backup fails while local data is at stake.
+    await authSignOut();
     setCounts(null);
-    return "Signed out.";
+    return "Signed out. Latest data backed up.";
   });
   const push = () => run("Pushing local data to cloud", async () => {
     if (!session) throw new Error("Sign in first.");

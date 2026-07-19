@@ -18,6 +18,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
+import AuroraBackdrop from "../components/AuroraBackdrop";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import {
   PROGRAMS_KEY,
@@ -135,6 +136,8 @@ export default function ProgramHistoryDetailScreen() {
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
+      {/* Blush glow — carries the Journal flow's tint into this history screen */}
+      <AuroraBackdrop dark={isDark} tint="blush" />
       {/* Top gradient blur */}
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView
@@ -230,7 +233,7 @@ export default function ProgramHistoryDetailScreen() {
                   style={styles.workoutWrap}
                   onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    router.push({ pathname: "/workout-detail", params: { id: w.id } });
+                    router.navigate({ pathname: "/workout-detail", params: { id: w.id } });
                   }}
                 >
                   <NeuCard dark={isDark} style={styles.workoutCard}>

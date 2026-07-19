@@ -29,9 +29,14 @@ export default function CommunityGuidelinesGate({ onAccept }: { onAccept: () => 
     onAccept();
   };
 
+  // This gate renders inside the tab layout, so the floating tab bar overlays
+  // the bottom of the screen; the pinned action buttons need to clear it (same
+  // reason PTHome/MyPTHome pad their scroll content by insets.bottom + 140).
+  const actionsBottomPad = insets.bottom + 72;
+
   if (declined) {
     return (
-      <View style={[styles.root, { backgroundColor: t.bg, paddingTop: insets.top + 40, paddingBottom: insets.bottom + 24 }]}>
+      <View style={[styles.root, { backgroundColor: t.bg, paddingTop: insets.top + 40, paddingBottom: actionsBottomPad }]}>
         <View style={styles.lockedInner}>
           <View style={[styles.iconWrap, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
             <Ionicons name="lock-closed-outline" size={30} color={t.ts} />
@@ -51,7 +56,7 @@ export default function CommunityGuidelinesGate({ onAccept }: { onAccept: () => 
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg, paddingTop: insets.top + 28, paddingBottom: insets.bottom + 16 }]}>
+    <View style={[styles.root, { backgroundColor: t.bg, paddingTop: insets.top + 28, paddingBottom: actionsBottomPad }]}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
         <View style={[styles.iconWrap, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.16)" }]}>
           <Ionicons name="people-outline" size={30} color={ACCT} />
@@ -76,7 +81,7 @@ export default function CommunityGuidelinesGate({ onAccept }: { onAccept: () => 
 
         <Text
           style={[styles.link, { color: ACCT }]}
-          onPress={() => router.push("/community-guidelines")}
+          onPress={() => router.navigate("/community-guidelines")}
           accessibilityRole="link"
         >
           Read the full guidelines

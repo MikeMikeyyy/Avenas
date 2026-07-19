@@ -25,9 +25,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, BUBBLE_DARK } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
-import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
+import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { batchKeyOf, SENT_PROGRAMS_KEY, SHARED_PROGRAMS_KEY, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
@@ -334,11 +334,13 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
     width: modeTrackWidth.value / 2,
     transform: [{ translateX: modeOffset.value * (modeTrackWidth.value / 2) }],
   }));
+  // White/grey segmented look (matches the Units toggle in Settings and the
+  // Account Type control on Profile): active label = primary text, inactive grey.
   const repsLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(modeOffset.value, [0, 1], ["#ffffff", isDark ? "#8896A7" : "#8896A7"]),
+    color: interpolateColor(modeOffset.value, [0, 1], [t.tp, t.ts]),
   }));
   const holdLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(modeOffset.value, [0, 1], [isDark ? "#8896A7" : "#8896A7", "#ffffff"]),
+    color: interpolateColor(modeOffset.value, [0, 1], [t.ts, t.tp]),
   }));
 
   const [collapsingSetIdx, setCollapsingSetIdx] = useState<number | null>(null);
@@ -405,7 +407,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
         <TouchableOpacity
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push({ pathname: "/exercise-summary", params: { exerciseName: exercise.name } });
+            router.navigate({ pathname: "/exercise-summary", params: { exerciseName: exercise.name } });
           }}
           activeOpacity={0.7}
           accessibilityLabel={`View ${exercise.name} summary`}
@@ -472,10 +474,10 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           </View>
         </TouchableOpacity>
         <View
-          style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
+          style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(118,118,128,0.12)" }]}
           onLayout={e => { modeTrackWidth.value = e.nativeEvent.layout.width - 6; }}
         >
-          <Reanimated.View style={[styles.exTogglePillPill, modePillStyle]} />
+          <Reanimated.View style={[styles.exTogglePillPill, { backgroundColor: isDark ? BUBBLE_DARK : BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 }, modePillStyle]} />
           <TouchableOpacity
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1940,6 +1942,10 @@ export default function NewProgramScreen() {
   const [summaryOpen, setSummaryOpen] = useState(false);
   // First-run coach mark teaching the tap-to-toggle Training/Rest interaction.
   const [showCycleCoach, setShowCycleCoach] = useState(false);
+  // First-run coach mark for Step 2 — two pages: (1) set badges toggle
+  // working/warmup, (2) the green Add Exercise button + multi-select.
+  const [showWorkoutsCoach, setShowWorkoutsCoach] = useState(false);
+  const [workoutsCoachPage, setWorkoutsCoachPage] = useState<1 | 2>(1);
 
   // Show the coach mark once, only when freshly creating a program (never in
   // edit/review/shared flows, where the user already knows the builder).
@@ -1962,6 +1968,28 @@ export default function NewProgramScreen() {
     setShowCycleCoach(false);
     AsyncStorage.setItem(CYCLE_COACHMARK_KEY, "1")
       .catch(e => warnStorage("setItem", CYCLE_COACHMARK_KEY, e));
+  }, []);
+
+  // Step 2 coach mark: same one-shot pattern, but triggered on first ARRIVAL at
+  // the Workouts step (not at mount) so it lands on the screen it explains.
+  useEffect(() => {
+    if (step !== 2 || isEditMode || isReviewMode || isSharedEditMode) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    AsyncStorage.getItem(WORKOUTS_COACHMARK_KEY)
+      .then(seen => {
+        if (cancelled || seen) return;
+        timer = setTimeout(() => { if (!cancelled) setShowWorkoutsCoach(true); }, 450);
+      })
+      .catch(e => warnStorage("getItem", WORKOUTS_COACHMARK_KEY, e));
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [step, isEditMode, isReviewMode, isSharedEditMode]);
+
+  const dismissWorkoutsCoach = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowWorkoutsCoach(false);
+    AsyncStorage.setItem(WORKOUTS_COACHMARK_KEY, "1")
+      .catch(e => warnStorage("setItem", WORKOUTS_COACHMARK_KEY, e));
   }, []);
 
   // Tracks whether the draft has been loaded — prevents auto-save overwriting it before load completes
@@ -2922,12 +2950,12 @@ export default function NewProgramScreen() {
           onCreateCustom={() => {
             pendingPickerDay.current = pickerState?.day ?? null;
             setPickerState(null);
-            router.push("/create-custom-exercise");
+            router.navigate("/create-custom-exercise");
           }}
           onEditCustom={name => {
             pendingPickerDay.current = pickerState?.day ?? null;
             setPickerState(null);
-            router.push({ pathname: "/create-custom-exercise", params: { edit: name } });
+            router.navigate({ pathname: "/create-custom-exercise", params: { edit: name } });
           }}
           onDeleteCustom={deleteCustomExercise}
           onClose={() => setPickerState(null)}
@@ -2968,6 +2996,77 @@ export default function NewProgramScreen() {
                   </View>
                 </View>
               </BounceButton>
+            </NeuCard>
+          </View>
+        </Modal>
+      )}
+
+      {/* First-run coach mark for Step 2, two pages: (1) the set-number badge
+          toggles working/warmup, (2) the green Add Exercise button opens a
+          multi-select picker. Shown once (WORKOUTS_COACHMARK_KEY), only when
+          the Workouts step is visible. Backdrop tap dismisses either page. */}
+      {showWorkoutsCoach && step === 2 && (
+        <Modal visible transparent animationType="fade" onRequestClose={dismissWorkoutsCoach}>
+          <View style={styles.coachBackdrop}>
+            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissWorkoutsCoach} />
+            <NeuCard dark={isDark} radius={24} style={styles.coachCard} innerStyle={styles.coachCardInner}>
+              {workoutsCoachPage === 1 ? (
+                <>
+                  <Text style={[styles.coachTitle, { color: t.tp }]}>Build your workouts</Text>
+                  <Text style={[styles.coachBody, { color: t.ts }]}>
+                    Fill in the weight and reps for every set. Tap a set&apos;s number to switch it between a working set and a warmup.
+                  </Text>
+
+                  {/* Live demo of the two set-badge states */}
+                  <View style={styles.coachDemoRow}>
+                    <View style={[styles.exSetBadge, { borderColor: isDark ? "rgba(255,255,255,0.25)" : t.div }]}>
+                      <Text style={[styles.exSetBadgeText, { color: t.tp }]}>1</Text>
+                    </View>
+                    <Ionicons name="swap-horizontal" size={20} color={t.ts} />
+                    <View style={[styles.exSetBadge, { borderColor: WARMUP_ORANGE }]}>
+                      <Text style={[styles.exSetBadgeText, { color: WARMUP_ORANGE }]}>W</Text>
+                    </View>
+                    <Text style={[styles.coachDemoNote, { color: t.ts }]}>warmup</Text>
+                  </View>
+
+                  <BounceButton
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutsCoachPage(2); }}
+                    accessibilityLabel="Next tip"
+                    accessibilityRole="button"
+                  >
+                    <View style={styles.coachBtnWrap}>
+                      <View style={styles.coachBtn}>
+                        <Text style={styles.coachBtnText}>Next</Text>
+                      </View>
+                    </View>
+                  </BounceButton>
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.coachTitle, { color: t.tp }]}>Add your exercises</Text>
+                  <Text style={[styles.coachBody, { color: t.ts }]}>
+                    Every training day has this button. Tap it to browse exercises, and select as many as you like. They are all added in one go.
+                  </Text>
+
+                  {/* Replica of the per-day Add Exercise button */}
+                  <View style={styles.coachDemoRow}>
+                    <View style={styles.addExBtnWrap}>
+                      <View style={styles.addExBtn}>
+                        <Ionicons name="add" size={18} color="#fff" />
+                        <Text style={styles.addExText}>Add Exercise</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <BounceButton onPress={dismissWorkoutsCoach} accessibilityLabel="Got it" accessibilityRole="button">
+                    <View style={styles.coachBtnWrap}>
+                      <View style={styles.coachBtn}>
+                        <Text style={styles.coachBtnText}>Got it</Text>
+                      </View>
+                    </View>
+                  </BounceButton>
+                </>
+              )}
             </NeuCard>
           </View>
         </Modal>
@@ -3027,6 +3126,7 @@ const styles = StyleSheet.create({
   coachTitle:       { fontFamily: FontFamily.bold, fontSize: 19, textAlign: "center" },
   coachBody:        { fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 20, textAlign: "center", marginTop: 8 },
   coachDemoRow:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 18, marginBottom: 22 },
+  coachDemoNote:    { fontFamily: FontFamily.regular, fontSize: 12 },
   coachBtnWrap:     { borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   coachBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 15, alignItems: "center" },
   coachBtnText:     { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
@@ -3082,7 +3182,7 @@ const styles = StyleSheet.create({
   exRestChip:       { flexDirection: "row", alignItems: "center", gap: 5 },
   exRestChipText:   { fontFamily: FontFamily.semibold, fontSize: 13 },
   exTogglePills:    { flexDirection: "row", borderRadius: 20, padding: 3 },
-  exTogglePillPill: { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  exTogglePillPill: { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 3 },
   exTogglePill:     { paddingHorizontal: 14, paddingVertical: 6, alignItems: "center" },
   exTogglePillText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   exSetHeaderRow:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6, borderTopWidth: 1, paddingRight: 16 },

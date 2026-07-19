@@ -72,7 +72,7 @@ export default function OnboardingScreen() {
       setPage(next);
       scrollRef.current?.scrollTo({ x: next * width, animated: true });
     } else {
-      router.push("/signup");
+      router.navigate("/signup");
     }
   };
 
@@ -130,7 +130,7 @@ export default function OnboardingScreen() {
           </View>
         </BounceButton>
 
-        <TouchableOpacity onPress={() => router.push("/login")} accessibilityRole="button" accessibilityLabel="Log in">
+        <TouchableOpacity onPress={() => router.navigate("/login")} accessibilityRole="button" accessibilityLabel="Log in">
           <Text style={[styles.loginText, { color: t.ts }]}>
             Already have an account? <Text style={{ color: ACCT, fontFamily: FontFamily.bold }}>Log in</Text>
           </Text>

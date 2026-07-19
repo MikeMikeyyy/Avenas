@@ -21,34 +21,44 @@ import { getCacheOwner, pushAllLocalDataToCloud } from "./cloud";
 const DEBOUNCE_MS = 2500;
 
 let timer: ReturnType<typeof setTimeout> | null = null;
-let pushing = false;
-let queuedWhilePushing = false;
+let current: Promise<boolean> | null = null;
+let rearm = false;
 
-async function runPush(): Promise<void> {
-  if (pushing) {
-    // A change arrived while a push was in flight — re-arm so it isn't lost.
-    queuedWhilePushing = true;
-    return;
-  }
-  pushing = true;
+// True = the account's data is safe to abandon (pushed, or there was nothing to
+// push for it: signed out / another account's cache). False = the push FAILED,
+// so this device holds data the cloud doesn't.
+async function doPush(): Promise<boolean> {
   try {
     const { data } = await supabase.auth.getSession();
     const uid = data.session?.user.id;
-    if (!uid) return;
+    if (!uid) return true;
     const owner = await getCacheOwner();
     // owner === null means a pre-backend / not-yet-reconciled cache; reconcile
     // sets it on sign-in, so treat a mismatch (not absence) as "don't push".
-    if (owner !== null && owner !== uid) return;
+    if (owner !== null && owner !== uid) return true;
     await pushAllLocalDataToCloud(uid);
+    return true;
   } catch (e) {
     if (__DEV__) console.warn("[avenas] cloud auto-push", e);
-  } finally {
-    pushing = false;
-    if (queuedWhilePushing) {
-      queuedWhilePushing = false;
+    return false;
+  }
+}
+
+function runPush(): Promise<boolean> {
+  if (current) {
+    // A change arrived while a push was in flight — re-arm so it isn't lost.
+    rearm = true;
+    return current;
+  }
+  current = doPush().then((ok) => {
+    current = null;
+    if (rearm) {
+      rearm = false;
       scheduleCloudPush();
     }
-  }
+    return ok;
+  });
+  return current;
 }
 
 /** Debounce a cloud push. Call after any local data write. */
@@ -69,13 +79,14 @@ export function flushCloudPush(): void {
   void runPush();
 }
 
-/** Await an immediate push (cancelling any pending debounce). Used before sign-out
- *  so the current account's latest local data reaches the cloud while we're still
- *  authenticated. Resolves even if nothing is pushed (e.g. cache-owner mismatch). */
-export async function flushCloudPushNow(): Promise<void> {
+/** Await an immediate push (cancelling any pending debounce). Used before
+ *  sign-out. Resolves true when the account's data is safe (pushed, or nothing
+ *  to push), false when the push failed — the caller decides whether signing
+ *  out is still acceptable. */
+export async function flushCloudPushNow(): Promise<boolean> {
   if (timer) {
     clearTimeout(timer);
     timer = null;
   }
-  await runPush();
+  return runPush();
 }

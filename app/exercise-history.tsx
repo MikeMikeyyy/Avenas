@@ -156,7 +156,7 @@ export default function ExerciseHistoryScreen() {
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push({ pathname: "/workout-detail", params: { id: workoutId } });
+    router.navigate({ pathname: "/workout-detail", params: { id: workoutId } });
   };
 
   return (

@@ -206,7 +206,7 @@ function StartButton({ isTodayCompleted }: { isTodayCompleted: boolean }) {
   const handlePress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (!isTodayCompleted && !isRunning) startTimer();
-    router.push("/(tabs)/workout");
+    router.navigate("/(tabs)/workout");
   };
 
   const arrow = (
@@ -487,7 +487,7 @@ export default function HomeScreen() {
                   <>
                     <Text style={[styles.workoutName, { color: t.tp }]}>NO ACTIVE PROGRAM</Text>
                     <Text style={[styles.metaText, { color: t.ts, marginTop: -8 }]}>Create a program and set it to active or start a custom workout.</Text>
-                    <BounceButton onPress={() => router.push("/(tabs)/workout")}>
+                    <BounceButton onPress={() => router.navigate("/(tabs)/workout")}>
                       <View style={[styles.startBtnDark, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
                         <View style={[styles.startBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
                           <View style={styles.startBtnContent}>
@@ -539,7 +539,7 @@ export default function HomeScreen() {
               <NeuCard dark={isDark} style={styles.quickCard}>
                 <View style={styles.quickInner}>
                   <BounceButton
-                    onPress={a.route !== undefined ? () => router.push(a.route as Parameters<typeof router.push>[0]) : undefined}
+                    onPress={a.route !== undefined ? () => router.navigate(a.route as Parameters<typeof router.push>[0]) : undefined}
                     accessibilityLabel={a.label.replace("\n", " ")}
                     accessibilityRole="button"
                   >
@@ -692,7 +692,7 @@ export default function HomeScreen() {
           const progInfo   = programLookup[w.workoutName] ?? null;
           const sessionNum = sessionNumbers[w.id] ?? 1;
           return (
-            <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.push({ pathname: "/workout-detail", params: { id: w.id } })}>
+            <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}>
               <NeuCard dark={isDark} style={[styles.activityCard, { marginBottom: 0 }]}>
                 <View style={styles.workoutCardInner}>
                   <View style={styles.workoutTopRow}>
@@ -730,7 +730,7 @@ export default function HomeScreen() {
 
       {/* Streak badge — fixed, always visible */}
       <View style={[styles.streakFloat, { top: insets.top + 6 }]}>
-        <BounceButton onPress={() => router.push("/streak")}>
+        <BounceButton onPress={() => router.navigate("/streak")}>
           <View style={styles.streakBadge}>
             <FlameIcon size={36} color={activeColor} />
             <Text style={[styles.streakBadgeText, { color: t.ts }]}>{streakDays}</Text>
@@ -738,7 +738,7 @@ export default function HomeScreen() {
         </BounceButton>
       </View>
 
-      <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]} onPress={() => router.push("/settings")}>
+      <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]} onPress={() => router.navigate("/settings")}>
         <View style={[styles.avatarHighlight, { shadowColor: isDark ? "#4d5363" : "#FFFFFF" }]}>
           <View style={[styles.avatarShadow, { shadowColor: isDark ? "#4d5363" : "#a3afc0" }]}>
             <BlurView intensity={90} tint="extraLight" style={styles.avatarBorder}>

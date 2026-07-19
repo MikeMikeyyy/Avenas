@@ -37,6 +37,17 @@ interface Props {
   onMetricChange: (m: StrengthMetricKey) => void;
 }
 
+// Leading icon per metric: a heavy weight for Total Volume, a rotating icon
+// for Workout Frequency (distinct from the swap arrows used elsewhere), and
+// the app's canonical dumbbell for Muscular Load. Shared by the card header
+// and the metric picker's sheet rows so the list mirrors the header.
+const ICON_SIZE = 18;
+function metricIcon(m: StrengthMetricKey, color: string) {
+  if (m === "volume") return <MaterialCommunityIcons name="weight" size={ICON_SIZE} color={color} />;
+  if (m === "frequency") return <MaterialCommunityIcons name="autorenew" size={ICON_SIZE + 1} color={color} />;
+  return <DumbbellIcon size={ICON_SIZE} color={color} />;
+}
+
 // ─── geometry helpers ────────────────────────────────────────────────────────
 
 function polar(cx: number, cy: number, r: number, deg: number) {
@@ -303,25 +314,12 @@ export default function StrengthRadarChart({
     return polygonPath(cx, cy, points.map(p => vertexRadius(p.prevRaw)));
   }, [points, hasTrendBaseline, fullScale, cx, cy, R]);
 
-  // Leading header icon per metric: a heavy weight for Total Volume, a rotating
-  // icon for Workout Frequency (distinct from the swap arrows used elsewhere),
-  // and the app's canonical dumbbell for Muscular Load.
-  const ICON_SIZE = 18;
-  const metricIcon =
-    metric === "volume" ? (
-      <MaterialCommunityIcons name="weight" size={ICON_SIZE} color={t.ts} />
-    ) : metric === "frequency" ? (
-      <MaterialCommunityIcons name="autorenew" size={ICON_SIZE + 1} color={t.ts} />
-    ) : (
-      <DumbbellIcon size={ICON_SIZE} color={t.ts} />
-    );
-
   return (
     <NeuCard dark={isDark} radius={20} style={{ marginHorizontal: 20, marginTop: 16 }}>
       <View style={styles.inner}>
         <View style={styles.headerRow}>
           <View style={styles.titleWrap}>
-            <View style={{ marginRight: 8 }}>{metricIcon}</View>
+            <View style={{ marginRight: 8 }}>{metricIcon(metric, t.ts)}</View>
             <Text style={[styles.title, { color: t.tp }]} numberOfLines={1}>
               {activeOption.label}
             </Text>
@@ -332,6 +330,7 @@ export default function StrengthRadarChart({
             onChange={onMetricChange}
             sheetTitle="Metric"
             triggerIcon="chevron-expand-outline"
+            renderOptionIcon={k => metricIcon(k, t.ts)}
           />
         </View>
 

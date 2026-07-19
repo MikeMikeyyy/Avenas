@@ -227,7 +227,7 @@ export default function ReviewScreen() {
                       );
                     })}
                   </View>
-                  <BounceButton style={{ marginTop: 12 }} onPress={() => router.push({ pathname: "/new-program", params: { reviewId: entry.id } })}>
+                  <BounceButton style={{ marginTop: 12 }} onPress={() => router.navigate({ pathname: "/new-program", params: { reviewId: entry.id } })}>
                     <NeuCard dark={isDark} radius={14} innerStyle={styles.editBtnInner}>
                       <Ionicons name="create-outline" size={16} color={t.tp} />
                       <Text style={[styles.editBtnText, { color: t.tp }]}>Open in Program Builder</Text>

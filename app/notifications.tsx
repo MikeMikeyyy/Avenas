@@ -1,13 +1,15 @@
 // Notifications — per-category preferences reached from Settings > Account >
 // Notifications. The master switch silences everything; each category can also
-// be toggled on its own. Values persist via NotificationPrefsContext and gate
-// any future delivery site through utils/notifications.isCategoryEnabled.
+// be toggled on its own. Values persist via NotificationPrefsContext, which
+// re-syncs both delivery paths on every change: the on-device schedule
+// (utils/notificationScheduler.ts) and the server-push categories (lib/push.ts).
 //
-// These toggles record intent only. Actually firing OS notifications needs a
-// dev/EAS build + expo-notifications (Expo Go can't deliver them), so the footer
-// points users at iOS Settings for system-level control.
+// Turning something ON asks for OS permission if it was never asked; if the OS
+// has notifications hard-off for Avenas, we say so and offer device Settings
+// (the toggles still persist, so choices apply as soon as permission returns).
 
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
+import { useState } from "react";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Platform, Alert, Linking } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -16,30 +18,67 @@ import { useRouter } from "expo-router";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 
 import NeuCard from "../components/NeuCard";
 import { useTheme } from "../contexts/ThemeContext";
 import { useNotificationPrefs } from "../contexts/NotificationPrefsContext";
-import { NOTIFICATION_SECTIONS } from "../constants/notifications";
+import { NOTIFICATION_SECTIONS, type ReminderTime } from "../constants/notifications";
+import { ensureNotificationPermissions } from "../utils/notificationScheduler";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 
 const TP = APP_LIGHT.tp;
+
+function formatTime({ hour, minute }: ReminderTime): string {
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${h12}:${String(minute).padStart(2, "0")} ${hour < 12 ? "AM" : "PM"}`;
+}
 
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { prefs, setMaster, setCategory } = useNotificationPrefs();
+  const { prefs, setMaster, setCategory, setWorkoutReminderTime } = useNotificationPrefs();
+  const [showTimePicker, setShowTimePicker] = useState(false);
+
+  // Enabling anything is the moment to secure OS permission. If it's been
+  // permanently denied, the toggle would be a silent no-op — say so.
+  const requestPermission = async () => {
+    const granted = await ensureNotificationPermissions(true);
+    if (!granted) {
+      Alert.alert(
+        "Notifications are off for Avenas",
+        "Your choices are saved, but nothing can be delivered until you allow notifications in your device Settings.",
+        [
+          { text: "Not Now", style: "cancel" },
+          { text: "Open Settings", onPress: () => { void Linking.openSettings(); } },
+        ],
+      );
+    }
+  };
 
   const toggleMaster = (val: boolean) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setMaster(val);
+    if (val) void requestPermission();
   };
 
   const toggleCategory = (key: Parameters<typeof setCategory>[0], val: boolean) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCategory(key, val);
+    if (val) void requestPermission();
+  };
+
+  const reminderDate = new Date();
+  reminderDate.setHours(prefs.workoutReminderTime.hour, prefs.workoutReminderTime.minute, 0, 0);
+
+  const onTimeChange = (event: DateTimePickerEvent, date?: Date) => {
+    // Android's picker is a dialog: close it on either outcome. iOS spinner
+    // stays open and streams changes.
+    if (Platform.OS === "android") setShowTimePicker(false);
+    if (event.type === "dismissed" || !date) return;
+    setWorkoutReminderTime({ hour: date.getHours(), minute: date.getMinutes() });
   };
 
   return (
@@ -129,6 +168,41 @@ export default function NotificationsScreen() {
                       thumbColor="#fff"
                     />
                   </View>
+                  {item.key === "workoutReminders" && prefs.master && prefs.categories.workoutReminders && (
+                    <View>
+                      <View style={[styles.divider, { backgroundColor: t.div }]} />
+                      <TouchableOpacity
+                        style={styles.row}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setShowTimePicker((v) => !v);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Change reminder time"
+                      >
+                        <View style={styles.rowLeft}>
+                          <Ionicons name="time-outline" size={20} color={t.icon} />
+                          <View style={styles.rowText}>
+                            <Text style={[styles.rowLabel, { color: t.tp }]}>Reminder time</Text>
+                          </View>
+                        </View>
+                        <Text style={[styles.timeValue, { color: ACCT }]}>
+                          {formatTime(prefs.workoutReminderTime)}
+                        </Text>
+                      </TouchableOpacity>
+                      {showTimePicker && (
+                        <DateTimePicker
+                          value={reminderDate}
+                          mode="time"
+                          display={Platform.OS === "ios" ? "spinner" : "default"}
+                          onChange={onTimeChange}
+                          themeVariant={isDark ? "dark" : "light"}
+                          style={styles.timePicker}
+                        />
+                      )}
+                    </View>
+                  )}
                 </View>
               ))}
             </NeuCard>
@@ -161,5 +235,7 @@ const styles = StyleSheet.create({
   rowText:      { flex: 1, gap: 2 },
   rowLabel:     { fontFamily: FontFamily.regular, fontSize: 16 },
   rowDesc:      { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 16 },
+  timeValue:    { fontFamily: FontFamily.semibold, fontSize: 16 },
+  timePicker:   { alignSelf: "center", marginBottom: 4 },
   footer:       { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, textAlign: "center", marginTop: 4, paddingHorizontal: 12 },
 });

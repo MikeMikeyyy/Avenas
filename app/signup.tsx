@@ -12,7 +12,7 @@ import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { signInWithEmail, signInWithProvider, signUpWithEmail } from "../lib/auth";
+import { oauthOnlyProvidersForEmail, signInWithEmail, signInWithProvider, signUpWithEmail } from "../lib/auth";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -73,7 +73,38 @@ export default function SignupScreen() {
       }
       afterAuth();
     } catch (e) {
-      Alert.alert("Couldn't sign up", e instanceof Error ? e.message : "Please try again.");
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/invalid login/i.test(msg)) {
+        // We only reach here when signUp said the email is already registered
+        // but the password sign-in failed. If it's a Google/Apple-created
+        // account there IS no password: point at the social button instead
+        // of surfacing "Invalid login credentials".
+        const providers = await oauthOnlyProvidersForEmail(email);
+        if (providers.length > 0) {
+          const label = providers.map(p => (p === "google" ? "Google" : "Apple")).join(" or ");
+          Alert.alert(
+            `Use ${label} to log in`,
+            `This email already has an Avenas account through ${label}, so it doesn't have a password. Log in with the "Continue with ${label}" button instead.`,
+            providers.includes("google")
+              ? [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Continue with Google", onPress: () => { void onGoogle(); } },
+                ]
+              : [{ text: "OK" }],
+          );
+        } else {
+          Alert.alert(
+            "Couldn't sign up",
+            "That email already has an account, but the password doesn't match. Try logging in instead.",
+            [
+              { text: "Try again", style: "cancel" },
+              { text: "Log in", onPress: () => router.replace("/login") },
+            ],
+          );
+        }
+      } else {
+        Alert.alert("Couldn't sign up", e instanceof Error ? e.message : "Please try again.");
+      }
     } finally {
       setBusy(false);
     }
@@ -195,7 +226,7 @@ export default function SignupScreen() {
             onPress={onGoogle}
           />
 
-          <TouchableOpacity onPress={() => router.push("/login")} style={styles.switchRow} accessibilityRole="button">
+          <TouchableOpacity onPress={() => router.navigate("/login")} style={styles.switchRow} accessibilityRole="button">
             <Text style={[styles.switchText, { color: t.ts }]}>
               Already have an account? <Text style={{ color: ACCT, fontFamily: FontFamily.bold }}>Log in</Text>
             </Text>

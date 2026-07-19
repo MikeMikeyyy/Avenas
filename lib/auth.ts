@@ -6,6 +6,8 @@ import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { supabase } from "./supabase";
 import { flushCloudPushNow } from "./syncManager";
+import { localCounts } from "./cloud";
+import { unregisterPushToken } from "./push";
 
 // Lets the in-app browser close cleanly when auth returns.
 WebBrowser.maybeCompleteAuthSession();
@@ -48,6 +50,24 @@ export async function signInWithProvider(provider: OAuthProvider): Promise<void>
   if (exchangeError) throw exchangeError;
 }
 
+/**
+ * Which social providers an email logs in with, when the account has NO
+ * password identity (migration 0010's login_providers_for_email). The server
+ * returns [] for unknown emails and for password accounts alike, so a
+ * non-empty result means exactly "this login must go through the returned
+ * provider(s)". Fails soft to [] (offline / migration not applied): callers
+ * then fall back to the generic invalid-credentials message.
+ */
+export async function oauthOnlyProvidersForEmail(email: string): Promise<OAuthProvider[]> {
+  try {
+    const { data, error } = await supabase.rpc("login_providers_for_email", { p_email: email.trim() });
+    if (error || !Array.isArray(data)) return [];
+    return data.filter((p): p is OAuthProvider => p === "google" || p === "apple");
+  } catch {
+    return [];
+  }
+}
+
 export async function signUpWithEmail(email: string, password: string): Promise<void> {
   const { error } = await supabase.auth.signUp({ email: email.trim(), password });
   if (error) throw error;
@@ -58,10 +78,35 @@ export async function signInWithEmail(email: string, password: string): Promise<
   if (error) throw error;
 }
 
-export async function signOut(): Promise<void> {
-  // Save the current account's latest local data to the cloud while we're still
-  // authenticated, so nothing logged just before sign-out is lost when the next
-  // account's sign-in clears the local cache.
-  try { await flushCloudPushNow(); } catch { /* sign out regardless */ }
+/** Thrown when sign-out is refused because the final backup push failed while
+ *  this device still holds the account's data. Signing out anyway would let the
+ *  next account's sign-in wipe the only up-to-date copy. */
+export class SignOutBackupError extends Error {
+  constructor() {
+    super("We couldn't back up your latest data.");
+    this.name = "SignOutBackupError";
+  }
+}
+
+/**
+ * Sign out, backing up the account's latest local data first (a different
+ * account signing in afterwards replaces the local cache, so the cloud must be
+ * current before we let go). If that backup push fails AND there is local data
+ * at stake, this throws SignOutBackupError WITHOUT signing out — callers show
+ * the error and can retry, or pass `force: true` as an explicit
+ * "sign out anyway" once the user accepts the risk.
+ */
+export async function signOut(opts?: { force?: boolean }): Promise<void> {
+  const backedUp = await flushCloudPushNow();
+  if (!backedUp && !opts?.force) {
+    const local = await localCounts().catch(() => null);
+    const hasData =
+      local !== null &&
+      local.programs + local.workouts + local.journal + local.customExercises > 0;
+    if (hasData) throw new SignOutBackupError();
+  }
+  // Stop this device receiving the account's pushes. Best effort, and it must
+  // run BEFORE auth.signOut() (deleting the row needs the session).
+  await unregisterPushToken();
   await supabase.auth.signOut();
 }

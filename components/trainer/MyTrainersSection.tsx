@@ -54,7 +54,7 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
 
   const handleConnect = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push("/connect");
+    router.navigate("/connect");
   }, [router]);
 
   // Tapping a trainer makes them the active (primary) one and returns to

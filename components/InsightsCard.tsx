@@ -23,7 +23,7 @@ export default function InsightsCard({ isDark }: Props) {
   return (
     <BounceButton
       style={styles.wrap}
-      onPress={() => router.push("/insights")}
+      onPress={() => router.navigate("/insights")}
       accessibilityRole="button"
       accessibilityLabel="Open training insights"
     >

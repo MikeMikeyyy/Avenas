@@ -1,12 +1,21 @@
 // utils/chatStore.ts
 //
-// Mock chat data layer (local AsyncStorage only — see constants/chat.ts). Built
-// on utils/storage.ts and the trainerStore people-loaders. All threads live in
-// one CHATS_KEY blob (contactId → messages); few contacts/messages, so a single
-// read/write is the simplest robust store and swaps cleanly to a backend later.
+// Chat data layer the screens talk to. Since migration 0011 this is a HYBRID:
+//   - real connections (contact id = auth uid) → Supabase `messages`/`chat_reads`
+//     via lib/chat.ts, so both accounts see the same thread and history survives
+//     account switches on this device;
+//   - mock-roster people (local non-uuid ids) and signed-out use → the legacy
+//     local AsyncStorage blob (one CHATS_KEY map, contactId → messages).
+// Cloud reads degrade gracefully offline (local-only view); cloud SENDS throw
+// so the UI can tell the user instead of silently keeping a message the other
+// side would never receive.
 
 import { getJSON, setJSON, removeKey } from "./storage";
 import { loadClients, loadCoaches, loadAssignedPT, loadOtherTrainers } from "./trainerStore";
+import {
+  getMyUid, isCloudContactId, fetchAllCloudThreads, fetchCloudThread,
+  sendCloudMessage, sendCloudBroadcast, fetchCloudReads, markCloudThreadRead,
+} from "../lib/chat";
 import { CHATS_KEY, CHAT_READS_KEY, type ChatMessage, type ChatThreads, type ChatReads, type ChatContact } from "../constants/chat";
 import type { AccountType } from "../contexts/AccountTypeContext";
 
@@ -22,51 +31,126 @@ export async function loadChatContacts(accountType: AccountType): Promise<ChatCo
   const out: ChatContact[] = [];
   if (accountType === "pt") {
     const [clients, coaches] = await Promise.all([loadClients(), loadCoaches()]);
-    for (const c of clients) out.push({ id: c.id, name: c.name, initials: c.initials, subtitle: c.note || "Client" });
-    for (const c of coaches) out.push({ id: c.id, name: c.name, initials: c.initials, subtitle: "Coach" });
+    for (const c of clients) out.push({ id: c.id, name: c.name, initials: c.initials, subtitle: c.note || "Client", photoUri: c.photoUri });
+    for (const c of coaches) out.push({ id: c.id, name: c.name, initials: c.initials, subtitle: "Coach", photoUri: c.photoUri });
   } else {
     const [primary, others] = await Promise.all([loadAssignedPT(), loadOtherTrainers()]);
-    if (primary) out.push({ id: primary.id, name: primary.name, initials: primary.initials, subtitle: "Your trainer" });
-    for (const tr of others) out.push({ id: tr.id, name: tr.name, initials: tr.initials, subtitle: "Trainer" });
+    if (primary) out.push({ id: primary.id, name: primary.name, initials: primary.initials, subtitle: "Your trainer", photoUri: primary.photoUri });
+    for (const tr of others) out.push({ id: tr.id, name: tr.name, initials: tr.initials, subtitle: "Trainer", photoUri: tr.photoUri });
   }
   const seen = new Set<string>();
   return out.filter(c => (seen.has(c.id) ? false : (seen.add(c.id), true)));
 }
 
-// ─── threads ─────────────────────────────────────────────────────────────────
+// ─── local blob (legacy mock threads) ────────────────────────────────────────
 
-export async function loadAllChats(): Promise<ChatThreads> {
-  return getJSON<ChatThreads>(CHATS_KEY, {});
+/**
+ * The local threads map, stripping any legacy demo-seed messages. Earlier
+ * builds injected synthetic `seed_*` inbound messages with Date.now()-relative
+ * timestamps; we no longer seed, and leftovers from older builds are pruned
+ * here on load so the bogus "Today" messages clean themselves up.
+ */
+async function loadLocalThreads(): Promise<ChatThreads> {
+  const all = await getJSON<ChatThreads>(CHATS_KEY, {});
+  let changed = false;
+  for (const id of Object.keys(all)) {
+    const pruned = all[id].filter(m => !m.id.startsWith("seed_"));
+    if (pruned.length !== all[id].length) {
+      all[id] = pruned;
+      changed = true;
+    }
+  }
+  if (changed) await setJSON(CHATS_KEY, all);
+  return all;
 }
 
 /** Wipe local chat threads + read state. Called on account delete / switch so
- *  one account's conversations don't leak into the next (see clearLocalUserData). */
+ *  one account's conversations don't leak into the next (see clearLocalUserData).
+ *  Cloud threads are untouched — they belong to the account, not the device. */
 export async function clearChatData(): Promise<void> {
   await Promise.all([removeKey(CHATS_KEY), removeKey(CHAT_READS_KEY)]);
 }
 
+// ─── threads (merged local + cloud) ──────────────────────────────────────────
+
+const byTime = (a: ChatMessage, b: ChatMessage) =>
+  new Date(a.sentAtISO).getTime() - new Date(b.sentAtISO).getTime();
+
+/** Interleave a thread's local (pre-0011 / mock) and cloud messages by time.
+ *  The id spaces are disjoint, so no dedupe is needed. */
+function mergeThreads(local: ChatMessage[] | undefined, cloud: ChatMessage[]): ChatMessage[] {
+  if (!local || local.length === 0) return cloud;
+  return [...local, ...cloud].sort(byTime);
+}
+
+/** Every conversation, contactId → messages oldest → newest. Cloud threads are
+ *  merged in when signed in; offline (or signed out) falls back to local only. */
+export async function loadAllThreads(): Promise<ChatThreads> {
+  const local = await loadLocalThreads();
+  const uid = await getMyUid();
+  if (!uid) return local;
+  try {
+    const cloud = await fetchAllCloudThreads(uid);
+    const merged: ChatThreads = { ...local };
+    for (const [peer, msgs] of Object.entries(cloud)) merged[peer] = mergeThreads(local[peer], msgs);
+    return merged;
+  } catch (err) {
+    if (__DEV__) console.warn("[avenas] load cloud threads", err);
+    return local;
+  }
+}
+
 /** Messages for one contact, oldest → newest ([] if none). */
 export async function loadThread(contactId: string): Promise<ChatMessage[]> {
-  const all = await loadAllChats();
-  return all[contactId] ?? [];
+  const local = (await loadLocalThreads())[contactId] ?? [];
+  const uid = await getMyUid();
+  if (!uid || !isCloudContactId(contactId)) return local;
+  try {
+    return mergeThreads(local, await fetchCloudThread(uid, contactId));
+  } catch (err) {
+    if (__DEV__) console.warn("[avenas] load cloud thread", contactId, err);
+    return local;
+  }
 }
 
 // ─── read receipts (unread badges) ───────────────────────────────────────────
 
-/** contactId → ISO time the thread was last opened ({} if none). */
+/** contactId → ISO time the thread was last opened ({} if none). Cloud stamps
+ *  (which survive account switches) are merged in; newest stamp wins. */
 export async function loadReads(): Promise<ChatReads> {
-  return getJSON<ChatReads>(CHAT_READS_KEY, {});
+  const local = await getJSON<ChatReads>(CHAT_READS_KEY, {});
+  const uid = await getMyUid();
+  if (!uid) return local;
+  try {
+    const cloud = await fetchCloudReads(uid);
+    const merged: ChatReads = { ...local };
+    for (const [peer, iso] of Object.entries(cloud)) {
+      const l = merged[peer];
+      if (!l || new Date(iso).getTime() > new Date(l).getTime()) merged[peer] = iso;
+    }
+    return merged;
+  } catch (err) {
+    if (__DEV__) console.warn("[avenas] load cloud reads", err);
+    return local;
+  }
 }
 
 /**
  * Mark a thread read as of now — opening a conversation clears its unread badge
  * in the messages list. A later inbound message (sentAtISO after this stamp)
- * would surface as unread again.
+ * would surface as unread again. The cloud stamp is best-effort: a failure only
+ * costs badge accuracy on the next device, never blocks the UI.
  */
 export async function markThreadRead(contactId: string): Promise<void> {
-  const reads = await loadReads();
-  reads[contactId] = new Date().toISOString();
-  await setJSON(CHAT_READS_KEY, reads);
+  const local = await getJSON<ChatReads>(CHAT_READS_KEY, {});
+  local[contactId] = new Date().toISOString();
+  await setJSON(CHAT_READS_KEY, local);
+  const uid = await getMyUid();
+  if (uid && isCloudContactId(contactId)) {
+    markCloudThreadRead(uid, contactId).catch(err => {
+      if (__DEV__) console.warn("[avenas] mark cloud read", contactId, err);
+    });
+  }
 }
 
 /**
@@ -85,64 +169,48 @@ export function countUnreadInThread(msgs: ChatMessage[], lastReadISO?: string): 
   return n;
 }
 
+// ─── sending ─────────────────────────────────────────────────────────────────
+
 // Collision-proof even within the same millisecond (broadcast loops).
 function newId(suffix = ""): string {
   return `chat_${Date.now()}_${Math.floor(Math.random() * 1e6)}${suffix}`;
 }
 
-/** Append the user's message to one thread; returns the stored message. */
-export async function appendMessage(contactId: string, text: string): Promise<ChatMessage> {
-  const all = await loadAllChats();
-  const msg: ChatMessage = { id: newId(), mine: true, text: text.trim(), sentAtISO: new Date().toISOString() };
-  all[contactId] = [...(all[contactId] ?? []), msg];
+async function appendLocalMessages(contactIds: string[], text: string): Promise<ChatMessage[]> {
+  const all = await getJSON<ChatThreads>(CHATS_KEY, {});
+  const now = new Date().toISOString();
+  const body = text.trim();
+  const msgs = contactIds.map((cid, i) => {
+    const msg: ChatMessage = { id: newId(contactIds.length > 1 ? `_${i}` : ""), mine: true, text: body, sentAtISO: now };
+    all[cid] = [...(all[cid] ?? []), msg];
+    return msg;
+  });
   await setJSON(CHATS_KEY, all);
+  return msgs;
+}
+
+/** Send one message; returns the stored message. Real connections go through
+ *  the backend and THROW on failure (the screen alerts and restores the draft);
+ *  mock contacts append to the local blob as before. */
+export async function appendMessage(contactId: string, text: string): Promise<ChatMessage> {
+  const uid = await getMyUid();
+  if (uid && isCloudContactId(contactId)) {
+    return sendCloudMessage(uid, contactId, text.trim());
+  }
+  const [msg] = await appendLocalMessages([contactId], text);
   return msg;
 }
 
 /**
  * Broadcast one message to several contacts' individual threads (a separate
  * entry per thread). Mirrors the "send a program to multiple people" flow in
- * PTHome — it's not a group chat, each conversation stays 1:1.
+ * PTHome — it's not a group chat, each conversation stays 1:1. Real connections
+ * go in one backend insert (throws on failure); mock contacts stay local.
  */
 export async function broadcastMessage(contactIds: string[], text: string): Promise<void> {
-  const all = await loadAllChats();
-  const now = new Date().toISOString();
-  const body = text.trim();
-  contactIds.forEach((cid, i) => {
-    const msg: ChatMessage = { id: newId(`_${i}`), mine: true, text: body, sentAtISO: now };
-    all[cid] = [...(all[cid] ?? []), msg];
-  });
-  await setJSON(CHATS_KEY, all);
-}
-
-// ─── threads map (with legacy demo-seed cleanup) ─────────────────────────────
-
-/**
- * Returns the full chat-threads map, stripping any legacy demo-seed messages.
- *
- * Earlier builds injected a couple of synthetic "inbound" messages for any
- * contact that had no thread yet, to make conversations look alive. Those
- * carried a seed-time (Date.now()-relative) timestamp, so they always rendered
- * as "Today" and — worse — were regenerated whenever a contact appeared under a
- * new id (e.g. a real connection merged into the messages list), fabricating
- * fresh "Today" messages from real people. We no longer seed: a thread only ever
- * holds messages that were actually sent (which carry an accurate sentAtISO).
- * Any leftover `seed_*` messages from older builds are pruned here on load, so
- * the bogus "Today" trial messages clean themselves up.
- *
- * `_contacts` is unused now but kept so callers can keep passing the list they
- * are about to render.
- */
-export async function ensureSeededContacts(_contacts: ChatContact[]): Promise<ChatThreads> {
-  const all = await loadAllChats();
-  let changed = false;
-  for (const id of Object.keys(all)) {
-    const pruned = all[id].filter(m => !m.id.startsWith("seed_"));
-    if (pruned.length !== all[id].length) {
-      all[id] = pruned;
-      changed = true;
-    }
-  }
-  if (changed) await setJSON(CHATS_KEY, all);
-  return all;
+  const uid = await getMyUid();
+  const cloudIds = uid ? contactIds.filter(isCloudContactId) : [];
+  const localIds = contactIds.filter(id => !cloudIds.includes(id));
+  if (localIds.length > 0) await appendLocalMessages(localIds, text);
+  if (uid && cloudIds.length > 0) await sendCloudBroadcast(uid, cloudIds, text.trim());
 }

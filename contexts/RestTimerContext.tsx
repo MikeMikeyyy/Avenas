@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useRef, useEffect, useCallback } from "react";
 import { AppState } from "react-native";
+import { scheduleRestTimerAlert, cancelRestTimerAlert } from "../utils/notificationScheduler";
 
 type RestTimerCtx = {
   restDisplay: number;
@@ -27,6 +28,10 @@ export function RestTimerProvider({ children }: { children: React.ReactNode }) {
     restTimerEndRef.current = null;
     setRestEndsAt(null);
     setRestBannerActive(false);
+    // Covers user dismissal AND natural in-app expiry; the OS alert is only
+    // wanted when the app is backgrounded at t=0 (foreground fire is suppressed
+    // by the handler anyway, this just keeps the pending queue clean).
+    cancelRestTimerAlert();
   }, []);
 
   useEffect(() => {
@@ -54,6 +59,9 @@ export function RestTimerProvider({ children }: { children: React.ReactNode }) {
       setRestDisplay(seconds);
       setRestTotal(seconds);
       setRestBannerActive(true);
+      // Fires only if the app is backgrounded when the rest ends (prefs-gated,
+      // foreground-suppressed). Replaces any previous pending alert.
+      scheduleRestTimerAlert(end);
     } else {
       dismissRestTimer();
     }
@@ -66,6 +74,7 @@ export function RestTimerProvider({ children }: { children: React.ReactNode }) {
     restTimerEndRef.current = newEnd;
     setRestEndsAt(newEnd);
     setRestDisplay(Math.ceil((newEnd - Date.now()) / 1000));
+    scheduleRestTimerAlert(newEnd);
   }, [dismissRestTimer]);
 
   return (

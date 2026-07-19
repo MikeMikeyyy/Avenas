@@ -24,6 +24,7 @@ import type { AccountType } from "../contexts/AccountTypeContext";
 import { clearTrainerData } from "../utils/trainerStore";
 import { clearChatData } from "../utils/chatStore";
 import { clearModerationData } from "../utils/moderation";
+import { unregisterPushToken } from "./push";
 
 export type SyncCounts = {
   programs: number;
@@ -95,44 +96,70 @@ export async function cloudCounts(userId: string): Promise<SyncCounts> {
   return { programs, workouts, journal, customExercises };
 }
 
+/** Everything the cloud holds for one account, fetched but not yet written. */
+type CloudSnapshot = {
+  programs: SavedProgram[];
+  workouts: CompletedWorkout[];
+  journal: JournalEntry[];
+  custom: CustomExercise[];
+};
+
 /**
- * Pull this user's cloud data down and OVERWRITE the local AsyncStorage cache
- * with it (cloud is the source of truth). Because the screens already read
- * AsyncStorage, this is what makes data appear on a freshly signed-in device.
- * workout_dates is rebuilt from the pulled workouts.
+ * Download every dataset for `userId`. Network only — throws on ANY failure
+ * WITHOUT touching local storage, so callers get an all-or-nothing snapshot
+ * and a failed download can never leave the device half-written or wiped.
  */
-export async function pullAllFromCloud(userId: string): Promise<SyncCounts> {
+async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
   const { data: progRows, error: pe } = await supabase.from("programs").select("*").eq("user_id", userId);
   if (pe) throw new Error(`pull programs: ${pe.message}`);
-  const programs = ((progRows ?? []) as ProgramRow[]).map(programFromRow);
-  await setJSON(PROGRAMS_KEY, programs);
 
   const { data: woRows, error: we } = await supabase
     .from("workouts").select("*").eq("user_id", userId)
     .order("completed_at", { ascending: false });  // history is newest-first
   if (we) throw new Error(`pull workouts: ${we.message}`);
-  const workouts = ((woRows ?? []) as WorkoutRow[]).map(workoutFromRow);
-  await setJSON(WORKOUT_HISTORY_KEY, workouts);
-  await setJSON(WORKOUT_DATES_KEY, Array.from(new Set(workouts.map((w) => w.date))));
 
   const { data: jRows, error: je } = await supabase
     .from("journal_entries").select("*").eq("user_id", userId)
     .order("created_at", { ascending: false });
   if (je) throw new Error(`pull journal: ${je.message}`);
-  const journal = ((jRows ?? []) as JournalRow[]).map(journalFromRow);
-  await setJSON(JOURNAL_KEY, journal);
 
   const { data: cRows, error: ce } = await supabase.from("custom_exercises").select("*").eq("user_id", userId);
   if (ce) throw new Error(`pull custom exercises: ${ce.message}`);
-  const custom = ((cRows ?? []) as CustomExerciseRow[]).map(customFromRow);
-  await setJSON(CUSTOM_KEY, custom);
 
   return {
-    programs: programs.length,
-    workouts: workouts.length,
-    journal: journal.length,
-    customExercises: custom.length,
+    programs: ((progRows ?? []) as ProgramRow[]).map(programFromRow),
+    workouts: ((woRows ?? []) as WorkoutRow[]).map(workoutFromRow),
+    journal: ((jRows ?? []) as JournalRow[]).map(journalFromRow),
+    custom: ((cRows ?? []) as CustomExerciseRow[]).map(customFromRow),
   };
+}
+
+/** Overwrite the local cache with a fetched snapshot (cloud is the source of
+ *  truth). workout_dates is rebuilt from the snapshot's workouts. */
+async function writeSnapshotToLocal(snap: CloudSnapshot): Promise<void> {
+  await setJSON(PROGRAMS_KEY, snap.programs);
+  await setJSON(WORKOUT_HISTORY_KEY, snap.workouts);
+  await setJSON(WORKOUT_DATES_KEY, Array.from(new Set(snap.workouts.map((w) => w.date))));
+  await setJSON(JOURNAL_KEY, snap.journal);
+  await setJSON(CUSTOM_KEY, snap.custom);
+}
+
+const snapshotCounts = (s: CloudSnapshot): SyncCounts => ({
+  programs: s.programs.length,
+  workouts: s.workouts.length,
+  journal: s.journal.length,
+  customExercises: s.custom.length,
+});
+
+/**
+ * Pull this user's cloud data down and OVERWRITE the local AsyncStorage cache
+ * with it. All four datasets are fetched before anything is written, so a
+ * network failure mid-pull leaves local storage exactly as it was.
+ */
+export async function pullAllFromCloud(userId: string): Promise<SyncCounts> {
+  const snap = await fetchAllFromCloud(userId);
+  await writeSnapshotToLocal(snap);
+  return snapshotCounts(snap);
 }
 
 /** Row counts currently in local AsyncStorage. */
@@ -193,6 +220,10 @@ export async function setCacheOwner(userId: string): Promise<void> {
 export async function deleteAccount(): Promise<void> {
   const { error } = await supabase.rpc("delete_own_account");
   if (error) throw new Error(error.message);
+  // Server-side push_tokens rows are already gone (FK cascade from the deleted
+  // auth user); this clears the locally-cached token so the next account on
+  // this device starts clean. Best effort by design.
+  await unregisterPushToken();
   await clearLocalUserData();
   await removeKey(CACHE_OWNER_KEY);
   await supabase.auth.signOut();
@@ -217,29 +248,71 @@ export async function clearLocalUserData(): Promise<void> {
   ]);
 }
 
+/** Thrown when an account switch can't download the new account's data. The
+ *  switch is aborted with local storage untouched; the caller should cancel the
+ *  sign-in (sign back out) and tell the user, instead of leaving a wiped device. */
+export class AccountSwitchLoadError extends Error {
+  constructor(cause: string) {
+    super(`account switch: ${cause}`);
+    this.name = "AccountSwitchLoadError";
+  }
+}
+
+export type ReconcileResult =
+  | "kept"           // same account — local kept, any empty side seeded
+  | "replaced"       // different account — local replaced with its cloud data
+  | "import_choice"; // unclaimed local data found — the UI must ask the user (see below)
+
 /**
  * Reconcile the local cache to the signed-in account:
  *   - same account as before → keep local edits, seed any empty side
- *   - any other account (incl. a brand-new one) → clear local and load THIS
- *     account's cloud data. An empty cloud ⇒ an empty account, as expected.
- *
- * NOTE: this never auto-imports stray on-device data into a new account, so a
- * new account always starts empty. (Migrating a pre-backend user's local data
- * into their first account, if we want it for release, should be an explicit
- * "import your existing data?" prompt — not a silent adopt.)
+ *   - unclaimed local data (no cache owner yet: a pre-backend install or an
+ *     upgrade from before the owner marker) → return "import_choice" WITHOUT
+ *     touching anything. It may be months of this very user's offline training,
+ *     so the caller asks whether to keep it (keepDeviceData) or replace it with
+ *     the account's cloud copy (useCloudData). Never silently wiped.
+ *   - any other account → download that account's cloud snapshot FIRST, and
+ *     only then clear local and write it. A failed download throws
+ *     AccountSwitchLoadError with the device untouched.
  */
-export async function reconcileOnSignIn(userId: string): Promise<"kept" | "replaced"> {
+export async function reconcileOnSignIn(userId: string): Promise<ReconcileResult> {
   const owner = await getCacheOwner();
   if (owner === userId) {
     await syncOnLogin(userId);
     return "kept";
   }
 
+  if (owner === null && total(await localCounts()) > 0) {
+    return "import_choice";
+  }
+
+  let snap: CloudSnapshot;
+  try {
+    snap = await fetchAllFromCloud(userId);
+  } catch (e) {
+    throw new AccountSwitchLoadError(e instanceof Error ? e.message : String(e));
+  }
   await clearLocalUserData();
-  const cloud = await cloudCounts(userId);
-  if (total(cloud) > 0) await pullAllFromCloud(userId);
+  await writeSnapshotToLocal(snap);
   await setCacheOwner(userId);
   return "replaced";
+}
+
+/** "import_choice" resolution: keep what's on the device. Claims the cache for
+ *  this account and uploads it, so the cloud mirrors what the user chose. */
+export async function keepDeviceData(userId: string): Promise<void> {
+  await setCacheOwner(userId);
+  await pushAllLocalDataToCloud(userId);
+}
+
+/** "import_choice" resolution: discard the on-device data and use the account's
+ *  cloud copy. Fetch-first, so a failed download leaves the device untouched.
+ *  (Not `use`-prefixed — it would read as a React hook.) */
+export async function replaceWithCloudData(userId: string): Promise<void> {
+  const snap = await fetchAllFromCloud(userId);
+  await clearLocalUserData();
+  await writeSnapshotToLocal(snap);
+  await setCacheOwner(userId);
 }
 
 // ── per-account profile (name + role + unit) ───────────────────────────────────

@@ -1,10 +1,9 @@
 // constants/chat.ts
 //
-// Local, mock chat for the Trainer section. There is no backend yet — messages
-// persist on-device only. `mine` distinguishes the user's own sends from the
-// seeded inbound demo messages (the "other side" never live-replies). All
-// threads live in a single AsyncStorage blob keyed by the contact's id, written
-// through utils/storage.ts (getJSON/setJSON), matching the trainerStore pattern.
+// Chat types + storage keys for the Trainer section. Real connections message
+// through Supabase (migration 0011, lib/chat.ts); the AsyncStorage blob below
+// only holds threads with local mock-roster contacts and pre-0011 leftovers.
+// utils/chatStore.ts routes between the two per contact.
 
 export const CHATS_KEY = "@avenas/chats";
 
@@ -22,7 +21,7 @@ export const HIDDEN_MESSAGES_KEY = "@avenas/hidden_messages";
 
 export type ChatMessage = {
   id: string;
-  /** true = sent by this device's user; false = received (seeded demo for now). */
+  /** true = sent by the current account; false = received from the contact. */
   mine: boolean;
   text: string;
   sentAtISO: string;
@@ -77,6 +76,8 @@ export type ChatContact = {
   name: string;
   initials: string;
   subtitle?: string;
+  /** Profile photo URL (real connected accounts); initials fallback when absent. */
+  photoUri?: string;
 };
 
 // 2-colour blend for SENT bubbles — on-brand teal → aqua. Close hues give a

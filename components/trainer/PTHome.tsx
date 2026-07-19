@@ -332,12 +332,15 @@ export default function PTHome() {
         // Without this the keyboard eats the first tap on any button (incl. the
         // search-close X) while the search field is focused, forcing a double tap.
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top, paddingBottom: insets.bottom + 140 }}
+        // +14 top: exactly the floating-chrome line pushed screens use
+        // (my-trainers back/plus sit at insets.top+14). Keep in sync with
+        // MyPTHome so both hub views share the same first-row line.
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 14, paddingBottom: insets.bottom + 140 }}
       >
         <View style={styles.coachesRow}>
           <BounceButton
             style={styles.coachesBtnWrap}
-            onPress={() => router.push("/trainer/coaches")}
+            onPress={() => router.navigate("/trainer/coaches")}
             accessibilityLabel="Open my trainers"
           >
             <View style={[styles.coachesBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
@@ -346,7 +349,7 @@ export default function PTHome() {
             </View>
           </BounceButton>
           <View style={{ flex: 1 }} />
-          <BounceButton onPress={() => router.push("/trainer/messages")} accessibilityLabel="Open messages">
+          <BounceButton onPress={() => router.navigate("/trainer/messages")} accessibilityLabel="Open messages">
             <View>
               <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
                 <ChatIcon size={18} color={t.tp} />
@@ -354,7 +357,7 @@ export default function PTHome() {
               <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
             </View>
           </BounceButton>
-          <BounceButton onPress={() => router.push("/connect")} accessibilityLabel="Connect with someone">
+          <BounceButton onPress={() => router.navigate("/connect")} accessibilityLabel="Connect with someone">
             <View>
               <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
                 <Ionicons name="add" size={24} color={t.tp} />
@@ -430,7 +433,7 @@ export default function PTHome() {
             {filtered.map((c, i) => (
               <TouchableOpacity
                 key={c.id}
-                onPress={() => router.push({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
+                onPress={() => router.navigate({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${c.name}`}
@@ -457,7 +460,7 @@ export default function PTHome() {
               // entries aren't in the map and keep their stored value.
               client={presenceById.has(c.id) ? { ...c, lastActiveISO: presenceById.get(c.id) ?? undefined } : c}
               activeProgramName={activeProgramByClient[c.id]}
-              onPress={() => router.push({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
+              onPress={() => router.navigate({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
             />
           ))
         )}
@@ -475,7 +478,7 @@ export default function PTHome() {
                   return (
                     <TouchableOpacity
                       key={b.key}
-                      onPress={() => router.push({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
+                      onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
                       activeOpacity={0.7}
                       accessibilityRole="button"
                       accessibilityLabel={`View ${b.programName}`}
@@ -580,7 +583,7 @@ export default function PTHome() {
                           <View style={styles.sharedActionRow}>
                             <BounceButton
                               style={{ flex: 2 }}
-                              onPress={() => router.push({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
+                              onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
                               accessibilityLabel={`View ${b.programName}`}
                             >
                               <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
@@ -624,7 +627,7 @@ export default function PTHome() {
                   return (
                     <TouchableOpacity
                       key={r.id}
-                      onPress={() => router.push({ pathname: "/trainer/review/[id]", params: { id: r.id } })}
+                      onPress={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id } })}
                       activeOpacity={0.7}
                       accessibilityRole="button"
                       accessibilityLabel={`Open review for ${r.programName}`}
@@ -697,7 +700,7 @@ export default function PTHome() {
                           entering={FadeIn.duration(180)}
                           exiting={FadeOut.duration(140)}
                         >
-                          <BounceButton onPress={() => router.push({ pathname: "/trainer/review/[id]", params: { id: r.id } })}>
+                          <BounceButton onPress={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id } })}>
                             <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
                               <Text style={[styles.reviewBtnText, { color: t.tp }]}>
                                 {returned ? "View Review" : "Edit & Send Back"}

@@ -49,6 +49,22 @@ export type ConnectionWithProfile = {
   direction: "accepted" | "incoming" | "outgoing";
 };
 
+// ── chat (account-to-account messages; migration 0011) ────────────────────────
+export type MessageRow = {
+  id: string;
+  sender_id: string;
+  recipient_id: string;
+  body: string;
+  created_at: string;
+};
+
+/** Per-peer "last read" stamp for the caller — drives the unread badges. */
+export type ChatReadRow = {
+  user_id: string;
+  peer_id: string;
+  last_read_at: string;
+};
+
 export type ProgramRow = {
   id: string;
   user_id: string;
@@ -102,6 +118,19 @@ export type CustomExerciseRow = {
   steps: string[] | null;
   muted: boolean;
   created_at: string;
+  updated_at: string;
+};
+
+// ── push tokens (server-sent notifications; migration 0012) ───────────────────
+// Written only through the register_push_token RPC (see lib/push.ts); the row
+// shape here is for reads/deletes.
+export type PushTokenRow = {
+  user_id: string;
+  token: string;
+  platform: string;
+  /** Effective push-category switches, e.g. { coachMessages: boolean }. A
+   *  missing key counts as enabled server-side. */
+  categories: Record<string, boolean>;
   updated_at: string;
 };
 

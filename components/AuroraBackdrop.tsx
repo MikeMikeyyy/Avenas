@@ -16,8 +16,11 @@ const TINT_BLOBS: Record<AuroraTint, Blob[]> = {
     { color: AURORA.aqua,  o: 0.16, cx: 0.95, cy: 0.16, rx: 0.72, ry: 0.46 },
     { color: AURORA.blush, o: 0.13, cx: 0.55, cy: 0.62, rx: 0.85, ry: 0.42 },
   ],
+  // Mint's base (ACCT) is far more electric than aqua/blush, so its lead blob
+  // runs at a lower opacity to land at the same perceived weight as the other
+  // two pages' glows.
   green: [
-    { color: AURORA.mint,  o: 0.20, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
+    { color: AURORA.mint,  o: 0.14, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
     { color: AURORA.aqua,  o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },
   ],
   aqua: [

@@ -12,7 +12,7 @@ import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { signInWithEmail, signInWithProvider, signOut } from "../lib/auth";
+import { oauthOnlyProvidersForEmail, signInWithEmail, signInWithProvider, signOut } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { pullProfile } from "../lib/cloud";
 
@@ -66,14 +66,33 @@ export default function LoginScreen() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (/invalid login/i.test(msg)) {
-        Alert.alert(
-          "Account not found",
-          "We couldn't log you in with that email and password. If you're new to Avenas, sign up to create an account.",
-          [
-            { text: "Try again", style: "cancel" },
-            { text: "Sign up", onPress: () => router.replace("/signup") },
-          ],
-        );
+        // A Google/Apple-created account has no password, and Supabase's
+        // invalid-credentials error is identical to "no such account". Ask
+        // the server whether this email is an OAuth-only account so we can
+        // point at the right button instead of claiming it doesn't exist.
+        const providers = await oauthOnlyProvidersForEmail(email);
+        if (providers.length > 0) {
+          const label = providers.map(p => (p === "google" ? "Google" : "Apple")).join(" or ");
+          Alert.alert(
+            `Use ${label} to log in`,
+            `This account was created with ${label}, so it doesn't have a password. Log in with the "Continue with ${label}" button instead.`,
+            providers.includes("google")
+              ? [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Continue with Google", onPress: () => { void onGoogle(); } },
+                ]
+              : [{ text: "OK" }],
+          );
+        } else {
+          Alert.alert(
+            "Account not found",
+            "We couldn't log you in with that email and password. If you're new to Avenas, sign up to create an account.",
+            [
+              { text: "Try again", style: "cancel" },
+              { text: "Sign up", onPress: () => router.replace("/signup") },
+            ],
+          );
+        }
       } else {
         Alert.alert("Couldn't log in", msg);
       }
@@ -98,7 +117,7 @@ export default function LoginScreen() {
           "New here?",
           "There's no Avenas account for that Google account yet — let's get you set up.",
           [
-            { text: "Cancel", style: "cancel", onPress: () => { void signOut(); } },
+            { text: "Cancel", style: "cancel", onPress: () => { void signOut({ force: true }); } },
             { text: "Continue", onPress: afterAuth },
           ],
         );

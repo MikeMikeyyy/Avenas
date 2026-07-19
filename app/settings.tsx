@@ -10,21 +10,19 @@ import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
-import { useAccountType } from "../contexts/AccountTypeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { removeKey } from "../utils/storage";
 import { signOut } from "../lib/auth";
 import { deleteAccount } from "../lib/cloud";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import { WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY } from "../constants/programs";
-import PeopleIcon from "../components/icons/PeopleIcon";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import NeuCard from "../components/NeuCard";
-import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BUBBLE_LIGHT, BUBBLE_DARK } from "../constants/theme";
 
 // ─── Settings item types ──────────────────────────────────────────────────────
 type BaseItem     = { icon: string; label: string; renderIcon?: (c: string) => React.ReactNode };
@@ -101,7 +99,8 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
       { icon: "help-circle-outline",   label: "Help & FAQ",        route: "/help-faq"         },
       { icon: "warning-outline",       label: "Report a Bug",      route: "/report-bug"       },
       { icon: "bulb-outline",          label: "Request a Feature", route: "/request-feature"  },
-      { icon: "cloud-outline",         label: "Cloud sync (test)", route: "/cloud-test"       },
+      // Dev-only backend test harness — must never ship to users.
+      ...(__DEV__ ? [{ icon: "cloud-outline" as const, label: "Cloud sync (test)", route: "/cloud-test" }] : []),
       { icon: "star-outline",          label: "Rate Avenas",       onPress: requestAppRating  },
     ],
   },
@@ -113,7 +112,6 @@ export default function SettingsScreen() {
   const { isDark, toggleDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg, setIsKg } = useUnit();
-  const { accountType, setAccountType } = useAccountType();
   const { profile, resetOnboarding } = useUserProfile();
   const initials = initialsFromName(profile.name);
   const displayName = profile.name.trim() || "Your Profile";
@@ -180,8 +178,29 @@ export default function SettingsScreen() {
         text: "Sign Out",
         style: "destructive",
         onPress: async () => {
-          await signOut();
-          router.replace("/onboarding");
+          try {
+            await signOut();
+            router.replace("/onboarding");
+          } catch {
+            // The pre-sign-out backup failed with local data at stake, so the
+            // sign-out was stopped. Signing out anyway risks losing whatever
+            // hasn't reached the cloud if another account signs in next.
+            Alert.alert(
+              "Backup didn't finish",
+              "We couldn't save your latest data to your account, so you're still signed in. Check your connection and try again, or sign out anyway and risk losing recent changes.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Sign Out Anyway",
+                  style: "destructive",
+                  onPress: async () => {
+                    await signOut({ force: true });
+                    router.replace("/onboarding");
+                  },
+                },
+              ],
+            );
+          }
         },
       },
     ]);
@@ -220,11 +239,13 @@ export default function SettingsScreen() {
     width: unitTrackWidth.value / 2,
     transform: [{ translateX: unitOffset.value * (unitTrackWidth.value / 2) }],
   }));
+  // White/grey segmented look (matches the Account Type control on Profile):
+  // active label = primary text on the white/navy thumb, inactive = grey.
   const kgLabelColor  = useAnimatedStyle(() => ({
-    color: interpolateColor(unitOffset.value, [0, 1], ["#ffffff", isDark ? "#8896A7" : "#8896A7"]),
+    color: interpolateColor(unitOffset.value, [0, 1], [t.tp, t.ts]),
   }));
   const lbsLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(unitOffset.value, [0, 1], [isDark ? "#8896A7" : "#8896A7", "#ffffff"]),
+    color: interpolateColor(unitOffset.value, [0, 1], [t.ts, t.tp]),
   }));
 
   return (
@@ -287,43 +308,6 @@ export default function SettingsScreen() {
           <Text style={[styles.userEmail, { color: t.ts }]}>{displayEmail}</Text>
         </View>
 
-        {/* Account Type */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: t.ts }]}>Account Type</Text>
-          <NeuCard dark={isDark} style={styles.sectionCard}>
-            <View style={styles.row}>
-              <View style={styles.rowLeft}>
-                <PeopleIcon size={20} color={t.icon} />
-                <Text style={[styles.rowLabel, { color: t.tp }]}>I am a</Text>
-              </View>
-              <View style={[styles.acctToggle, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}>
-                <TouchableOpacity
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setAccountType("gym_user");
-                  }}
-                  style={[styles.acctBtn, accountType === "gym_user" && { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Gym user"
-                >
-                  <Text style={[styles.acctBtnText, { color: accountType === "gym_user" ? "#fff" : t.ts }]}>Gym User</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setAccountType("pt");
-                  }}
-                  style={[styles.acctBtn, accountType === "pt" && { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Trainer"
-                >
-                  <Text style={[styles.acctBtnText, { color: accountType === "pt" ? "#fff" : t.ts }]}>Trainer</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </NeuCard>
-        </View>
-
         {/* Sections */}
         {SECTIONS.map((section) => (
           <View key={section.title} style={styles.section}>
@@ -339,10 +323,10 @@ export default function SettingsScreen() {
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
                       <View
-                        style={[styles.unitToggle, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
+                        style={[styles.unitToggle, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(118,118,128,0.12)" }]}
                         onLayout={e => { unitTrackWidth.value = e.nativeEvent.layout.width - 6; }}
                       >
-                        <Reanimated.View style={[styles.unitPill, unitPillStyle]} />
+                        <Reanimated.View style={[styles.unitPill, { backgroundColor: isDark ? BUBBLE_DARK : BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 }, unitPillStyle]} />
                         <TouchableOpacity
                           onPress={() => {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -440,7 +424,10 @@ export default function SettingsScreen() {
                         const onPress = "onPress" in item ? item.onPress : undefined;
                         if (route) {
                           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          router.push(route as any);
+                          // navigate (not push): a double tap fires this twice
+                          // before the first transition commits, and push would
+                          // stack the page twice. navigate no-ops on the repeat.
+                          router.navigate(route as any);
                         } else if (onPress) {
                           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                           onPress();
@@ -521,10 +508,7 @@ const styles = StyleSheet.create({
   rowLabel:          { fontFamily: FontFamily.regular, fontSize: 16, color: TP },
   signOutCard:       { borderRadius: 18, marginBottom: 12 },
   unitToggle: { flexDirection: "row", borderRadius: 20, padding: 3 },
-  unitPill:   { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  unitPill:   { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 3 },
   unitBtn:    { paddingHorizontal: 12, paddingVertical: 5, alignItems: "center" },
   unitBtnText:{ fontFamily: FontFamily.semibold, fontSize: 13 },
-  acctToggle: { flexDirection: "row", borderRadius: 20, padding: 3 },
-  acctBtn:    { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 17, alignItems: "center", justifyContent: "center" },
-  acctBtnText:{ fontFamily: FontFamily.semibold, fontSize: 12 },
 });

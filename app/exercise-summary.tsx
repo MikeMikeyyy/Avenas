@@ -170,7 +170,7 @@ export default function ExerciseSummaryScreen() {
           style={styles.historyBtnWrap}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push({ pathname: "/exercise-history", params: { exerciseName: name } });
+            router.navigate({ pathname: "/exercise-history", params: { exerciseName: name } });
           }}
           accessibilityRole="button"
           accessibilityLabel={`See full history for ${name}`}

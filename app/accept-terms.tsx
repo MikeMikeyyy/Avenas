@@ -36,7 +36,7 @@ export default function AcceptTermsScreen() {
     const name = (params.name ?? "").trim();
     const email = (params.email ?? "").trim();
     completeOnboarding(name && email ? { name, email } : undefined);
-    router.push("/account-created");
+    router.navigate("/account-created");
   };
 
   return (
@@ -77,7 +77,7 @@ export default function AcceptTermsScreen() {
             <TouchableOpacity
               style={styles.linkRow}
               activeOpacity={0.7}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push("/terms-of-service"); }}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.navigate("/terms-of-service"); }}
               accessibilityRole="button"
               accessibilityLabel="Read the Terms of Service"
             >
@@ -89,7 +89,7 @@ export default function AcceptTermsScreen() {
             <TouchableOpacity
               style={styles.linkRow}
               activeOpacity={0.7}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push("/privacy-policy"); }}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.navigate("/privacy-policy"); }}
               accessibilityRole="button"
               accessibilityLabel="Read the Privacy Policy"
             >

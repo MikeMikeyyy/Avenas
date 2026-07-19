@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, ReactNode } from "react";
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, BUBBLE_DARK, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 
 interface Option<T extends string> {
@@ -37,6 +37,12 @@ interface Props<T extends string> {
    * top-right toggle.
    */
   triggerIcon?: keyof typeof Ionicons.glyphMap;
+  /**
+   * Optional leading icon for each sheet row. Takes the option key so the
+   * caller can mirror whatever icon it shows elsewhere for that value (the
+   * Strength card reuses its header's per-metric icons here).
+   */
+  renderOptionIcon?: (key: T) => ReactNode;
 }
 
 /**
@@ -49,6 +55,7 @@ export default function DropdownPicker<T extends string>({
   onChange,
   sheetTitle = "Select",
   triggerIcon,
+  renderOptionIcon,
 }: Props<T>) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -106,20 +113,29 @@ export default function DropdownPicker<T extends string>({
         accessibilityRole="button"
         accessibilityLabel={`${sheetTitle}: ${current.label}. Tap to change.`}
       >
-        <NeuCard dark={isDark} radius={12} shadowSize="sm">
+        {/* Bubble-pill trigger — same floating white (light) / lifted-navy
+            (dark) pill as the SegmentedControl thumb, so every small chart
+            control on the Progress page reads as one family. */}
+        <View
+          style={[
+            triggerIcon ? styles.iconBtn : styles.btn,
+            {
+              backgroundColor: isDark ? BUBBLE_DARK : BUBBLE_LIGHT,
+              shadowOpacity: isDark ? 0.3 : 0.12,
+            },
+          ]}
+        >
           {triggerIcon ? (
-            <View style={styles.iconBtn}>
-              <Ionicons name={triggerIcon} size={18} color={t.ts} />
-            </View>
+            <Ionicons name={triggerIcon} size={18} color={t.ts} />
           ) : (
-            <View style={styles.btn}>
+            <>
               <Text style={[styles.btnText, { color: t.tp }]} numberOfLines={1}>
                 {current.shortLabel ?? current.label}
               </Text>
               <Ionicons name="chevron-down" size={14} color={t.ts} />
-            </View>
+            </>
           )}
-        </NeuCard>
+        </View>
       </BounceButton>
 
       <Modal visible={mounted} transparent animationType="none" onRequestClose={() => setOpen(false)}>
@@ -171,6 +187,9 @@ export default function DropdownPicker<T extends string>({
                       innerStyle={selected ? { borderWidth: 0 } : undefined}
                     >
                       <View style={styles.rowInner}>
+                        {renderOptionIcon ? (
+                          <View style={styles.rowIcon}>{renderOptionIcon(opt.key)}</View>
+                        ) : null}
                         <Text style={[styles.rowLabel, { color: t.tp }]} numberOfLines={1}>
                           {opt.label}
                         </Text>
@@ -204,9 +223,14 @@ const styles = StyleSheet.create({
   btn: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     gap: 6,
+    borderRadius: 999,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 3,
   },
   btnText: {
     fontFamily: FontFamily.semibold,
@@ -215,8 +239,13 @@ const styles = StyleSheet.create({
   iconBtn: {
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 9,
-    paddingVertical: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 3,
   },
 
   sheetWrap: {
@@ -254,6 +283,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 14,
     paddingHorizontal: 14,
+  },
+  // Fixed-width leading icon slot so row labels stay aligned even when the
+  // icons themselves differ by a pixel or two (mixed icon sets).
+  rowIcon: {
+    width: 24,
+    alignItems: "center",
+    marginRight: 10,
   },
   rowLabel: {
     fontFamily: FontFamily.semibold,

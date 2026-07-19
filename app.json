@@ -2,7 +2,7 @@
   "expo": {
     "name": "avenas",
     "slug": "avenas",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "avenas",
@@ -13,11 +13,16 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Avenas uses your photo library to set your profile photo and to add an image or video to your custom exercises.",
         "NSCameraUsageDescription": "Avenas uses your camera to scan a connect code and to take a photo for your custom exercise.",
-        "NSSupportsLiveActivities": true
+        "NSSupportsLiveActivities": true,
+        "ITSAppUsesNonExemptEncryption": false
       },
       "entitlements": {
-        "com.apple.security.application-groups": ["group.com.avenas.workout"]
-      }
+        "com.apple.security.application-groups": [
+          "group.com.avenas.workout"
+        ]
+      },
+      "bundleIdentifier": "com.avenas.app",
+      "appleTeamId": "8X55YH783A"
     },
     "android": {
       "adaptiveIcon": {
@@ -50,11 +55,37 @@
       "expo-font",
       "expo-web-browser",
       "expo-video",
-      "@bacons/apple-targets"
+      "expo-notifications",
+      "@bacons/apple-targets",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "bundleIdentifier": "com.avenas.app.widget",
+                  "targetName": "AvenasWorkoutWidget",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.com.avenas.workout"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "projectId": "339284cd-e4f5-4635-91db-b75806f732c9"
+      }
+    },
+    "owner": "mikemikey"
   }
 }

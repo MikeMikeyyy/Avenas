@@ -11,6 +11,7 @@ import * as Haptics from "expo-haptics";
 
 import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
+import Avatar from "../Avatar";
 import SendIcon from "../icons/SendIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -120,9 +121,13 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
               <TouchableOpacity key={c.id} activeOpacity={0.85} style={{ marginBottom: 10 }} onPress={() => toggleContact(c.id)} disabled={sendToAll}>
                 <NeuCard dark={isDark} radius={14}>
                   <View style={[styles.row, sendToAll && { opacity: 0.45 }]}>
-                    <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                      <Text style={[styles.avatarText, { color: ACCT }]}>{c.initials}</Text>
-                    </View>
+                    <Avatar
+                      uri={c.photoUri}
+                      initials={c.initials}
+                      size={40}
+                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                      textStyle={[styles.avatarText, { color: ACCT }]}
+                    />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
                       {c.subtitle ? <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={1}>{c.subtitle}</Text> : null}
@@ -174,7 +179,6 @@ const styles = StyleSheet.create({
   row:          { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   rowTitle:     { fontFamily: FontFamily.semibold, fontSize: 15 },
   rowMeta:      { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  avatar:       { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 14 },
   allIcon:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   check:        { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },

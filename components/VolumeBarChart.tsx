@@ -4,7 +4,7 @@ import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS, Shar
 import { BarChart } from "react-native-gifted-charts";
 import * as Haptics from "expo-haptics";
 import NeuCard from "./NeuCard";
-import BounceButton from "./BounceButton";
+import SegmentedControl from "./SegmentedControl";
 import DropdownPicker from "./DropdownPicker";
 import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
@@ -486,40 +486,14 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
           </View>
         </Reanimated.View>
 
-        {/* Metric selector — three discrete NeuCard buttons so each option
-            reads clearly as a tappable button. Active one is ACCT-filled
-            with a matching glow; inactive ones get the standard neumorphic
-            card treatment. */}
-        <View style={styles.metricRow}>
-          {METRIC_OPTIONS.map(opt => {
-            const active = opt.key === metric;
-            return (
-              <BounceButton
-                key={opt.key}
-                style={styles.metricBtnWrap}
-                onPress={() => onMetricChange(opt.key)}
-                accessibilityRole="button"
-                accessibilityLabel={`Show ${opt.label}`}
-              >
-                {active ? (
-                  <View style={styles.metricBtnActive}>
-                    <Text style={[styles.metricBtnLabel, { color: "#fff" }]} numberOfLines={1}>
-                      {opt.label}
-                    </Text>
-                  </View>
-                ) : (
-                  <NeuCard dark={isDark} radius={12} shadowSize="sm">
-                    <View style={styles.metricBtn}>
-                      <Text style={[styles.metricBtnLabel, { color: t.tp }]} numberOfLines={1}>
-                        {opt.label}
-                      </Text>
-                    </View>
-                  </NeuCard>
-                )}
-              </BounceButton>
-            );
-          })}
-        </View>
+        {/* Metric selector — iOS-style segmented control with a sliding
+            thumb (Volume / Reps / Duration). */}
+        <SegmentedControl<MetricKey>
+          options={METRIC_OPTIONS}
+          value={metric}
+          onChange={onMetricChange}
+          style={{ marginTop: 16 }}
+        />
       </View>
     </NeuCard>
   );
@@ -668,39 +642,5 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.regular,
     fontSize: 13,
     textAlign: "center",
-  },
-  metricRow: {
-    flexDirection: "row",
-    marginTop: 16,
-    gap: 8,
-  },
-  metricBtnWrap: {
-    flex: 1,
-  },
-  // Inactive button — sits inside a NeuCard.
-  metricBtn: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-  },
-  // Active button — ACCT-filled pill with a matching shadow glow so the
-  // selected metric reads as the "primary" action of the three.
-  metricBtnActive: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    backgroundColor: ACCT,
-    shadowColor: ACCT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  metricBtnLabel: {
-    fontFamily: FontFamily.semibold,
-    fontSize: 13,
   },
 });

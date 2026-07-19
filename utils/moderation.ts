@@ -84,14 +84,10 @@ export async function blockContact(
   accountType: AccountType,
 ): Promise<{ severed: boolean }> {
   await blockUser(contact);
-  await unaddContact(contact.id, accountType);
-  try {
-    await disconnectByOtherId(contact.id);
-    return { severed: true };
-  } catch (e) {
-    if (__DEV__) console.warn("[avenas] blockContact disconnect", contact.id, e);
-    return { severed: false };
-  }
+  // unaddContact does both the local roster cleanup and the server-side
+  // disconnect; the local block above keeps them filtered out of every list
+  // even when the sever couldn't run (offline), unlike a plain un-add.
+  return unaddContact(contact.id, accountType);
 }
 
 // ─── reporting ─────────────────────────────────────────────────────────────────
@@ -155,11 +151,19 @@ export async function hideMessage(messageId: string): Promise<void> {
 
 /**
  * Remove a person from the current account's connections, wherever they live:
- *   - trainer (pt):  drop them from clients and/or coaches
- *   - gym user:      clear them as primary trainer and/or remove from other trainers
+ *   - local roster: trainer (pt) → drop from clients and/or coaches;
+ *     gym user → clear as primary trainer and/or remove from other trainers
+ *   - server: delete the live account-to-account connections row
  * Idempotent — safe to call for an id that isn't actually connected.
+ *
+ * The server step is what actually removes a REAL connection: the trainer-hub
+ * rosters re-merge accepted connections from getMyConnections() on every focus,
+ * so a local-only removal silently reappears. Returns `{ severed }` — `false`
+ * means the server couldn't be reached (offline / signed out) and the
+ * connection is still up; callers should tell the user to retry, because
+ * (unlike blockContact) nothing filters the person out in the meantime.
  */
-export async function unaddContact(contactId: string, accountType: AccountType): Promise<void> {
+export async function unaddContact(contactId: string, accountType: AccountType): Promise<{ severed: boolean }> {
   if (accountType === "pt") {
     const clients = await loadClients();
     const nextClients = clients.filter(c => c.id !== contactId);
@@ -169,6 +173,13 @@ export async function unaddContact(contactId: string, accountType: AccountType):
     const primary = await loadAssignedPT();
     if (primary?.id === contactId) await saveAssignedPT(null);
     await removeOtherTrainer(contactId);
+  }
+  try {
+    await disconnectByOtherId(contactId);
+    return { severed: true };
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] unaddContact disconnect", contactId, e);
+    return { severed: false };
   }
 }
 

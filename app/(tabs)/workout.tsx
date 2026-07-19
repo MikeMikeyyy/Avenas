@@ -4,7 +4,7 @@ import * as Haptics from "expo-haptics";
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
-  Alert, Animated, Keyboard, Modal,
+  Alert, Animated, AppState, Keyboard, Modal,
   PanResponder, Easing, Switch, useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -948,6 +948,14 @@ function CheckboxCell({ done, isDark, isActive, onToggle }: { done: boolean; isD
 
 // ─── ExerciseCard ──────────────────────────────────────────────────────────────
 
+// Stable empty fallback for `prevSets` — a fresh [] per render would defeat the
+// React.memo below (every card would re-render on every parent keystroke).
+const EMPTY_PREV: string[] = [];
+
+// All callbacks are exId-FIRST so the parent can pass the same stable function
+// references to every card; the card supplies its own exercise.id at the call
+// site. Combined with React.memo (below), typing in one card's input no longer
+// re-renders every other card on the screen.
 interface ExerciseCardProps {
   exercise: Exercise;
   exIndex: number;
@@ -955,19 +963,19 @@ interface ExerciseCardProps {
   exLog: ExerciseLog;
   isDark: boolean;
   /** `cascade` marks typed input, which may auto-fill the sets below (Settings toggle). */
-  onUpdateSet: (type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade?: boolean) => void;
-  onToggleDone: (type: "warmup" | "working", idx: number) => void;
-  onAutoTick: (type: "warmup" | "working", idx: number) => void;
-  onUpdateNotes: (notes: string) => void;
+  onUpdateSet: (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade?: boolean) => void;
+  onToggleDone: (exId: string, type: "warmup" | "working", idx: number) => void;
+  onAutoTick: (exId: string, type: "warmup" | "working", idx: number) => void;
+  onUpdateNotes: (exId: string, notes: string) => void;
   exNotes: string;
-  onAddSet: () => void;
-  onRemoveSet: () => void;
+  onAddSet: (exId: string) => void;
+  onRemoveSet: (exId: string) => void;
   onOpenReorder: () => void;
-  onChangeExercise: () => void;
-  onRemoveExercise: () => void;
+  onChangeExercise: (exId: string) => void;
+  onRemoveExercise: (exId: string) => void;
   isIsometric: boolean;
-  onToggleIsometric: () => void;
-  onToggleSetType: (type: "warmup" | "working", localIdx: number) => void;
+  onToggleIsometric: (exId: string) => void;
+  onToggleSetType: (exId: string, type: "warmup" | "working", localIdx: number) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   activeSetFlatIdx: number | null;
   isLocked?: boolean;
@@ -1075,7 +1083,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
             <CollapsibleCard
               key={`${set.type}-${set.localIdx}`}
               isCollapsing={flatIdx === collapsingSetIdx}
-              onCollapsed={() => { setCollapsingSetIdx(null); onRemoveSet(); }}
+              onCollapsed={() => { setCollapsingSetIdx(null); onRemoveSet(exercise.id); }}
               expanding={flatIdx === newlyAddedIdx}
               naturalHeight={flatIdx === newlyAddedIdx ? setRowHeight.current : undefined}
             >
@@ -1093,7 +1101,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   <TouchableOpacity
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      onToggleSetType(set.type, set.localIdx);
+                      onToggleSetType(exercise.id, set.type, set.localIdx);
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     activeOpacity={0.6}
@@ -1141,8 +1149,8 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                       () => repsRefs.current[flatIdx]?.focus(),
                       flatIdx > 0 ? () => repsRefs.current[flatIdx - 1]?.focus() : null,
                     )}
-                    onChangeText={v => onUpdateSet(set.type, set.localIdx, "weight", v, true)}
-                    onEndEditing={() => onAutoTick(set.type, set.localIdx)}
+                    onChangeText={v => onUpdateSet(exercise.id, set.type, set.localIdx, "weight", v, true)}
+                    onEndEditing={() => onAutoTick(exercise.id, set.type, set.localIdx)}
                     selectTextOnFocus
                   />
                 </View>
@@ -1178,8 +1186,8 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                         onInputFocus(null, prevFn);
                       }
                     }}
-                    onChangeText={v => onUpdateSet(set.type, set.localIdx, "reps", v, true)}
-                    onEndEditing={() => onAutoTick(set.type, set.localIdx)}
+                    onChangeText={v => onUpdateSet(exercise.id, set.type, set.localIdx, "reps", v, true)}
+                    onEndEditing={() => onAutoTick(exercise.id, set.type, set.localIdx)}
                     selectTextOnFocus
                   />
                 </View>
@@ -1210,11 +1218,11 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                         const prev = prevSets?.[flatIdx];
                         if (prev && prev !== "—") {
                           const parts = prev.split("×");
-                          onUpdateSet(set.type, set.localIdx, "weight", parts[0] ?? "");
-                          onUpdateSet(set.type, set.localIdx, "reps", parts[1] ?? "");
+                          onUpdateSet(exercise.id, set.type, set.localIdx, "weight", parts[0] ?? "");
+                          onUpdateSet(exercise.id, set.type, set.localIdx, "reps", parts[1] ?? "");
                         }
                       }
-                      onToggleDone(set.type, set.localIdx);
+                      onToggleDone(exercise.id, set.type, set.localIdx);
                     }}
                   />
                 )}
@@ -1242,7 +1250,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
               </TouchableOpacity>
               <Text style={[styles.editMoveLabel, { color: t.ts, flex: 1 }]}>Move exercise</Text>
               <TouchableOpacity
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(); }}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(exercise.id); }}
                 activeOpacity={0.8}
                 style={{
                   borderRadius: 10, backgroundColor: ACCT,
@@ -1261,13 +1269,13 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
             <View style={styles.editChipsRow}>
               {[
                 {
-                  onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggleIsometric(); },
+                  onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggleIsometric(exercise.id); },
                   icon: <Ionicons name="timer-outline" size={13} color={isIsometric ? ACCT : t.ts} />,
                   label: isIsometric ? "Hold" : "Reps",
                   color: isIsometric ? ACCT : t.ts,
                 },
                 {
-                  onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChangeExercise(); },
+                  onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChangeExercise(exercise.id); },
                   icon: <Ionicons name="swap-horizontal" size={13} color={t.ts} />,
                   label: "Change",
                   color: t.ts,
@@ -1276,7 +1284,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); Alert.alert(
                     "Remove Exercise",
                     `Remove "${exercise.name}" from today's workout?`,
-                    [{ text: "Cancel", style: "cancel" }, { text: "Remove", style: "destructive", onPress: onRemoveExercise }]
+                    [{ text: "Cancel", style: "cancel" }, { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(exercise.id) }]
                   ); },
                   icon: <TrashIcon size={13} color="#FF4D4F" />,
                   label: "Remove",
@@ -1326,7 +1334,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
             placeholderTextColor={t.ts}
             value={exNotes}
             editable={!isLocked}
-            onChangeText={onUpdateNotes}
+            onChangeText={v => onUpdateNotes(exercise.id, v)}
             onFocus={() => onInputFocus(null, null)}
             multiline
             textAlignVertical="top"
@@ -1337,6 +1345,13 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
     </NeuCard>
   );
 }
+
+// Re-render a card only when ITS data changes. The parent re-renders on every
+// keystroke (log state lives there), and without this every card — dozens of
+// TextInputs and animated views — re-rendered per character, which is exactly
+// the typing lag this fixes. Props are memo-friendly by construction: exId-first
+// stable callbacks, per-exercise exLog identity, memoized prevSets arrays.
+const MemoExerciseCard = React.memo(ExerciseCard);
 
 function getActiveSetFlatIdx(exId: string, exercises: Exercise[], log: WorkoutLog): number | null {
   for (const ex of exercises) {
@@ -1425,6 +1440,12 @@ export default function WorkoutScreen() {
   // a program → stamped as "" on the CompletedWorkout (definitively no program).
   const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[]; programId?: string } | null>(null);
   const [log, setLog] = useState<WorkoutLog>({});
+  // Latest committed log for reads inside the stable set-handlers below. Updated
+  // in an effect (post-commit), so handlers fired from user events always see
+  // fresh state without needing `log` in their deps — which would re-create
+  // them every keystroke and defeat MemoExerciseCard.
+  const logRef = useRef(log);
+  useEffect(() => { logRef.current = log; }, [log]);
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [changingExId, setChangingExId] = useState<string | null>(null);
   const [addingExercise, setAddingExercise] = useState(false);
@@ -1663,6 +1684,31 @@ export default function WorkoutScreen() {
   // scheduled day stay frozen on yesterday.
   useDayRollover(useCallback(() => { if (draftRestored) loadData(); }, [loadData, draftRestored]));
 
+  // Debounced draft writer. The autosave effect below runs on every keystroke;
+  // stringifying + writing the whole draft each time was measurable typing lag,
+  // so state lands in pendingDraftRef immediately and the expensive
+  // JSON.stringify + AsyncStorage.setItem coalesces to one write ~400ms after
+  // the last change. flushDraft() runs the pending write NOW — called when the
+  // app backgrounds so a swipe-kill can't lose more than the debounce window.
+  const pendingDraftRef = useRef<object | null>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushDraft = useCallback(() => {
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    const payload = pendingDraftRef.current;
+    if (!payload) return;
+    pendingDraftRef.current = null;
+    AsyncStorage.setItem(WORKOUT_DRAFT_KEY, JSON.stringify(payload))
+      .catch((e) => warnStorage("setItem", WORKOUT_DRAFT_KEY, e));
+  }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "background" || s === "inactive") flushDraft();
+    });
+    return () => { sub.remove(); flushDraft(); };
+  }, [flushDraft]);
+
   // Autosave draft on any change after restoration. Skip while a completed workout
   // is shown (nothing to save), and skip the empty pre-start baseline (saving only
   // when the user has actually engaged: running timer, real progress, or notes).
@@ -1675,29 +1721,33 @@ export default function WorkoutScreen() {
     if (!hasContent && !draftLockedRef.current) return;
     draftLockedRef.current = true;
     isWorkoutActiveRef.current = true;
-    AsyncStorage.setItem(
-      WORKOUT_DRAFT_KEY,
-      JSON.stringify({
-        date: effectiveTodayRef.current,
-        workoutInfo,
-        log,
-        isometricExIds: Array.from(isometricExIds),
-        notes,
-        isFreeWorkout,
-        freeWorkoutAddToProgram,
-      })
-    ).catch((e) => warnStorage("setItem", WORKOUT_DRAFT_KEY, e));
-  }, [draftRestored, todaysCompletedWorkout, isRunning, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram]);
+    pendingDraftRef.current = {
+      date: effectiveTodayRef.current,
+      workoutInfo,
+      log,
+      isometricExIds: Array.from(isometricExIds),
+      notes,
+      isFreeWorkout,
+      freeWorkoutAddToProgram,
+    };
+    if (!draftTimerRef.current) {
+      draftTimerRef.current = setTimeout(() => { draftTimerRef.current = null; flushDraft(); }, 400);
+    }
+  }, [draftRestored, todaysCompletedWorkout, isRunning, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram, flushDraft]);
 
   const clearDraft = useCallback(() => {
     draftLockedRef.current = false;
+    // Drop any queued write too — a debounced save landing AFTER the clear
+    // would resurrect the draft the user just finished/discarded.
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    pendingDraftRef.current = null;
     AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
   }, []);
 
   // `cascade` is true only for TYPED input (onChangeText). Programmatic fills
   // (the checkbox's copy-from-prev) stay single-set, or ticking one empty set
   // would overwrite the sets below with that set's prev values.
-  const updateSet = (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade = false) => {
+  const updateSet = useCallback((exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade = false) => {
     const fillDown = cascade && autofillSets;
     setLog(prev => {
       const exLog = prev[exId];
@@ -1722,12 +1772,13 @@ export default function WorkoutScreen() {
       }
       return { ...prev, [exId]: { ...exLog, working: fillFrom(exLog.working, idx) } };
     });
-  };
+  }, [autofillSets]);
 
   // True if marking this one set done would complete the whole workout (every
   // set of every exercise done). Used to suppress the post-set rest timer on the
   // final set — the workout is over, so there's nothing left to rest for.
-  const wouldCompleteWorkout = (exId: string, type: "warmup" | "working", idx: number): boolean => {
+  const wouldCompleteWorkout = useCallback((exId: string, type: "warmup" | "working", idx: number): boolean => {
+    const log = logRef.current;
     if (!workoutInfo || workoutInfo.exercises.length === 0) return false;
     return workoutInfo.exercises.every((ex: Exercise) => {
       const exLog = log[ex.id];
@@ -1736,20 +1787,20 @@ export default function WorkoutScreen() {
       const workingDone = exLog.working.every((s, i) => (ex.id === exId && type === "working" && i === idx) || s.done);
       return warmupDone && workingDone;
     });
-  };
+  }, [workoutInfo]);
 
   // Start the rest timer after completing a set — unless that set completed the
   // whole workout, in which case clear any running timer instead.
-  const startRestAfterSet = (exId: string, type: "warmup" | "working", idx: number) => {
+  const startRestAfterSet = useCallback((exId: string, type: "warmup" | "working", idx: number) => {
     if (wouldCompleteWorkout(exId, type, idx)) {
       dismissRestTimer();
       return;
     }
     startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
-  };
+  }, [wouldCompleteWorkout, dismissRestTimer, startRestTimer, workoutInfo]);
 
-  const autoTickIfComplete = (exId: string, type: "warmup" | "working", idx: number) => {
-    const cur = log[exId]?.[type]?.[idx];
+  const autoTickIfComplete = useCallback((exId: string, type: "warmup" | "working", idx: number) => {
+    const cur = logRef.current[exId]?.[type]?.[idx];
     const willTick = !!cur && !cur.done && !!cur.weight.trim() && !!cur.reps.trim();
     setLog(prev => {
       const exLog = prev[exId];
@@ -1767,10 +1818,10 @@ export default function WorkoutScreen() {
       startTimer();
       startRestAfterSet(exId, type, idx);
     }
-  };
+  }, [startTimer, startRestAfterSet]);
 
-  const toggleDone = (exId: string, type: "warmup" | "working", idx: number) => {
-    const becomingDone = !log[exId]?.[type]?.[idx]?.done;
+  const toggleDone = useCallback((exId: string, type: "warmup" | "working", idx: number) => {
+    const becomingDone = !logRef.current[exId]?.[type]?.[idx]?.done;
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
@@ -1780,17 +1831,17 @@ export default function WorkoutScreen() {
     });
     startTimer();
     if (becomingDone) startRestAfterSet(exId, type, idx);
-  };
+  }, [startTimer, startRestAfterSet]);
 
-  const addSet = (exId: string) => {
+  const addSet = useCallback((exId: string) => {
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
       return { ...prev, [exId]: { ...exLog, working: [...exLog.working, makeSet()] } };
     });
-  };
+  }, []);
 
-  const toggleSetType = (exId: string, type: "warmup" | "working", localIdx: number) => {
+  const toggleSetType = useCallback((exId: string, type: "warmup" | "working", localIdx: number) => {
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
@@ -1816,9 +1867,9 @@ export default function WorkoutScreen() {
         }};
       }
     });
-  };
+  }, []);
 
-  const removeSet = (exId: string) => {
+  const removeSet = useCallback((exId: string) => {
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
@@ -1831,15 +1882,15 @@ export default function WorkoutScreen() {
       }
       return prev;
     });
-  };
+  }, []);
 
-  const updateExNotes = (exId: string, notes: string) => {
+  const updateExNotes = useCallback((exId: string, notes: string) => {
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
       return { ...prev, [exId]: { ...exLog, notes } };
     });
-  };
+  }, []);
 
   const changeExercise = (exId: string, newName: string) => {
     setWorkoutInfo(prev => prev ? {
@@ -1860,7 +1911,17 @@ export default function WorkoutScreen() {
   };
 
   const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
-  const startCollapse = (exId: string) => setCollapsingIds(prev => new Set(prev).add(exId));
+  const startCollapse = useCallback((exId: string) => setCollapsingIds(prev => new Set(prev).add(exId)), []);
+  // Stable card-callback identities for MemoExerciseCard (inline closures at the
+  // render site would re-create per keystroke and defeat the memo).
+  const openReorder = useCallback(() => setReorderOpen(true), []);
+  const openChangeExercise = useCallback((exId: string) => setChangingExId(exId), []);
+  const toggleIsometricEx = useCallback((exId: string) => setIsometricExIds(prev => {
+    const next = new Set(prev);
+    if (next.has(exId)) next.delete(exId);
+    else next.add(exId);
+    return next;
+  }), []);
 
   const [reorderOpen, setReorderOpen] = useState(false);
   const reorderExercises = useCallback((exercises: Exercise[]) => {
@@ -2146,6 +2207,16 @@ export default function WorkoutScreen() {
     () => buildPrevByName(prevHistory, undefined, workoutInfo?.name),
     [prevHistory, workoutInfo],
   );
+  // Pre-formatted "prev" hint strings per normalized exercise name. Memoized so
+  // each card's `prevSets` prop keeps its identity across keystrokes (a fresh
+  // .map() per render would re-render every MemoExerciseCard every character).
+  const prevHintsByName = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const [name, sets] of Object.entries(prevByName)) {
+      out[name] = sets.map(p => formatPrevHint(p, isKg));
+    }
+    return out;
+  }, [prevByName, isKg]);
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -2175,14 +2246,14 @@ export default function WorkoutScreen() {
       exercises: workoutInfo.exercises.map(e => ({ id: e.id, name: e.name, restSeconds: e.restSeconds })),
       log,
       // Exactly the prevSets lookup ExerciseCard feeds its checkboxes.
-      prevHintsFor: name => (prevByName[normalizeExerciseName(name)] ?? []).map(p => formatPrevHint(p, isKg)),
+      prevHintsFor: name => prevHintsByName[normalizeExerciseName(name)] ?? EMPTY_PREV,
       isKg,
       timerStartMs: startEpochMs,
       pausedElapsedSec: isPaused ? elapsedSeconds : 0,
       restEndsAt,
       restTotalSec: restTotal,
     });
-  }, [workoutInfo, todaysCompletedWorkout, log, prevByName, isKg, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
+  }, [workoutInfo, todaysCompletedWorkout, log, prevHintsByName, isKg, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
 
   const applyLockScreenTicks = useCallback((actions: LiveActivityTickAction[]) => {
     setLog(prev => {
@@ -2529,7 +2600,7 @@ export default function WorkoutScreen() {
 
             {/* Edit in Journal + Discard row */}
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 16 }}>
-              <BounceButton onPress={() => router.push({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id } })} style={{ flex: 1 }}>
+              <BounceButton onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id } })} style={{ flex: 1 }}>
                 <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
                   <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
                     <Ionicons name="create-outline" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
@@ -2594,35 +2665,30 @@ export default function WorkoutScreen() {
                 isCollapsing={collapsingIds.has(exercise.id)}
                 onCollapsed={() => removeExercise(exercise.id)}
               >
-                <ExerciseCard
+                <MemoExerciseCard
                   exercise={exercise}
                   exIndex={i}
                   totalExercises={workoutInfo.exercises.length}
                   exLog={exLog}
                   isDark={isDark}
-                  onUpdateSet={(type, idx, field, value, cascade) => updateSet(exercise.id, type, idx, field, value, cascade)}
-                  onToggleDone={(type, idx) => toggleDone(exercise.id, type, idx)}
-                  onAutoTick={(type, idx) => autoTickIfComplete(exercise.id, type, idx)}
+                  onUpdateSet={updateSet}
+                  onToggleDone={toggleDone}
+                  onAutoTick={autoTickIfComplete}
                   exNotes={log[exercise.id]?.notes ?? ""}
-                  onUpdateNotes={notes => updateExNotes(exercise.id, notes)}
-                  onAddSet={() => addSet(exercise.id)}
-                  onRemoveSet={() => removeSet(exercise.id)}
-                  onOpenReorder={() => setReorderOpen(true)}
-                  onChangeExercise={() => setChangingExId(exercise.id)}
-                  onRemoveExercise={() => startCollapse(exercise.id)}
-                  onToggleSetType={(type, localIdx) => toggleSetType(exercise.id, type, localIdx)}
+                  onUpdateNotes={updateExNotes}
+                  onAddSet={addSet}
+                  onRemoveSet={removeSet}
+                  onOpenReorder={openReorder}
+                  onChangeExercise={openChangeExercise}
+                  onRemoveExercise={startCollapse}
+                  onToggleSetType={toggleSetType}
                   onInputFocus={handleInputFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
-                  prevSets={(prevByName[normalizeExerciseName(exercise.name)] ?? []).map(p => formatPrevHint(p, isKg))}
+                  prevSets={prevHintsByName[normalizeExerciseName(exercise.name)] ?? EMPTY_PREV}
                   hideIndexLabel
                   numberBadge={focusMode ? undefined : i + 1}
-                  onToggleIsometric={() => setIsometricExIds(prev => {
-                    const next = new Set(prev);
-                    if (next.has(exercise.id)) next.delete(exercise.id);
-                    else next.add(exercise.id);
-                    return next;
-                  })}
+                  onToggleIsometric={toggleIsometricEx}
                 />
               </CollapsibleCard>
             );
@@ -2829,12 +2895,12 @@ export default function WorkoutScreen() {
           onCreateCustom={() => {
             pendingChangingExId.current = changingExId;
             setChangingExId(null);
-            router.push("/create-custom-exercise");
+            router.navigate("/create-custom-exercise");
           }}
           onEditCustom={name => {
             pendingChangingExId.current = changingExId;
             setChangingExId(null);
-            router.push({ pathname: "/create-custom-exercise", params: { edit: name } });
+            router.navigate({ pathname: "/create-custom-exercise", params: { edit: name } });
           }}
           onClose={() => setChangingExId(null)}
           isDark={isDark}
@@ -2856,11 +2922,11 @@ export default function WorkoutScreen() {
           onDeleteCustom={deleteCustomExercise}
           onCreateCustom={() => {
             setAddingExercise(false);
-            router.push("/create-custom-exercise");
+            router.navigate("/create-custom-exercise");
           }}
           onEditCustom={name => {
             setAddingExercise(false);
-            router.push({ pathname: "/create-custom-exercise", params: { edit: name } });
+            router.navigate({ pathname: "/create-custom-exercise", params: { edit: name } });
           }}
           onClose={() => setAddingExercise(false)}
           isDark={isDark}

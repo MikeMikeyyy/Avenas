@@ -1,8 +1,13 @@
 import { createContext, useContext, useEffect, useState, useMemo } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { toYMD } from "../utils/dates";
+import { notifyAchievement } from "../utils/notificationScheduler";
 
 const STORAGE_KEY = "avenas_streak_data";
+
+// Streak lengths worth celebrating with an achievement notification (gated on
+// the achievements toggle inside notifyAchievement).
+const STREAK_MILESTONES = new Set([7, 14, 30, 50, 100, 200, 365]);
 
 interface StreakData {
   count: number;
@@ -144,6 +149,12 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
           openedDates: nextOpenedDates,
           dayBasis: "local",
         };
+        if (STREAK_MILESTONES.has(next.count)) {
+          notifyAchievement(
+            `${next.count}-day streak!`,
+            `You've shown up ${next.count} days in a row. Keep it going.`,
+          );
+        }
       } else {
         // Missed 2+ days — reset streak but preserve highest
         next = {

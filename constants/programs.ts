@@ -10,6 +10,10 @@ export const logDraftKey = (date: string, workoutName: string) =>
 // One-shot flag: has the user seen the "tap a day to switch Training/Rest"
 // coach mark in the program builder. Local-only UI preference (never synced).
 export const CYCLE_COACHMARK_KEY = "@avenas/cycle_pattern_coachmark_seen";
+// One-shot flag: has the user seen the Step 2 (Workouts) coach mark — add
+// exercises per day, tap a set's number badge to toggle warmup/working.
+// Local-only UI preference (never synced).
+export const WORKOUTS_COACHMARK_KEY = "@avenas/workouts_coachmark_seen";
 // How many working sets a newly added exercise starts with (the exercise
 // picker's "sets" stepper). Local-only UI preference (never synced).
 export const DEFAULT_SET_COUNT_KEY = "@avenas/builder_default_sets";

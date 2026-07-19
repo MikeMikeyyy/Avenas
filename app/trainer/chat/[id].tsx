@@ -22,6 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../../components/FadeScreen";
+import Avatar from "../../../components/Avatar";
 import ChatBubble from "../../../components/trainer/ChatBubble";
 import SimpleSheet from "../../../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
@@ -29,7 +30,8 @@ import SendIcon from "../../../components/icons/SendIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constants/theme";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
-import { ensureSeededContacts, loadThread, appendMessage, markThreadRead } from "../../../utils/chatStore";
+import { loadThread, appendMessage, markThreadRead } from "../../../utils/chatStore";
+import { getMyUid, isCloudContactId, subscribeToInbound } from "../../../lib/chat";
 import { loadHiddenMessageIds, loadBlockedIds, blockContact, unaddContact, reportUser, reportMessage } from "../../../utils/moderation";
 import { toYMD, relativeDayLabel } from "../../../utils/dates";
 import type { ChatMessage, ReportReason } from "../../../constants/chat";
@@ -43,7 +45,7 @@ type ChatItem =
 
 export default function ChatThreadScreen() {
   const router = useRouter();
-  const { id, name, initials } = useLocalSearchParams<{ id: string; name?: string; initials?: string }>();
+  const { id, name, initials, photo } = useLocalSearchParams<{ id: string; name?: string; initials?: string; photo?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -66,9 +68,20 @@ export default function ChatThreadScreen() {
   // null = no report sheet open; the variant drives the reason picker's title.
   const [report, setReport] = useState<{ kind: "user" } | { kind: "message"; msg: ChatMessage } | null>(null);
 
+  // Re-fetch the thread (merged local + cloud) and mark it read. Used by the
+  // focus effect and by the realtime subscription when a message arrives live.
+  const refresh = useCallback(async () => {
+    const thread = contactId ? await loadThread(contactId) : [];
+    const hidden = await loadHiddenMessageIds();
+    // newest-first for the inverted list; reported messages filtered out
+    setMessages([...thread].reverse().filter(m => !hidden.has(m.id)));
+    if (contactId) markThreadRead(contactId); // viewing clears the unread badge
+  }, [contactId]);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
+      let unsubscribe: (() => void) | null = null;
       (async () => {
         // Defence-in-depth: every UI path filters blocked users out of the lists
         // that link here, but a stale router history or a deep-link could still
@@ -82,18 +95,23 @@ export default function ChatThreadScreen() {
             return;
           }
         }
-        if (contactId) {
-          await ensureSeededContacts([{ id: contactId, name: displayName, initials: displayInitials }]);
-        }
-        const thread = contactId ? await loadThread(contactId) : [];
-        const hidden = await loadHiddenMessageIds();
-        if (cancelled) return;
-        // newest-first for the inverted list; reported messages filtered out
-        setMessages([...thread].reverse().filter(m => !hidden.has(m.id)));
-        if (contactId) markThreadRead(contactId); // viewing clears the unread badge
+        await refresh();
+        // Real connections get live delivery while the thread is open; without
+        // realtime (offline, Expo Go hiccup) the focus-effect reload still
+        // catches up on the next visit.
+        const uid = await getMyUid();
+        if (cancelled || !uid || !isCloudContactId(contactId)) return;
+        const unsub = subscribeToInbound(uid, senderId => {
+          if (senderId === contactId) refresh();
+        });
+        if (cancelled) unsub();
+        else unsubscribe = unsub;
       })();
-      return () => { cancelled = true; };
-    }, [contactId]),
+      return () => {
+        cancelled = true;
+        unsubscribe?.();
+      };
+    }, [contactId, refresh]),
   );
 
   const onReportUser = () => { setMenuOpen(false); setReport({ kind: "user" }); };
@@ -121,7 +139,16 @@ export default function ChatThreadScreen() {
       "This removes your connection. Any programs already shared stay in your library.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Remove", style: "destructive", onPress: async () => { await unaddContact(contactId, accountType); router.back(); } },
+        { text: "Remove", style: "destructive", onPress: async () => {
+          const { severed } = await unaddContact(contactId, accountType);
+          if (severed) {
+            router.back();
+          } else {
+            // Unlike block, nothing filters an un-added person out while
+            // offline — the connection is genuinely still up, so say so.
+            Alert.alert("Couldn't remove connection", "We couldn't reach the server, so the connection wasn't removed. Check your internet and try again.");
+          }
+        } },
       ],
     );
   };
@@ -162,10 +189,18 @@ export default function ChatThreadScreen() {
     if (!text || !contactId) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setInput("");
-    const msg = await appendMessage(contactId, text);
-    setMessages(prev => [msg, ...prev]); // prepend → bottom of inverted list
-    // If the user had scrolled into history, bring their new message into view.
-    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    try {
+      const msg = await appendMessage(contactId, text);
+      setMessages(prev => [msg, ...prev]); // prepend → bottom of inverted list
+      // If the user had scrolled into history, bring their new message into view.
+      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    } catch (err) {
+      // Backend send failed (offline / connection severed) — hand the draft
+      // back rather than pretending it went through.
+      if (__DEV__) console.warn("[avenas] send message", contactId, err);
+      setInput(text);
+      Alert.alert("Message not sent", "Check your connection and try again.");
+    }
   }, [input, contactId]);
 
   const canSend = input.trim().length > 0;
@@ -229,9 +264,13 @@ export default function ChatThreadScreen() {
               </View>
             )}
           </TouchableOpacity>
-          <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-            <Text style={[styles.avatarText, { color: ACCT }]}>{displayInitials}</Text>
-          </View>
+          <Avatar
+            uri={photo || undefined}
+            initials={displayInitials}
+            size={38}
+            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+            textStyle={[styles.avatarText, { color: ACCT }]}
+          />
           <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
           <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Conversation options" accessibilityRole="button">
             {isGlassEffectAPIAvailable() ? (
@@ -362,7 +401,6 @@ export default function ChatThreadScreen() {
 const styles = StyleSheet.create({
   header:     { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
   backBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  avatar:     { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 13 },
   headerName: { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },
 

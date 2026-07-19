@@ -103,6 +103,8 @@ export default function ProgressView({
   const scrollRef = useRef<any>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
   const exerciseSectionY = useRef(0);
+  const exerciseSectionH = useRef(0);
+  const viewportH = useRef(0);
 
   // Reconcile scope when the upstream programs list changes (e.g. switching client).
   useEffect(() => {
@@ -236,13 +238,30 @@ export default function ProgressView({
   useEffect(() => {
     if (!selectedExercise) return;
     const id = requestAnimationFrame(() => {
-      if (exerciseSectionY.current > 0) {
-        const node: any = scrollRef.current;
-        node?.scrollTo?.({ y: Math.max(0, exerciseSectionY.current - 40), animated: true });
+      const secY = exerciseSectionY.current;
+      const secH = exerciseSectionH.current;
+      const viewH = viewportH.current;
+      if (secY <= 0) return;
+      const node: any = scrollRef.current;
+      if (secH > 0 && viewH > 0) {
+        // Bottom-anchored: scroll the LEAST amount that still leaves the
+        // section's bottom (the "See Exercise History" CTA) clear of the
+        // floating tab bar (~49pt + bottom inset, plus a breathing gap).
+        // This keeps as much of the day list above visible as possible.
+        // Capped so the section's top never disappears under the header
+        // gradient — on screens too short for both, the top wins (the tab
+        // bar is translucent glass, so a grazed CTA stays legible).
+        const needed = secY + secH - (viewH - (insets.bottom + 72));
+        const cap = secY - (insets.top + 24);
+        node?.scrollTo?.({ y: Math.max(0, Math.min(needed, cap)), animated: true });
+      } else {
+        // Measurements not in yet (first-ever selection this mount) — fall
+        // back to pinning the section top near the viewport top.
+        node?.scrollTo?.({ y: Math.max(0, secY - 40), animated: true });
       }
     });
     return () => cancelAnimationFrame(id);
-  }, [selectedExercise]);
+  }, [selectedExercise, insets.top, insets.bottom]);
 
   const onSelectExercise = useCallback((day: string, name: string) => {
     // Keep the previous object identity on a same-pair reselect so the
@@ -287,6 +306,7 @@ export default function ProgressView({
         showsVerticalScrollIndicator={false}
         automaticallyAdjustContentInsets={false}
         contentInsetAdjustmentBehavior="never"
+        onLayout={e => { viewportH.current = e.nativeEvent.layout.height; }}
         contentContainerStyle={[styles.scroll, { paddingTop: topPad, paddingBottom: botPad }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
         scrollEventThrottle={16}
@@ -352,7 +372,12 @@ export default function ProgressView({
         )}
 
         {selectedExercise && displayPrs ? (
-          <View onLayout={e => { exerciseSectionY.current = e.nativeEvent.layout.y; }}>
+          <View
+            onLayout={e => {
+              exerciseSectionY.current = e.nativeEvent.layout.y;
+              exerciseSectionH.current = e.nativeEvent.layout.height;
+            }}
+          >
             <ExerciseProgressionChart
               exerciseName={selectedExercise.name}
               dayName={selectedExercise.day}

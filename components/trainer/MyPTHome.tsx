@@ -44,6 +44,7 @@ import {
   type SharedProgram,
 } from "../../utils/trainerStore";
 import { getMyConnections } from "../../lib/connections";
+import { loadBlockedIds } from "../../utils/moderation";
 import Avatar from "../Avatar";
 import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
@@ -158,7 +159,11 @@ export default function MyPTHome() {
       let trainer: AssignedPT | null = p;
       try {
         const conns = await getMyConnections();
-        const accepted = conns.filter(c => c.status === "accepted");
+        // Blocked ids never fill the trainer slot — covers the offline-block
+        // case where the server-side sever hasn't run yet (the connection row
+        // is still up, but the person is blocked locally).
+        const blocked = await loadBlockedIds();
+        const accepted = conns.filter(c => c.status === "accepted" && !blocked.has(c.otherId));
         const trainerConn = accepted.find(c => c.accountType === "pt");
         if (trainerConn) {
           trainer = { id: trainerConn.otherId, name: trainerConn.name || "Trainer", initials: makeInitials(trainerConn.name || "Trainer"), photoUri: trainerConn.photoUri };
@@ -175,7 +180,7 @@ export default function MyPTHome() {
 
   const openChat = () => {
     if (!pt) return;
-    router.push({ pathname: "/trainer/chat/[id]", params: { id: pt.id, name: pt.name, initials: pt.initials } });
+    router.navigate({ pathname: "/trainer/chat/[id]", params: { id: pt.id, name: pt.name, initials: pt.initials } });
   };
 
 
@@ -255,12 +260,14 @@ export default function MyPTHome() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top, paddingBottom: insets.bottom + 140 }}
+        // +14 top: same first-row line as PTHome (the my-trainers back/plus
+        // chrome line) — keep the two hub views in sync.
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 14, paddingBottom: insets.bottom + 140 }}
       >
         <View style={styles.topPills}>
           <BounceButton
             style={styles.trainersBtnWrap}
-            onPress={() => router.push("/my-trainers")}
+            onPress={() => router.navigate("/my-trainers")}
             accessibilityLabel="Open my trainers"
           >
             <View style={[styles.trainersBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
@@ -269,7 +276,7 @@ export default function MyPTHome() {
             </View>
           </BounceButton>
           <View style={{ flex: 1 }} />
-          <BounceButton onPress={() => router.push("/trainer/messages")} accessibilityLabel="Open messages">
+          <BounceButton onPress={() => router.navigate("/trainer/messages")} accessibilityLabel="Open messages">
             <View>
               <View style={[styles.circleBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
                 <ChatIcon size={18} color={t.tp} />
@@ -277,7 +284,7 @@ export default function MyPTHome() {
               <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
             </View>
           </BounceButton>
-          <BounceButton onPress={() => router.push("/connect")} accessibilityLabel="Connect with someone">
+          <BounceButton onPress={() => router.navigate("/connect")} accessibilityLabel="Connect with someone">
             <View>
               <View style={[styles.circleBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
                 <Ionicons name="add" size={24} color={t.tp} />
@@ -299,7 +306,7 @@ export default function MyPTHome() {
               <Text style={[styles.emptyBody, { color: t.ts }]}>
                 Connect with a personal trainer to share programs and get feedback on your progress.
               </Text>
-              <BounceButton style={{ marginTop: 8 }} onPress={() => router.push("/connect")}>
+              <BounceButton style={{ marginTop: 8 }} onPress={() => router.navigate("/connect")}>
                 <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                   <Text style={styles.ctaText}>Connect a Trainer</Text>
                 </View>
@@ -410,7 +417,7 @@ export default function MyPTHome() {
                 <View style={styles.actionRow}>
                   <BounceButton
                     style={{ flex: 1 }}
-                    onPress={() => router.push({ pathname: "/program-view", params: { sharedId: r.id } })}
+                    onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: r.id } })}
                     accessibilityLabel={`View ${r.programName}`}
                   >
                     <NeuCard dark={isDark} radius={14} innerStyle={styles.viewBtnInner}>
@@ -435,7 +442,7 @@ export default function MyPTHome() {
                   <TouchableOpacity
                     key={r.id}
                     activeOpacity={0.85}
-                    onPress={() => router.push(
+                    onPress={() => router.navigate(
                       r.acceptedProgramId
                         ? { pathname: "/programs", params: { focus: r.acceptedProgramId } }
                         : "/programs"
@@ -505,7 +512,7 @@ export default function MyPTHome() {
               return (
                 <TouchableOpacity
                   key={r.id}
-                  onPress={() => router.push({ pathname: "/program-view", params: { sharedId: r.id } })}
+                  onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: r.id } })}
                   activeOpacity={0.7}
                   accessibilityRole="button"
                   accessibilityLabel={`View ${r.programName}`}
@@ -540,7 +547,7 @@ export default function MyPTHome() {
         </View>
         {!collapsedSentToTrainer ? (sent.length === 0 ? (
           <NeuCard dark={isDark} radius={16}>
-            <Text style={[styles.smallEmpty, { color: t.ts }]}>You haven't sent any programs to your trainer yet.</Text>
+            <Text style={[styles.smallEmpty, { color: t.ts }]}>{`You haven't sent any programs to your trainer yet.`}</Text>
           </NeuCard>
         ) : (
           sent.map(s => {
@@ -628,7 +635,7 @@ export default function MyPTHome() {
                         )}
                         <BounceButton
                           style={{ flex: 1 }}
-                          onPress={() => router.push({ pathname: "/program-view", params: { sentId: s.id } })}
+                          onPress={() => router.navigate({ pathname: "/program-view", params: { sentId: s.id } })}
                           accessibilityLabel={`View ${s.programName}`}
                         >
                           <NeuCard dark={isDark} radius={14} innerStyle={styles.viewBtnInner}>
@@ -661,8 +668,8 @@ export default function MyPTHome() {
               const label = applied ? "Applied" : returned ? "Returned" : "Awaiting review";
               const accent = applied || returned;
               const onPress = () => {
-                if (applied) router.push({ pathname: "/programs", params: { focus: s.programId } });
-                else router.push({ pathname: "/program-view", params: { sentId: s.id } });
+                if (applied) router.navigate({ pathname: "/programs", params: { focus: s.programId } });
+                else router.navigate({ pathname: "/program-view", params: { sentId: s.id } });
               };
               return (
                 <TouchableOpacity
