@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Avenas uses your photo library to set your profile photo and to add an image or video to your custom exercises.",
         "NSCameraUsageDescription": "Avenas uses your camera to scan a connect code and to take a photo for your custom exercise.",
@@ -23,7 +23,7 @@
       },
       "bundleIdentifier": "com.avenas.app",
       "appleTeamId": "8X55YH783A",
-      "buildNumber": "27"
+      "buildNumber": "28"
     },
     "android": {
       "adaptiveIcon": {
