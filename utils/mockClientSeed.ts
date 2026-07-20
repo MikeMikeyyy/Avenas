@@ -1,5 +1,9 @@
 // Seeds 3 mock clients with plausible workout history + programs + journal.
-// Runs once, guarded by PT_SEEDED_KEY, so flipping role on/off won't re-seed.
+// DEV ONLY — production builds never seed (and actively clean up any demo
+// clients a previous dev build left on the device), so real trainer accounts
+// start with an empty roster that fills from real connections.
+// In dev it runs once, guarded by PT_SEEDED_KEY, so flipping role on/off
+// won't re-seed.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
@@ -133,6 +137,21 @@ function buildHistory(clientId: string): CompletedWorkout[] {
 }
 
 export async function seedMockClientsIfNeeded(): Promise<Client[]> {
+  if (!__DEV__) {
+    // Production: no seeding, and scrub any mock clients (all ids are
+    // mock_client_*) left behind by a dev build on this device.
+    const raw = await AsyncStorage.getItem(CLIENTS_KEY);
+    const clients: Client[] = raw ? JSON.parse(raw) : [];
+    const real = clients.filter(c => !c.id.startsWith("mock_client_"));
+    if (real.length !== clients.length) {
+      await setJSON(CLIENTS_KEY, real);
+      await AsyncStorage.multiRemove(
+        clients.filter(c => c.id.startsWith("mock_client_")).map(c => clientDataKey(c.id)),
+      );
+    }
+    return real;
+  }
+
   const seeded = await AsyncStorage.getItem(PT_SEEDED_KEY);
   if (seeded === "1") {
     const raw = await AsyncStorage.getItem(CLIENTS_KEY);

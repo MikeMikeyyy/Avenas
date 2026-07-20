@@ -226,7 +226,13 @@ export default function MyPTHome() {
       status: "sent",
       programSnapshot: program,
     };
-    await appendSentProgram(entry);
+    try {
+      // Real trainers (uuid id) receive through the cloud; mock stays local.
+      await appendSentProgram(entry, pt.id);
+    } catch (e) {
+      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      return;
+    }
     setSent(prev => [entry, ...prev]);
     Alert.alert("Sent", `"${program.name}" was sent to ${pt.name}.`);
   }, [pt]);

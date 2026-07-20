@@ -121,6 +121,27 @@ export type CustomExerciseRow = {
   updated_at: string;
 };
 
+// ── shared programs (cross-account sharing; migration 0013) ───────────────────
+export type SharedProgramRow = {
+  id: string;
+  sender_id: string;
+  recipient_id: string;
+  kind: "share" | "review";
+  /** The sender's local @avenas/programs id — round-trips so batch grouping
+   *  (programId|sentAtISO) and review apply-in-place keep working. */
+  sender_program_id: string;
+  program_name: string;
+  snapshot: Record<string, unknown>;          // SavedProgram (canonical kg)
+  sent_key: string;                           // sender's client-side sentAtISO
+  sent_at: string;
+  last_edited_at: string | null;
+  accepted_at: string | null;
+  deleted_by_recipient_at: string | null;
+  returned_at: string | null;
+  trainer_comments: string | null;
+  returned_snapshot: Record<string, unknown> | null;
+};
+
 // ── push tokens (server-sent notifications; migration 0012) ───────────────────
 // Written only through the register_push_token RPC (see lib/push.ts); the row
 // shape here is for reads/deletes.

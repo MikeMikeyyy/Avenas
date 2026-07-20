@@ -116,7 +116,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
             <View style={{ flex: 1 }}>
               <Text style={[styles.swTitle, { color: t.tp }]}>Which day is it today?</Text>
               <Text style={[styles.swSubtitle, { color: t.ts }]} numberOfLines={2}>
-                Pick where you are in your '{program.name}' cycle
+                {`Pick where you are in your '${program.name}' cycle`}
               </Text>
             </View>
           </View>
@@ -662,8 +662,15 @@ export default function ProgramsScreen() {
               programName: program.name,
               sentAtISO: new Date().toISOString(),
               status: "sent",
+              programSnapshot: program,
             };
-            await appendSentProgram(entry);
+            try {
+              // Real trainers (uuid id) receive through the cloud; mock stays local.
+              await appendSentProgram(entry, assignedPT.id);
+            } catch (e) {
+              Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+              return;
+            }
             Alert.alert("Sent", `"${program.name}" was sent to ${assignedPT.name}.`);
           },
         },

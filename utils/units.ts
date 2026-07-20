@@ -80,6 +80,20 @@ export function toKgWeight(display: number, isKg: boolean): number {
 }
 
 /**
+ * Reinterpret a DISPLAY-unit weight string from one unit into another, keeping
+ * the underlying load constant (via canonical kg). Used when the unit toggle
+ * changes while an in-progress log/edit buffer holds display-unit strings:
+ * without this, finishing would parse those strings in the NEW unit and
+ * silently rewrite the stored kg. No-op when the unit is unchanged; non-numeric
+ * inputs ("BW"/"") pass through. See [[unit-toggle-should-convert]].
+ */
+export function reinterpretWeightUnit(displayWeight: string, fromIsKg: boolean, toIsKg: boolean): string {
+  if (fromIsKg === toIsKg) return displayWeight;
+  const kg = parseWeightToKg(displayWeight, fromIsKg);
+  return formatWeightForDisplay(kg, toIsKg);
+}
+
+/**
  * Convert the weight part of a "weight×reps" previous-set hint for display.
  * Only the "w×r" form is converted (the weight is unambiguously before the ×);
  * a bare token ("10" — could be a weight or bodyweight reps) is left as-is to

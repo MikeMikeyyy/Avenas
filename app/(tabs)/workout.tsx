@@ -35,7 +35,7 @@ import type { LiveActivityTickAction } from "../../modules/avenas-live-activity"
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
 import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, normalizeExerciseName, type DayOverride } from "../../utils/workout";
-import { formatWeightForDisplay, parseWeightToKg, formatPrevHint } from "../../utils/units";
+import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import IntervalTimerModal from "../../components/IntervalTimerModal";
@@ -1446,6 +1446,37 @@ export default function WorkoutScreen() {
   // them every keystroke and defeat MemoExerciseCard.
   const logRef = useRef(log);
   useEffect(() => { logRef.current = log; }, [log]);
+  // Which unit the live `log` weight strings are currently expressed in. The log
+  // holds DISPLAY-unit strings (converted to canonical kg only at finish), so if
+  // the unit toggle changes mid-session we must re-express every string in the
+  // new unit — otherwise finishing would parse them in the wrong unit and
+  // silently rewrite the stored kg. Seeded from the restored draft's unit; kept
+  // in sync by the effect below. See [[unit-toggle-should-convert]].
+  const logUnitRef = useRef(isKg);
+  // Re-express the live log's weight strings when the unit toggle flips while a
+  // session is in progress, keeping every load constant. logUnitRef always
+  // tracks the unit the strings are in (seeded from the draft on restore), so
+  // this only converts on a genuine change — never on the async unit load at
+  // launch, and never double-converts a restored draft.
+  useEffect(() => {
+    if (logUnitRef.current === isKg) return;
+    const from = logUnitRef.current;
+    logUnitRef.current = isKg;
+    setLog(prev => {
+      let changed = false;
+      const convert = (sets: SetLog[]) => sets.map(s => {
+        const w = reinterpretWeightUnit(s.weight, from, isKg);
+        if (w === s.weight) return s;
+        changed = true;
+        return { ...s, weight: w };
+      });
+      const next: WorkoutLog = {};
+      for (const [exId, exLog] of Object.entries(prev)) {
+        next[exId] = { ...exLog, warmup: convert(exLog.warmup), working: convert(exLog.working) };
+      }
+      return changed ? next : prev;
+    });
+  }, [isKg]);
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [changingExId, setChangingExId] = useState<string | null>(null);
   const [addingExercise, setAddingExercise] = useState(false);
@@ -1613,6 +1644,11 @@ export default function WorkoutScreen() {
           effectiveTodayRef.current = effective;
           if (draft?.date === effective && draft.workoutInfo && draft.log) {
             setWorkoutInfo(draft.workoutInfo);
+            // The draft's weight strings are in the unit that was active when it
+            // was saved; record it so a later unit toggle converts correctly.
+            // Legacy drafts (pre-unitIsKg) are same-day and predate this — leave
+            // the ref at its mount value (current unit), matching an untoggled user.
+            if (typeof draft.unitIsKg === "boolean") logUnitRef.current = draft.unitIsKg;
             setLog(draft.log);
             setIsometricExIds(new Set(draft.isometricExIds ?? []));
             setNotes(draft.notes ?? "");
@@ -1725,6 +1761,9 @@ export default function WorkoutScreen() {
       date: effectiveTodayRef.current,
       workoutInfo,
       log,
+      // The unit `log`'s weight strings are in, so a restore after a unit toggle
+      // (or on another day) re-expresses them correctly instead of reinterpreting.
+      unitIsKg: logUnitRef.current,
       isometricExIds: Array.from(isometricExIds),
       notes,
       isFreeWorkout,
@@ -1733,7 +1772,7 @@ export default function WorkoutScreen() {
     if (!draftTimerRef.current) {
       draftTimerRef.current = setTimeout(() => { draftTimerRef.current = null; flushDraft(); }, 400);
     }
-  }, [draftRestored, todaysCompletedWorkout, isRunning, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram, flushDraft]);
+  }, [draftRestored, todaysCompletedWorkout, isRunning, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram, isKg, flushDraft]);
 
   const clearDraft = useCallback(() => {
     draftLockedRef.current = false;

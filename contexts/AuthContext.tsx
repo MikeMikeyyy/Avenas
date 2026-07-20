@@ -19,6 +19,7 @@ import {
 } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { registerPushToken } from "../lib/push";
+import { flushPendingReports } from "../utils/moderation";
 
 interface AuthContextValue {
   /** True once the initial session check has finished (gate waits on this). */
@@ -105,6 +106,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Keep this device's push token fresh (no-ops in Expo Go / simulator /
         // when permission isn't granted).
         void registerPushToken();
+        // Deliver any reports filed while offline (no-op when none queued).
+        void flushPendingReports();
       }
     });
 

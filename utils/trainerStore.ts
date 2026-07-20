@@ -1,13 +1,38 @@
-// Mock data layer for the Trainer feature. Local-only (AsyncStorage).
+// Data layer for the Trainer feature.
 //
-// Real backend will replace this — keep the shapes minimal and the API
-// async-only so swapping to fetch() later is a contained change.
+// Rosters and client training data are still local/mock, BUT program sharing
+// is now REAL for connected accounts: entries whose counterpart id is an auth
+// uid ride supabase's shared_programs table (migration 0013, full program
+// snapshot per row) while mock-roster people keep the on-device path — the
+// same routing pattern utils/chatStore.ts uses for messages. Loads merge
+// cloud + local into the existing SharedProgram / SentProgram shapes, so the
+// screens never know the difference; mutations route by id (uuid → cloud).
+// Cloud loads fail soft to local-only when offline.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getJSON, removeKey, setJSON } from "./storage";
 import { formatStoredDate } from "./dates";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
+import { ACCOUNT_TYPE_KEY } from "../contexts/AccountTypeContext";
+import { isCloudContactId } from "../lib/chat";
+import {
+  deleteShareRow,
+  fetchMyShareRows,
+  fetchShareRow,
+  getMyUid,
+  insertShareRows,
+  updateShareRow,
+  type NewShareRow,
+  type SharedProgramRow,
+} from "../lib/shares";
+
+const warnShares = (op: string, err: unknown) => {
+  if (__DEV__) console.warn("[avenas] shares", op, err);
+};
+
+/** Cloud rows are keyed by uuid; local mock entries by `share_…` / `sent_…`. */
+const isCloudShareId = isCloudContactId;
 
 export const CLIENTS_KEY = "@avenas/pt/clients";
 export const CLIENT_DATA_PREFIX = "@avenas/pt/client_data/";
@@ -101,6 +126,113 @@ export type SentProgram = {
 
 export const clientDataKey = (clientId: string) => `${CLIENT_DATA_PREFIX}${clientId}`;
 
+// ─── cloud share plumbing ─────────────────────────────────────────────────────
+
+/** Per-cloud-share local state the server doesn't need: which LOCAL program a
+ *  recipient's accept materialised, so re-accepts update in place. */
+export const CLOUD_SHARE_META_KEY = "@avenas/pt/cloud_share_meta";
+type CloudShareMeta = Record<string, { acceptedProgramId?: string }>;
+
+async function loadShareMeta(): Promise<CloudShareMeta> {
+  return getJSON<CloudShareMeta>(CLOUD_SHARE_META_KEY, {});
+}
+async function saveShareMeta(meta: CloudShareMeta): Promise<void> {
+  await setJSON(CLOUD_SHARE_META_KEY, meta);
+}
+
+async function viewerIsPT(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(ACCOUNT_TYPE_KEY)) === "pt";
+  } catch {
+    return false;
+  }
+}
+
+/** Map a cloud 'share' row into the SharedProgram shape the screens consume.
+ *  Direction is derived from the viewer: incoming rows surface under
+ *  receivedFromCoachId for trainers (My Coaches) and as plain received entries
+ *  for gym users; outgoing rows keep clientId = recipient. */
+function rowToShared(row: SharedProgramRow, uid: string, isPT: boolean, meta: CloudShareMeta): SharedProgram {
+  const incoming = row.recipient_id === uid;
+  return {
+    id: row.id,
+    clientId: incoming ? uid : row.recipient_id,
+    programId: row.sender_program_id,
+    programName: row.program_name,
+    sentAtISO: row.sent_key,
+    receivedFromCoachId: incoming && isPT ? row.sender_id : undefined,
+    programSnapshot: row.snapshot as unknown as SavedProgram,
+    acceptedAtISO: row.accepted_at ?? undefined,
+    acceptedProgramId: incoming ? meta[row.id]?.acceptedProgramId : undefined,
+    lastEditedAtISO: row.last_edited_at ?? undefined,
+    deletedByRecipientAtISO: row.deleted_by_recipient_at ?? undefined,
+  };
+}
+
+/** Map a cloud 'review' row into the SentProgram shape. Serves both sides:
+ *  the gym user (sender) sees their sent list, the trainer (recipient) their
+ *  reviews inbox. The trainer's working copy lives in returned_snapshot. */
+function rowToSent(row: SharedProgramRow): SentProgram {
+  return {
+    id: row.id,
+    programId: row.sender_program_id,
+    programName: row.program_name,
+    sentAtISO: row.sent_key,
+    status: row.returned_at ? "returned" : "sent",
+    programSnapshot: (row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram,
+    returnedAtISO: row.returned_at ?? undefined,
+    trainerComments: row.trainer_comments ?? undefined,
+    appliedAtISO: row.accepted_at ?? undefined,
+    lastEditedAtISO: row.last_edited_at ?? undefined,
+  };
+}
+
+/** All my cloud rows, or [] when offline / signed out (fail soft — the local
+ *  entries still render, and the next focus retries). */
+async function fetchCloudRowsSafe(): Promise<{ uid: string; rows: SharedProgramRow[] } | null> {
+  try {
+    const uid = await getMyUid();
+    if (!uid) return null;
+    return { uid, rows: await fetchMyShareRows(uid) };
+  } catch (e) {
+    warnShares("fetch", e);
+    return null;
+  }
+}
+
+/** Materialise a program snapshot into @avenas/programs. Re-uses (and updates
+ *  in place) `priorId` when that program still exists — a re-accept after the
+ *  sender edited lands on the same local program. Returns the local id. */
+async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promise<string> {
+  const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+  const existing = priorId ? programs.find(p => p.id === priorId) : undefined;
+  if (existing) {
+    const updated = programs.map(p => p.id === existing.id ? {
+      ...p,
+      name: snap.name,
+      totalWeeks: snap.totalWeeks,
+      trainingDays: snap.trainingDays,
+      cycleDays: snap.cycleDays,
+      cyclePattern: snap.cyclePattern,
+      workouts: snap.workouts,
+    } : p);
+    await setJSON(PROGRAMS_KEY, updated);
+    return existing.id;
+  }
+  const importedId = `program_${Date.now()}`;
+  const imported: SavedProgram = {
+    ...snap,
+    id: importedId,
+    status: "created",
+    currentWeek: 0,
+    startDate: formatStoredDate(new Date()),
+    cycleOffset: undefined,
+    completedDate: undefined,
+  };
+  await setJSON(PROGRAMS_KEY, [...programs, imported]);
+  return importedId;
+}
+
 export async function loadClients(): Promise<Client[]> {
   return getJSON<Client[]>(CLIENTS_KEY, []);
 }
@@ -115,12 +247,55 @@ export async function saveClientData(clientId: string, data: ClientData): Promis
   await setJSON(clientDataKey(clientId), data);
 }
 
-export async function loadSharedPrograms(): Promise<SharedProgram[]> {
+/** Local (mock-roster) share entries only. */
+async function loadLocalSharedPrograms(): Promise<SharedProgram[]> {
   return getJSON<SharedProgram[]>(SHARED_PROGRAMS_KEY, []);
 }
+
+/** All share entries the viewer can see: local mock entries merged with cloud
+ *  'share' rows (both directions), newest first. */
+export async function loadSharedPrograms(): Promise<SharedProgram[]> {
+  const local = await loadLocalSharedPrograms();
+  const cloud = await fetchCloudRowsSafe();
+  if (!cloud) return local;
+  const [isPT, meta] = await Promise.all([viewerIsPT(), loadShareMeta()]);
+  const mapped = cloud.rows
+    .filter(r => r.kind === "share")
+    .map(r => rowToShared(r, cloud.uid, isPT, meta));
+  return [...mapped, ...local].sort(
+    (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
+  );
+}
+
+/** Send program shares. Entries addressed to REAL accounts (uuid clientId) go
+ *  through the cloud table — and THROW when that fails (offline / not
+ *  connected), so callers can tell the user instead of faking success. Mock
+ *  roster entries keep the local path. */
 export async function appendSharedPrograms(entries: SharedProgram[]): Promise<void> {
-  const existing = await loadSharedPrograms();
-  await setJSON(SHARED_PROGRAMS_KEY, [...entries, ...existing]);
+  const cloudEntries = entries.filter(e => e.clientId !== "all" && isCloudContactId(e.clientId));
+  const localEntries = entries.filter(e => !cloudEntries.includes(e));
+  if (cloudEntries.length > 0) {
+    const uid = await getMyUid();
+    if (!uid) throw new Error("Sign in to send programs to connected accounts.");
+    const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+    const rows: NewShareRow[] = cloudEntries.map(e => {
+      const snapshot = e.programSnapshot ?? programs.find(p => p.id === e.programId);
+      if (!snapshot) throw new Error(`Program "${e.programName}" was not found.`);
+      return {
+        recipientId: e.clientId as string,
+        kind: "share",
+        senderProgramId: e.programId,
+        programName: e.programName,
+        snapshot,
+        sentKey: e.sentAtISO,
+      };
+    });
+    await insertShareRows(uid, rows);
+  }
+  if (localEntries.length > 0) {
+    const existing = await loadLocalSharedPrograms();
+    await setJSON(SHARED_PROGRAMS_KEY, [...localEntries, ...existing]);
+  }
 }
 
 /** Stable grouping key — every entry created in a single send call shares the same sentAtISO. */
@@ -132,7 +307,7 @@ export function batchKeyOf(s: SharedProgram): string {
  *  Idempotent — does nothing when no broadcast entries are present. */
 export async function migrateBroadcastShares(clients: Client[]): Promise<void> {
   if (clients.length === 0) return;
-  const list = await loadSharedPrograms();
+  const list = await loadLocalSharedPrograms();
   if (!list.some(s => s.clientId === "all")) return;
   const next: SharedProgram[] = [];
   for (const s of list) {
@@ -144,79 +319,125 @@ export async function migrateBroadcastShares(clients: Client[]): Promise<void> {
   await setJSON(SHARED_PROGRAMS_KEY, next);
 }
 
-/** Accept every share entry in a batch as a single unit.
- *  Materialises the snapshot to @avenas/programs exactly once (re-using an existing
- *  acceptedProgramId if any batch entry already has one) so all recipients land on
- *  the same local program. */
+/** Accept every share entry in a batch as a single unit — LOCAL entries and my
+ *  incoming CLOUD rows alike. Materialises the snapshot to @avenas/programs
+ *  exactly once (re-using an existing acceptedProgramId from either side) so
+ *  all entries in the batch land on the same local program. */
 export async function acceptSharedProgramBatch(batchKey: string): Promise<string | null> {
-  const list = await loadSharedPrograms();
-  const targets = list.filter(s => batchKeyOf(s) === batchKey);
-  if (targets.length === 0) return null;
-  const snap = targets.find(t => t.programSnapshot)?.programSnapshot;
   const acceptedAt = new Date().toISOString();
+  const list = await loadLocalSharedPrograms();
+  const localTargets = list.filter(s => batchKeyOf(s) === batchKey);
 
+  const cloud = await fetchCloudRowsSafe();
+  const meta = await loadShareMeta();
+  const cloudTargets = (cloud?.rows ?? []).filter(
+    r => r.kind === "share" && r.recipient_id === cloud?.uid && `${r.sender_program_id}|${r.sent_key}` === batchKey,
+  );
+  if (localTargets.length === 0 && cloudTargets.length === 0) return null;
+
+  const snap =
+    localTargets.find(t => t.programSnapshot)?.programSnapshot ??
+    (cloudTargets[0]?.snapshot as unknown as SavedProgram | undefined);
   if (!snap) {
     const next = list.map(s => batchKeyOf(s) === batchKey ? { ...s, acceptedAtISO: acceptedAt } : s);
     await setJSON(SHARED_PROGRAMS_KEY, next);
     return null;
   }
 
-  const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-  const priorId = targets.find(t => t.acceptedProgramId)?.acceptedProgramId;
-  const existing = priorId ? programs.find(p => p.id === priorId) : undefined;
-  let importedId: string;
+  const priorId =
+    localTargets.find(t => t.acceptedProgramId)?.acceptedProgramId ??
+    cloudTargets.map(r => meta[r.id]?.acceptedProgramId).find(Boolean);
+  const importedId = await materialiseSnapshot(snap, priorId);
 
-  if (existing) {
-    importedId = existing.id;
-    const updated = programs.map(p => p.id === importedId ? {
-      ...p,
-      name: snap.name,
-      totalWeeks: snap.totalWeeks,
-      trainingDays: snap.trainingDays,
-      cycleDays: snap.cycleDays,
-      cyclePattern: snap.cyclePattern,
-      workouts: snap.workouts,
-    } : p);
-    await setJSON(PROGRAMS_KEY, updated);
-  } else {
-    importedId = `program_${Date.now()}`;
-    const imported: SavedProgram = {
-      ...snap,
-      id: importedId,
-      status: "created",
-      currentWeek: 0,
-      startDate: formatStoredDate(new Date()),
-      cycleOffset: undefined,
-      completedDate: undefined,
-    };
-    await setJSON(PROGRAMS_KEY, [...programs, imported]);
+  if (localTargets.length > 0) {
+    const next = list.map(s => batchKeyOf(s) === batchKey
+      ? { ...s, acceptedAtISO: acceptedAt, acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
+      : s
+    );
+    await setJSON(SHARED_PROGRAMS_KEY, next);
   }
-
-  const next = list.map(s => batchKeyOf(s) === batchKey
-    ? { ...s, acceptedAtISO: acceptedAt, acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
-    : s
-  );
-  await setJSON(SHARED_PROGRAMS_KEY, next);
+  for (const r of cloudTargets) {
+    meta[r.id] = { acceptedProgramId: importedId };
+    try {
+      await updateShareRow(r.id, { accepted_at: acceptedAt, deleted_by_recipient_at: null });
+    } catch (e) {
+      // Local import already happened; the pending stamp just means the entry
+      // still shows unaccepted next load — re-accepting is idempotent.
+      warnShares("acceptBatch", e);
+    }
+  }
+  await saveShareMeta(meta);
   return importedId;
 }
 
-/** Unsend a whole batch. */
+/** Unsend a whole batch (local entries + my outgoing cloud rows). */
 export async function removeSharedProgramBatch(batchKey: string): Promise<void> {
-  const existing = await loadSharedPrograms();
+  const existing = await loadLocalSharedPrograms();
   await setJSON(SHARED_PROGRAMS_KEY, existing.filter(s => batchKeyOf(s) !== batchKey));
+  const cloud = await fetchCloudRowsSafe();
+  for (const r of (cloud?.rows ?? []).filter(
+    r => r.kind === "share" && r.sender_id === cloud?.uid && `${r.sender_program_id}|${r.sent_key}` === batchKey,
+  )) {
+    try {
+      await deleteShareRow(r.id);
+    } catch (e) {
+      warnShares("unsendBatch", e);
+    }
+  }
 }
 
 /** Apply a patch to every entry in the batch. Used by the post-send edit flow. */
 export async function updateSharedProgramBatch(batchKey: string, patch: Partial<SharedProgram>): Promise<void> {
-  const existing = await loadSharedPrograms();
+  const existing = await loadLocalSharedPrograms();
   const next = existing.map(s => batchKeyOf(s) === batchKey ? { ...s, ...patch } : s);
   await setJSON(SHARED_PROGRAMS_KEY, next);
+  const cloud = await fetchCloudRowsSafe();
+  const rowPatch: Parameters<typeof updateShareRow>[1] = {};
+  if (patch.programSnapshot) rowPatch.snapshot = patch.programSnapshot as unknown as Record<string, unknown>;
+  if (patch.programName) rowPatch.program_name = patch.programName;
+  if (patch.lastEditedAtISO) rowPatch.last_edited_at = patch.lastEditedAtISO;
+  // An explicit `acceptedAtISO: undefined` in the patch is the sender resetting
+  // acceptance after an edit — mirror that as a NULL, not "leave unchanged".
+  if ("acceptedAtISO" in patch) rowPatch.accepted_at = patch.acceptedAtISO ?? null;
+  if (Object.keys(rowPatch).length === 0) return;
+  for (const r of (cloud?.rows ?? []).filter(
+    r => r.kind === "share" && r.sender_id === cloud?.uid && `${r.sender_program_id}|${r.sent_key}` === batchKey,
+  )) {
+    try {
+      await updateShareRow(r.id, rowPatch);
+    } catch (e) {
+      warnShares("editBatch", e);
+    }
+  }
 }
 
 /** Accept a shared program. On first accept the snapshot is appended to @avenas/programs.
  *  On a re-accept (trainer edited after the user previously accepted) the existing local program is updated in place. */
 export async function acceptSharedProgram(shareId: string): Promise<string | null> {
-  const list = await loadSharedPrograms();
+  if (isCloudShareId(shareId)) {
+    let row: SharedProgramRow | null = null;
+    try {
+      row = await fetchShareRow(shareId);
+    } catch (e) {
+      warnShares("accept", e);
+    }
+    if (!row) return null;
+    const meta = await loadShareMeta();
+    const importedId = await materialiseSnapshot(
+      row.snapshot as unknown as SavedProgram,
+      meta[row.id]?.acceptedProgramId,
+    );
+    meta[row.id] = { acceptedProgramId: importedId };
+    await saveShareMeta(meta);
+    try {
+      await updateShareRow(row.id, { accepted_at: new Date().toISOString(), deleted_by_recipient_at: null });
+    } catch (e) {
+      warnShares("acceptStamp", e); // local import done; re-accept is idempotent
+    }
+    return importedId;
+  }
+
+  const list = await loadLocalSharedPrograms();
   const target = list.find(s => s.id === shareId);
   if (!target) return null;
   if (!target.programSnapshot) {
@@ -226,42 +447,7 @@ export async function acceptSharedProgram(shareId: string): Promise<string | nul
     return null;
   }
 
-  const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-  const snap = target.programSnapshot;
-  let importedId: string;
-
-  const existing = target.acceptedProgramId
-    ? programs.find(p => p.id === target.acceptedProgramId)
-    : undefined;
-
-  if (existing) {
-    // Re-accept after a trainer edit — overwrite the existing local program in place.
-    importedId = existing.id;
-    const updated = programs.map(p => p.id === importedId ? {
-      ...p,
-      name: snap.name,
-      totalWeeks: snap.totalWeeks,
-      trainingDays: snap.trainingDays,
-      cycleDays: snap.cycleDays,
-      cyclePattern: snap.cyclePattern,
-      workouts: snap.workouts,
-    } : p);
-    await setJSON(PROGRAMS_KEY, updated);
-  } else {
-    // First accept (or the local program was deleted) — insert a fresh one.
-    importedId = `program_${Date.now()}`;
-    const imported: SavedProgram = {
-      ...snap,
-      id: importedId,
-      status: "created",
-      currentWeek: 0,
-      startDate: formatStoredDate(new Date()),
-      cycleOffset: undefined,
-      completedDate: undefined,
-    };
-    await setJSON(PROGRAMS_KEY, [...programs, imported]);
-  }
-
+  const importedId = await materialiseSnapshot(target.programSnapshot, target.acceptedProgramId);
   const next = list.map(s => s.id === shareId
     ? { ...s, acceptedAtISO: new Date().toISOString(), acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
     : s
@@ -345,7 +531,7 @@ export async function disconnectTrainer(id: string): Promise<void> {
  *  coach id. Now that connected trainers also live in the client roster that
  *  heuristic collides, so stamp the explicit flag once. Idempotent. */
 export async function migrateCoachReceivedShares(): Promise<void> {
-  const [shares, coaches] = await Promise.all([loadSharedPrograms(), loadCoaches()]);
+  const [shares, coaches] = await Promise.all([loadLocalSharedPrograms(), loadCoaches()]);
   if (coaches.length === 0 || shares.length === 0) return;
   const coachIds = new Set(coaches.map(c => c.id));
   let mutated = false;
@@ -357,11 +543,48 @@ export async function migrateCoachReceivedShares(): Promise<void> {
   if (mutated) await setJSON(SHARED_PROGRAMS_KEY, next);
 }
 
-export async function loadSentPrograms(): Promise<SentProgram[]> {
+async function loadLocalSentPrograms(): Promise<SentProgram[]> {
   return getJSON<SentProgram[]>(SENT_PROGRAMS_KEY, []);
 }
-export async function appendSentProgram(entry: SentProgram): Promise<void> {
-  const existing = await loadSentPrograms();
+
+/** The viewer's review entries: local ones merged with cloud 'review' rows.
+ *  Direction is viewer-dependent — a trainer sees their reviews INBOX
+ *  (recipient side, minus ones they dismissed), a gym user their SENT list. */
+export async function loadSentPrograms(): Promise<SentProgram[]> {
+  const local = await loadLocalSentPrograms();
+  const cloud = await fetchCloudRowsSafe();
+  if (!cloud) return local;
+  const isPT = await viewerIsPT();
+  const mapped = cloud.rows
+    .filter(r => r.kind === "review")
+    .filter(r => (isPT ? r.recipient_id === cloud.uid && !r.deleted_by_recipient_at : r.sender_id === cloud.uid))
+    .map(rowToSent);
+  return [...mapped, ...local].sort(
+    (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
+  );
+}
+
+/** Send a program for review. When the trainer is a REAL account (uuid),
+ *  the entry rides the cloud table and THROWS on failure so callers can tell
+ *  the user; a local/mock trainer keeps the on-device path. */
+export async function appendSentProgram(entry: SentProgram, recipientId?: string): Promise<void> {
+  if (recipientId && isCloudContactId(recipientId)) {
+    const uid = await getMyUid();
+    if (!uid) throw new Error("Sign in to send programs to your trainer.");
+    const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+    const snapshot = entry.programSnapshot ?? programs.find(p => p.id === entry.programId);
+    if (!snapshot) throw new Error(`Program "${entry.programName}" was not found.`);
+    await insertShareRows(uid, [{
+      recipientId,
+      kind: "review",
+      senderProgramId: entry.programId,
+      programName: entry.programName,
+      snapshot,
+      sentKey: entry.sentAtISO,
+    }]);
+    return;
+  }
+  const existing = await loadLocalSentPrograms();
   await setJSON(SENT_PROGRAMS_KEY, [entry, ...existing]);
 }
 
@@ -369,7 +592,7 @@ export async function appendSentProgram(entry: SentProgram): Promise<void> {
  *  as withdrawn rather than removing them — the trainer's per-client view filters them out,
  *  but the gym user can still re-accept from their My Trainer page if they want it back. */
 export async function removeSharedProgramByLocalId(localProgramId: string): Promise<void> {
-  const list = await loadSharedPrograms();
+  const list = await loadLocalSharedPrograms();
   let mutated = false;
   const now = new Date().toISOString();
   const next = list.map(s => {
@@ -378,11 +601,26 @@ export async function removeSharedProgramByLocalId(localProgramId: string): Prom
     return { ...s, deletedByRecipientAtISO: now, acceptedAtISO: undefined, acceptedProgramId: undefined };
   });
   if (mutated) await setJSON(SHARED_PROGRAMS_KEY, next);
+
+  // Cloud shares that materialised this local program: hide from the sender's
+  // view + clear the accept, keeping the row so the recipient can re-accept.
+  const meta = await loadShareMeta();
+  const affected = Object.entries(meta).filter(([, m]) => m.acceptedProgramId === localProgramId);
+  if (affected.length === 0) return;
+  for (const [id] of affected) {
+    delete meta[id];
+    try {
+      await updateShareRow(id, { deleted_by_recipient_at: now, accepted_at: null });
+    } catch (e) {
+      warnShares("hideByLocalId", e);
+    }
+  }
+  await saveShareMeta(meta);
 }
 
 /** Migration: pre-acceptedProgramId entries are linked back to a local program by name + snapshot match. */
 export async function backfillAcceptedProgramIds(): Promise<void> {
-  const shares = await loadSharedPrograms();
+  const shares = await loadLocalSharedPrograms();
   const orphan = shares.filter(s => s.acceptedAtISO && !s.acceptedProgramId);
   if (orphan.length === 0) return;
 
@@ -400,26 +638,68 @@ export async function backfillAcceptedProgramIds(): Promise<void> {
 }
 
 export async function updateSentProgram(id: string, patch: Partial<SentProgram>): Promise<void> {
-  const existing = await loadSentPrograms();
+  if (isCloudShareId(id)) {
+    // Trainer-side review edits/returns map onto the row's review columns; the
+    // ORIGINAL snapshot is never touched, the working copy is returned_snapshot.
+    const rowPatch: Parameters<typeof updateShareRow>[1] = {};
+    if (patch.programSnapshot) rowPatch.returned_snapshot = patch.programSnapshot as unknown as Record<string, unknown>;
+    if (patch.programName) rowPatch.program_name = patch.programName;
+    if (patch.lastEditedAtISO) rowPatch.last_edited_at = patch.lastEditedAtISO;
+    if (patch.trainerComments !== undefined) rowPatch.trainer_comments = patch.trainerComments ?? null;
+    if (patch.status === "returned" || patch.returnedAtISO) rowPatch.returned_at = patch.returnedAtISO ?? new Date().toISOString();
+    if (patch.appliedAtISO) rowPatch.accepted_at = patch.appliedAtISO;
+    if (Object.keys(rowPatch).length === 0) return;
+    try {
+      await updateShareRow(id, rowPatch);
+    } catch (e) {
+      warnShares("updateSent", e);
+      throw e instanceof Error ? e : new Error("Couldn't update the program.");
+    }
+    return;
+  }
+  const existing = await loadLocalSentPrograms();
   const next = existing.map(s => s.id === id ? { ...s, ...patch } : s);
   await setJSON(SENT_PROGRAMS_KEY, next);
 }
 
 /** Gym user accepts a returned program: overwrite the original entry in @avenas/programs with the trainer's edited snapshot. */
 export async function applyReturnedProgram(id: string): Promise<void> {
-  const list = await loadSentPrograms();
+  if (isCloudShareId(id)) {
+    let row: SharedProgramRow | null = null;
+    try {
+      row = await fetchShareRow(id);
+    } catch (e) {
+      warnShares("applyReturned", e);
+    }
+    if (!row || !row.returned_at || row.accepted_at) return;
+    const snap = (row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram;
+    // In-place over the sender's original program; a fresh import if it's gone.
+    await materialiseSnapshotOverExisting(snap, row.sender_program_id);
+    try {
+      await updateShareRow(id, { accepted_at: new Date().toISOString() });
+    } catch (e) {
+      warnShares("applyStamp", e); // local apply done; re-apply is guarded by accepted_at staying null
+    }
+    return;
+  }
+
+  const list = await loadLocalSentPrograms();
   const target = list.find(s => s.id === id);
   if (!target || target.status !== "returned" || target.appliedAtISO) return;
   if (!target.programSnapshot) return;
+  await materialiseSnapshotOverExisting(target.programSnapshot, target.programId);
+  const nextList = list.map(s => s.id === id ? { ...s, appliedAtISO: new Date().toISOString() } : s);
+  await setJSON(SENT_PROGRAMS_KEY, nextList);
+}
 
+/** Overwrite `programId` in @avenas/programs with `snap` (preserving id,
+ *  status, currentWeek, startDate), or import fresh when it no longer exists. */
+async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: string): Promise<void> {
   const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-  const original = programs.find(p => p.id === target.programId);
-  const snap = target.programSnapshot;
-
+  const original = programs.find(p => p.id === programId);
   let nextPrograms: SavedProgram[];
   if (original) {
-    // Replace the original program in place — preserve id, status, currentWeek, startDate.
-    nextPrograms = programs.map(p => p.id === target.programId ? {
+    nextPrograms = programs.map(p => p.id === programId ? {
       ...p,
       name: snap.name,
       totalWeeks: snap.totalWeeks,
@@ -429,7 +709,6 @@ export async function applyReturnedProgram(id: string): Promise<void> {
       workouts: snap.workouts,
     } : p);
   } else {
-    // Original was deleted — import as a fresh "created" program so the user doesn't lose the edits.
     const imported: SavedProgram = {
       ...snap,
       id: `program_${Date.now()}`,
@@ -442,27 +721,52 @@ export async function applyReturnedProgram(id: string): Promise<void> {
     nextPrograms = [...programs, imported];
   }
   await setJSON(PROGRAMS_KEY, nextPrograms);
-
-  const nextList = list.map(s => s.id === id ? { ...s, appliedAtISO: new Date().toISOString() } : s);
-  await setJSON(SENT_PROGRAMS_KEY, nextList);
 }
 
 /** Gym user unsends a program they sent to the trainer. */
 export async function removeSentProgram(id: string): Promise<void> {
-  const existing = await loadSentPrograms();
+  if (isCloudShareId(id)) {
+    try {
+      await deleteShareRow(id); // sender-only per RLS — this is the sender's flow
+    } catch (e) {
+      warnShares("unsendReview", e);
+    }
+    return;
+  }
+  const existing = await loadLocalSentPrograms();
   await setJSON(SENT_PROGRAMS_KEY, existing.filter(s => s.id !== id));
 }
 
-/** Trainer unsends a program they shared with a client.
- *  If the client already accepted, the imported copy in `@avenas/programs` stays — they own it. */
+/** Remove a share entry. Sender → the row is deleted (unsend; if the client
+ *  already accepted, their imported copy in `@avenas/programs` stays — they own
+ *  it). Recipient → the row is hidden (deleted_by_recipient_at) so re-accepting
+ *  stays possible, mirroring the local model. */
 export async function removeSharedProgram(id: string): Promise<void> {
-  const existing = await loadSharedPrograms();
+  if (isCloudShareId(id)) {
+    try {
+      const uid = await getMyUid();
+      const row = await fetchShareRow(id);
+      if (!row || !uid) return;
+      if (row.sender_id === uid) {
+        await deleteShareRow(id);
+      } else {
+        await updateShareRow(id, { deleted_by_recipient_at: new Date().toISOString(), accepted_at: null });
+        const meta = await loadShareMeta();
+        if (meta[id]) { delete meta[id]; await saveShareMeta(meta); }
+      }
+    } catch (e) {
+      warnShares("remove", e);
+    }
+    return;
+  }
+  const existing = await loadLocalSharedPrograms();
   await setJSON(SHARED_PROGRAMS_KEY, existing.filter(s => s.id !== id));
 }
 
-/** Generic patch update for a SharedProgram entry. */
+/** Generic patch update for a LOCAL SharedProgram entry (cloud entries go
+ *  through the batch/accept paths above). */
 export async function updateSharedProgram(id: string, patch: Partial<SharedProgram>): Promise<void> {
-  const existing = await loadSharedPrograms();
+  const existing = await loadLocalSharedPrograms();
   const next = existing.map(s => s.id === id ? { ...s, ...patch } : s);
   await setJSON(SHARED_PROGRAMS_KEY, next);
 }
@@ -481,6 +785,7 @@ export async function clearTrainerData(): Promise<void> {
   await AsyncStorage.multiRemove([
     CLIENTS_KEY,
     SHARED_PROGRAMS_KEY,
+    CLOUD_SHARE_META_KEY,
     PT_SEEDED_KEY,
     ASSIGNED_PT_KEY,
     SENT_PROGRAMS_KEY,

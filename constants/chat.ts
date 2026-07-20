@@ -68,6 +68,10 @@ export type Report = {
   messageId?: string;
   messageText?: string;
   createdAtISO: string;
+  /** True while a report against a REAL account hasn't reached the server yet
+   *  (filed offline). Retried on the next report submission — see
+   *  utils/moderation.flushPendingReports. */
+  pendingSync?: boolean;
 };
 
 /** A person you can message: clients/coaches for a trainer, trainers for a gym user. */

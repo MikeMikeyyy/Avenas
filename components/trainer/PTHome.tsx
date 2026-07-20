@@ -307,7 +307,14 @@ export default function PTHome() {
       sentAtISO: now,
       programSnapshot: pendingProgram,
     }));
-    await appendSharedPrograms(entries);
+    try {
+      await appendSharedPrograms(entries);
+    } catch (e) {
+      // Real-account sends go through the server and genuinely fail offline —
+      // don't pretend it worked.
+      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      return;
+    }
     setSharedOut(prev => [...entries, ...prev]);
     Alert.alert("Program Sent", `"${pendingProgram.name}" was sent to ${targets.length} client${targets.length === 1 ? "" : "s"}.`);
     setPendingProgram(null);
@@ -414,7 +421,7 @@ export default function PTHome() {
             <NeuCard dark={isDark} radius={12}>
               <View style={styles.noMatchRow}>
                 <Ionicons name="search-outline" size={15} color={t.ts} />
-                <Text style={[styles.noMatchText, { color: t.ts }]}>No matches for "{search}"</Text>
+                <Text style={[styles.noMatchText, { color: t.ts }]}>{`No matches for "${search}"`}</Text>
               </View>
             </NeuCard>
           ) : (
@@ -468,7 +475,7 @@ export default function PTHome() {
         {batches.length > 0 && (
           <>
             <Pressable onPress={toggleSharedSection} style={styles.sectionHeaderRow} accessibilityRole="button">
-              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Programs You've Sent</Text>
+              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>{`Programs You've Sent`}</Text>
               <ChevronToggle expanded={!collapsedSharedSection} color={t.ts} />
             </Pressable>
             {collapsedSharedSection ? (

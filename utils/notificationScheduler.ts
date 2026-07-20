@@ -25,12 +25,14 @@ import * as Notifications from "expo-notifications";
 import { SchedulableTriggerInputTypes } from "expo-notifications";
 
 import { getJSON } from "./storage";
-import { toYMD, todayYMD } from "./dates";
+import { toYMD, todayYMD, fmtDuration } from "./dates";
 import { getWorkoutForDate, resolveWorkoutForDate, type DayOverride } from "./workout";
 import {
   PROGRAMS_KEY,
   WORKOUT_DATES_KEY,
   WORKOUT_DAY_OVERRIDE_KEY,
+  WORKOUT_HISTORY_KEY,
+  type CompletedWorkout,
   type SavedProgram,
 } from "../constants/programs";
 import { loadNotificationPrefs, isCategoryEnabled } from "./notifications";
@@ -45,8 +47,10 @@ const HORIZON_DAYS = 7;
  *  enough to act on. (The workout reminder time is the user-configurable one.) */
 const STREAK_REMINDER = { hour: 20, minute: 30 };
 
-/** Weekly summary: Sunday evening (expo-notifications weekday 1 = Sunday). */
-const WEEKLY_SUMMARY = { weekday: 1, hour: 18, minute: 0 };
+/** Weekly summary: Sunday evening. Scheduled as a ONE-SHOT (not a repeating
+ *  trigger) so the body can carry real stats — content is baked at schedule
+ *  time, and the resync on every app open/background keeps it fresh. */
+const WEEKLY_SUMMARY = { hour: 18, minute: 0 };
 
 const warn = (op: string, err: unknown) => {
   if (__DEV__) console.warn("[avenas] notifications", op, err);
@@ -201,18 +205,31 @@ async function doResync(): Promise<void> {
     }
   }
 
-  // Weekly summary: one repeating trigger, Sunday evening.
+  // Weekly summary: a one-shot for next Sunday evening carrying real numbers
+  // for that Monday–Sunday week (workout count + total training time), as of
+  // the last time the app was open. Zero-workout weeks fall back to the
+  // generic recap line rather than a guilt trip.
   if (prefs.categories.weeklySummary) {
+    const daysUntilSunday = (7 - now.getDay()) % 7;
+    let fireAt = at(daysUntilSunday, WEEKLY_SUMMARY.hour, WEEKLY_SUMMARY.minute);
+    if (fireAt.getTime() <= now.getTime()) {
+      fireAt = at(daysUntilSunday + 7, WEEKLY_SUMMARY.hour, WEEKLY_SUMMARY.minute);
+    }
+    const weekStart = new Date(fireAt);
+    weekStart.setDate(fireAt.getDate() - 6);
+    const startYMD = toYMD(weekStart);
+    const endYMD = toYMD(fireAt);
+    const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+    const inWeek = history.filter(w => w.date >= startYMD && w.date <= endYMD);
+    const totalSecs = inWeek.reduce((s, w) => s + (w.durationSeconds || 0), 0);
+    const body = inWeek.length > 0
+      ? `${inWeek.length} workout${inWeek.length === 1 ? "" : "s"} and ${fmtDuration(totalSecs)} of training this week. Tap for the full recap.`
+      : "Your weekly training recap is ready in Avenas.";
     await schedule(
       "weeklySummary",
       "Your week in review",
-      "Your weekly training recap is ready in Avenas.",
-      {
-        type: SchedulableTriggerInputTypes.WEEKLY,
-        weekday: WEEKLY_SUMMARY.weekday,
-        hour: WEEKLY_SUMMARY.hour,
-        minute: WEEKLY_SUMMARY.minute,
-      },
+      body,
+      { type: SchedulableTriggerInputTypes.DATE, date: fireAt },
     );
   }
 }

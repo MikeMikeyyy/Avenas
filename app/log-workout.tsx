@@ -31,7 +31,7 @@ import {
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
 import { buildPrevByName, normalizeExerciseName } from "../utils/workout";
-import { formatWeightForDisplay, parseWeightToKg, formatPrevHint } from "../utils/units";
+import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { useTheme } from "../contexts/ThemeContext";
@@ -863,6 +863,28 @@ export default function LogWorkoutScreen() {
   const t = isDark ? APP_DARK : APP_LIGHT;
 
   const [exercises, setExercises] = useState<LogExercise[]>([]);
+  // Which unit `exercises`' weight strings are in (they're display-unit until
+  // parsed to kg on save). Seeded from the restored draft; a mid-log unit toggle
+  // re-expresses them so Save doesn't reinterpret them in the wrong unit.
+  const logUnitRef = useRef(isKg);
+  useEffect(() => {
+    if (logUnitRef.current === isKg) return;
+    const from = logUnitRef.current;
+    logUnitRef.current = isKg;
+    setExercises(prev => {
+      let changed = false;
+      const next = prev.map(ex => ({
+        ...ex,
+        sets: ex.sets.map(s => {
+          const w = reinterpretWeightUnit(s.weight, from, isKg);
+          if (w === s.weight) return s;
+          changed = true;
+          return { ...s, weight: w };
+        }),
+      }));
+      return changed ? next : prev;
+    });
+  }, [isKg]);
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [addExVisible, setAddExVisible] = useState(false);
   const [changingExId, setChangingExId] = useState<string | null>(null);
@@ -943,6 +965,10 @@ export default function LogWorkoutScreen() {
         try {
           const draft = JSON.parse(raw);
           if (Array.isArray(draft?.exercises)) {
+            // The draft's weight strings are in the unit active when saved; a
+            // later toggle converts from here. Legacy drafts (no unitIsKg) leave
+            // the ref at its mount value (current unit) — an untoggled user matches.
+            if (typeof draft.unitIsKg === "boolean") logUnitRef.current = draft.unitIsKg;
             setExercises(draft.exercises);
             setNotes(draft.notes ?? "");
             setWorkoutTime(draft.workoutTime ?? null);
@@ -1008,9 +1034,9 @@ export default function LogWorkoutScreen() {
     draftLockedRef.current = true;
     AsyncStorage.setItem(
       draftKey,
-      JSON.stringify({ exercises, notes, workoutTime })
+      JSON.stringify({ exercises, notes, workoutTime, unitIsKg: logUnitRef.current })
     ).catch(() => {});
-  }, [draftRestored, draftKey, exercises, notes, workoutTime]);
+  }, [draftRestored, draftKey, exercises, notes, workoutTime, isKg]);
 
   useEffect(() => {
     AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {

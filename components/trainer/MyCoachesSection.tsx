@@ -199,24 +199,24 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     if (!passDownTarget) return;
     const now = new Date().toISOString();
     const base = `share_${Date.now()}`;
-    const entries: SharedProgram[] = recipients === "all"
-      ? [{
-          id: base,
-          clientId: "all",
-          programId: passDownTarget.id,
-          programName: passDownTarget.name,
-          sentAtISO: now,
-          programSnapshot: passDownTarget,
-        }]
-      : recipients.map((cid, i) => ({
-          id: `${base}_${i}`,
-          clientId: cid,
-          programId: passDownTarget.id,
-          programName: passDownTarget.name,
-          sentAtISO: now,
-          programSnapshot: passDownTarget,
-        }));
-    await appendSharedPrograms(entries);
+    // Expand "all" to explicit ids up front (same as PTHome's send flow): a
+    // literal "all" entry can only live in the LOCAL blob, so real connected
+    // clients would never receive it through the cloud path.
+    const targets = recipients === "all" ? clients.map(c => c.id) : recipients;
+    const entries: SharedProgram[] = targets.map((cid, i) => ({
+      id: `${base}_${i}`,
+      clientId: cid,
+      programId: passDownTarget.id,
+      programName: passDownTarget.name,
+      sentAtISO: now,
+      programSnapshot: passDownTarget,
+    }));
+    try {
+      await appendSharedPrograms(entries);
+    } catch (e) {
+      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      return;
+    }
     const count = recipients === "all" ? clients.length : recipients.length;
     Alert.alert("Program Sent", `"${passDownTarget.name}" was sent to ${count} client${count === 1 ? "" : "s"}.`);
     setPassDownTarget(null);

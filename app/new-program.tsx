@@ -29,7 +29,7 @@ import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { batchKeyOf, SENT_PROGRAMS_KEY, SHARED_PROGRAMS_KEY, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
+import { batchKeyOf, loadSentPrograms, loadSharedPrograms, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
@@ -2077,9 +2077,10 @@ export default function NewProgramScreen() {
       try {
         if (isSharedEditMode && sharedId) {
           // Shared-edit mode — load the SharedProgram the trainer sent to a client.
-          // Saving will write back to that SharedProgram so the client can re-accept the update.
-          const raw = await AsyncStorage.getItem(SHARED_PROGRAMS_KEY);
-          const list: SharedProgram[] = raw ? JSON.parse(raw) : [];
+          // Saving will write back to that SharedProgram so the client can re-accept
+          // the update. Loaded via the store (NOT raw AsyncStorage): shares to real
+          // accounts live in the cloud table and only the store merges them in.
+          const list = await loadSharedPrograms();
           const target = list.find(s => s.id === sharedId);
           const snap = target?.programSnapshot;
           if (snap) {
@@ -2108,8 +2109,8 @@ export default function NewProgramScreen() {
           // Review mode — load the SentProgram snapshot the gym user sent.
           // We treat its snapshot as the seed for the builder; saving will
           // write the edited program back into that same SentProgram entry.
-          const raw = await AsyncStorage.getItem(SENT_PROGRAMS_KEY);
-          const list: SentProgram[] = raw ? JSON.parse(raw) : [];
+          // Loaded via the store so cloud review rows are included.
+          const list = await loadSentPrograms();
           const target = list.find(s => s.id === reviewId);
           const snap = target?.programSnapshot;
           if (snap) {
@@ -2296,8 +2297,7 @@ export default function NewProgramScreen() {
                 const savedCyclePattern = cyclePattern.map((n, i) => isTrainingDay[i] ? (n.trim() || "Workout") : "Rest");
                 const trainingDays = isTrainingDay.filter(Boolean).length;
                 try {
-                  const raw = await AsyncStorage.getItem(SENT_PROGRAMS_KEY);
-                  const list: SentProgram[] = raw ? JSON.parse(raw) : [];
+                  const list = await loadSentPrograms();
                   const target = list.find(s => s.id === reviewId);
                   const prev = target?.programSnapshot;
                   const startDate = formatStoredDate(new Date());
@@ -2317,7 +2317,7 @@ export default function NewProgramScreen() {
                     completedDate: prev?.completedDate,
                   };
                   await updateSentProgram(reviewId, { programSnapshot: updatedSnap, programName, lastEditedAtISO: new Date().toISOString() });
-                } catch (err) { warnStorage("setItem", SENT_PROGRAMS_KEY, err); }
+                } catch (err) { warnStorage("setItem", "sent_programs", err); }
               }
               isLeavingIntentionally.current = true;
               navigation.dispatch(e.data.action);
@@ -2489,8 +2489,8 @@ export default function NewProgramScreen() {
       // snapshot and clear acceptedAtISO so the recipient gets a tick to re-accept the update.
       const doSharedSave = async () => {
         try {
-          const raw = await AsyncStorage.getItem(SHARED_PROGRAMS_KEY);
-          const list: SharedProgram[] = raw ? JSON.parse(raw) : [];
+          // Store load (not raw AsyncStorage) — cloud shares only exist there.
+          const list = await loadSharedPrograms();
           const target = list.find(s => s.id === sharedId);
           const prev = target?.programSnapshot;
           const updatedSnap: SavedProgram = {
@@ -2531,8 +2531,8 @@ export default function NewProgramScreen() {
       // snapshot so the trainer's edits are what gets returned on Send Back.
       const doReview = async () => {
         try {
-          const raw = await AsyncStorage.getItem(SENT_PROGRAMS_KEY);
-          const list: SentProgram[] = raw ? JSON.parse(raw) : [];
+          // Store load (not raw AsyncStorage) — cloud review rows only exist there.
+          const list = await loadSentPrograms();
           const target = list.find(s => s.id === reviewId);
           const prev = target?.programSnapshot;
           const updatedSnap: SavedProgram = {

@@ -36,6 +36,7 @@ import {
   getCurrentWeek, type SavedProgram, type CompletedWorkout,
 } from "../constants/programs";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
+import { scheduleCloudPush } from "../lib/syncManager";
 import { fmtDuration } from "../utils/dates";
 import { workoutBelongsToProgram } from "../utils/progressStats";
 import { useTheme } from "../contexts/ThemeContext";
@@ -584,6 +585,12 @@ export default function JournalScreen() {
     setEntries(updated);
     try {
       await AsyncStorage.setItem(JOURNAL_KEY, JSON.stringify(updated));
+      // Back up promptly. Journal was the one user-data write that didn't
+      // schedule a push, so a new/edited/deleted entry only reached the cloud
+      // incidentally (a later workout/program write, or the background flush) —
+      // a reinstall in between lost it. Same debounced full-snapshot push every
+      // other write site uses; a no-op when signed out / wrong cache owner.
+      scheduleCloudPush();
     } catch (e) {
       warnStorage("setItem", JOURNAL_KEY, e);
       setEntries(previous);

@@ -3,11 +3,17 @@
 // Client-side moderation for the Trainer hub's user-generated content, built to
 // satisfy Apple Guideline 1.2 (Safety — UGC): block abusive users, report
 // objectionable content/people, and filter reported messages out of every
-// thread. There is no backend yet, so reports are logged on-device and the user
-// is pointed to Support for human follow-up; blocking and hiding take effect
-// immediately and persist locally.
+// thread. Blocking and hiding take effect immediately and persist locally.
+//
+// Reports are REAL server-side (migration 0014): every report against a real
+// account is delivered to the reports table for operator review. The on-device
+// log is kept as the offline fallback (entries that couldn't reach the server
+// are marked pendingSync and retried on the next report) and as the only store
+// for mock/local contacts, which have no real account to moderate.
 
 import { getJSON, setJSON, removeKey } from "./storage";
+import { insertReportRow } from "../lib/reports";
+import { isCloudContactId } from "../lib/chat";
 import {
   loadClients, saveClients,
   loadCoaches, removeCoach,
@@ -96,7 +102,8 @@ export async function loadReports(): Promise<Report[]> {
   return getJSON<Report[]>(REPORTS_KEY, []);
 }
 
-/** Log a report of a person. */
+/** Report a person: logged on-device, and delivered to the server when they're
+ *  a real account. */
 export async function reportUser(
   contact: { id: string; name: string },
   reason: ReportReason,
@@ -111,7 +118,8 @@ export async function reportUser(
   });
 }
 
-/** Log a report of a single message (and hide it everywhere). */
+/** Report a single message (and hide it everywhere). Delivered server-side for
+ *  real accounts, like reportUser. */
 export async function reportMessage(
   contact: { id: string; name: string },
   message: { id: string; text: string },
@@ -131,8 +139,43 @@ export async function reportMessage(
 }
 
 async function appendReport(report: Report): Promise<void> {
+  // Real account → deliver to the operator (migration 0014); a failed delivery
+  // (offline) marks the local entry for retry. Mock contacts stay local-only.
+  let pendingSync = false;
+  if (isCloudContactId(report.contactId)) {
+    try {
+      await insertReportRow(report);
+    } catch (e) {
+      if (__DEV__) console.warn("[avenas] report sync", e);
+      pendingSync = true;
+    }
+  }
   const list = await loadReports();
-  await setJSON(REPORTS_KEY, [report, ...list]);
+  await setJSON(REPORTS_KEY, [{ ...report, ...(pendingSync ? { pendingSync } : {}) }, ...list]);
+  // Piggyback: whenever a report goes through, retry any queued ones.
+  if (!pendingSync) void flushPendingReports();
+}
+
+/** Retry delivery of reports filed while offline. Safe to call any time. */
+export async function flushPendingReports(): Promise<void> {
+  const list = await loadReports();
+  const pending = list.filter(r => r.pendingSync);
+  if (pending.length === 0) return;
+  const delivered = new Set<string>();
+  for (const r of pending) {
+    try {
+      await insertReportRow(r);
+      delivered.add(r.id);
+    } catch {
+      break; // still offline — keep the rest queued
+    }
+  }
+  if (delivered.size > 0) {
+    await setJSON(
+      REPORTS_KEY,
+      (await loadReports()).map(r => delivered.has(r.id) ? { ...r, pendingSync: undefined } : r),
+    );
+  }
 }
 
 // ─── hidden messages (filter reported content) ──────────────────────────────────

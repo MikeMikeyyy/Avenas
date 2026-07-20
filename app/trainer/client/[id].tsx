@@ -178,8 +178,14 @@ export default function ClientDetailScreen() {
       programId: program.id,
       programName: program.name,
       sentAtISO: new Date().toISOString(),
+      programSnapshot: program,
     };
-    await appendSharedPrograms([entry]);
+    try {
+      await appendSharedPrograms([entry]);
+    } catch (e) {
+      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      return;
+    }
     setShared(prev => [entry, ...prev]);
     Alert.alert("Program Sent", `"${program.name}" was sent to ${client?.name ?? "this client"}.`);
   }, [id, client]);
