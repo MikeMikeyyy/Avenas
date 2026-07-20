@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View, ScrollView } from "react-native";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolate, Extrapolation, type SharedValue } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -44,6 +44,27 @@ import { getJSON } from "../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
 
 type Tab = "progress" | "journal" | "programs";
+
+// Hairline separator between adjacent tabs, matching the iOS-style dividers on
+// the Progress chart toggles. `gap` is the boundary between tab gap and gap+1;
+// it fades out as the green pill (pillX in px) slides onto either side.
+function TabDivider({ gap, pillX, segW, color }: {
+  gap: number; pillX: SharedValue<number>; segW: number; color: string;
+}) {
+  const style = useAnimatedStyle(
+    () => ({
+      opacity: interpolate(
+        pillX.value,
+        [(gap - 0.15) * segW, gap * segW, (gap + 1) * segW, (gap + 1.15) * segW],
+        [1, 0, 0, 1],
+        Extrapolation.CLAMP,
+      ),
+      transform: [{ translateX: (gap + 1) * segW }],
+    }),
+    [gap, segW],
+  );
+  return <Reanimated.View pointerEvents="none" style={[styles.tabDivider, { backgroundColor: color }, style]} />;
+}
 
 function fmtAgo(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -329,6 +350,15 @@ export default function ClientDetailScreen() {
           style={[styles.tabs, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)" }]}
           onLayout={e => setTabsWidth(e.nativeEvent.layout.width - styles.tabs.padding * 2)}
         >
+          {tabsWidth > 0 && TABS.slice(1).map((_, g) => (
+            <TabDivider
+              key={g}
+              gap={g}
+              pillX={pillX}
+              segW={tabsWidth / TABS.length}
+              color={isDark ? "rgba(255,255,255,0.22)" : "rgba(60,60,67,0.29)"}
+            />
+          ))}
           {tabsWidth > 0 && (
             <Reanimated.View
               pointerEvents="none"
@@ -535,6 +565,9 @@ const styles = StyleSheet.create({
   tab:           { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: "center", justifyContent: "center", zIndex: 1 },
   tabText:       { fontFamily: FontFamily.semibold, fontSize: 13 },
   tabPill:       { position: "absolute", top: 4, bottom: 4, left: 4, borderRadius: 999, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  // Hairline tab separator: 1px, vertically centered, positioned on a boundary
+  // via translateX. Rendered under the green pill so it covers any it slides over.
+  tabDivider:    { position: "absolute", top: "50%", marginTop: -8, left: 4 - 0.5, width: 1, height: 16, borderRadius: 0.5 },
   section:       { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", marginTop: 16, marginBottom: 12 },
   sectionHeading:{ fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
   programCardInner:{ padding: 14, gap: 10 },
