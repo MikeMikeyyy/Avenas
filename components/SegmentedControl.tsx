@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, LayoutChangeEvent, StyleProp, ViewStyle } from "react-native";
-import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, Easing, interpolate, Extrapolation, type SharedValue } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { APP_DARK, APP_LIGHT, BUBBLE_DARK, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
@@ -22,11 +22,34 @@ const TRACK_DARK = "rgba(255, 255, 255, 0.08)";
 
 const TRACK_PAD = 3;
 const TRACK_HEIGHT = 38;
+const DIVIDER_HEIGHT = 16;
+
+// A thin separator between adjacent segments, like a native iOS segmented
+// control. `gap` is the boundary index (between segment gap and gap+1); it fades
+// out whenever the sliding thumb sits on (or passes over) either adjacent
+// segment, so a divider never shows next to the selected pill.
+function SegDivider({ gap, animIdx, segW, color }: {
+  gap: number; animIdx: SharedValue<number>; segW: number; color: string;
+}) {
+  const style = useAnimatedStyle(
+    () => ({
+      opacity: interpolate(
+        animIdx.value,
+        [gap - 0.15, gap, gap + 1, gap + 1.15],
+        [1, 0, 0, 1],
+        Extrapolation.CLAMP,
+      ),
+      transform: [{ translateX: (gap + 1) * segW }],
+    }),
+    [gap, segW],
+  );
+  return <Reanimated.View pointerEvents="none" style={[styles.divider, { backgroundColor: color }, style]} />;
+}
 
 /**
  * iOS-style segmented control: gray pill track, white (light) / lifted-navy
- * (dark) thumb that slides to the selected segment on the UI thread.
- * Used below the Progress charts to switch the plotted metric.
+ * (dark) thumb that slides to the selected segment on the UI thread, with hairline
+ * dividers between segments. Used below the Progress charts to switch the metric.
  */
 export default function SegmentedControl<K extends string>({ options, value, onChange, style }: Props<K>) {
   const { isDark } = useTheme();
@@ -58,6 +81,15 @@ export default function SegmentedControl<K extends string>({ options, value, onC
       style={[styles.track, { backgroundColor: isDark ? TRACK_DARK : TRACK_LIGHT }, style]}
       accessibilityRole="tablist"
     >
+      {segW > 0 && options.slice(1).map((_, g) => (
+        <SegDivider
+          key={g}
+          gap={g}
+          animIdx={animIdx}
+          segW={segW}
+          color={isDark ? "rgba(255,255,255,0.22)" : "rgba(60,60,67,0.29)"}
+        />
+      ))}
       {segW > 0 && (
         <Reanimated.View
           pointerEvents="none"
@@ -124,6 +156,17 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
     elevation: 3,
+  },
+  // Hairline separator, centered on a segment boundary (translateX positions it)
+  // and vertically within the track. Rendered under the thumb so the pill covers
+  // any it passes over.
+  divider: {
+    position: "absolute",
+    top: (TRACK_HEIGHT - DIVIDER_HEIGHT) / 2,
+    left: TRACK_PAD - 0.5,
+    width: 1,
+    height: DIVIDER_HEIGHT,
+    borderRadius: 0.5,
   },
   segment: {
     flex: 1,
