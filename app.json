@@ -22,7 +22,8 @@
         ]
       },
       "bundleIdentifier": "com.avenas.app",
-      "appleTeamId": "8X55YH783A"
+      "appleTeamId": "8X55YH783A",
+      "buildNumber": "27"
     },
     "android": {
       "adaptiveIcon": {
