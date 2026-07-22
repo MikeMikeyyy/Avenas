@@ -45,24 +45,55 @@ func formatFrozenElapsed(_ secs: Int) -> String {
   return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
 }
 
+/// Parse a working-set label ("Set 3 of 4") into (completed, total) for the
+/// per-exercise progress bar. `done` = sets finished before the current one, so
+/// the bar advances as each set is ticked. Returns nil for warmups /
+/// unrecognized labels — those fall back to showing the label text.
+func workingProgress(_ label: String) -> (done: Int, total: Int)? {
+  guard label.hasPrefix("Set ") else { return nil }
+  let parts = String(label.dropFirst(4)).components(separatedBy: " of ")
+  guard parts.count == 2,
+        let current = Int(parts[0].trimmingCharacters(in: .whitespaces)),
+        let total = Int(parts[1].trimmingCharacters(in: .whitespaces)),
+        total > 0 else { return nil }
+  return (min(max(current - 1, 0), total), total)
+}
+
 // ─── shared subviews ─────────────────────────────────────────────────────────
 
+/// Applies a fixed max width only when one is given; nil lets the timer hug its
+/// digits so an adjacent icon sits right next to the number.
+struct MaybeMaxWidth: ViewModifier {
+  let width: CGFloat?
+  @ViewBuilder func body(content: Content) -> some View {
+    if let width {
+      content.frame(maxWidth: width, alignment: .trailing)
+    } else {
+      content
+    }
+  }
+}
+
 /// Live count-up while the workout timer runs; frozen mm:ss while paused.
+/// `width: nil` hugs the digits (used in the lock-screen header so the stopwatch
+/// icon sits tight against the time).
 struct ElapsedTimer: View {
   let state: WorkoutActivityAttributes.ContentState
-  var width: CGFloat = 64
+  var width: CGFloat? = 64
 
-  var body: some View {
+  @ViewBuilder var timerText: some View {
     if state.startedAtMs > 0 {
       Text(msDate(state.startedAtMs), style: .timer)
-        .monospacedDigit()
-        .multilineTextAlignment(.trailing)
-        .frame(maxWidth: width, alignment: .trailing)
     } else {
       Text(formatFrozenElapsed(state.pausedElapsedSec))
-        .monospacedDigit()
-        .frame(maxWidth: width, alignment: .trailing)
     }
+  }
+
+  var body: some View {
+    timerText
+      .monospacedDigit()
+      .multilineTextAlignment(.trailing)
+      .modifier(MaybeMaxWidth(width: width))
   }
 }
 
@@ -78,19 +109,30 @@ struct SetRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 6) {
         Text(state.exerciseName)
           .font(.headline)
           .lineLimit(1)
-        HStack(spacing: 8) {
+        // Per-exercise set progress: a bar that fills as each working set is
+        // ticked. Warmups (no "of N") fall back to their label text.
+        if let p = workingProgress(state.setLabel) {
+          HStack(spacing: 8) {
+            ProgressView(value: Double(p.done), total: Double(p.total))
+              .tint(avenasAccent)
+            Text("\(p.done)/\(p.total)")
+              .font(.caption2.weight(.semibold))
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+          }
+        } else {
           Text(state.setLabel)
             .font(.subheadline)
             .foregroundStyle(.secondary)
-          Text(preview)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(avenasAccent)
-            .lineLimit(1)
         }
+        Text(preview)
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(avenasAccent)
+          .lineLimit(1)
       }
       Spacer(minLength: 4)
       Button(intent: TickSetIntent()) {
@@ -194,9 +236,10 @@ struct LockScreenCard: View {
   var body: some View {
     VStack(spacing: 12) {
       HStack(spacing: 7) {
-        Image(systemName: "dumbbell.fill")
-          .font(.subheadline)
-          .foregroundStyle(avenasAccent)
+        Image("avenasLogo")
+          .resizable()
+          .scaledToFit()
+          .frame(height: 15)
         Text(workoutName)
           .font(.subheadline.weight(.semibold))
           .lineLimit(1)
@@ -210,7 +253,8 @@ struct LockScreenCard: View {
           Image(systemName: state.startedAtMs > 0 ? "stopwatch" : "pause.fill")
             .font(.caption)
             .foregroundStyle(.secondary)
-          ElapsedTimer(state: state, width: 74)
+          // width: nil so the icon hugs the time instead of a gap.
+          ElapsedTimer(state: state, width: nil)
         }
         .font(.subheadline.weight(.semibold))
       }
@@ -277,8 +321,10 @@ struct WorkoutLiveActivity: Widget {
           .foregroundStyle(.white)
         }
       } compactLeading: {
-        Image(systemName: "dumbbell.fill")
-          .foregroundStyle(avenasAccent)
+        Image("avenasLogo")
+          .resizable()
+          .scaledToFit()
+          .frame(height: 15)
       } compactTrailing: {
         if isResting(context.state) {
           Text(timerInterval: restInterval(context.state), countsDown: true)
@@ -299,8 +345,10 @@ struct WorkoutLiveActivity: Widget {
             .foregroundStyle(.secondary)
         }
       } minimal: {
-        Image(systemName: "dumbbell.fill")
-          .foregroundStyle(avenasAccent)
+        Image("avenasLogo")
+          .resizable()
+          .scaledToFit()
+          .frame(height: 13)
       }
       .keylineTint(avenasAccent)
     }
