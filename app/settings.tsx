@@ -22,7 +22,7 @@ import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import NeuCard from "../components/NeuCard";
-import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BUBBLE_LIGHT, BUBBLE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BUBBLE_LIGHT } from "../constants/theme";
 
 // ─── Settings item types ──────────────────────────────────────────────────────
 type BaseItem     = { icon: string; label: string; renderIcon?: (c: string) => React.ReactNode };
@@ -50,6 +50,10 @@ const TP   = APP_LIGHT.tp;
 const TS   = APP_LIGHT.ts;
 const ICON = APP_LIGHT.icon;
 const DIV  = APP_LIGHT.div;
+// Off-state track for the iOS-style Switches in LIGHT mode. APP_LIGHT.div
+// (#D8DCE0) is too pale against the white card to read as a control; this is a
+// clearly darker grey. Dark mode keeps t.div (already visible).
+const SWITCH_TRACK_LIGHT = "#C4CAD3";
 
 const SECTIONS: { title: string; items: SettingsItem[] }[] = [
   {
@@ -239,13 +243,14 @@ export default function SettingsScreen() {
     width: unitTrackWidth.value / 2,
     transform: [{ translateX: unitOffset.value * (unitTrackWidth.value / 2) }],
   }));
-  // White/grey segmented look (matches the Account Type control on Profile):
-  // active label = primary text on the white/navy thumb, inactive = grey.
+  // The sliding pill is white in BOTH modes now (matching the Apple Switch's
+  // white thumb), so the active label is always dark (APP_LIGHT.tp) and the
+  // inactive one is the theme's secondary grey.
   const kgLabelColor  = useAnimatedStyle(() => ({
-    color: interpolateColor(unitOffset.value, [0, 1], [t.tp, t.ts]),
+    color: interpolateColor(unitOffset.value, [0, 1], [APP_LIGHT.tp, t.ts]),
   }));
   const lbsLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(unitOffset.value, [0, 1], [t.ts, t.tp]),
+    color: interpolateColor(unitOffset.value, [0, 1], [t.ts, APP_LIGHT.tp]),
   }));
 
   return (
@@ -323,10 +328,12 @@ export default function SettingsScreen() {
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
                       <View
-                        style={[styles.unitToggle, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(118,118,128,0.12)" }]}
+                        style={[styles.unitToggle, { backgroundColor: isDark ? t.div : "rgba(118,118,128,0.12)" }]}
                         onLayout={e => { unitTrackWidth.value = e.nativeEvent.layout.width - 6; }}
                       >
-                        <Reanimated.View style={[styles.unitPill, { backgroundColor: isDark ? BUBBLE_DARK : BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 }, unitPillStyle]} />
+                        {/* White pill in both modes, echoing the Apple Switch's white
+                            thumb (dark mode uses the dark navy t.div track behind it). */}
+                        <Reanimated.View style={[styles.unitPill, { backgroundColor: BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 }, unitPillStyle]} />
                         <TouchableOpacity
                           onPress={() => {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -366,7 +373,7 @@ export default function SettingsScreen() {
                       <Switch
                         value={focusView}
                         onValueChange={toggleFocusView}
-                        trackColor={{ false: t.div, true: ACCT }}
+                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
                         thumbColor="#fff"
                       />
                     </View>
@@ -381,7 +388,7 @@ export default function SettingsScreen() {
                       <Switch
                         value={autofillSets}
                         onValueChange={toggleAutofillSets}
-                        trackColor={{ false: t.div, true: ACCT }}
+                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
                         thumbColor="#fff"
                       />
                     </View>
@@ -396,7 +403,7 @@ export default function SettingsScreen() {
                       <Switch
                         value={liveActivity}
                         onValueChange={toggleLiveActivity}
-                        trackColor={{ false: t.div, true: ACCT }}
+                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
                         thumbColor="#fff"
                       />
                     </View>
@@ -411,7 +418,7 @@ export default function SettingsScreen() {
                       <Switch
                         value={isDark}
                         onValueChange={toggleDark}
-                        trackColor={{ false: t.div, true: ACCT }}
+                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
                         thumbColor="#fff"
                       />
                     </View>
