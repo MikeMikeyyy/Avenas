@@ -25,7 +25,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, BUBBLE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT } from "../constants/theme";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -334,13 +334,13 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
     width: modeTrackWidth.value / 2,
     transform: [{ translateX: modeOffset.value * (modeTrackWidth.value / 2) }],
   }));
-  // White/grey segmented look (matches the Units toggle in Settings and the
-  // Account Type control on Profile): active label = primary text, inactive grey.
+  // White pill in both modes (matches the Settings unit toggle): the active
+  // label is always dark (APP_LIGHT.tp) since it sits on white, inactive is grey.
   const repsLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(modeOffset.value, [0, 1], [t.tp, t.ts]),
+    color: interpolateColor(modeOffset.value, [0, 1], [APP_LIGHT.tp, t.ts]),
   }));
   const holdLabelColor = useAnimatedStyle(() => ({
-    color: interpolateColor(modeOffset.value, [0, 1], [t.ts, t.tp]),
+    color: interpolateColor(modeOffset.value, [0, 1], [t.ts, APP_LIGHT.tp]),
   }));
 
   const [collapsingSetIdx, setCollapsingSetIdx] = useState<number | null>(null);
@@ -474,10 +474,10 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           </View>
         </TouchableOpacity>
         <View
-          style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(118,118,128,0.12)" }]}
+          style={[styles.exTogglePills, { backgroundColor: isDark ? t.div : "rgba(118,118,128,0.12)" }]}
           onLayout={e => { modeTrackWidth.value = e.nativeEvent.layout.width - 6; }}
         >
-          <Reanimated.View style={[styles.exTogglePillPill, { backgroundColor: isDark ? BUBBLE_DARK : BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 }, modePillStyle]} />
+          <Reanimated.View style={[styles.exTogglePillPill, { backgroundColor: BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 }, modePillStyle]} />
           <TouchableOpacity
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

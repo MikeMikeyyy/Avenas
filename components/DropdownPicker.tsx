@@ -14,7 +14,7 @@ import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
-import { ACCT, APP_DARK, APP_LIGHT, BUBBLE_DARK, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 
 interface Option<T extends string> {
@@ -113,26 +113,27 @@ export default function DropdownPicker<T extends string>({
         accessibilityRole="button"
         accessibilityLabel={`${sheetTitle}: ${current.label}. Tap to change.`}
       >
-        {/* Bubble-pill trigger — same floating white (light) / lifted-navy
-            (dark) pill as the SegmentedControl thumb, so every small chart
-            control on the Progress page reads as one family. */}
+        {/* Bubble-pill trigger — a floating white pill in BOTH modes (matching
+            the SegmentedControl thumb and the Settings unit toggle), so every
+            small chart control on the Progress page reads as one family. Content
+            is always the on-white (light-palette) text/icon colours. */}
         <View
           style={[
             triggerIcon ? styles.iconBtn : styles.btn,
             {
-              backgroundColor: isDark ? BUBBLE_DARK : BUBBLE_LIGHT,
+              backgroundColor: BUBBLE_LIGHT,
               shadowOpacity: isDark ? 0.3 : 0.12,
             },
           ]}
         >
           {triggerIcon ? (
-            <Ionicons name={triggerIcon} size={18} color={t.ts} />
+            <Ionicons name={triggerIcon} size={18} color={APP_LIGHT.ts} />
           ) : (
             <>
-              <Text style={[styles.btnText, { color: t.tp }]} numberOfLines={1}>
+              <Text style={[styles.btnText, { color: APP_LIGHT.tp }]} numberOfLines={1}>
                 {current.shortLabel ?? current.label}
               </Text>
-              <Ionicons name="chevron-down" size={14} color={t.ts} />
+              <Ionicons name="chevron-down" size={14} color={APP_LIGHT.ts} />
             </>
           )}
         </View>

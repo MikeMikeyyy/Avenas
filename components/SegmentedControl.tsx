@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, LayoutChangeEvent, StyleProp, ViewStyle } from "react-native";
 import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, Easing, interpolate, Extrapolation, type SharedValue } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
-import { APP_DARK, APP_LIGHT, BUBBLE_DARK, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 
 export type SegmentOption<K extends string> = { key: K; label: string };
@@ -18,7 +18,6 @@ interface Props<K extends string> {
 // over both NEU_BG and NEU_BG_DARK cards — solid hexes would need a
 // per-surface variant). The sliding thumb uses the shared bubble-pill colors.
 const TRACK_LIGHT = "rgba(118, 118, 128, 0.12)";
-const TRACK_DARK = "rgba(255, 255, 255, 0.08)";
 
 const TRACK_PAD = 3;
 const TRACK_HEIGHT = 38;
@@ -78,7 +77,7 @@ export default function SegmentedControl<K extends string>({ options, value, onC
   return (
     <View
       onLayout={onTrackLayout}
-      style={[styles.track, { backgroundColor: isDark ? TRACK_DARK : TRACK_LIGHT }, style]}
+      style={[styles.track, { backgroundColor: isDark ? t.div : TRACK_LIGHT }, style]}
       accessibilityRole="tablist"
     >
       {segW > 0 && options.slice(1).map((_, g) => (
@@ -97,7 +96,9 @@ export default function SegmentedControl<K extends string>({ options, value, onC
             styles.thumb,
             {
               width: segW,
-              backgroundColor: isDark ? BUBBLE_DARK : BUBBLE_LIGHT,
+              // White thumb in both modes (dark mode sits on the t.div track),
+              // matching the Settings unit toggle.
+              backgroundColor: BUBBLE_LIGHT,
               shadowOpacity: isDark ? 0.3 : 0.12,
             },
             thumbStyle,
@@ -124,7 +125,8 @@ export default function SegmentedControl<K extends string>({ options, value, onC
               style={[
                 styles.label,
                 active
-                  ? { color: t.tp, fontFamily: FontFamily.bold }
+                  // Dark text on the white thumb (both modes).
+                  ? { color: APP_LIGHT.tp, fontFamily: FontFamily.bold }
                   : { color: t.ts, fontFamily: FontFamily.semibold },
               ]}
             >
