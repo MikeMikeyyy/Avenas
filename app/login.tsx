@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,7 +12,7 @@ import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { oauthOnlyProvidersForEmail, signInWithEmail, signInWithProvider, signOut } from "../lib/auth";
+import { AppleSignInCancelled, isAppleSignInAvailable, oauthOnlyProvidersForEmail, signInWithApple, signInWithEmail, signInWithProvider, signOut } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { pullProfile } from "../lib/cloud";
 
@@ -50,6 +50,10 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false);
 
   const canSubmit = EMAIL_RE.test(email.trim()) && password.length > 0;
+
+  // Only offer Apple where the native sheet actually exists (iOS 13+).
+  const [appleAvailable, setAppleAvailable] = useState(false);
+  useEffect(() => { isAppleSignInAvailable().then(setAppleAvailable); }, []);
 
   // After auth, the profile step loads this account's saved profile and goes Home.
   // `from` lets that screen's back button return here (this screen was replaced,
@@ -132,8 +136,20 @@ export default function LoginScreen() {
     }
   };
 
-  const onApple = () => {
-    Alert.alert("Apple sign-in", "Apple sign-in turns on in the next build. For now, use Google or email.");
+  const onApple = async () => {
+    if (busy) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setBusy(true);
+    try {
+      await signInWithApple();
+      afterAuth();
+    } catch (e) {
+      // Dismissing Apple's sheet isn't an error worth surfacing.
+      if (e instanceof AppleSignInCancelled) return;
+      Alert.alert("Apple sign-in failed", e instanceof Error ? e.message : "Please try again.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -215,12 +231,14 @@ export default function LoginScreen() {
             <View style={[styles.orLine, { backgroundColor: t.div }]} />
           </View>
 
-          <SocialButton
-            icon={<Ionicons name="logo-apple" size={20} color={t.tp} style={styles.appleIcon} />}
-            label="Continue with Apple"
-            dark={isDark}
-            onPress={onApple}
-          />
+          {appleAvailable && (
+            <SocialButton
+              icon={<Ionicons name="logo-apple" size={20} color={t.tp} style={styles.appleIcon} />}
+              label="Continue with Apple"
+              dark={isDark}
+              onPress={onApple}
+            />
+          )}
           <SocialButton
             icon={<GoogleIcon size={18} />}
             label="Continue with Google"

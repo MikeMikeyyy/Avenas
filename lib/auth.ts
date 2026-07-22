@@ -4,6 +4,7 @@
 
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { supabase } from "./supabase";
 import { flushCloudPushNow } from "./syncManager";
 import { localCounts } from "./cloud";
@@ -48,6 +49,71 @@ export async function signInWithProvider(provider: OAuthProvider): Promise<void>
   }
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
   if (exchangeError) throw exchangeError;
+}
+
+/** Thrown when the user dismisses the native Apple sheet. Callers should stay
+ *  silent for this — it isn't a failure. */
+export class AppleSignInCancelled extends Error {
+  constructor() {
+    super("Apple sign-in cancelled.");
+    this.name = "AppleSignInCancelled";
+  }
+}
+
+/** True when this device can show the native Sign in with Apple sheet (iOS 13+).
+ *  Used to hide the button where it can't work — Android, older iOS, Expo Go. */
+export async function isAppleSignInAvailable(): Promise<boolean> {
+  try {
+    return await AppleAuthentication.isAvailableAsync();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * NATIVE Sign in with Apple, required by App Store Guideline 4.8 whenever the
+ * app also offers another social login (we offer Google). Uses Apple's own
+ * sheet rather than the web OAuth flow, then exchanges the returned identity
+ * token for a Supabase session via signInWithIdToken.
+ *
+ * Apple returns the user's name ONLY on the very first authorization for this
+ * app, so it's handed back for the caller to seed the profile with; every later
+ * sign-in resolves with `fullName: null` and the stored profile is used.
+ *
+ * Requires: `ios.usesAppleSignIn` (entitlement) and the app's bundle id
+ * registered as an authorized client id on Supabase's Apple provider.
+ */
+export async function signInWithApple(): Promise<{ fullName: string | null }> {
+  let credential: AppleAuthentication.AppleAuthenticationCredential;
+  try {
+    credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+    });
+  } catch (e) {
+    // Apple reports a user-cancelled sheet as ERR_REQUEST_CANCELED.
+    const code = (e as { code?: string })?.code;
+    if (code === "ERR_REQUEST_CANCELED" || /cancel/i.test(String(e))) throw new AppleSignInCancelled();
+    throw e;
+  }
+
+  if (!credential.identityToken) {
+    throw new Error("Apple didn't return an identity token. Please try again.");
+  }
+
+  const { error } = await supabase.auth.signInWithIdToken({
+    provider: "apple",
+    token: credential.identityToken,
+  });
+  if (error) throw error;
+
+  const fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return { fullName: fullName || null };
 }
 
 /**
