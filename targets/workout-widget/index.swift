@@ -8,12 +8,19 @@
 import ActivityKit
 import AppIntents
 import SwiftUI
+import UIKit
 import WidgetKit
 
 // ACCT from constants/theme.ts (#1deca0).
 let avenasAccent = Color(red: 29 / 255, green: 236 / 255, blue: 160 / 255)
-// APP_DARK-ish card tint so the activity matches the app's dark surfaces.
-let avenasCardTint = Color(red: 0.075, green: 0.086, blue: 0.165)
+// The lock-screen card background follows the system appearance: the app's dark
+// navy (APP_DARK) in dark mode, white in light mode. Card text uses .primary so
+// it flips with it. (The Dynamic Island is always dark, so it keeps white text.)
+let avenasCardBackground = Color(uiColor: UIColor { traits in
+  traits.userInterfaceStyle == .dark
+    ? UIColor(red: 0.075, green: 0.086, blue: 0.165, alpha: 1)
+    : UIColor.white
+})
 
 @main
 struct AvenasWidgets: WidgetBundle {
@@ -230,19 +237,18 @@ struct AllDoneRow: View {
 // ─── lock screen card ────────────────────────────────────────────────────────
 
 struct LockScreenCard: View {
-  let workoutName: String
   let state: WorkoutActivityAttributes.ContentState
 
   var body: some View {
     VStack(spacing: 12) {
       HStack(spacing: 7) {
+        // Template-rendered so the AV mark tints with .primary (white on the
+        // dark card, dark on the white card) instead of being a fixed white.
         Image("avenasLogo")
+          .renderingMode(.template)
           .resizable()
           .scaledToFit()
           .frame(height: 15)
-        Text(workoutName)
-          .font(.subheadline.weight(.semibold))
-          .lineLimit(1)
         if state.totalCount > 0 {
           Text("\(state.doneCount)/\(state.totalCount)")
             .font(.caption.weight(.semibold))
@@ -268,7 +274,7 @@ struct LockScreenCard: View {
       }
     }
     .padding(14)
-    .foregroundStyle(.white)
+    .foregroundStyle(.primary)
   }
 }
 
@@ -277,8 +283,8 @@ struct LockScreenCard: View {
 struct WorkoutLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: WorkoutActivityAttributes.self) { context in
-      LockScreenCard(workoutName: context.attributes.workoutName, state: context.state)
-        .activityBackgroundTint(avenasCardTint.opacity(0.94))
+      LockScreenCard(state: context.state)
+        .activityBackgroundTint(avenasCardBackground)
         .activitySystemActionForegroundColor(avenasAccent)
         .widgetURL(URL(string: "avenas://workout"))
     } dynamicIsland: { context in
