@@ -16,9 +16,4 @@ module.exports = {
   entitlements: {
     "com.apple.security.application-groups": ["group.com.avenas.workout"],
   },
-  // Bundles the app's AV logo into the widget's asset catalog as an imageset,
-  // usable in SwiftUI via Image("avenasLogo"). Same logo the Home screen shows.
-  images: {
-    avenasLogo: "../../assets/images/logo.png",
-  },
 };
