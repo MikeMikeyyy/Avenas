@@ -328,7 +328,7 @@ export default function SettingsScreen() {
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
                       <View
-                        style={[styles.unitToggle, { backgroundColor: isDark ? t.div : "rgba(118,118,128,0.12)" }]}
+                        style={[styles.unitToggle, { backgroundColor: isDark ? "rgba(255,255,255,0.10)" : "rgba(118,118,128,0.12)" }]}
                         onLayout={e => { unitTrackWidth.value = e.nativeEvent.layout.width - 6; }}
                       >
                         {/* White pill in both modes, echoing the Apple Switch's white

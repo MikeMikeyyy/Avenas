@@ -18,6 +18,10 @@ interface Props<K extends string> {
 // over both NEU_BG and NEU_BG_DARK cards — solid hexes would need a
 // per-surface variant). The sliding thumb uses the shared bubble-pill colors.
 const TRACK_LIGHT = "rgba(118, 118, 128, 0.12)";
+// Translucent white overlay, not a solid colour — the dark card (NEU_BG_DARK)
+// and APP_DARK.div are the same #252840, so a solid t.div track would be
+// invisible. The overlay always lifts off whatever dark surface it sits on.
+const TRACK_DARK = "rgba(255, 255, 255, 0.10)";
 
 const TRACK_PAD = 3;
 const TRACK_HEIGHT = 38;
@@ -77,7 +81,7 @@ export default function SegmentedControl<K extends string>({ options, value, onC
   return (
     <View
       onLayout={onTrackLayout}
-      style={[styles.track, { backgroundColor: isDark ? t.div : TRACK_LIGHT }, style]}
+      style={[styles.track, { backgroundColor: isDark ? TRACK_DARK : TRACK_LIGHT }, style]}
       accessibilityRole="tablist"
     >
       {segW > 0 && options.slice(1).map((_, g) => (

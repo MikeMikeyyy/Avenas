@@ -474,7 +474,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           </View>
         </TouchableOpacity>
         <View
-          style={[styles.exTogglePills, { backgroundColor: isDark ? t.div : "rgba(118,118,128,0.12)" }]}
+          style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.10)" : "rgba(118,118,128,0.12)" }]}
           onLayout={e => { modeTrackWidth.value = e.nativeEvent.layout.width - 6; }}
         >
           <Reanimated.View style={[styles.exTogglePillPill, { backgroundColor: BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 }, modePillStyle]} />
