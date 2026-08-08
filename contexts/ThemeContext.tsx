@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback } from "react";
-import { useColorScheme } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const THEME_KEY = "@avenas/theme";
@@ -15,18 +14,19 @@ const ThemeContext = createContext<ThemeContextValue>({
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const systemScheme = useColorScheme();
-  const [isDark, setIsDark] = useState(systemScheme === "dark");
+  // Default to LIGHT. The app follows the in-app Dark Mode toggle only, NOT the
+  // device's system theme — a fresh install starts light and only goes dark once
+  // the user has explicitly turned dark mode on (persisted at THEME_KEY).
+  const [isDark, setIsDark] = useState(false);
 
-  // Load persisted preference on mount; fall back to system scheme
+  // Apply the saved preference on mount; stay light when none is saved.
   useEffect(() => {
     (async () => {
       try {
         const saved = await AsyncStorage.getItem(THEME_KEY);
         if (saved !== null) setIsDark(saved === "dark");
-        else setIsDark(systemScheme === "dark");
       } catch {
-        setIsDark(systemScheme === "dark");
+        // keep light on read failure
       }
     })();
   }, []);
