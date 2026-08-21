@@ -10,7 +10,7 @@
 // Cloud loads fail soft to local-only when offline.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getJSON, removeKey, setJSON } from "./storage";
+import { getJSON, setJSON } from "./storage";
 import { formatStoredDate } from "./dates";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
@@ -39,17 +39,18 @@ export const CLIENT_DATA_PREFIX = "@avenas/pt/client_data/";
 export const SHARED_PROGRAMS_KEY = "@avenas/pt/shared_programs";
 export const PT_SEEDED_KEY = "@avenas/pt/seeded_v2";
 
+// The gym user's PRIMARY trainer — now a pointer, not the list. The list of
+// trainers is derived from live connections (utils/roster.ts); this records
+// which of them MyPTHome features.
 export const ASSIGNED_PT_KEY = "@avenas/gym/assigned_pt";
 export const SENT_PROGRAMS_KEY = "@avenas/gym/sent_programs";
 
-// Trainers may also receive programs from senior coaches/mentors. Stored
-// separately from ASSIGNED_PT_KEY so the gym user's single-trainer flow in
-// MyPTHome is unaffected.
+// Trainers a TRAINER receives programs from. Legacy/mock leftovers only — see
+// loadCoaches(); real ones come from the connections table.
 export const COACHES_KEY = "@avenas/pt/coaches";
 
-// Gym users can now have additional trainers beyond their primary
-// (ASSIGNED_PT_KEY). The primary stays in the existing single-trainer field
-// so MyPTHome's prominent header is unchanged; this key holds the rest.
+// A gym user's non-primary trainers. Same story: legacy/mock leftovers, merged
+// underneath the derived list.
 export const OTHER_TRAINERS_KEY = "@avenas/gym/other_trainers";
 
 export type Client = {
@@ -59,9 +60,10 @@ export type Client = {
   note?: string;
   lastActiveISO?: string;
   streak?: number;
-  /** True when this "client" is actually a fellow trainer you've connected with.
-   *  They appear in the roster so you can send them programs, but are also listed
-   *  on the My Coaches page. Removing one severs the whole connection. */
+  /** True when this "client" is actually a fellow trainer. Connecting alone no
+   *  longer puts a trainer in the roster (utils/roster.ts routes them to My
+   *  Trainers instead) — the flag marks the ones you've deliberately taken on as
+   *  a client, so the UI can badge them. */
   isTrainer?: boolean;
   /** Profile photo URL for real connected accounts (migration 0006). Absent for
    *  local/mock clients, which fall back to initials. */
@@ -479,51 +481,15 @@ export async function removeOtherTrainer(id: string): Promise<void> {
   await setJSON(OTHER_TRAINERS_KEY, existing.filter(p => p.id !== id));
 }
 
+/** Legacy/mock entries only — read + delete. Nothing writes new ones: the
+ *  trainers who coach a trainer are derived from live connections in
+ *  utils/roster.ts, which merges whatever is still stored here underneath. */
 export async function loadCoaches(): Promise<AssignedPT[]> {
   return getJSON<AssignedPT[]>(COACHES_KEY, []);
-}
-export async function saveCoaches(list: AssignedPT[]): Promise<void> {
-  await setJSON(COACHES_KEY, list);
-}
-export async function addCoach(coach: AssignedPT): Promise<void> {
-  const existing = await loadCoaches();
-  if (existing.some(c => c.id === coach.id)) return;
-  await setJSON(COACHES_KEY, [...existing, coach]);
 }
 export async function removeCoach(id: string): Promise<void> {
   const existing = await loadCoaches();
   await setJSON(COACHES_KEY, existing.filter(c => c.id !== id));
-}
-
-/** Connect with a fellow trainer. The connection is symmetric: they're recorded
- *  as a coach (so programs they send surface on My Coaches) AND inserted into the
- *  client roster (so you can send programs to them via the normal Send flow).
- *  Idempotent — re-connecting the same trainer is a no-op for each list. */
-export async function connectTrainer(pt: AssignedPT): Promise<void> {
-  await addCoach(pt);
-  const clients = await loadClients();
-  if (!clients.some(c => c.id === pt.id)) {
-    const asClient: Client = {
-      id: pt.id,
-      name: pt.name,
-      initials: pt.initials,
-      lastActiveISO: new Date().toISOString(),
-      streak: 0,
-      isTrainer: true,
-    };
-    await setJSON(CLIENTS_KEY, [asClient, ...clients]);
-  }
-}
-
-/** Sever a trainer connection from either side — removes the coach entry, the
- *  mirrored client entry, and that client's local data. */
-export async function disconnectTrainer(id: string): Promise<void> {
-  await removeCoach(id);
-  const clients = await loadClients();
-  if (clients.some(c => c.id === id)) {
-    await setJSON(CLIENTS_KEY, clients.filter(c => c.id !== id));
-    await removeKey(clientDataKey(id));
-  }
 }
 
 /** Backfill `receivedFromCoachId` on legacy incoming shares. Before the field

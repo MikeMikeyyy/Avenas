@@ -1,7 +1,12 @@
-// "My Trainers" — a section rendered inside the standalone /my-trainers route.
-// Lists every trainer the gym user is connected to (primary + additional)
-// in one flat list. The primary trainer is marked with a small "PRIMARY" tag.
-// Mirrors the MyCoachesSection structure used on the trainer side.
+// "My Trainers" (gym-user side) — a section rendered inside the standalone
+// /my-trainers route. Lists every trainer the user is connected to (primary +
+// additional) in one flat list. The primary trainer is marked with a small
+// "PRIMARY" tag. Mirrors the MyCoachesSection structure used on the trainer side.
+//
+// The list is DERIVED from real accepted connections whose counterpart holds a
+// trainer account (utils/roster.ts), merged with any local/mock entries — the
+// connect handshake writes no local roster, so reading a local key here is what
+// used to leave this page permanently empty.
 
 import { forwardRef, useCallback, useImperativeHandle, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -10,17 +15,15 @@ import { useFocusEffect, useRouter } from "expo-router";
 
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import Avatar from "../Avatar";
 import PeopleIcon from "../icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import {
-  loadAssignedPT,
-  loadOtherTrainers,
-  removeOtherTrainer,
-  saveAssignedPT,
-  saveOtherTrainers,
-  type AssignedPT,
-} from "../../utils/trainerStore";
+import { resolveMyTrainers, setPrimaryTrainer } from "../../utils/roster";
+import { unaddContact } from "../../utils/moderation";
+import { useConnectionPresence } from "../../hooks/useConnectionPresence";
+import { isActiveNow, presenceLabel } from "../../utils/presence";
+import type { AssignedPT } from "../../utils/trainerStore";
 
 export interface MyTrainersSectionRef {
   openMenu: () => void;
@@ -31,13 +34,17 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
 
-  const [primary, setPrimary] = useState<AssignedPT | null>(null);
-  const [others, setOthers] = useState<AssignedPT[]>([]);
+  // Live "last active" for connected trainers; local/mock entries aren't in the
+  // map and show no presence row.
+  const { presenceById } = useConnectionPresence();
+
+  const [trainers, setTrainers] = useState<AssignedPT[]>([]);
+  const [primaryId, setPrimaryId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    const [p, os] = await Promise.all([loadAssignedPT(), loadOtherTrainers()]);
-    setPrimary(p);
-    setOthers(os);
+    const { all, primary } = await resolveMyTrainers();
+    setTrainers(all);
+    setPrimaryId(primary?.id ?? null);
   }, []);
 
   // useFocusEffect (not useEffect) — the route may stay mounted when the user
@@ -59,37 +66,38 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
 
   // Tapping a trainer makes them the active (primary) one and returns to
   // MyPTHome so the user immediately sees that trainer's header + programs.
-  // The previously-primary trainer is demoted to the "others" list so nothing
-  // is lost on the swap.
+  // The rest of the list is derived, so nothing is lost on the swap.
   const handlePickTrainer = useCallback(async (pt: AssignedPT, isPrimary: boolean) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (isPrimary) {
       router.back();
       return;
     }
-    const nextOthers = others.filter(o => o.id !== pt.id);
-    if (primary) nextOthers.push(primary);
-    await saveOtherTrainers(nextOthers);
-    await saveAssignedPT(pt);
+    await setPrimaryTrainer(pt);
     router.back();
-  }, [primary, others, router]);
+  }, [router]);
 
-  const handleRemove = useCallback((pt: AssignedPT, isPrimary: boolean) => {
-    const label = isPrimary
-      ? `Remove ${pt.name} as your primary trainer? Any programs you've already accepted will stay in your library.`
-      : `Stop being coached by ${pt.name}? Any programs you've already accepted will stay in your library.`;
+  const handleRemove = useCallback((pt: AssignedPT) => {
     Alert.alert(
       "Remove Trainer",
-      label,
+      `Stop being coached by ${pt.name}? Any programs you've already accepted will stay in your library.`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Remove",
           style: "destructive",
           onPress: async () => {
-            if (isPrimary) await saveAssignedPT(null);
-            else await removeOtherTrainer(pt.id);
+            // unaddContact (not a local-only delete): this list is derived from
+            // live connections, so without the server-side sever they'd simply
+            // reappear on the next focus.
+            const { severed } = await unaddContact(pt.id, "gym_user");
             await reload();
+            if (!severed) {
+              Alert.alert(
+                "Couldn't remove them",
+                `We couldn't reach the server to disconnect from ${pt.name}. Check your connection and try again.`,
+              );
+            }
           },
         },
       ]
@@ -99,27 +107,23 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
   // Step into "remove" sub-menu — lists every trainer as an Alert button so
   // the user can pick which one to remove. Cancel returns to nothing.
   const openRemovePicker = useCallback(() => {
-    if (!primary && others.length === 0) {
+    if (trainers.length === 0) {
       Alert.alert("No trainers", "You haven't connected to any trainers yet.");
       return;
     }
-    const all: { trainer: AssignedPT; isPrimary: boolean }[] = [
-      ...(primary ? [{ trainer: primary, isPrimary: true }] : []),
-      ...others.map(o => ({ trainer: o, isPrimary: false })),
-    ];
     Alert.alert(
       "Remove a Trainer",
       "Pick a trainer to remove.",
       [
         { text: "Cancel", style: "cancel" },
-        ...all.map(({ trainer, isPrimary }) => ({
-          text: isPrimary ? `${trainer.name} (Primary)` : trainer.name,
+        ...trainers.map(trainer => ({
+          text: trainer.id === primaryId ? `${trainer.name} (Primary)` : trainer.name,
           style: "destructive" as const,
-          onPress: () => handleRemove(trainer, isPrimary),
+          onPress: () => handleRemove(trainer),
         })),
       ],
     );
-  }, [primary, others, handleRemove]);
+  }, [trainers, primaryId, handleRemove]);
 
   // Top-right plus button entry — offers both add and remove paths.
   const openMenu = useCallback(() => {
@@ -137,15 +141,12 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
 
   useImperativeHandle(ref, () => ({ openMenu }), [openMenu]);
 
-  const all: { trainer: AssignedPT; isPrimary: boolean }[] = [
-    ...(primary ? [{ trainer: primary, isPrimary: true }] : []),
-    ...others.map(o => ({ trainer: o, isPrimary: false })),
-  ];
+  const all = trainers.map(trainer => ({ trainer, isPrimary: trainer.id === primaryId }));
 
   return (
     <View style={styles.wrap}>
       <Text style={[styles.sub, { color: t.ts }]}>
-        Trainers you're connected with — programs they send appear on your My Trainer page.
+        {"Trainers you're connected with. Programs they send appear on your My Trainer page."}
       </Text>
 
       {all.length === 0 ? (
@@ -177,9 +178,14 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
             >
               <NeuCard dark={isDark} radius={16}>
                 <View style={styles.trainerCard}>
-                  <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                    <Text style={[styles.avatarText, { color: ACCT }]}>{trainer.initials}</Text>
-                  </View>
+                  <Avatar
+                    uri={trainer.photoUri}
+                    initials={trainer.initials}
+                    size={48}
+                    backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                    textColor={ACCT}
+                    textStyle={[styles.avatarText, { color: ACCT }]}
+                  />
                   <View style={{ flex: 1 }}>
                     <View style={styles.nameRow}>
                       <Text style={[styles.trainerName, { color: t.tp }]} numberOfLines={1}>{trainer.name}</Text>
@@ -192,6 +198,16 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
                     <Text style={[styles.trainerLabel, { color: t.ts }]}>
                       {isPrimary ? "TRAINER" : "TAP TO SWITCH"}
                     </Text>
+                    {(() => {
+                      const lastActive = presenceById.get(trainer.id);
+                      if (!lastActive) return null; // not connected, never active, or sharing off
+                      return (
+                        <View style={styles.presenceRow}>
+                          <View style={[styles.presenceDot, { backgroundColor: isActiveNow(lastActive) ? ACCT : t.ts }]} />
+                          <Text style={[styles.presenceText, { color: t.ts }]}>{presenceLabel(lastActive)}</Text>
+                        </View>
+                      );
+                    })()}
                   </View>
                 </View>
               </NeuCard>
@@ -217,8 +233,10 @@ const styles = StyleSheet.create({
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
 
   trainerCard:  { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  avatar:       { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 16 },
+  presenceRow:  { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  presenceDot:  { width: 6, height: 6, borderRadius: 3 },
+  presenceText: { fontFamily: FontFamily.regular, fontSize: 12 },
   nameRow:      { flexDirection: "row", alignItems: "center", gap: 6 },
   trainerName:  { fontFamily: FontFamily.bold, fontSize: 16, flexShrink: 1 },
   trainerLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 1, marginTop: 2 },

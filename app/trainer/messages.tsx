@@ -95,7 +95,7 @@ export default function MessagesScreen() {
           id: c.otherId,
           name: c.name || "User",
           initials: makeInitials(c.name || "User"),
-          subtitle: accountType === "pt" ? (c.accountType === "pt" ? "Coach" : "Client") : "Trainer",
+          subtitle: accountType === "pt" ? (c.accountType === "pt" ? "Trainer" : "Client") : "Trainer",
           photoUri: c.photoUri,
         }));
       const realIds = new Set(real.map(c => c.id));

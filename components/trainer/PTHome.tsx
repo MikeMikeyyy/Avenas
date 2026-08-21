@@ -47,9 +47,8 @@ import {
   type SharedProgram,
 } from "../../utils/trainerStore";
 import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
-import { loadBlockedIds } from "../../utils/moderation";
+import { resolveTrainerRoster } from "../../utils/roster";
 import { getJSON } from "../../utils/storage";
-import { getMyConnections } from "../../lib/connections";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 
 // Same SVG used by workout.tsx / new-program.tsx / review screen.
@@ -166,34 +165,12 @@ export default function PTHome() {
       const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
       const sent = await loadSentPrograms();
 
-      // Real accepted connections join the roster with their real name + photo.
-      // They take precedence over any same-id local entry; pending incoming
-      // requests drive the Connect badge. Offline / signed-out → keep local only.
-      let merged = fresh;
-      try {
-        const conns = await getMyConnections();
-        const realClients: Client[] = conns
-          .filter(c => c.status === "accepted")
-          .map(c => ({
-            id: c.otherId,
-            name: c.name || "User",
-            initials: makeInitials(c.name || "User"),
-            photoUri: c.photoUri,
-            isTrainer: c.accountType === "pt",
-            lastActiveISO: c.lastActiveAt,
-            streak: 0,
-          }));
-        const realIds = new Set(realClients.map(c => c.id));
-        merged = [...realClients, ...fresh.filter(f => !realIds.has(f.id))];
-      } catch { /* keep the local roster */ }
-
-      // Hide anyone the user has blocked, in case blockContact's server-side
-      // disconnect failed (offline) and the lingering accepted connection came
-      // back through getMyConnections — the local block takes precedence.
-      try {
-        const blocked = await loadBlockedIds();
-        if (blocked.size > 0) merged = merged.filter(c => !blocked.has(c.id));
-      } catch { /* defense-in-depth — leave as-is on storage error */ }
+      // Live connections joined with the local roster, bucketed by the
+      // counterpart's account type — a connected TRAINER belongs on the My
+      // Trainers page, not in here. Blocked ids and stale local snapshots of
+      // severed connections are filtered inside the resolver; offline it
+      // degrades to the local roster.
+      const merged = (await resolveTrainerRoster()).clients;
 
       await migrateBroadcastShares(fresh);
       await migrateCoachReceivedShares();
@@ -230,10 +207,14 @@ export default function PTHome() {
       lastActiveISO: new Date().toISOString(),
       streak: 0,
     };
-    const next = [newClient, ...clients];
-    setClients(next);
-    await saveClients(next);
-  }, [clients]);
+    // Persist against the LOCAL roster only. `clients` in state is the resolved
+    // view (local + live connections), and writing that back would bake
+    // connection snapshots into CLIENTS_KEY, where they'd outlive the
+    // connection itself.
+    const local = await loadClients();
+    await saveClients([newClient, ...local]);
+    setClients(prev => [newClient, ...prev]);
+  }, []);
 
   const batches = useMemo(() => {
     const byKey = new Map<string, SharedProgram[]>();

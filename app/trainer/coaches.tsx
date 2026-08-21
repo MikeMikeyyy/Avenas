@@ -1,6 +1,6 @@
-// "My Coaches" — standalone page reached from a small button on PTHome.
-// Lets a trainer connect to senior coaches/mentors, accept programs they
-// share, and pass those programs down to their own clients in one tap.
+// "My Trainers" (trainer side) — standalone page reached from a small button on
+// PTHome. Lets a trainer connect to senior trainers/mentors, accept programs
+// they share, and pass those programs down to their own clients in one tap.
 
 import { useCallback, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -16,7 +16,8 @@ import FadeScreen from "../../components/FadeScreen";
 import MyCoachesSection, { type MyCoachesSectionRef } from "../../components/trainer/MyCoachesSection";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import { loadClients, type Client } from "../../utils/trainerStore";
+import { resolveTrainerRoster } from "../../utils/roster";
+import type { Client } from "../../utils/trainerStore";
 
 export default function CoachesScreen() {
   const router = useRouter();
@@ -30,7 +31,9 @@ export default function CoachesScreen() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     (async () => {
-      const cs = await loadClients();
+      // Resolver, not loadClients(): "Send to my clients" must target the same
+      // roster PTHome shows, which is derived from live connections.
+      const { clients: cs } = await resolveTrainerRoster();
       if (!cancelled) setClients(cs);
     })();
     return () => { cancelled = true; };
@@ -75,7 +78,7 @@ export default function CoachesScreen() {
         onPress={() => sectionRef.current?.openMenu()}
         style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
         activeOpacity={0.8}
-        accessibilityLabel="Add or remove a coach"
+        accessibilityLabel="Add or remove a trainer"
         accessibilityRole="button"
       >
         {isGlassEffectAPIAvailable() ? (
@@ -99,7 +102,7 @@ export default function CoachesScreen() {
       >
         <View style={styles.header}>
           <View style={{ width: 44 }} />
-          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>My Coaches</Text>
+          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>My Trainers</Text>
           <View style={{ width: 44 }} />
         </View>
 

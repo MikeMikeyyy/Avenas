@@ -19,6 +19,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
 import { flushCloudPush } from "../lib/syncManager";
+import { reconcileAccountType } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
@@ -66,6 +67,12 @@ function AppShell() {
   useEffect(() => {
     if (profileLoaded && authLoaded) SplashScreen.hideAsync();
   }, [profileLoaded, authLoaded]);
+
+  // Repair accounts whose server-side account_type drifted from the one this
+  // device uses (the Profile toggle was local-only before migration 0015). Until
+  // it matches, connected accounts see this user under the wrong role. No-ops
+  // when signed out or already in sync.
+  useEffect(() => { void reconcileAccountType(); }, []);
 
   // Two foreground/background jobs:
   //  - Cloud-backup safety net: on leaving the foreground, push any changes from

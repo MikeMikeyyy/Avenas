@@ -1,18 +1,24 @@
-// "My Coaches" — a section embedded at the top of PTHome that lets a trainer
-// also be coached by other trainers (mentors). Mirrors the visual language of
-// MyPTHome's "My Trainer" + "From Your Trainer" blocks, but supports a list of
-// coaches and adds a one-tap "Send to clients" action on accepted programs so
-// the trainer can pass a mentor's program down to their own roster.
+// "My Trainers" (trainer side) — rendered inside the /trainer/coaches route.
+// Lets a trainer also be coached by other trainers. Mirrors the visual language
+// of MyPTHome's "My Trainer" + "From Your Trainer" blocks, but supports a list
+// of trainers and adds a one-tap "Send to clients" action on accepted programs
+// so the trainer can pass a mentor's program down to their own roster.
+//
+// The list is DERIVED from real accepted connections whose counterpart holds a
+// trainer account (utils/roster.ts), merged with any local/mock entries — the
+// connect handshake writes no local roster, so reading a local key here is what
+// used to leave this page permanently empty.
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { scheduleCloudPush } from "../../lib/syncManager";
 
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import Avatar from "../Avatar";
 import TrashIcon from "../TrashIcon";
 import PeopleIcon from "../icons/PeopleIcon";
 import SendIcon from "../icons/SendIcon";
@@ -22,8 +28,6 @@ import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgram,
   appendSharedPrograms,
-  disconnectTrainer,
-  loadCoaches,
   loadSharedPrograms,
   migrateCoachReceivedShares,
   removeSharedProgram,
@@ -31,6 +35,8 @@ import {
   type Client,
   type SharedProgram,
 } from "../../utils/trainerStore";
+import { resolveTrainerRoster } from "../../utils/roster";
+import { unaddContact } from "../../utils/moderation";
 import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
@@ -63,82 +69,96 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
 
-  const [coaches, setCoaches] = useState<AssignedPT[]>([]);
+  const [trainers, setTrainers] = useState<AssignedPT[]>([]);
   const [received, setReceived] = useState<SharedProgram[]>([]);
   const [passDownTarget, setPassDownTarget] = useState<SavedProgram | null>(null);
-  // Coach entries are local snapshots; live "last active" comes from the
-  // connection presence poll. Coaches without a real connection (legacy/mock)
-  // aren't in the map and show no presence row.
+  // Live "last active" comes from the connection presence poll. Trainers
+  // without a real connection (legacy/mock) aren't in the map and show no
+  // presence row.
   const { presenceById } = useConnectionPresence();
 
   const reload = useCallback(async () => {
     // Backfill the direction flag on any legacy incoming shares before reading.
     await migrateCoachReceivedShares();
-    const [cs, shares] = await Promise.all([loadCoaches(), loadSharedPrograms()]);
-    setCoaches(cs);
-    // Incoming = a program a coach sent ME (flagged with receivedFromCoachId).
+    const [roster, shares] = await Promise.all([resolveTrainerRoster(), loadSharedPrograms()]);
+    setTrainers(roster.trainers);
+    // Incoming = a program another trainer sent ME (receivedFromCoachId).
     setReceived(shares.filter(s => !!s.receivedFromCoachId));
   }, []);
 
-  useEffect(() => { void reload(); }, [reload]);
+  // useFocusEffect (not useEffect) — this route stays mounted while the user
+  // steps out to /connect, so a trainer added there only appears if we refresh
+  // on the way back.
+  useFocusEffect(useCallback(() => {
+    void reload();
+  }, [reload]));
 
-  const handleConnectCoach = useCallback(() => {
+  const handleConnectTrainer = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate("/connect");
   }, [router]);
 
-  const handleRemoveCoach = useCallback((coach: AssignedPT) => {
+  const handleRemoveTrainer = useCallback((trainer: AssignedPT) => {
     Alert.alert(
-      "Remove Coach",
-      `Stop being connected with ${coach.name}? They'll be removed from your clients too. Programs you've already accepted will stay in your library.`,
+      "Remove Trainer",
+      `Stop being coached by ${trainer.name}? Programs you've already accepted will stay in your library.`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Remove",
           style: "destructive",
           onPress: async () => {
-            await disconnectTrainer(coach.id);
+            // unaddContact (not a local-only delete): this list is derived from
+            // live connections, so without the server-side sever they'd simply
+            // reappear on the next focus.
+            const { severed } = await unaddContact(trainer.id, "pt");
             await reload();
+            if (!severed) {
+              Alert.alert(
+                "Couldn't remove them",
+                `We couldn't reach the server to disconnect from ${trainer.name}. Check your connection and try again.`,
+              );
+            }
           },
         },
       ]
     );
   }, [reload]);
 
-  // Step into "remove" sub-menu — lists every coach as an Alert button so
+  // Step into "remove" sub-menu — lists every trainer as an Alert button so
   // the user can pick which one to remove. Cancel returns to nothing.
   const openRemovePicker = useCallback(() => {
-    if (coaches.length === 0) {
-      Alert.alert("No coaches", "You haven't connected to any coaches yet.");
+    if (trainers.length === 0) {
+      Alert.alert("No trainers", "You haven't connected to any trainers yet.");
       return;
     }
     Alert.alert(
-      "Remove a Coach",
-      "Pick a coach to remove.",
+      "Remove a Trainer",
+      "Pick a trainer to remove.",
       [
         { text: "Cancel", style: "cancel" },
-        ...coaches.map(coach => ({
-          text: coach.name,
+        ...trainers.map(trainer => ({
+          text: trainer.name,
           style: "destructive" as const,
-          onPress: () => handleRemoveCoach(coach),
+          onPress: () => handleRemoveTrainer(trainer),
         })),
       ],
     );
-  }, [coaches, handleRemoveCoach]);
+  }, [trainers, handleRemoveTrainer]);
 
   // Top-right plus button entry — offers both add and remove paths.
   const openMenu = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert(
-      "Manage Coaches",
+      "Manage Trainers",
       undefined,
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Add a Coach", onPress: handleConnectCoach },
-        { text: "Remove a Coach", style: "destructive", onPress: openRemovePicker },
+        { text: "Add a Trainer", onPress: handleConnectTrainer },
+        { text: "Remove a Trainer", style: "destructive", onPress: openRemovePicker },
       ],
     );
-  }, [handleConnectCoach, openRemovePicker]);
+  }, [handleConnectTrainer, openRemovePicker]);
 
   useImperativeHandle(ref, () => ({ openMenu }), [openMenu]);
 
@@ -179,8 +199,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     Alert.alert(
       "Remove Program",
       accepted
-        ? `Remove "${share.programName}" from your coaches list? Your accepted copy stays in your library.`
-        : `Remove "${share.programName}"? You won't be able to get it back unless your coach sends it again.`,
+        ? `Remove "${share.programName}" from your trainers list? Your accepted copy stays in your library.`
+        : `Remove "${share.programName}"? You won't be able to get it back unless your trainer sends it again.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -222,28 +242,28 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     setPassDownTarget(null);
   }, [passDownTarget, clients]);
 
-  const coachNameFor = (share: SharedProgram): string => {
-    const coach = coaches.find(c => c.id === share.receivedFromCoachId);
-    return coach?.name ?? "your coach";
+  const trainerNameFor = (share: SharedProgram): string => {
+    const trainer = trainers.find(c => c.id === share.receivedFromCoachId);
+    return trainer?.name ?? "your trainer";
   };
 
   return (
     <View style={styles.wrap}>
       <Text style={[styles.sub, { color: t.ts }]}>
-        Trainers you receive programs from — accept one and pass it on to your clients.
+        Trainers you receive programs from. Accept one and pass it on to your clients.
       </Text>
 
-      {coaches.length === 0 ? (
+      {trainers.length === 0 ? (
         <NeuCard dark={isDark} radius={20} style={{ marginTop: 12 }}>
           <View style={styles.emptyInner}>
             <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
               <PeopleIcon size={28} color={ACCT} />
             </View>
-            <Text style={[styles.emptyTitle, { color: t.tp }]}>No coaches yet</Text>
+            <Text style={[styles.emptyTitle, { color: t.tp }]}>No trainers yet</Text>
             <Text style={[styles.emptyBody, { color: t.ts }]}>
               Connect to a senior trainer to receive programs you can adapt and pass on to your own clients.
             </Text>
-            <BounceButton style={{ marginTop: 8 }} onPress={handleConnectCoach}>
+            <BounceButton style={{ marginTop: 8 }} onPress={handleConnectTrainer}>
               <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                 <Text style={styles.ctaText}>Connect to a Trainer</Text>
               </View>
@@ -252,14 +272,19 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         </NeuCard>
       ) : (
         <View style={{ marginTop: 12, gap: 10 }}>
-          {coaches.map(coach => (
+          {trainers.map(coach => (
             <NeuCard key={coach.id} dark={isDark} radius={16}>
               <View style={styles.coachCard}>
-                <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                  <Text style={[styles.avatarText, { color: ACCT }]}>{coach.initials}</Text>
-                </View>
+                <Avatar
+                  uri={coach.photoUri}
+                  initials={coach.initials}
+                  size={48}
+                  backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                  textColor={ACCT}
+                  textStyle={[styles.avatarText, { color: ACCT }]}
+                />
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.coachLabel, { color: t.ts }]}>COACH</Text>
+                  <Text style={[styles.coachLabel, { color: t.ts }]}>TRAINER</Text>
                   <Text style={[styles.coachName, { color: t.tp }]}>{coach.name}</Text>
                   {(() => {
                     const lastActive = presenceById.get(coach.id);
@@ -278,14 +303,14 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         </View>
       )}
 
-      {coaches.length > 0 && (
+      {trainers.length > 0 && (
         <>
           <View style={styles.sectionHeadingRow}>
-            <Text style={[styles.sectionHeading, { color: t.tp }]}>From Your Coaches</Text>
+            <Text style={[styles.sectionHeading, { color: t.tp }]}>From Your Trainers</Text>
           </View>
           {received.length === 0 ? (
             <NeuCard dark={isDark} radius={16}>
-              <Text style={[styles.smallEmpty, { color: t.ts }]}>No programs received from coaches yet.</Text>
+              <Text style={[styles.smallEmpty, { color: t.ts }]}>No programs received from your trainers yet.</Text>
             </NeuCard>
           ) : (
             <View>
@@ -307,7 +332,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                           <View style={{ flex: 1 }}>
                             <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
                             <Text style={[styles.itemMeta, { color: t.ts }]}>
-                              From {coachNameFor(r)} · {fmtAgo(r.sentAtISO)}
+                              From {trainerNameFor(r)} · {fmtAgo(r.sentAtISO)}
                             </Text>
                           </View>
                           {accepted && (
@@ -405,7 +430,6 @@ const styles = StyleSheet.create({
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
 
   coachCard:    { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  avatar:       { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 16 },
   coachLabel:   { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 1 },
   coachName:    { fontFamily: FontFamily.bold, fontSize: 16, marginTop: 2 },

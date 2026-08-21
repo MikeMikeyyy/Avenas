@@ -4,6 +4,7 @@
 //
 // RN-only (imports the Supabase client + AsyncStorage) — not for the node harness.
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
 import { getJSON, removeKey, setJSON } from "../utils/storage";
 import {
@@ -20,7 +21,7 @@ import {
   toReplaceUserDataPayload,
 } from "./mappers";
 import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./database.types";
-import type { AccountType } from "../contexts/AccountTypeContext";
+import { ACCOUNT_TYPE_KEY, type AccountType } from "../contexts/AccountTypeContext";
 import { clearTrainerData } from "../utils/trainerStore";
 import { clearChatData } from "../utils/chatStore";
 import { clearModerationData } from "../utils/moderation";
@@ -345,6 +346,45 @@ export async function pushProfile(
     })
     .eq("id", userId);
   if (error) throw new Error(`save profile: ${error.message}`);
+}
+
+/** Update just the self-declared role on this account's profile. Separate from
+ *  pushProfile (the onboarding write) so the Profile screen's Member/Trainer
+ *  toggle can change this one column. Requires migration 0015 — before that, the
+ *  0008 trigger rejected any account_type change once onboarding completed. */
+export async function pushAccountType(userId: string, accountType: AccountType): Promise<void> {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ account_type: toDbAccountType(accountType) })
+    .eq("id", userId);
+  if (error) throw new Error(`save account type: ${error.message}`);
+}
+
+/**
+ * Make the server's account_type match the one this device is actually using.
+ *
+ * The Member/Trainer toggle in Profile was local-only for a long time, so any
+ * account that switched to Trainer after onboarding kept `account_type = 'user'`
+ * in the cloud. That column is what every OTHER account sees through
+ * get_my_connections(), so such a trainer appeared to their connections as a
+ * member and could never be bucketed as a trainer (utils/roster.ts). This runs
+ * on launch and on every foreground to repair the drift. The local value wins:
+ * it's the one the user actually sees in the app.
+ *
+ * No-ops when signed out, offline, mid-onboarding, or already in sync.
+ */
+export async function reconcileAccountType(): Promise<void> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const local = await AsyncStorage.getItem(ACCOUNT_TYPE_KEY);
+    if (local !== "pt" && local !== "gym_user") return;
+    const profile = await pullProfile(user.id);
+    if (!profile?.complete || profile.accountType === local) return;
+    await pushAccountType(user.id, local);
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] reconcileAccountType", e);
+  }
 }
 
 /** Update just the display name on this account's profile. */

@@ -23,16 +23,19 @@ import type { AccountType } from "../contexts/AccountTypeContext";
 
 /**
  * Everyone the current account can message, normalised to ChatContact:
- *   - trainer (pt):  their clients + their coaches
+ *   - trainer (pt):  their clients + the trainers who coach them
  *   - gym user:      their primary trainer + any other trainers
  * Deduped by id (a person added in two roles shows once).
+ *
+ * LOCAL roster only — app/trainer/messages.tsx merges live connections on top,
+ * which is what surfaces people you're connected to but have no local entry for.
  */
 export async function loadChatContacts(accountType: AccountType): Promise<ChatContact[]> {
   const out: ChatContact[] = [];
   if (accountType === "pt") {
     const [clients, coaches] = await Promise.all([loadClients(), loadCoaches()]);
     for (const c of clients) out.push({ id: c.id, name: c.name, initials: c.initials, subtitle: c.note || "Client", photoUri: c.photoUri });
-    for (const c of coaches) out.push({ id: c.id, name: c.name, initials: c.initials, subtitle: "Coach", photoUri: c.photoUri });
+    for (const c of coaches) out.push({ id: c.id, name: c.name, initials: c.initials, subtitle: "Trainer", photoUri: c.photoUri });
   } else {
     const [primary, others] = await Promise.all([loadAssignedPT(), loadOtherTrainers()]);
     if (primary) out.push({ id: primary.id, name: primary.name, initials: primary.initials, subtitle: "Your trainer", photoUri: primary.photoUri });

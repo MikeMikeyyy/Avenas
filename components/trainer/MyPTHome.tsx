@@ -32,19 +32,16 @@ import {
   applyReturnedProgram,
   backfillAcceptedProgramIds,
   batchKeyOf,
-  loadAssignedPT,
   loadClients,
   loadSentPrograms,
   loadSharedPrograms,
-  makeInitials,
   migrateBroadcastShares,
   removeSentProgram,
   type AssignedPT,
   type SentProgram,
   type SharedProgram,
 } from "../../utils/trainerStore";
-import { getMyConnections } from "../../lib/connections";
-import { loadBlockedIds } from "../../utils/moderation";
+import { resolveMyTrainers } from "../../utils/roster";
 import Avatar from "../Avatar";
 import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
@@ -127,8 +124,8 @@ export default function MyPTHome() {
       await backfillAcceptedProgramIds();
       const clientsForMigration = await loadClients();
       await migrateBroadcastShares(clientsForMigration);
-      const [p, r, s, progs] = await Promise.all([
-        loadAssignedPT(),
+      const [myTrainers, r, s, progs] = await Promise.all([
+        resolveMyTrainers(),
         loadSharedPrograms(),
         loadSentPrograms(),
         getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
@@ -140,37 +137,20 @@ export default function MyPTHome() {
       const seen = new Set<string>();
       const dedupedReceived: SharedProgram[] = [];
       for (const entry of r) {
-        // Skip trainer-to-trainer programs (a coach sent them to a trainer) —
-        // they belong on the trainer's My Coaches page, not a gym user's
-        // My Trainer feed.
+        // Skip trainer-to-trainer programs: they belong on the trainer-side
+        // My Trainers page, not a gym user's My Trainer feed.
         if (entry.receivedFromCoachId) continue;
         const k = batchKeyOf(entry);
         if (seen.has(k)) continue;
         seen.add(k);
         dedupedReceived.push(entry);
       }
-      // A real accepted connection whose counterpart is a trainer (PT) takes
-      // over the displayed trainer with their real name + photo. Only PT-typed
-      // connections fill this slot — a non-PT accepted connection used to be
-      // accepted as a fallback "in case account_type was stale," but that
-      // surfaced gym-user friends under the "YOUR TRAINER" label. Better to
-      // keep the empty state than mislabel the relationship; account_type is
-      // set during onboarding and should be fixed at source if stale.
-      let trainer: AssignedPT | null = p;
-      try {
-        const conns = await getMyConnections();
-        // Blocked ids never fill the trainer slot — covers the offline-block
-        // case where the server-side sever hasn't run yet (the connection row
-        // is still up, but the person is blocked locally).
-        const blocked = await loadBlockedIds();
-        const accepted = conns.filter(c => c.status === "accepted" && !blocked.has(c.otherId));
-        const trainerConn = accepted.find(c => c.accountType === "pt");
-        if (trainerConn) {
-          trainer = { id: trainerConn.otherId, name: trainerConn.name || "Trainer", initials: makeInitials(trainerConn.name || "Trainer"), photoUri: trainerConn.photoUri };
-        }
-      } catch { /* keep the local trainer */ }
-      if (cancelled) return;
-      setPT(trainer);
+      // The featured trainer is whichever one is primary on /my-trainers. The
+      // resolver honours that choice, falls back to the first connected trainer,
+      // and only ever fills this slot with a PT-typed account so a gym-user
+      // friend can't end up mislabelled under "YOUR TRAINER". Blocked ids and
+      // severed-but-still-local entries are filtered there too.
+      setPT(myTrainers.primary);
       setReceived(dedupedReceived);
       setSent(s);
       setMyPrograms(Array.isArray(progs) ? progs : []);

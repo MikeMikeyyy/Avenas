@@ -2,7 +2,7 @@
 // is uploaded to the Supabase "avatars" Storage bucket (migration 0005) and its
 // public URL is stored on the profile so it syncs across the user's devices.
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
 import { Image } from "expo-image";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -15,13 +15,13 @@ import * as ImagePicker from "expo-image-picker";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { useAuth } from "../contexts/AuthContext";
-import { useAccountType } from "../contexts/AccountTypeContext";
+import { useAccountType, type AccountType } from "../contexts/AccountTypeContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import SegmentedControl from "../components/SegmentedControl";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
+import { pushAccountType, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -98,6 +98,25 @@ export default function ProfileScreen() {
       setBusy(false);
     }
   };
+
+  // The role has to reach the server, not just this device: `account_type` on the
+  // profile is what every OTHER account sees through get_my_connections(), and
+  // it's what decides whether a connection is bucketed as a trainer or a client.
+  // A local-only switch left connected accounts seeing a trainer as a member.
+  // Applied optimistically and rolled back if the write fails, so the two copies
+  // can't silently disagree.
+  const onChangeAccountType = useCallback(async (next: AccountType) => {
+    const previous = accountType;
+    if (next === previous) return;
+    setAccountType(next);
+    if (!userId) return; // signed out — reconcileAccountType pushes it on next launch
+    try {
+      await pushAccountType(userId, next);
+    } catch (e) {
+      setAccountType(previous);
+      Alert.alert("Couldn't change account type", e instanceof Error ? e.message : "Check your connection and try again.");
+    }
+  }, [accountType, setAccountType, userId]);
 
   // Pick from the library and STAGE it as a preview. The upload + persist happen
   // in onSave, so the photo only sticks once the user taps Save changes.
@@ -220,8 +239,8 @@ export default function ProfileScreen() {
           <Text style={[styles.hint, { color: t.ts }]}>Changing your email needs a confirmation link sent to the new address.</Text>
         ) : null}
 
-        {/* Applies immediately (not staged behind Save) — it's a local mode
-            switch, same behavior it had on the Settings screen. */}
+        {/* Applies immediately (not staged behind Save), same behavior it had on
+            the Settings screen. */}
         <Text style={[styles.label, { color: t.ts }]}>ACCOUNT TYPE</Text>
         <SegmentedControl
           options={[
@@ -229,7 +248,7 @@ export default function ProfileScreen() {
             { key: "pt", label: "Trainer" },
           ]}
           value={accountType}
-          onChange={setAccountType}
+          onChange={onChangeAccountType}
         />
         <Text style={[styles.hint, { color: t.ts }]}>
           Trainers get a coaching hub with clients, program sharing, and messaging.
