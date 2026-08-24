@@ -325,6 +325,9 @@ export type CloudProfile = {
   avatarUrl: string | null;
   /** True once the user has finished the name/role step for this account. */
   complete: boolean;
+  /** Reachable address when the login identifier isn't one (Apple "Hide My
+   *  Email" accounts). Null when unset — most accounts never need it. */
+  contactEmail: string | null;
 };
 
 // App uses "gym_user"/"pt" + "kg"/"lbs"; the DB column is "user"/"pt" + "kg"/"lb".
@@ -419,7 +422,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
 export async function pullProfile(userId: string): Promise<CloudProfile | null> {
   const { data, error } = await supabase
     .from("profiles")
-    .select("name, account_type, unit, avatar_url, onboarding_complete")
+    .select("name, account_type, unit, avatar_url, onboarding_complete, contact_email")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw new Error(`load profile: ${error.message}`);
@@ -430,7 +433,22 @@ export async function pullProfile(userId: string): Promise<CloudProfile | null> 
     unit: (data.unit as string) === "lb" ? "lb" : "kg",
     avatarUrl: (data.avatar_url as string | null) ?? null,
     complete: data.onboarding_complete === true,
+    contactEmail: (data.contact_email as string | null) ?? null,
   };
+}
+
+/**
+ * Set (or clear, with null) the account's contact address.
+ *
+ * Deliberately NOT supabase.auth.updateUser({ email }): that changes the LOGIN
+ * identifier and needs a confirm-link round trip. This is a plain profile field
+ * — the address to reach someone on when their login email can't be, which is
+ * exactly the Apple "Hide My Email" case. See migration 0017.
+ */
+export async function updateContactEmail(userId: string, email: string | null): Promise<void> {
+  const value = email?.trim() ? email.trim() : null;
+  const { error } = await supabase.from("profiles").update({ contact_email: value }).eq("id", userId);
+  if (error) throw new Error(`save contact email: ${error.message}`);
 }
 
 /**

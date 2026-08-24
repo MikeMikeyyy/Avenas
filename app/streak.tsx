@@ -94,7 +94,7 @@ export default function StreakScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}

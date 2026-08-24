@@ -878,14 +878,14 @@ function Step1({
   totalWeeks, setTotalWeeks,
   cycleDays, onCycleDaysChange,
   cyclePattern, isTrainingDay, onToggleDay, onSetDayName,
-  isDark, onNext,
+  isDark,
 }: {
   name: string; setName: (v: string) => void;
   totalWeeks: number; setTotalWeeks: (v: number) => void;
   cycleDays: number; onCycleDaysChange: (v: number) => void;
   cyclePattern: string[]; isTrainingDay: boolean[];
   onToggleDay: (i: number) => void; onSetDayName: (i: number, t: string) => void;
-  isDark: boolean; onNext: () => void;
+  isDark: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
@@ -914,10 +914,6 @@ function Step1({
     onCycleDaysChange(next);
   }, [onCycleDaysChange]);
   const trainingIndices = cyclePattern.map((_, i) => i).filter(i => isTrainingDay[i]);
-  const canProceed =
-    name.trim().length > 0 &&
-    isTrainingDay.some(Boolean) &&
-    isTrainingDay.every((isTraining, i) => !isTraining || cyclePattern[i].trim().length > 0);
 
   return (
     <>
@@ -1031,26 +1027,8 @@ function Step1({
         </View>
       </NeuCard>
 
-      <BounceButton
-        onPress={canProceed ? onNext : undefined}
-        accessibilityLabel="Next step"
-        accessibilityRole="button"
-        style={{ opacity: canProceed ? 1 : 0.4 }}
-      >
-        {(() => {
-          const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
-          const btnContent = isDark ? APP_DARK.bg : "#fff";
-          const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
-          return (
-            <View style={[styles.primaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
-              <View style={[styles.primaryBtn, { backgroundColor: btnBg }]}>
-                <Text style={[styles.primaryBtnText, { color: btnContent }]}>Next</Text>
-                <Ionicons name="arrow-forward" size={18} color={btnContent} />
-              </View>
-            </View>
-          );
-        })()}
-      </BounceButton>
+      {/* No "Next" button down here any more — it's a floating pill at the
+          bottom of the screen, matching Step 2's Create Program. */}
     </>
   );
 }
@@ -1820,7 +1798,7 @@ const DayCard = memo(function DayCard({
 });
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, onFinish, isEditMode, isReviewMode, isSharedEditMode, collapsingIds, onStartCollapse, onInputFocus, customImageByName, onMeasureDay,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, collapsingIds, onStartCollapse, onInputFocus, customImageByName, onMeasureDay,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1832,10 +1810,6 @@ function Step2({
   onReorderExercises: (day: string, exercises: Exercise[]) => void;
   onDragStateChange: (dragging: boolean) => void;
   isDark: boolean;
-  onFinish: () => void;
-  isEditMode: boolean;
-  isReviewMode: boolean;
-  isSharedEditMode: boolean;
   collapsingIds: Set<string>;
   onStartCollapse: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
@@ -1873,22 +1847,9 @@ function Step2({
         />
       ))}
 
-      {!isEditMode && !isReviewMode && !isSharedEditMode && (
-        <BounceButton onPress={onFinish} accessibilityLabel="Create program" accessibilityRole="button">
-          {(() => {
-            const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
-            const btnContent = isDark ? APP_DARK.bg : "#fff";
-            const btnShadow = isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)";
-            return (
-              <View style={[styles.primaryBtnWrap, { backgroundColor: btnBg, shadowColor: btnShadow }]}>
-                <View style={[styles.primaryBtn, { backgroundColor: btnBg }]}>
-                  <Text style={[styles.primaryBtnText, { color: btnContent }]}>Create Program</Text>
-                </View>
-              </View>
-            );
-          })()}
-        </BounceButton>
-      )}
+      {/* No "Create Program" button down here any more — it's a floating pill
+          paired with Summary at the bottom of the screen, so it's reachable
+          without scrolling to the end of a long program. */}
 
       <ReorderSheet
         visible={reorderDay !== null}
@@ -2751,7 +2712,7 @@ export default function NewProgramScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
@@ -2818,7 +2779,12 @@ export default function NewProgramScreen() {
         scrollEnabled={scrollEnabled}
         scrollEventThrottle={16}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + (step === 2 ? 120 : 40) }}
+        // Clearance for the floating pills, whose top edge sits at roughly
+        // insets.bottom + 68. Step 1 leaves ~22pt under the last card; Step 2
+        // keeps its longer-standing 120 because its content runs much further.
+        // Padding on the CONTENT, not a fixed height, so adding cycle days or
+        // exercises keeps the same gap rather than eating into it.
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + (step === 2 ? 120 : 90) }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -2840,7 +2806,7 @@ export default function NewProgramScreen() {
             cycleDays={cycleDays} onCycleDaysChange={handleCycleDaysChange}
             cyclePattern={cyclePattern} isTrainingDay={isTrainingDay}
             onToggleDay={toggleDay} onSetDayName={setDayName}
-            isDark={isDark} onNext={handleNext}
+            isDark={isDark}
           />
         ) : (
           <Step2
@@ -2854,10 +2820,6 @@ export default function NewProgramScreen() {
             onReorderExercises={reorderExercises}
             onDragStateChange={handleDragStateChange}
             isDark={isDark}
-            onFinish={handleFinish}
-            isEditMode={isEditMode}
-            isReviewMode={isReviewMode}
-            isSharedEditMode={isSharedEditMode}
             collapsingIds={collapsingIds}
             onStartCollapse={startCollapse}
             onInputFocus={handleInputFocus}
@@ -2893,6 +2855,55 @@ export default function NewProgramScreen() {
           >
             <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Floating Next button — bottom RIGHT. Step 1 has no Summary pill, so the
+          right side is free and a forward arrow reads better there. Dimmed and
+          inert until the program has a name and at least one named training day. */}
+      {step === 1 && kbHeight === 0 && (
+        <View style={{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
+          <BounceButton
+            onPress={canProceed ? handleNext : undefined}
+            accessibilityLabel="Next step"
+            accessibilityRole="button"
+            style={{ opacity: canProceed ? 1 : 0.4 }}
+          >
+            {(() => {
+              const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+              const btnContent = isDark ? APP_DARK.bg : "#fff";
+              return (
+                <View style={[styles.createFabWrap, { backgroundColor: btnBg }]}>
+                  <View style={[styles.createFab, { backgroundColor: btnBg }]}>
+                    <Text style={[styles.createFabText, { color: btnContent }]}>Next</Text>
+                    <Ionicons name="arrow-forward" size={16} color={btnContent} />
+                  </View>
+                </View>
+              );
+            })()}
+          </BounceButton>
+        </View>
+      )}
+
+      {/* Floating Create button — bottom LEFT, paired with Summary on the right.
+          Only in create mode: editing, reviewing and shared-edit each commit
+          through their own header action, not this one. */}
+      {step === 2 && kbHeight === 0 && !isEditMode && !isReviewMode && !isSharedEditMode && (
+        <View style={{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
+          <BounceButton onPress={handleFinish} accessibilityLabel="Create program" accessibilityRole="button">
+            {(() => {
+              const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+              const btnContent = isDark ? APP_DARK.bg : "#fff";
+              return (
+                <View style={[styles.createFabWrap, { backgroundColor: btnBg }]}>
+                  <View style={[styles.createFab, { backgroundColor: btnBg }]}>
+                    <Ionicons name="checkmark" size={16} color={btnContent} />
+                    <Text style={[styles.createFabText, { color: btnContent }]}>Create Program</Text>
+                  </View>
+                </View>
+              );
+            })()}
+          </BounceButton>
         </View>
       )}
 
@@ -3245,4 +3256,10 @@ const styles = StyleSheet.create({
   summaryFabWrap:   { borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   summaryFab:       { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 12, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 6 },
   summaryFabText:   { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
+  // Same geometry as the Summary pill so the two read as a pair. Neutral drop
+  // shadow rather than Summary's ACCT glow — a coloured glow on a slate button
+  // would look like a mistake.
+  createFabWrap:    { borderRadius: 50, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
+  createFab:        { borderRadius: 50, paddingVertical: 12, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 6 },
+  createFabText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
 });

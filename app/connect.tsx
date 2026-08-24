@@ -28,7 +28,7 @@ import SimpleSheet from "../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, DANGER, FontFamily } from "../constants/theme";
-import { blockContact, reportUser, loadBlockedIds, unblockUser } from "../utils/moderation";
+import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
 import type { ReportReason } from "../constants/chat";
 import {
   getMyCode,
@@ -260,7 +260,10 @@ export default function ConnectScreen() {
     const c = reportFor;
     setReportFor(null);
     if (!c) return;
-    await reportUser({ id: c.otherId, name: c.name || "User" }, reason);
+    // reportPerson, not reportUser: an "inappropriate name or photo" report has
+    // to snapshot what's on screen right now, because the account can change
+    // both the moment they're reported.
+    await reportPerson({ id: c.otherId, name: c.name || "User", photoUri: c.photoUri }, reason);
     const who = c.name || "this person";
     Alert.alert(
       "Report received",
@@ -290,7 +293,7 @@ export default function ConnectScreen() {
     <View style={[styles.root, { backgroundColor: t.bg }]}>
       <TouchableOpacity
         onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: isDark ? t.div : "#ffffff" }]}
+        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
         activeOpacity={0.8}
         accessibilityRole="button"
         accessibilityLabel="Go back"

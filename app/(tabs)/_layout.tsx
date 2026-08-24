@@ -12,7 +12,7 @@ import DumbbellIcon from "../../components/DumbbellIcon";
 import Svg, { Path } from "react-native-svg";
 import { useRef, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
-import { FontFamily, NEU_BG_DARK } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 let LiquidGlassView: any = View;
 let LiquidGlassContainerView: any = View;
@@ -187,14 +187,27 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
     );
   }
 
-  // Fallback for Expo Go / iOS < 26
-  const barBg   = isDark ? NEU_BG_DARK : "#FFFFFF";
+  // Fallback for Expo Go / iOS < 26. The bar has to read as a surface floating
+  // ABOVE the page: t.nav is a rung lighter than the cards, the hairline defines
+  // its edge (carrying dark mode, where a shadow barely registers), and the
+  // shadow lifts it in light mode.
+  const t       = isDark ? APP_DARK : APP_LIGHT;
   const pillBg  = isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.07)";
   return (
     <View style={styles.tabBarWrapper}>
-      <View style={[styles.bar, { width: barWidth, height: BAR_HEIGHT, backgroundColor: barBg }]}>
-        <Animated.View style={[styles.pill, { width: pillWidth, height: pillHeight, backgroundColor: pillBg, transform: [{ translateX }, { scale: pillScale }] }]} />
-        {tabItems}
+      {/* Two views on purpose: the shadow can't live on the same node as
+          overflow:"hidden" (iOS clips it), and the bar needs that overflow to
+          clip the sliding pill to its rounded ends. Outer casts, inner clips. */}
+      <View style={[styles.barShadow, { width: barWidth, height: BAR_HEIGHT, backgroundColor: t.nav }]}>
+        <View
+          style={[
+            styles.bar,
+            { width: barWidth, height: BAR_HEIGHT, backgroundColor: t.nav, borderColor: t.navEdge },
+          ]}
+        >
+          <Animated.View style={[styles.pill, { width: pillWidth, height: pillHeight, backgroundColor: pillBg, transform: [{ translateX }, { scale: pillScale }] }]} />
+          {tabItems}
+        </View>
       </View>
     </View>
   );
@@ -235,6 +248,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  barShadow: {
+    borderRadius: BAR_HEIGHT / 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 8,
   },
   pill: {
     position: "absolute",

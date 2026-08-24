@@ -51,6 +51,25 @@ export async function signInWithProvider(provider: OAuthProvider): Promise<void>
   if (exchangeError) throw exchangeError;
 }
 
+/** Domain Apple mints per-app relay addresses under when the user picks
+ *  "Hide My Email" on the Sign in with Apple sheet. */
+const APPLE_PRIVATE_EMAIL_DOMAIN = "@privaterelay.appleid.com";
+
+/**
+ * True when this address is an Apple "Hide My Email" relay rather than a real
+ * inbox the user recognises.
+ *
+ * Apple never discloses the underlying address — unlike the full name, which
+ * arrives once on first authorization, the real email is withheld permanently
+ * when the user chose to hide it. So the relay is all we ever have as a login
+ * identifier, and showing it back to the user is meaningless noise. Screens use
+ * this to label it instead, and to offer a contact address they can actually
+ * be reached on (profiles.contact_email, migration 0017).
+ */
+export function isApplePrivateEmail(email: string | null | undefined): boolean {
+  return !!email && email.trim().toLowerCase().endsWith(APPLE_PRIVATE_EMAIL_DOMAIN);
+}
+
 /** Thrown when the user dismisses the native Apple sheet. Callers should stay
  *  silent for this — it isn't a failure. */
 export class AppleSignInCancelled extends Error {

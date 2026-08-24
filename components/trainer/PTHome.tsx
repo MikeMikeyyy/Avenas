@@ -49,7 +49,10 @@ import {
 import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { getJSON } from "../../utils/storage";
+import { fetchAllGroupMemberships, fetchMyGroups } from "../../lib/groups";
+import { getMyUid } from "../../lib/chat";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
+import type { Group } from "../../constants/groups";
 
 // Same SVG used by workout.tsx / new-program.tsx / review screen.
 function KeyboardDismissIcon({ color }: { color: string }) {
@@ -95,6 +98,8 @@ export default function PTHome() {
   const [reviews, setReviews] = useState<SentProgram[]>([]);
   const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
   const [sharedOut, setSharedOut] = useState<SharedProgram[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [groupMemberships, setGroupMemberships] = useState<Record<string, string[]>>({});
   const [kbHeight, setKbHeight] = useState(0);
   // Live-ish presence for connected clients + the Connect button badge count.
   // Disconnecting a real connection lives on the Connect screen (app/connect.tsx).
@@ -172,6 +177,22 @@ export default function PTHome() {
       // degrades to the local roster.
       const merged = (await resolveTrainerRoster()).clients;
 
+      // Groups + their rosters (two queries total, not one per group), so the
+      // send flow can offer "everyone in this group" without a second load.
+      let groupList: Group[] = [];
+      let memberships: Record<string, string[]> = {};
+      try {
+        const uid = await getMyUid();
+        if (uid) {
+          [groupList, memberships] = await Promise.all([
+            fetchMyGroups(uid),
+            fetchAllGroupMemberships(uid),
+          ]);
+        }
+      } catch (e) {
+        if (__DEV__) console.warn("[avenas] load groups", e);
+      }
+
       await migrateBroadcastShares(fresh);
       await migrateCoachReceivedShares();
       const shared = await loadSharedPrograms();
@@ -187,6 +208,8 @@ export default function PTHome() {
         setReviews(sent);
         setSharedOut(shared);
         setActiveProgramByClient(activeMap);
+        setGroups(groupList);
+        setGroupMemberships(memberships);
       }
     })();
     return () => { cancelled = true; };
@@ -215,6 +238,23 @@ export default function PTHome() {
     await saveClients([newClient, ...local]);
     setClients(prev => [newClient, ...prev]);
   }, []);
+
+  const openNewGroup = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.navigate("/trainer/group-edit");
+  }, [router]);
+
+  const openGroup = useCallback((g: Group) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.navigate({ pathname: "/trainer/group/[id]", params: { id: g.id, name: g.name } });
+  }, [router]);
+
+  // Group shortcuts for the recipient picker: ticking one ticks its members, and
+  // the send still goes out per-person through the existing share path.
+  const recipientGroups = useMemo(
+    () => groups.map(g => ({ id: g.id, name: g.name, memberIds: groupMemberships[g.id] ?? [] })),
+    [groups, groupMemberships],
+  );
 
   const batches = useMemo(() => {
     const byKey = new Map<string, SharedProgram[]>();
@@ -331,7 +371,7 @@ export default function PTHome() {
             onPress={() => router.navigate("/trainer/coaches")}
             accessibilityLabel="Open my trainers"
           >
-            <View style={[styles.coachesBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+            <View style={[styles.coachesBtn, { backgroundColor: t.ctrl }]}>
               <Ionicons name="person-outline" size={16} color={ACCT} />
               <Text style={[styles.coachesBtnText, { color: t.tp }]}>My Trainers</Text>
             </View>
@@ -339,7 +379,7 @@ export default function PTHome() {
           <View style={{ flex: 1 }} />
           <BounceButton onPress={() => router.navigate("/trainer/messages")} accessibilityLabel="Open messages">
             <View>
-              <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
                 <ChatIcon size={18} color={t.tp} />
               </View>
               <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
@@ -347,7 +387,7 @@ export default function PTHome() {
           </BounceButton>
           <BounceButton onPress={() => router.navigate("/connect")} accessibilityLabel="Connect with someone">
             <View>
-              <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
                 <Ionicons name="add" size={24} color={t.tp} />
               </View>
               <UnreadBadge count={pendingIncoming} style={styles.msgBadge} />
@@ -371,7 +411,7 @@ export default function PTHome() {
             </View>
           </Pressable>
           <BounceButton onPress={toggleSearch} accessibilityLabel={searchOpen ? "Close search" : "Search clients"}>
-            <View style={[styles.searchBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+            <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
               <Ionicons name={searchOpen ? "close" : "search"} size={18} color={t.tp} />
             </View>
           </BounceButton>
@@ -451,6 +491,46 @@ export default function PTHome() {
               onPress={() => router.navigate({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
             />
           ))
+        )}
+
+        <View style={styles.sectionHeaderRow}>
+          <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0, flex: 1 }]}>Groups</Text>
+          <BounceButton onPress={openNewGroup} accessibilityLabel="Create a group">
+            <View style={[styles.groupAddBtn, { backgroundColor: t.ctrl }]}>
+              <Ionicons name="add" size={20} color={t.tp} />
+            </View>
+          </BounceButton>
+        </View>
+        {groups.length === 0 ? (
+          <NeuCard dark={isDark} radius={16}>
+            <Text style={[styles.groupEmpty, { color: t.ts }]}>
+              Put clients in a group to message them together and send one program to all of them.
+            </Text>
+          </NeuCard>
+        ) : (
+          <NeuCard dark={isDark} radius={16}>
+            {groups.map((g, i) => (
+              <TouchableOpacity
+                key={g.id}
+                onPress={() => openGroup(g)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Open group ${g.name}`}
+                style={[styles.summaryRow, { borderBottomColor: t.div, borderBottomWidth: i === groups.length - 1 ? 0 : 1 }]}
+              >
+                <View style={[styles.groupIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
+                  <PeopleIcon size={16} color={ACCT} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
+                  <Text style={[styles.groupMeta, { color: t.ts }]}>
+                    {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={t.ts} />
+              </TouchableOpacity>
+            ))}
+          </NeuCard>
         )}
 
         {batches.length > 0 && (
@@ -722,6 +802,7 @@ export default function PTHome() {
         visible={pendingProgram !== null}
         programName={pendingProgram?.name ?? ""}
         clients={clients}
+        groups={recipientGroups}
         onConfirm={handleConfirmRecipients}
         onClose={() => setPendingProgram(null)}
       />
@@ -774,6 +855,10 @@ const styles = StyleSheet.create({
   sectionHeaderRow:{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 12 },
   summaryRow:    { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 10 },
   summaryName:   { flex: 1, fontFamily: FontFamily.semibold, fontSize: 14 },
+  groupAddBtn:   { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  groupIcon:     { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  groupMeta:     { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 1 },
+  groupEmpty:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, padding: 16, textAlign: "center" },
   reviewInner:  { padding: 14, gap: 12 },
   reviewTop:    { flexDirection: "row", alignItems: "center", gap: 12 },
   reviewName:   { fontFamily: FontFamily.semibold, fontSize: 15 },

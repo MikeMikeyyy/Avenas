@@ -24,16 +24,19 @@ import NeuCard from "../../components/NeuCard";
 import BounceButton from "../../components/BounceButton";
 import PlusIcon from "../../components/icons/PlusIcon";
 import ChatIcon from "../../components/icons/ChatIcon";
+import PeopleIcon from "../../components/icons/PeopleIcon";
 import MessageComposeSheet from "../../components/trainer/MessageComposeSheet";
 import Avatar from "../../components/Avatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
 import { loadChatContacts, loadAllThreads, broadcastMessage, loadReads, countUnreadInThread } from "../../utils/chatStore";
+import { loadGroupRows, type GroupChatRow } from "../../utils/groupStore";
 import { makeInitials } from "../../utils/trainerStore";
 import { getMyConnections } from "../../lib/connections";
 import UnreadBadge from "../../components/UnreadBadge";
 import { loadBlockedIds, loadHiddenMessageIds } from "../../utils/moderation";
+import { groupIdFromKey, toGroupKey } from "../../constants/groups";
 import type { ChatContact, ChatThreads, ChatReads } from "../../constants/chat";
 
 function fmtAgo(iso: string): string {
@@ -49,7 +52,16 @@ function fmtAgo(iso: string): string {
   return `${Math.floor(days / 7)}w`;
 }
 
-type Row = ChatContact & { lastText: string; lastAtISO: string; unreadCount: number; unread: boolean; sortKey: number };
+// One list row, person or group. Groups are threads too, so they sort into the
+// same recency order rather than living in a separate section.
+type Row = ChatContact & {
+  lastText: string;
+  lastAtISO: string;
+  unreadCount: number;
+  unread: boolean;
+  sortKey: number;
+  kind: "person" | "group";
+};
 
 export default function MessagesScreen() {
   const router = useRouter();
@@ -63,22 +75,42 @@ export default function MessagesScreen() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const buildRows = useCallback((people: ChatContact[], threads: ChatThreads, reads: ChatReads, hidden: Set<string>): Row[] => {
-    return people
-      .map(c => {
-        const msgs = (threads[c.id] ?? []).filter(m => !hidden.has(m.id)); // drop reported messages
-        const last = msgs[msgs.length - 1];
-        const unreadCount = countUnreadInThread(msgs, reads[c.id]);
-        return {
-          ...c,
-          lastText: last ? (last.mine ? `You: ${last.text}` : last.text) : "Tap to start the conversation",
-          lastAtISO: last?.sentAtISO ?? "",
-          unreadCount,
-          unread: unreadCount > 0,
-          sortKey: last ? new Date(last.sentAtISO).getTime() : 0,
-        };
-      })
-      .sort((a, b) => b.sortKey - a.sortKey);
+  const buildRows = useCallback((
+    people: ChatContact[],
+    threads: ChatThreads,
+    reads: ChatReads,
+    hidden: Set<string>,
+    groups: GroupChatRow[],
+  ): Row[] => {
+    const personRows: Row[] = people.map(c => {
+      const msgs = (threads[c.id] ?? []).filter(m => !hidden.has(m.id)); // drop reported messages
+      const last = msgs[msgs.length - 1];
+      const unreadCount = countUnreadInThread(msgs, reads[c.id]);
+      return {
+        ...c,
+        lastText: last ? (last.mine ? `You: ${last.text}` : last.text) : "Tap to start the conversation",
+        lastAtISO: last?.sentAtISO ?? "",
+        unreadCount,
+        unread: unreadCount > 0,
+        sortKey: last ? new Date(last.sentAtISO).getTime() : 0,
+        kind: "person" as const,
+      };
+    });
+    // Group ids and account ids are both uuids, so the row id is namespaced to
+    // keep the two apart in one list (see constants/groups.ts).
+    const groupRows: Row[] = groups.map(g => ({
+      id: toGroupKey(g.group.id),
+      name: g.group.name,
+      initials: makeInitials(g.group.name),
+      subtitle: `${g.group.memberCount} member${g.group.memberCount === 1 ? "" : "s"}`,
+      lastText: g.lastText,
+      lastAtISO: g.lastAtISO,
+      unreadCount: g.unreadCount,
+      unread: g.unreadCount > 0,
+      sortKey: g.lastAtISO ? new Date(g.lastAtISO).getTime() : 0,
+      kind: "group" as const,
+    }));
+    return [...personRows, ...groupRows].sort((a, b) => b.sortKey - a.sortKey);
   }, []);
 
   // Contacts to list = the local roster (mock clients/coaches/trainers) merged
@@ -107,10 +139,12 @@ export default function MessagesScreen() {
 
   const load = useCallback(async () => {
     const all = await gatherContacts();
-    const [threads, reads, blocked, hidden] = await Promise.all([loadAllThreads(), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
+    const [threads, reads, blocked, hidden, groups] = await Promise.all([
+      loadAllThreads(), loadReads(), loadBlockedIds(), loadHiddenMessageIds(), loadGroupRows(),
+    ]);
     const people = all.filter(p => !blocked.has(p.id)); // blocked users disappear from chat
     setContacts(people);
-    setRows(buildRows(people, threads, reads, hidden));
+    setRows(buildRows(people, threads, reads, hidden, groups));
   }, [gatherContacts, buildRows]);
 
   useFocusEffect(
@@ -118,19 +152,25 @@ export default function MessagesScreen() {
       let cancelled = false;
       (async () => {
         const all = await gatherContacts();
-        const [threads, reads, blocked, hidden] = await Promise.all([loadAllThreads(), loadReads(), loadBlockedIds(), loadHiddenMessageIds()]);
+        const [threads, reads, blocked, hidden, groups] = await Promise.all([
+          loadAllThreads(), loadReads(), loadBlockedIds(), loadHiddenMessageIds(), loadGroupRows(),
+        ]);
         if (cancelled) return;
         const people = all.filter(p => !blocked.has(p.id));
         setContacts(people);
-        setRows(buildRows(people, threads, reads, hidden));
+        setRows(buildRows(people, threads, reads, hidden, groups));
       })();
       return () => { cancelled = true; };
     }, [gatherContacts, buildRows]),
   );
 
-  const openThread = (c: ChatContact) => {
+  const openThread = (r: Row) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.navigate({ pathname: "/trainer/chat/[id]", params: { id: c.id, name: c.name, initials: c.initials, photo: c.photoUri ?? "" } });
+    if (r.kind === "group") {
+      router.navigate({ pathname: "/trainer/group/[id]", params: { id: groupIdFromKey(r.id), name: r.name } });
+      return;
+    }
+    router.navigate({ pathname: "/trainer/chat/[id]", params: { id: r.id, name: r.name, initials: r.initials, photo: r.photoUri ?? "" } });
   };
 
   const handleSend = async (ids: string[], text: string) => {
@@ -185,7 +225,7 @@ export default function MessagesScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
@@ -256,16 +296,22 @@ export default function MessagesScreen() {
           <Text style={[styles.noMatch, { color: t.ts }]}>No people match “{search.trim()}”.</Text>
         ) : (
           visibleRows.map(r => (
-            <BounceButton key={r.id} style={{ marginBottom: 10 }} onPress={() => openThread(r)} accessibilityLabel={`Open chat with ${r.name}`}>
+            <BounceButton key={r.id} style={{ marginBottom: 10 }} onPress={() => openThread(r)} accessibilityLabel={r.kind === "group" ? `Open group ${r.name}` : `Open chat with ${r.name}`}>
               <NeuCard dark={isDark} radius={16}>
                 <View style={styles.row}>
-                  <Avatar
-                    uri={r.photoUri}
-                    initials={r.initials}
-                    size={48}
-                    backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                    textStyle={[styles.avatarText, { color: ACCT }]}
-                  />
+                  {r.kind === "group" ? (
+                    <View style={[styles.groupAvatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
+                      <PeopleIcon size={22} color={ACCT} />
+                    </View>
+                  ) : (
+                    <Avatar
+                      uri={r.photoUri}
+                      initials={r.initials}
+                      size={48}
+                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                      textStyle={[styles.avatarText, { color: ACCT }]}
+                    />
+                  )}
                   <View style={{ flex: 1 }}>
                     <View style={styles.rowTop}>
                       <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{r.name}</Text>
@@ -311,6 +357,7 @@ const styles = StyleSheet.create({
 
   row:         { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   avatarText:  { fontFamily: FontFamily.bold, fontSize: 16 },
+  groupAvatar: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   rowTop:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   name:        { flex: 1, fontFamily: FontFamily.bold, fontSize: 16 },
   time:        { fontFamily: FontFamily.regular, fontSize: 12 },

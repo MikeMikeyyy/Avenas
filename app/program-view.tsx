@@ -269,7 +269,7 @@ export default function ProgramViewScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
@@ -291,7 +291,7 @@ export default function ProgramViewScreen() {
                 <Ionicons name="create-outline" size={20} color={t.tp} />
               </GlassView>
             ) : (
-              <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+              <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
                 <Ionicons name="create-outline" size={20} color={t.tp} />
               </View>
             )}
@@ -307,7 +307,7 @@ export default function ProgramViewScreen() {
                 <TrashIcon size={20} color="#E53935" />
               </GlassView>
             ) : (
-              <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+              <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
                 <TrashIcon size={20} color="#E53935" />
               </View>
             )}

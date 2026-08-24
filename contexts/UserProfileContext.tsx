@@ -12,10 +12,16 @@ export const ONBOARDING_COMPLETE_KEY = "@avenas/onboarding_complete";
 
 export interface UserProfile {
   name: string;
+  /** The LOGIN identifier. For Sign in with Apple accounts that chose "Hide My
+   *  Email" this is an unreachable @privaterelay.appleid.com address, which is
+   *  why `contactEmail` exists — see lib/auth.ts:isApplePrivateEmail. */
   email: string;
   /** Public URL of the profile photo (synced via the cloud profile). Undefined
    *  when none is set — callers fall back to initials. */
   photoUri?: string;
+  /** Where the user actually wants to be reached, when `email` can't be used.
+   *  Mirrors profiles.contact_email (migration 0017); undefined when unset. */
+  contactEmail?: string;
 }
 
 const EMPTY_PROFILE: UserProfile = { name: "", email: "" };

@@ -118,6 +118,45 @@ export async function reportUser(
   });
 }
 
+/**
+ * Report someone's display name and/or profile photo.
+ *
+ * Distinct from reportUser because the evidence is perishable: `name` and
+ * `avatar_url` are live profile fields the reported account can change the
+ * instant they're reported, so what the reporter saw is snapshotted into the
+ * report itself (migration 0018). Without that, an operator reviewing an
+ * "inappropriate photo" report a day later just sees whatever is there now.
+ */
+export async function reportProfile(
+  contact: { id: string; name: string; photoUri?: string },
+  reason: ReportReason,
+): Promise<void> {
+  await appendReport({
+    id: newId("report"),
+    kind: "profile",
+    contactId: contact.id,
+    contactName: contact.name,
+    reason,
+    reportedName: contact.name,
+    reportedAvatarUrl: contact.photoUri,
+    createdAtISO: new Date().toISOString(),
+  });
+}
+
+/**
+ * The entry point every "report this person" button should use. Files a
+ * 'profile' report (with the perishable name/photo snapshot) when that's what
+ * the reporter picked, and a plain 'user' report otherwise — so an operator can
+ * tell from `kind` alone whether to review the profile or the conversation.
+ */
+export async function reportPerson(
+  contact: { id: string; name: string; photoUri?: string },
+  reason: ReportReason,
+): Promise<void> {
+  if (reason === "Inappropriate name or photo") return reportProfile(contact, reason);
+  return reportUser(contact, reason);
+}
+
 /** Report a single message (and hide it everywhere). Delivered server-side for
  *  real accounts, like reportUser. */
 export async function reportMessage(

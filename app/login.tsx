@@ -156,7 +156,7 @@ export default function LoginScreen() {
     <View style={[styles.root, { backgroundColor: t.bg }]}>
       <TouchableOpacity
         onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: isDark ? t.div : "#ffffff" }]}
+        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
         activeOpacity={0.8}
         accessibilityRole="button"
         accessibilityLabel="Go back"

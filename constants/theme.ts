@@ -16,6 +16,9 @@ export const APP_LIGHT = {
   ts:   "#8896A7",  // text secondary
   icon: "#3a3f47",
   div:  "#D8DCE0",  // divider
+  ctrl: "#ffffff",  // floating control surface — see the note on APP_DARK.ctrl
+  nav:  "#ffffff",  // floating tab bar — see the note on APP_DARK.nav
+  navEdge: "rgba(0,0,0,0.06)",
 } as const;
 
 export const APP_DARK = {
@@ -24,6 +27,23 @@ export const APP_DARK = {
   ts:   "#6B7396",  // muted blue-gray
   icon: "#8B93AE",  // navy-tinted icon
   div:  "#252840",  // dark navy divider
+  // Background for floating chrome (back / plus / chat / jump buttons, timer
+  // pills) — anything round that sits ON the page rather than in a card.
+  //
+  // NOT div: in dark mode div is #252840, which is both the card colour
+  // (NEU_BG_DARK) and a hair off the page bg, so a button painted with it
+  // disappears. A translucent white lifts off whatever is behind it instead,
+  // which is what makes these read on every surface in both themes.
+  ctrl: "rgba(255,255,255,0.12)",
+  // The floating tab bar. A rung ABOVE the cards rather than level with them:
+  // it used NEU_BG_DARK (#252840), which is the card colour and only ~6% off
+  // the page bg, so the bar melted into the background. Solid rather than
+  // translucent like ctrl, because content scrolls underneath it and there's no
+  // blur behind the fallback bar to hide it.
+  nav:  "#30354F",
+  // Hairline that defines the bar's edge. Does most of the work in dark mode,
+  // where a drop shadow is close to invisible.
+  navEdge: "rgba(255,255,255,0.10)",
 } as const;
 
 export type AppTheme = typeof APP_LIGHT;

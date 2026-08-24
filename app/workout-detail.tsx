@@ -713,7 +713,7 @@ export default function WorkoutDetailScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.navBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
@@ -729,7 +729,7 @@ export default function WorkoutDetailScreen() {
                   <Ionicons name="close" size={22} color={t.tp} />
                 </GlassView>
               ) : (
-                <View style={[styles.navBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+                <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
                   <Ionicons name="close" size={22} color={t.tp} />
                 </View>
               )}
@@ -748,7 +748,7 @@ export default function WorkoutDetailScreen() {
                   <Ionicons name="create-outline" size={20} color={t.tp} />
                 </GlassView>
               ) : (
-                <View style={[styles.navBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+                <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
                   <Ionicons name="create-outline" size={20} color={t.tp} />
                 </View>
               )}
@@ -759,7 +759,7 @@ export default function WorkoutDetailScreen() {
                   <TrashIcon size={18} color={t.tp} />
                 </GlassView>
               ) : (
-                <View style={[styles.navBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+                <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
                   <TrashIcon size={18} color={t.tp} />
                 </View>
               )}

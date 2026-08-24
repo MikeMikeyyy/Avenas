@@ -12,7 +12,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { removeKey } from "../utils/storage";
-import { signOut } from "../lib/auth";
+import { isApplePrivateEmail, signOut } from "../lib/auth";
 import { deleteAccount } from "../lib/cloud";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import { WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY } from "../constants/programs";
@@ -119,7 +119,13 @@ export default function SettingsScreen() {
   const { profile, resetOnboarding } = useUserProfile();
   const initials = initialsFromName(profile.name);
   const displayName = profile.name.trim() || "Your Profile";
-  const displayEmail = profile.email.trim() || "Set up your profile";
+  // An Apple "Hide My Email" login has a relay address for an email, which means
+  // nothing to the user. Prefer whatever contact address they set, and otherwise
+  // name the sign-in method rather than printing the relay.
+  const displayEmail =
+    profile.contactEmail?.trim() ||
+    (isApplePrivateEmail(profile.email) ? "Signed in with Apple" : profile.email.trim()) ||
+    "Set up your profile";
 
   // Workout view-mode preference ("focus" | "list"), shared with the Workout
   // screen via WORKOUT_VIEW_MODE_KEY. The Workout screen re-reads this on focus.
@@ -267,7 +273,7 @@ export default function SettingsScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}

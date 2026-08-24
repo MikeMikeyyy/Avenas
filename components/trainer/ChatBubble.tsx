@@ -3,11 +3,16 @@
 //   - theirs: left-aligned neutral surface, primary text.
 // The gradient is the bubble background (not masked text), so it reads as a
 // solid Instagram-style blend behind the message.
+//
+// In a GROUP thread a received bubble also carries its author (`senderName` +
+// optional photo), because the thread has many senders. 1:1 threads pass
+// neither and render exactly as before.
 
 import { View, Text, StyleSheet } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 
-import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
+import Avatar from "../Avatar";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { SENT_BUBBLE_GRADIENT, type ChatMessage } from "../../constants/chat";
 import { useTheme } from "../../contexts/ThemeContext";
 
@@ -21,7 +26,15 @@ function fmtTime(iso: string): string {
   return `${h}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
-export default function ChatBubble({ msg }: { msg: ChatMessage }) {
+interface Props {
+  msg: ChatMessage;
+  /** Group threads only: the author of a RECEIVED message. Omitted in 1:1. */
+  senderName?: string;
+  senderPhotoUri?: string;
+  senderInitials?: string;
+}
+
+export default function ChatBubble({ msg, senderName, senderPhotoUri, senderInitials }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
@@ -45,7 +58,20 @@ export default function ChatBubble({ msg }: { msg: ChatMessage }) {
 
   return (
     <View style={[styles.row, { justifyContent: "flex-start" }]}>
-      <View style={styles.wrap}>
+      {senderName ? (
+        <Avatar
+          uri={senderPhotoUri}
+          initials={senderInitials || senderName.slice(0, 2).toUpperCase()}
+          size={28}
+          backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+          textColor={ACCT}
+          textStyle={[styles.senderInitials, { color: ACCT }]}
+        />
+      ) : null}
+      <View style={[styles.wrap, senderName ? styles.wrapWithAvatar : null]}>
+        {senderName ? (
+          <Text style={[styles.senderName, { color: t.ts }]} numberOfLines={1}>{senderName}</Text>
+        ) : null}
         <View style={[styles.bubble, styles.theirs, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "#ffffff" }]}>
           <Text style={[styles.theirsText, { color: t.tp }]}>{msg.text}</Text>
         </View>
@@ -56,8 +82,13 @@ export default function ChatBubble({ msg }: { msg: ChatMessage }) {
 }
 
 const styles = StyleSheet.create({
-  row:        { width: "100%", marginVertical: 4, flexDirection: "row" },
+  row:        { width: "100%", marginVertical: 4, flexDirection: "row", alignItems: "flex-end", gap: 8 },
   wrap:       { maxWidth: "78%" },
+  // The avatar eats horizontal room, so a group bubble gets a slightly
+  // narrower ceiling to keep the right-hand gutter consistent with 1:1.
+  wrapWithAvatar: { maxWidth: "72%" },
+  senderName:     { fontFamily: FontFamily.semibold, fontSize: 11, marginBottom: 3, marginHorizontal: 4 },
+  senderInitials: { fontFamily: FontFamily.bold, fontSize: 10 },
   bubble:     { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20 },
   mine:       { borderBottomRightRadius: 6 },
   theirs:     { borderBottomLeftRadius: 6 },

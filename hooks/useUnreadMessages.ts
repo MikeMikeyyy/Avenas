@@ -9,6 +9,7 @@ import { useCallback, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import { loadChatContacts, loadAllThreads, loadReads, countUnreadInThread } from "../utils/chatStore";
+import { loadGroupRows, sumGroupUnread } from "../utils/groupStore";
 import { makeInitials } from "../utils/trainerStore";
 import { getMyConnections } from "../lib/connections";
 import { loadBlockedIds, loadHiddenMessageIds } from "../utils/moderation";
@@ -43,11 +44,12 @@ export function useUnreadMessages(): number {
           contacts = [...real, ...local.filter(l => !realIds.has(l.id))];
         } catch { /* offline → fall back to local roster */ }
 
-        const [threads, reads, blocked, hidden] = await Promise.all([
+        const [threads, reads, blocked, hidden, groups] = await Promise.all([
           loadAllThreads(),
           loadReads(),
           loadBlockedIds(),
           loadHiddenMessageIds(),
+          loadGroupRows(),
         ]);
         if (cancelled) return;
         let sum = 0;
@@ -56,7 +58,7 @@ export function useUnreadMessages(): number {
           const msgs = (threads[c.id] ?? []).filter(m => !hidden.has(m.id));
           sum += countUnreadInThread(msgs, reads[c.id]);
         }
-        setTotal(sum);
+        setTotal(sum + sumGroupUnread(groups));
       })();
       return () => { cancelled = true; };
     }, [accountType]),

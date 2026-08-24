@@ -21,7 +21,8 @@ import BounceButton from "../components/BounceButton";
 import SegmentedControl from "../components/SegmentedControl";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { pushAccountType, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
+import { pushAccountType, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
+import { isApplePrivateEmail } from "../lib/auth";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -43,6 +44,13 @@ export default function ProfileScreen() {
   const [name, setName] = useState(profile.name);
   const [email, setEmail] = useState(currentEmail);
   const [busy, setBusy] = useState(false);
+
+  // Apple "Hide My Email" accounts log in with a relay address Apple never
+  // resolves back to a real inbox. Showing it as "your email" is meaningless to
+  // the user and it can't be changed here (it's the login identifier), so it's
+  // labelled instead and a separate contact address is offered.
+  const usesAppleRelay = isApplePrivateEmail(currentEmail);
+  const [contactEmail, setContactEmail] = useState(profile.contactEmail ?? "");
   // Photo changes are STAGED — picking/removing only updates this local preview;
   // nothing uploads or persists until the user taps Save changes (mirrors how
   // name/email commit). null = no pending photo change.
@@ -57,9 +65,17 @@ export default function ProfileScreen() {
 
   const trimmedName = name.trim();
   const trimmedEmail = email.trim();
-  const emailChanged = trimmedEmail !== currentEmail;
+  // The login email is read-only for relay accounts, so it can never be "changed".
+  const emailChanged = !usesAppleRelay && trimmedEmail !== currentEmail;
   const nameChanged = trimmedName !== profile.name;
-  const canSave = trimmedName.length > 0 && (!emailChanged || EMAIL_RE.test(trimmedEmail)) && (nameChanged || emailChanged || photoChanged);
+  const trimmedContact = contactEmail.trim();
+  const contactChanged = usesAppleRelay && trimmedContact !== (profile.contactEmail ?? "");
+  const contactValid = trimmedContact === "" || EMAIL_RE.test(trimmedContact);
+  const canSave =
+    trimmedName.length > 0 &&
+    (!emailChanged || EMAIL_RE.test(trimmedEmail)) &&
+    contactValid &&
+    (nameChanged || emailChanged || photoChanged || contactChanged);
 
   const onSave = async () => {
     if (!userId || busy || !canSave) return;
@@ -80,8 +96,16 @@ export default function ProfileScreen() {
       if (nameChanged) {
         await updateProfileName(userId, trimmedName);
       }
-      if (nameChanged || photoChanged) {
-        setProfile({ ...profile, name: nameChanged ? trimmedName : profile.name, photoUri: nextPhotoUri });
+      if (contactChanged) {
+        await updateContactEmail(userId, trimmedContact || null);
+      }
+      if (nameChanged || photoChanged || contactChanged) {
+        setProfile({
+          ...profile,
+          name: nameChanged ? trimmedName : profile.name,
+          photoUri: nextPhotoUri,
+          contactEmail: trimmedContact || undefined,
+        });
       }
       setPhotoChange(null);
       let emailNote = "";
@@ -163,7 +187,7 @@ export default function ProfileScreen() {
     <View style={[styles.root, { backgroundColor: t.bg }]}>
       <TouchableOpacity
         onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: isDark ? t.div : "#ffffff" }]}
+        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
         activeOpacity={0.8}
         accessibilityRole="button"
         accessibilityLabel="Go back"
@@ -220,24 +244,66 @@ export default function ProfileScreen() {
           />
         </NeuCard>
 
-        <Text style={[styles.label, { color: t.ts }]}>EMAIL</Text>
-        <NeuCard dark={isDark} radius={16} style={styles.field}>
-          <TextInput
-            style={[styles.input, { color: t.tp }]}
-            placeholder="you@email.com"
-            placeholderTextColor={t.ts}
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            returnKeyType="done"
-            textContentType="emailAddress"
-          />
-        </NeuCard>
-        {emailChanged ? (
-          <Text style={[styles.hint, { color: t.ts }]}>Changing your email needs a confirmation link sent to the new address.</Text>
-        ) : null}
+        {usesAppleRelay ? (
+          <>
+            <Text style={[styles.label, { color: t.ts }]}>SIGN IN</Text>
+            <NeuCard dark={isDark} radius={16} style={styles.field}>
+              <View style={styles.lockedRow}>
+                <Ionicons name="logo-apple" size={20} color={t.tp} />
+                <Text style={[styles.lockedText, { color: t.tp }]} numberOfLines={1}>
+                  Apple, with your email hidden
+                </Text>
+                <Ionicons name="lock-closed" size={15} color={t.ts} />
+              </View>
+            </NeuCard>
+            <Text style={[styles.hint, { color: t.ts }]}>
+              You chose to hide your email when you signed in with Apple. Apple gave us a private
+              address that forwards to your Apple Account, so we never see your real one.
+            </Text>
+
+            <Text style={[styles.label, { color: t.ts }]}>CONTACT EMAIL</Text>
+            <NeuCard dark={isDark} radius={16} style={styles.field}>
+              <TextInput
+                style={[styles.input, { color: t.tp }]}
+                placeholder="Optional"
+                placeholderTextColor={t.ts}
+                value={contactEmail}
+                onChangeText={setContactEmail}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                returnKeyType="done"
+                textContentType="emailAddress"
+              />
+            </NeuCard>
+            <Text style={[styles.hint, { color: t.ts }]}>
+              {contactChanged && !contactValid
+                ? "That doesn't look like a valid email address."
+                : "Add an address if you'd rather we reach you somewhere other than your Apple Account. It doesn't change how you sign in."}
+            </Text>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.label, { color: t.ts }]}>EMAIL</Text>
+            <NeuCard dark={isDark} radius={16} style={styles.field}>
+              <TextInput
+                style={[styles.input, { color: t.tp }]}
+                placeholder="you@email.com"
+                placeholderTextColor={t.ts}
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                returnKeyType="done"
+                textContentType="emailAddress"
+              />
+            </NeuCard>
+            {emailChanged ? (
+              <Text style={[styles.hint, { color: t.ts }]}>Changing your email needs a confirmation link sent to the new address.</Text>
+            ) : null}
+          </>
+        )}
 
         {/* Applies immediately (not staged behind Save), same behavior it had on
             the Settings screen. */}
@@ -283,7 +349,9 @@ const styles = StyleSheet.create({
   label:         { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4, marginTop: 18 },
   field:         { borderRadius: 16 },
   input:         { fontFamily: FontFamily.regular, fontSize: 16, paddingVertical: 16, paddingHorizontal: 18 },
-  hint:          { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 8, marginLeft: 4 },
+  hint:          { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 8, marginLeft: 4, lineHeight: 17 },
+  lockedRow:     { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 16, paddingHorizontal: 18 },
+  lockedText:    { flex: 1, fontFamily: FontFamily.regular, fontSize: 16 },
   ctaWrap:       { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   ctaDisabled:   { opacity: 0.4 },
   cta:           { borderRadius: 28, paddingVertical: 17, alignItems: "center", justifyContent: "center" },

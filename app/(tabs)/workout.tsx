@@ -2495,14 +2495,14 @@ export default function WorkoutScreen() {
           <View style={[styles.topBar, { top: insets.top }]}>
             <View style={styles.topBarLeft}>
               <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
-                <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                   <Ionicons name="add" size={22} color={t.tp} />
                 </View>
               </BounceButton>
             </View>
             {/* Rest days keep the timer/stopwatch available (top-right), same as an active workout. */}
             <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
-              <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+              <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                 <Ionicons name="timer-outline" size={22} color={t.tp} />
               </View>
             </TouchableOpacity>
@@ -2868,7 +2868,7 @@ export default function WorkoutScreen() {
       <View style={[styles.topBar, { top: insets.top }]}>
         <View style={styles.topBarLeft}>
           {todaysCompletedWorkout ? (
-            <View style={[styles.workoutTimerPill, { backgroundColor: isDark ? t.div : "#fff" }]}>
+            <View style={[styles.workoutTimerPill, { backgroundColor: t.ctrl }]}>
               <Ionicons name="checkmark-circle" size={14} color={ACCT} />
               <Text style={[styles.workoutTimerText, { color: t.tp }]}>
                 {todaysCompletedWorkout.durationSeconds > 0 ? fmtTime(todaysCompletedWorkout.durationSeconds) : "Done"}
@@ -2876,7 +2876,7 @@ export default function WorkoutScreen() {
             </View>
           ) : (isRunning || isPaused) ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View style={[styles.workoutTimerPill, { backgroundColor: isDark ? t.div : "#fff" }]}>
+              <View style={[styles.workoutTimerPill, { backgroundColor: t.ctrl }]}>
                 <View style={[styles.timerActiveDot, isPaused && styles.timerActiveDotPaused]} />
                 <Text style={[styles.workoutTimerText, { color: t.tp }]}>{fmtTime(elapsedSeconds)}</Text>
               </View>
@@ -2885,12 +2885,12 @@ export default function WorkoutScreen() {
                 if (isPaused) resumeTimer();
                 else pauseTimer();
               }}>
-                <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                   <Ionicons name={isPaused ? "play" : "pause"} size={16} color={t.tp} />
                 </View>
               </BounceButton>
               <BounceButton onPress={handleDiscard}>
-                <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                   <TrashIcon size={18} color={t.ts} />
                 </View>
               </BounceButton>
@@ -2898,13 +2898,13 @@ export default function WorkoutScreen() {
           ) : (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}>
-                <View style={[styles.workoutTimerPill, { backgroundColor: isDark ? t.div : "#fff" }]}>
+                <View style={[styles.workoutTimerPill, { backgroundColor: t.ctrl }]}>
                   <Text style={[styles.workoutTimerText, { color: t.tp }]}>Start</Text>
                 </View>
               </BounceButton>
               {activeProgram && (
                 <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
-                  <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+                  <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
                     <Ionicons name="add" size={22} color={t.tp} />
                   </View>
                 </BounceButton>
@@ -2913,7 +2913,7 @@ export default function WorkoutScreen() {
           )}
         </View>
         <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
-          <View style={[styles.topIconBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+          <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
             <Ionicons name="timer-outline" size={22} color={t.tp} />
           </View>
         </TouchableOpacity>

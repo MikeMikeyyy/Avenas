@@ -1,7 +1,13 @@
 // Second step of the "Send a Program" flow. Lists clients with checkboxes
 // + a "Send to all" toggle. Confirm sends to the chosen recipients.
+//
+// Groups are a SHORTCUT, not a separate delivery channel: tapping one ticks
+// every member, and the send still goes out as one shared_programs row per
+// person (migration 0013, unchanged). They land in the recipients' libraries
+// exactly like an individual send, and the sender's "Programs You've Sent"
+// groups them into a single card via the existing batch key.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -13,16 +19,21 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { Client } from "../../utils/trainerStore";
 
+/** A group offered as a one-tap way to tick all its members. */
+export type RecipientGroup = { id: string; name: string; memberIds: string[] };
+
 interface Props {
   visible: boolean;
   programName: string;
   clients: Client[];
+  /** Optional group shortcuts. Omit (or pass []) to hide the section. */
+  groups?: RecipientGroup[];
   /** Called with the chosen recipient IDs, or "all" if every client was selected via the toggle. */
   onConfirm: (recipients: string[] | "all") => void;
   onClose: () => void;
 }
 
-export default function RecipientPickerSheet({ visible, programName, clients, onConfirm, onClose }: Props) {
+export default function RecipientPickerSheet({ visible, programName, clients, groups = [], onConfirm, onClose }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
@@ -52,6 +63,31 @@ export default function RecipientPickerSheet({ visible, programName, clients, on
     setSendToAll(prev => {
       const next = !prev;
       if (next) setSelected(new Set());
+      return next;
+    });
+  };
+
+  // Only members who are still in the client roster can receive: a member who
+  // was removed as a connection is no longer a valid recipient server-side.
+  const clientIds = useMemo(() => new Set(clients.map(c => c.id)), [clients]);
+  const sendableMembers = useCallback(
+    (g: RecipientGroup) => g.memberIds.filter(id => clientIds.has(id)),
+    [clientIds],
+  );
+
+  // Ticking a group ticks its members; untick when they're all already on.
+  const toggleGroup = (g: RecipientGroup) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSendToAll(false);
+    const ids = sendableMembers(g);
+    if (ids.length === 0) return;
+    setSelected(prev => {
+      const next = new Set(prev);
+      const allOn = ids.every(id => next.has(id));
+      for (const id of ids) {
+        if (allOn) next.delete(id);
+        else next.add(id);
+      }
       return next;
     });
   };
@@ -99,6 +135,50 @@ export default function RecipientPickerSheet({ visible, programName, clients, on
           </NeuCard>
         </TouchableOpacity>
       </View>
+
+      {groups.length > 0 && (
+        <>
+          <Text style={[styles.section, { color: t.ts }]}>OR PICK A GROUP</Text>
+          <View style={styles.groupList}>
+            {groups.map(g => {
+              const ids = sendableMembers(g);
+              const checked = !sendToAll && ids.length > 0 && ids.every(id => selected.has(id));
+              return (
+                <TouchableOpacity
+                  key={g.id}
+                  activeOpacity={0.85}
+                  style={{ marginBottom: 10 }}
+                  onPress={() => toggleGroup(g)}
+                  disabled={sendToAll || ids.length === 0}
+                  accessibilityRole="button"
+                  accessibilityState={{ checked }}
+                  accessibilityLabel={`${checked ? "Deselect" : "Select"} everyone in ${g.name}`}
+                >
+                  <NeuCard dark={isDark} radius={14}>
+                    <View style={[styles.row, (sendToAll || ids.length === 0) && { opacity: 0.45 }]}>
+                      <View style={[styles.allIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
+                        <Ionicons name="people-outline" size={18} color={ACCT} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
+                        <Text style={[styles.rowMeta, { color: t.ts }]}>
+                          {ids.length} {ids.length === 1 ? "client" : "clients"}
+                        </Text>
+                      </View>
+                      <View style={[styles.check, checked
+                        ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                        : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
+                      ]}>
+                        {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
+                      </View>
+                    </View>
+                  </NeuCard>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </>
+      )}
 
       <Text style={[styles.section, { color: t.ts }]}>OR PICK INDIVIDUALLY</Text>
 
@@ -163,6 +243,7 @@ const styles = StyleSheet.create({
   allWrap:    { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 14 },
   section:    { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", paddingHorizontal: 24, marginBottom: 10 },
   list:       { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
+  groupList:  { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 4 },
   empty:      { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
   row:        { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   nameRow:    { flexDirection: "row", alignItems: "center", gap: 6 },

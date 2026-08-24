@@ -1308,7 +1308,7 @@ export default function LogWorkoutScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[s.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
@@ -1325,7 +1325,7 @@ export default function LogWorkoutScreen() {
             <Ionicons name="time-outline" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[s.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="time-outline" size={22} color={t.tp} />
           </View>
         )}

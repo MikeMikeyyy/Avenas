@@ -9,6 +9,10 @@ export type ProfileRow = {
   id: string;
   name: string | null;
   email: string | null;
+  /** Where the user wants to be reached, when that differs from the login
+   *  identifier — set by Apple "Hide My Email" accounts, whose auth email is an
+   *  unreachable relay address (migration 0017). Null when unset. */
+  contact_email: string | null;
   account_type: "user" | "pt";
   unit: "kg" | "lb";
   theme: string;
@@ -63,6 +67,46 @@ export type ChatReadRow = {
   user_id: string;
   peer_id: string;
   last_read_at: string;
+};
+
+// ── groups + group chat (migration 0016) ──────────────────────────────────────
+export type GroupRow = {
+  id: string;
+  owner_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GroupMemberRow = {
+  group_id: string;
+  user_id: string;
+  added_at: string;
+};
+
+export type GroupMessageRow = {
+  id: string;
+  group_id: string;
+  sender_id: string;
+  body: string;
+  created_at: string;
+};
+
+/** Per-group "last read" stamp for the caller — drives the group unread badge. */
+export type GroupReadRow = {
+  user_id: string;
+  group_id: string;
+  last_read_at: string;
+};
+
+/** Row shape returned by get_group_members() — SAFE display fields only. Group
+ *  members are generally not connected to each other, so this RPC is the only
+ *  way they can resolve one another's name + photo. */
+export type GroupMemberWithProfile = {
+  user_id: string;
+  name: string | null;
+  avatar_url: string | null;
+  is_owner: boolean;
 };
 
 export type ProgramRow = {

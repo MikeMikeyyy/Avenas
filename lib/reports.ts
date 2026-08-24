@@ -28,6 +28,9 @@ export async function insertReportRow(report: Report): Promise<void> {
     message_id: report.messageId ?? null,
     message_text: report.messageText ?? null,
     contact_name: report.contactName ?? null,
+    // Profile reports (migration 0018): what the reporter saw at filing time.
+    reported_name: report.reportedName ?? null,
+    reported_avatar_url: report.reportedAvatarUrl ?? null,
   });
   if (error) throw new Error(`submit report: ${error.message}`);
 }

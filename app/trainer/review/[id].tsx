@@ -144,7 +144,7 @@ export default function ReviewScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.iconBtn, { backgroundColor: isDark ? t.div : "#fff" }]}>
+          <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}

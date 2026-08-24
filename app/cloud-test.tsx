@@ -133,7 +133,7 @@ function CloudTestInner() {
       >
         <View style={styles.header}>
           <BounceButton onPress={() => router.back()} accessibilityLabel="Go back">
-            <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#fff" }]}>
+            <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
               <Ionicons name="chevron-back" size={22} color={t.tp} />
             </View>
           </BounceButton>

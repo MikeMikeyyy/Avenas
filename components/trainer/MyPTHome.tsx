@@ -256,7 +256,7 @@ export default function MyPTHome() {
             onPress={() => router.navigate("/my-trainers")}
             accessibilityLabel="Open my trainers"
           >
-            <View style={[styles.trainersBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+            <View style={[styles.trainersBtn, { backgroundColor: t.ctrl }]}>
               <Ionicons name="person-outline" size={16} color={ACCT} />
               <Text style={[styles.trainersBtnText, { color: t.tp }]}>My Trainers</Text>
             </View>
@@ -264,7 +264,7 @@ export default function MyPTHome() {
           <View style={{ flex: 1 }} />
           <BounceButton onPress={() => router.navigate("/trainer/messages")} accessibilityLabel="Open messages">
             <View>
-              <View style={[styles.circleBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <View style={[styles.circleBtn, { backgroundColor: t.ctrl }]}>
                 <ChatIcon size={18} color={t.tp} />
               </View>
               <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
@@ -272,7 +272,7 @@ export default function MyPTHome() {
           </BounceButton>
           <BounceButton onPress={() => router.navigate("/connect")} accessibilityLabel="Connect with someone">
             <View>
-              <View style={[styles.circleBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+              <View style={[styles.circleBtn, { backgroundColor: t.ctrl }]}>
                 <Ionicons name="add" size={24} color={t.tp} />
               </View>
               <UnreadBadge count={pendingIncoming} style={styles.msgBadge} />
@@ -325,7 +325,7 @@ export default function MyPTHome() {
                 })()}
               </View>
               <BounceButton onPress={openChat} accessibilityLabel="Chat with trainer">
-                <View style={[styles.chatBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "#ffffff" }]}>
+                <View style={[styles.chatBtn, { backgroundColor: t.ctrl }]}>
                   <ChatIcon size={18} color={t.tp} />
                 </View>
               </BounceButton>

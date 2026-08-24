@@ -53,7 +53,7 @@ export default function MyTrainersScreen() {
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.backBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="chevron-back" size={22} color={t.tp} />
           </View>
         )}
@@ -71,7 +71,7 @@ export default function MyTrainersScreen() {
             <Ionicons name="add" size={24} color={t.tp} />
           </GlassView>
         ) : (
-          <View style={[styles.plusBtn, { backgroundColor: isDark ? t.div : "#ffffff" }]}>
+          <View style={[styles.plusBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="add" size={24} color={t.tp} />
           </View>
         )}

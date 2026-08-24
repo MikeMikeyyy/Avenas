@@ -47,19 +47,27 @@ export type ReportReason =
   | "Spam or scam"
   | "Harassment or bullying"
   | "Inappropriate or offensive"
+  | "Inappropriate name or photo"
   | "Other";
 
 export const REPORT_REASONS: ReportReason[] = [
   "Spam or scam",
   "Harassment or bullying",
   "Inappropriate or offensive",
+  "Inappropriate name or photo",
   "Other",
 ];
 
-/** A logged report — either of a whole person or a single message. */
+/**
+ * A logged report. Three kinds:
+ *   'user'    — the person in general
+ *   'message' — one message (text snapshotted, since the row can be deleted)
+ *   'profile' — their display name and/or photo (both snapshotted, since they
+ *               are live fields the reported account can change immediately)
+ */
 export type Report = {
   id: string;
-  kind: "user" | "message";
+  kind: "user" | "message" | "profile";
   /** The reported person's contact id (the message author for message reports). */
   contactId: string;
   contactName: string;
@@ -67,6 +75,10 @@ export type Report = {
   /** Present for message reports. */
   messageId?: string;
   messageText?: string;
+  /** Present for profile reports — what the reporter actually saw when they
+   *  filed, so review doesn't depend on the account not having changed it. */
+  reportedName?: string;
+  reportedAvatarUrl?: string;
   createdAtISO: string;
   /** True while a report against a REAL account hasn't reached the server yet
    *  (filed offline). Retried on the next report submission — see

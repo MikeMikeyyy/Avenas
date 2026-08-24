@@ -304,7 +304,7 @@ export default function ClientDetailScreen() {
               <Ionicons name="chevron-back" size={22} color={t.tp} />
             </GlassView>
           ) : (
-            <View style={[styles.iconBtn, { backgroundColor: isDark ? t.div : "#fff" }]}>
+            <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
               <Ionicons name="chevron-back" size={22} color={t.tp} />
             </View>
           )}
@@ -328,7 +328,7 @@ export default function ClientDetailScreen() {
               <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
             </GlassView>
           ) : (
-            <View style={[styles.iconBtn, { backgroundColor: isDark ? t.div : "#fff" }]}>
+            <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
               <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
             </View>
           )}
@@ -336,7 +336,7 @@ export default function ClientDetailScreen() {
 
         <TouchableOpacity onPress={openChat} activeOpacity={0.8} accessibilityLabel="Chat with client" accessibilityRole="button">
           <View>
-            <View style={[styles.chatBtn, { backgroundColor: isDark ? t.div : "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
+            <View style={[styles.chatBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
               <ChatIcon size={18} color={t.tp} />
             </View>
             <UnreadBadge count={unreadFromClient} style={styles.msgBadge} />
