@@ -54,14 +54,14 @@ export type NotificationPrefs = {
 };
 
 /** Sensible defaults on first launch. High-signal categories default ON; the
- *  opt-in ones (workout reminders — a per-user time preference, deliberately
- *  OFF for new accounts — rest timer, weekly summary) default OFF. */
+ *  opt-in ones (workout reminders — a per-user time preference — streak
+ *  reminders, rest timer, weekly summary) default OFF for new accounts. */
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   master: true,
   categories: {
     coachMessages: true,
     workoutReminders: false,
-    streakReminders: true,
+    streakReminders: false,
     restTimerAlerts: false,
     programShared: true,
     coachingRequests: true,
