@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -8,14 +8,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
-import Animated, {
-  FadeIn, FadeOut, LinearTransition,
-  useSharedValue, useAnimatedStyle, withTiming,
-} from "react-native-reanimated";
+import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
 import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import ChevronToggle from "../ChevronToggle";
 import ChatIcon from "../icons/ChatIcon";
 import PeopleIcon from "../icons/PeopleIcon";
 import PlusIcon from "../icons/PlusIcon";
@@ -53,19 +51,6 @@ function fmtAgo(iso: string): string {
   if (days === 1) return "Yesterday";
   if (days < 7) return `${days}d ago`;
   return `${Math.floor(days / 7)}w ago`;
-}
-
-function ChevronToggle({ expanded, color, upDown }: { expanded: boolean; color: string; upDown?: boolean }) {
-  const sv = useSharedValue(expanded ? 1 : 0);
-  useEffect(() => { sv.value = withTiming(expanded ? 1 : 0, { duration: 220 }); }, [expanded, sv]);
-  const style = useAnimatedStyle(() => ({
-    transform: [{ rotate: upDown ? `${sv.value * 180}deg` : `${sv.value * 90 - 90}deg` }],
-  }));
-  return (
-    <Animated.View style={style}>
-      <Ionicons name="chevron-down" size={20} color={color} />
-    </Animated.View>
-  );
 }
 
 export default function MyPTHome() {

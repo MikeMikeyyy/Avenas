@@ -7,14 +7,12 @@ import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
 import Svg, { Path } from "react-native-svg";
 import * as Haptics from "expo-haptics";
-import Animated, {
-  FadeIn, FadeOut, LinearTransition,
-  useSharedValue, useAnimatedStyle, withTiming,
-} from "react-native-reanimated";
+import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
 import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import ChevronToggle from "../ChevronToggle";
 import ClientCard from "./ClientCard";
 import Avatar from "../Avatar";
 import AddClientSheet from "./AddClientSheet";
@@ -71,19 +69,6 @@ function fmtAgo(iso: string): string {
   if (days === 1) return "yesterday";
   if (days < 7) return `${days}d ago`;
   return `${Math.floor(days / 7)}w ago`;
-}
-
-function ChevronToggle({ expanded, color, upDown }: { expanded: boolean; color: string; upDown?: boolean }) {
-  const sv = useSharedValue(expanded ? 1 : 0);
-  useEffect(() => { sv.value = withTiming(expanded ? 1 : 0, { duration: 220 }); }, [expanded, sv]);
-  const style = useAnimatedStyle(() => ({
-    transform: [{ rotate: upDown ? `${sv.value * 180}deg` : `${sv.value * 90 - 90}deg` }],
-  }));
-  return (
-    <Animated.View style={style}>
-      <Ionicons name="chevron-down" size={20} color={color} />
-    </Animated.View>
-  );
 }
 
 export default function PTHome() {
