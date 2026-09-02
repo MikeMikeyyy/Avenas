@@ -215,6 +215,11 @@ interface ActiveProgramCardProps {
 
 const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onOpenActions }: ActiveProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  // A held program is still status "active", so everything here has to key off
+  // pausedAt or it reads as running: green bars and an "Active" badge.
+  const paused = !!program.pausedAt;
+  const accent = paused ? PAUSED_ORANGE : ACCT;
+  const week = getCurrentWeek(program);
 
   return (
     <NeuCard dark={isDark} style={styles.activeProgramCard}>
@@ -225,17 +230,25 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
               {program.name}
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <ActiveBadge />
+              {paused ? (
+                <View style={[styles.statusBadge, { backgroundColor: isDark ? `${PAUSED_ORANGE}22` : `${PAUSED_ORANGE}18` }]}>
+                  <Text style={[styles.statusBadgeText, { color: PAUSED_ORANGE }]}>Paused</Text>
+                </View>
+              ) : (
+                <ActiveBadge />
+              )}
               <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
             </View>
           </View>
 
           <View style={styles.progressRow}>
             {Array.from({ length: program.totalWeeks }).map((_, i) => (
-              <View key={i} style={[styles.progressSeg, { backgroundColor: i < getCurrentWeek(program) ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < getCurrentWeek(program) && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
+              <View key={i} style={[styles.progressSeg, { backgroundColor: i < week ? accent : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < week && { shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
             ))}
           </View>
-          <Text style={[styles.weekLabel, { color: t.ts }]}>Week {getCurrentWeek(program)} of {program.totalWeeks}</Text>
+          <Text style={[styles.weekLabel, { color: t.ts }]}>
+            {paused ? `Paused on week ${week} of ${program.totalWeeks}` : `Week ${week} of ${program.totalWeeks}`}
+          </Text>
 
           <View style={styles.metaRow}>
             <Ionicons name="calendar-outline" size={14} color={t.ts} />
@@ -250,8 +263,8 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
                   key={i}
                   style={[
                     styles.cycleChip,
-                    { backgroundColor: isTraining ? ACCT + "22" : isDark ? "rgba(255,255,255,0.1)" : t.div },
-                    isTraining && { borderColor: ACCT, borderWidth: 1 },
+                    { backgroundColor: isTraining ? accent + "22" : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                    isTraining && { borderColor: accent, borderWidth: 1 },
                   ]}
                 >
                   <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
@@ -525,14 +538,19 @@ export default function ProgramsScreen() {
       if (p.id === program.id) {
         // A (re-)activation is a fresh run from today: any cycleOffset left over
         // from a previous run's "set workout day" would shift day 1 arbitrarily.
-        return { ...p, status: "active" as const, startDate: todayStr, currentWeek: 1, cycleOffset: undefined };
+        // pausedAt goes for the same reason — a hold belongs to the run it was
+        // taken during, and carrying it over would make the new run start paused.
+        return { ...p, status: "active" as const, startDate: todayStr, currentWeek: 1, cycleOffset: undefined, pausedAt: undefined };
       }
       if (p.status === "active") {
         const week = getCurrentWeek(p);
         if (week >= p.totalWeeks) {
-          return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: todayStr };
+          return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: todayStr, pausedAt: undefined };
         }
-        return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week };
+        // Demoting a HELD program: it's inactive now, not on hold. Leaving
+        // pausedAt set would show it as paused in the list and, worse, make it
+        // resume already-paused if it were activated again.
+        return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week, pausedAt: undefined };
       }
       return p;
     });
@@ -547,11 +565,15 @@ export default function ProgramsScreen() {
 
   // Deactivate the active program without completing it — drops it back to paused
   // (or "created" if it never got past week 1) so no program is active.
+  //
+  // Clears any hold: "inactive" and "on hold" are different states, and a
+  // program can't be both. Once it's out of the active slot the hold is
+  // meaningless, and activating it later must give a clean run.
   const handleMakeInactive = async (program: SavedProgram) => {
     const week = getCurrentWeek(program);
     const updated = programs.map(p =>
       p.id === program.id
-        ? { ...p, status: week > 1 ? ("paused" as const) : ("created" as const), currentWeek: week }
+        ? { ...p, status: week > 1 ? ("paused" as const) : ("created" as const), currentWeek: week, pausedAt: undefined }
         : p
     );
     setPrograms(updated);
@@ -619,7 +641,9 @@ export default function ProgramsScreen() {
           const todayStr = todayFormatted();
           const updated = programs.map(p =>
             p.id === activeProgram.id
-              ? { ...p, status: "completed" as const, currentWeek: getCurrentWeek(activeProgram), completedDate: todayStr }
+              // Completing ends the run, hold and all — a finished program is
+              // never "on hold".
+              ? { ...p, status: "completed" as const, currentWeek: getCurrentWeek(activeProgram), completedDate: todayStr, pausedAt: undefined }
               : p
           );
           setPrograms(updated);
@@ -640,6 +664,8 @@ export default function ProgramsScreen() {
       startDate: todayStr,
       cycleOffset: undefined,
       completedDate: undefined,
+      // A copy is a brand-new program; the original's hold doesn't come with it.
+      pausedAt: undefined,
     };
     const updated = [...programs, copy];
     setPrograms(updated);

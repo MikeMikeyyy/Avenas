@@ -2495,8 +2495,9 @@ export default function WorkoutScreen() {
               <Text style={styles.emptyBtnText}>Resume Program</Text>
             </View>
           </BounceButton>
-          <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 12 }}>
-            <View style={[styles.pausedSecondaryBtn, { borderColor: t.div }]}>
+          <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 12 }} accessibilityLabel="Start a custom workout" accessibilityRole="button">
+            <View style={[styles.pausedSecondaryBtn, { backgroundColor: t.ctrl }]}>
+              <DumbbellIcon size={17} color={t.tp} />
               <Text style={[styles.pausedSecondaryText, { color: t.tp }]}>Custom Workout</Text>
             </View>
           </BounceButton>
@@ -3289,8 +3290,9 @@ const styles = StyleSheet.create({
   emptySub:       { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center", lineHeight: 22 },
   emptyBtn:       { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, paddingHorizontal: 28, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   emptyBtnText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-  // Outlined, so Resume stays the primary action on the paused screen.
-  pausedSecondaryBtn:  { borderRadius: 14, borderWidth: 1.5, paddingVertical: 12, paddingHorizontal: 24 },
+  // White chrome pill, matching the rest of the app's neutral buttons. Resume
+  // keeps the green fill above it, so this still reads as the secondary action.
+  pausedSecondaryBtn:  { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 50, paddingVertical: 13, paddingHorizontal: 24, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   pausedSecondaryText: { fontFamily: FontFamily.bold, fontSize: 14 },
   // Interval Timer / Stopwatch modal styles now live in components/IntervalTimerModal.tsx.
 });

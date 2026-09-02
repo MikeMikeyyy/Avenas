@@ -23,7 +23,7 @@
 // to cancel (2) while keeping (1).
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, type SavedProgram } from "../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
 import { formatStoredDate, parseStoredDate, todayYMD, toYMD } from "./dates";
 import { resolveDayIndex } from "./workout";
 
@@ -55,12 +55,16 @@ export function pauseProgram(
   programId: string,
   whenYMD: string = todayYMD(),
 ): SavedProgram[] {
-  return programs.map(p =>
-    p.id === programId
-      // currentWeek is snapshotted so getCurrentWeek has something to freeze on.
-      ? { ...p, pausedAt: whenYMD, currentWeek: Math.max(p.currentWeek || 1, 1) }
-      : p,
-  );
+  return programs.map(p => {
+    if (p.id !== programId) return p;
+    // Snapshot the COMPUTED week, not the stored one. Nothing writes
+    // currentWeek while a program runs — it's set to 1 at activation and only
+    // updated when the program is demoted — so p.currentWeek is stale and
+    // freezing on it would drop a week-8 program back to week 1. Called before
+    // pausedAt is set, so getCurrentWeek still measures from startDate.
+    const week = getCurrentWeek(p);
+    return { ...p, pausedAt: whenYMD, currentWeek: week };
+  });
 }
 
 /** How a resumed program should pick the cycle back up. */

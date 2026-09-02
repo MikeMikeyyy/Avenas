@@ -14,7 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS, PAUSED_ORANGE } from "../../constants/theme";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
@@ -507,15 +507,23 @@ export default function HomeScreen() {
           );
         })()}
 
-        {activeProgram && (
+        {activeProgram && (() => {
+          // A held program keeps status "active", so the bar has to key off
+          // pausedAt or it stays green and reads as running.
+          const paused = !!activeProgram.pausedAt;
+          const accent = paused ? PAUSED_ORANGE : ACCT;
+          const week = getCurrentWeek(activeProgram);
+          return (
           <NeuCard dark={isDark} style={styles.programCard}>
             <View style={styles.programCardInner}>
               <View style={styles.programHeader}>
                 <View>
-                  <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
+                  <Text style={[styles.sectionLabel, { color: paused ? PAUSED_ORANGE : t.ts }]}>
+                    {paused ? "PROGRAM PAUSED" : "ACTIVE PROGRAM"}
+                  </Text>
                   <Text style={[styles.programName, { color: t.tp }]}>{activeProgram.name.toUpperCase()}</Text>
                 </View>
-                <Text style={[styles.programWeek, { color: t.ts }]}>Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}</Text>
+                <Text style={[styles.programWeek, { color: t.ts }]}>Week {week} of {activeProgram.totalWeeks}</Text>
               </View>
               <View style={styles.progressRow}>
                 {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => (
@@ -523,15 +531,16 @@ export default function HomeScreen() {
                     key={i}
                     style={[
                       styles.progressSegment,
-                      { backgroundColor: i < getCurrentWeek(activeProgram) ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div },
-                      i < getCurrentWeek(activeProgram) && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
+                      { backgroundColor: i < week ? accent : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                      i < week && { shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
                     ]}
                   />
                 ))}
               </View>
             </View>
           </NeuCard>
-        )}
+          );
+        })()}
 
         <View style={styles.quickRow}>
           {QUICK_ACTIONS.map((a) => (

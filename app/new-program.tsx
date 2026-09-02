@@ -2579,10 +2579,12 @@ export default function NewProgramScreen() {
             if (p.id === newProgram.id) return { ...p, status: "active" as const, currentWeek: 1 };
             if (p.status === "active") {
               const week = getCurrentWeek(p);
+              // pausedAt is cleared on both branches, same as programs.tsx: the
+              // demoted program is inactive or finished now, not on hold.
               if (week >= p.totalWeeks) {
-                return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: startDate };
+                return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: startDate, pausedAt: undefined };
               }
-              return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week };
+              return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week, pausedAt: undefined };
             }
             return p;
           });
