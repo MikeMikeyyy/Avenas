@@ -47,6 +47,16 @@ function ymdToLocalDate(ymd: string): Date | null {
  * fallback) or when `dateYMD` is before the program started.
  */
 export function resolveDayIndex(program: SavedProgram, dateYMD: string): number | null {
+  // A held program schedules nothing from the pause date onward. This is the
+  // single chokepoint: getWorkoutForDate, getTodaysWorkout, resolveWorkoutForDate
+  // and resolveTodayWorkout all funnel through here, and Home, the Workout tab
+  // and the notification scheduler funnel through those.
+  //
+  // Bounded at >= pausedAt rather than blanket-null so dates BEFORE the pause
+  // still resolve — Home's weekly strip and history must not rewrite themselves
+  // when a program is paused. Both sides are "YYYY-MM-DD", so a string compare
+  // is a date compare.
+  if (program.pausedAt && dateYMD >= program.pausedAt) return null;
   const start = parseStoredDate(program.startDate);
   const target = ymdToLocalDate(dateYMD);
   if (!start || !target) return null;

@@ -119,6 +119,10 @@ export type ProgramRow = {
   start_date: string | null;      // YYYY-MM-DD
   completed_date: string | null;  // YYYY-MM-DD
   cycle_offset: number | null;
+  /** Date an ACTIVE program was put on hold ("YYYY-MM-DD"), or null when
+   *  running. Unrelated to status = 'paused', which means not active at all
+   *  (migration 0019). */
+  paused_at: string | null;
   training_days: number;
   cycle_days: number;
   cycle_pattern: string[];

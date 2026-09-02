@@ -52,6 +52,9 @@ export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
     start_date: storedToYMD(p.startDate),
     completed_date: storedToYMD(p.completedDate),
     cycle_offset: p.cycleOffset ?? null,
+    // Already "YYYY-MM-DD" on both sides, unlike start_date/completed_date which
+    // convert from the local stored format — no translation needed.
+    paused_at: p.pausedAt ?? null,
     training_days: p.trainingDays,
     cycle_days: p.cycleDays,
     cycle_pattern: p.cyclePattern,
@@ -70,6 +73,7 @@ export function programFromRow(r: ProgramRow): SavedProgram {
     startDate: ymdToStored(r.start_date),
     completedDate: r.completed_date ? ymdToStored(r.completed_date) : undefined,
     cycleOffset: r.cycle_offset ?? undefined,
+    pausedAt: r.paused_at ?? undefined,
     trainingDays: r.training_days,
     cycleDays: r.cycle_days,
     cyclePattern: r.cycle_pattern,

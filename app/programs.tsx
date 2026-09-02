@@ -1,19 +1,25 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+// Aliased: `Animated` in this file is React Native's, used by the sheets' pan
+// responders. Reanimated drives the collapse transition.
+import Reanimated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
+import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import { formatStoredDate, parseStoredDate } from "../utils/dates";
+import { dayNameAt, pauseProgram, resumeDayOptions, resumeProgram, type ResumeMode } from "../utils/programPause";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
@@ -21,6 +27,10 @@ import { appendSentProgram, loadAssignedPT, removeSharedProgramByLocalId, type A
 
 // Warmup-set accent (matches the orange used for warmup sets across the app).
 const WARMUP_ORANGE = "#ffbf0f";
+
+// One layout transition for the whole collapse: the card's own height and the
+// cards sliding beneath it must run at the same speed or the list tears.
+const CARD_LAYOUT = LinearTransition.duration(220);
 
 // ─── Set Workout Picker ────────────────────────────────────────────────────────
 
@@ -262,22 +272,37 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
 interface ProgramCardProps {
   program: SavedProgram;
   isDark: boolean;
+  /** Hide everything below the header row. The header itself stays mounted. */
+  collapsed?: boolean;
   onOpenActions: () => void;
 }
 
-const ProgramCard = React.memo(function ProgramCard({ program, isDark, onOpenActions }: ProgramCardProps) {
+/** Badge colour + wording for a program. Shared by the full and compact cards so
+ *  the two can't drift apart. Takes the secondary text colour rather than the
+ *  whole theme: the palettes are `as const`, so a `typeof APP_LIGHT` parameter
+ *  would reject APP_DARK on its literal types.
+ *
+ *  A HELD program keeps status "active", so pausedAt has to be checked first or
+ *  it would show as Active. */
+function statusStyle(program: SavedProgram, mutedColor: string): { color: string; label: string } {
+  if (program.pausedAt)              return { color: PAUSED_ORANGE, label: "Paused" };
+  if (program.status === "active")    return { color: ACCT,          label: "Active" };
+  if (program.status === "paused")    return { color: PAUSED_ORANGE, label: "Paused" };
+  if (program.status === "completed") return { color: ACCT,          label: "Completed" };
+  return { color: mutedColor, label: "Not Started" };
+}
+
+// Collapsing does NOT swap in a different component. The header row (name,
+// status badge, ellipsis) stays mounted either way, so it physically cannot
+// shift position — only the detail beneath it is added and removed. An earlier
+// version rendered a separate compact card, and its slightly different paddings
+// and gaps made everything jump on every toggle.
+const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed, onOpenActions }: ProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
 
   const computedWeek = getCurrentWeek(program);
   const filledWeeks = program.status === "completed" ? program.currentWeek : computedWeek;
-  const statusColor =
-    program.status === "active"    ? ACCT :
-    program.status === "paused"    ? Colors.warning :
-    program.status === "completed" ? ACCT : t.ts;
-  const statusLabel =
-    program.status === "active"    ? "Active" :
-    program.status === "paused"    ? "Paused" :
-    program.status === "created"   ? "Not Started" : "Completed";
+  const { color: statusColor, label: statusLabel } = statusStyle(program, t.ts);
   const weekText =
     program.status === "completed" ? `Completed ${program.currentWeek} of ${program.totalWeeks} weeks` :
     program.status === "created"   ? `${program.totalWeeks} weeks planned` :
@@ -287,7 +312,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, onOpenAct
   return (
     <NeuCard dark={isDark} style={styles.programCard}>
       <TouchableOpacity activeOpacity={0.8} onPress={onOpenActions} accessibilityLabel={`${program.name} options`} accessibilityRole="button">
-        <View style={styles.programCardInner}>
+        <Reanimated.View style={styles.programCardInner} layout={CARD_LAYOUT}>
           <View style={styles.rowBetween}>
             <Text style={[styles.programName, { color: t.tp }]} numberOfLines={1}>{program.name}</Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -298,6 +323,12 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, onOpenAct
             </View>
           </View>
 
+          {!collapsed && (
+          <Reanimated.View
+            entering={FadeIn.duration(160)}
+            exiting={FadeOut.duration(110)}
+            style={styles.programCardDetail}
+          >
           <View style={styles.progressRow}>
             {Array.from({ length: program.totalWeeks }).map((_, i) => (
               <View key={i} style={[styles.progressSeg, { backgroundColor: i < filledWeeks ? statusColor : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < filledWeeks && { shadowColor: statusColor, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
@@ -335,7 +366,9 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, onOpenAct
               );
             })}
           </View>
-        </View>
+          </Reanimated.View>
+          )}
+        </Reanimated.View>
       </TouchableOpacity>
     </NeuCard>
   );
@@ -472,6 +505,13 @@ export default function ProgramsScreen() {
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [setWorkoutOpen, setSetWorkoutOpen] = useState(false);
   const [actionsProgram, setActionsProgram] = useState<SavedProgram | null>(null);
+  // Transient, like the trainer hub's collapsible sections — not persisted.
+  const [collapsedAll, setCollapsedAll] = useState(false);
+
+  const toggleCollapsed = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCollapsedAll(v => !v);
+  }, []);
   const { focus } = useLocalSearchParams<{ focus?: string }>();
   const scrollRef = useRef<ScrollView | null>(null);
   const cardOffsets = useRef<Record<string, number>>({});
@@ -517,6 +557,51 @@ export default function ProgramsScreen() {
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     scheduleCloudPush();
+  };
+
+  // Put the active program on hold. Unlike Make Inactive it keeps the active
+  // slot — nothing is scheduled and the week counter stops until it's resumed.
+  const handlePauseProgram = async (program: SavedProgram) => {
+    const updated = pauseProgram(programs, program.id);
+    setPrograms(updated);
+    await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    // A change-day override belongs to a running program; it would resurface a
+    // workout on the day the hold starts.
+    AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
+    scheduleCloudPush();
+    Alert.alert(
+      "Program Paused",
+      `"${program.name}" is on hold. No workouts are scheduled and the weeks stop counting until you resume.`,
+    );
+  };
+
+  const commitResume = async (program: SavedProgram, mode: ResumeMode) => {
+    const updated = resumeProgram(programs, program.id, mode);
+    setPrograms(updated);
+    await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    scheduleCloudPush();
+  };
+
+  // Resuming only asks which day when the two answers actually differ — pause
+  // and resume on the same day, or on days that land on the same workout, and
+  // there's nothing worth interrupting for.
+  const handleResumeProgram = async (program: SavedProgram) => {
+    const { today, whereILeftOff } = resumeDayOptions(program);
+    if (today === whereILeftOff) {
+      await commitResume(program, "whereILeftOff");
+      return;
+    }
+    const todayName = dayNameAt(program, today) ?? "Rest";
+    const leftOffName = dayNameAt(program, whereILeftOff) ?? "Rest";
+    Alert.alert(
+      "Resume Program",
+      `You paused on ${leftOffName}. Where should the cycle pick up?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: `Today (${todayName})`, onPress: () => { void commitResume(program, "today"); } },
+        { text: `Carry on (${leftOffName})`, onPress: () => { void commitResume(program, "whereILeftOff"); } },
+      ],
+    );
   };
 
   const handleCompleteProgram = () => {
@@ -643,6 +728,10 @@ export default function ProgramsScreen() {
   }, []));
 
   const activeProgram = programs.find((p) => p.status === "active") ?? null;
+  // Everything under the All Programs heading — the active one has its own
+  // section above. Derived once: the list, its empty state and the heading's
+  // accessibility label all need the same count.
+  const otherPrograms = programs.filter((p) => p.status !== "active");
   const canSendToPT = accountType === "gym_user" && assignedPT !== null;
 
   const handleSendToPT = (program: SavedProgram) => {
@@ -692,16 +781,25 @@ export default function ProgramsScreen() {
     let list: ProgramAction[];
     if (program.status === "active") {
       list = [
-        { key: "setworkout", label: "Set Workout Date", icon: "calendar-outline", primary: true, onPress: () => {
+        // Set Workout Date shifts cycleOffset, which resuming also does — offering
+        // both while paused would just mean the resume overwrites your choice.
+        ...(program.pausedAt ? [] : [{ key: "setworkout", label: "Set Workout Date", icon: "calendar-outline", primary: true, onPress: () => {
           if (isRunning) {
             Alert.alert("Workout In Progress", "Please end or discard your current workout before changing the workout day.", [{ text: "OK" }]);
           } else {
             setSetWorkoutOpen(true);
           }
-        } },
+        } } as ProgramAction]),
         editAction,
         { key: "complete", label: "Mark Complete", icon: "checkmark-circle-outline", tint: ACCT, onPress: handleCompleteProgram },
-        { key: "inactive", label: "Make Inactive", icon: "pause-circle-outline", tint: WARMUP_ORANGE, onPress: () => handleMakeInactive(program) },
+        // Pause sits between Mark Complete and Make Inactive. The two are
+        // different actions: pause keeps the active slot, Make Inactive frees it
+        // so another program can take over — hence the different oranges, and
+        // why Make Inactive gives up the pause icon.
+        program.pausedAt
+          ? { key: "resume", label: "Resume Program", icon: "play-circle-outline", tint: ACCT, onPress: () => handleResumeProgram(program) }
+          : { key: "pause", label: "Pause Program", icon: "pause-circle-outline", tint: PAUSED_ORANGE, onPress: () => handlePauseProgram(program) },
+        { key: "inactive", label: "Make Inactive", icon: "remove-circle-outline", tint: WARMUP_ORANGE, onPress: () => handleMakeInactive(program) },
         duplicateAction,
       ];
     } else if (program.status === "completed") {
@@ -791,9 +889,18 @@ export default function ProgramsScreen() {
           </>
         )}
 
-        {/* All programs */}
+        {/* All programs. The heading collapses the list to compact cards; only
+            the left side is pressable, so tapping New never toggles it. */}
         <View style={[styles.rowBetween, { marginBottom: 12 }]}>
-          <Text style={[styles.sectionLabel, { color: t.tp, marginBottom: 0 }]}>All Programs</Text>
+          <Pressable
+            onPress={toggleCollapsed}
+            style={styles.allProgramsTap}
+            accessibilityRole="button"
+            accessibilityLabel={`All Programs, ${otherPrograms.length} ${otherPrograms.length === 1 ? "program" : "programs"}. Toggle list`}
+          >
+            <Text style={[styles.sectionLabel, { color: t.tp, marginBottom: 0 }]}>All Programs</Text>
+            <ChevronToggle expanded={!collapsedAll} color={t.ts} />
+          </Pressable>
           <BounceButton onPress={() => router.navigate("/new-program")} accessibilityLabel="Create new program" accessibilityRole="button">
             <View style={[styles.newProgramBtn, { backgroundColor: t.ctrl }]}>
               <Ionicons name="add" size={14} color={t.tp} />
@@ -801,7 +908,7 @@ export default function ProgramsScreen() {
             </View>
           </BounceButton>
         </View>
-        {programs.filter(p => p.status !== "active").length === 0 ? (
+        {otherPrograms.length === 0 ? (
           <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 12 }}>
             <View style={{ padding: 32, alignItems: "center", gap: 8 }}>
               <Ionicons name="barbell-outline" size={32} color={t.ts} />
@@ -810,14 +917,22 @@ export default function ProgramsScreen() {
             </View>
           </NeuCard>
         ) : (
-          programs.filter(p => p.status !== "active").map((p) => (
-            <View key={p.id} onLayout={e => { cardOffsets.current[p.id] = e.nativeEvent.layout.y; }}>
-            <ProgramCard
-              program={p}
-              isDark={isDark}
-              onOpenActions={() => setActionsProgram(p)}
-            />
-            </View>
+          otherPrograms.map((p) => (
+            // onLayout feeds cardOffsets, which drives scroll-to-program.
+            // Reanimated layout on the wrapper is what makes the cards below
+            // slide up and down instead of snapping as one card changes height.
+            <Reanimated.View
+              key={p.id}
+              layout={CARD_LAYOUT}
+              onLayout={e => { cardOffsets.current[p.id] = e.nativeEvent.layout.y; }}
+            >
+              <ProgramCard
+                program={p}
+                isDark={isDark}
+                collapsed={collapsedAll}
+                onOpenActions={() => setActionsProgram(p)}
+              />
+            </Reanimated.View>
           ))
         )}
       </ScrollView>
@@ -898,6 +1013,11 @@ const styles = StyleSheet.create({
   // Neutral chrome (background comes from t.ctrl inline) — a soft drop shadow
   // rather than the ACCT glow reserved for primary green actions.
   newProgramBtn:      { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  // flex:1 so the tap target spans the row up to the New pill, not just the words.
+  allProgramsTap:     { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
+  // The collapsible half of the card. `gap: 10` matches programCardInner's, so
+  // the spacing under the header is identical whether it's mounted or not.
+  programCardDetail:  { gap: 10 },
   newProgramBtnText:  { fontFamily: FontFamily.semibold, fontSize: 12, color: "#fff" },
   cardActions:        { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 0 },
   deleteBtnText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#E53935", letterSpacing: 0.2 },

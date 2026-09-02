@@ -19,7 +19,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
 import {
   PROGRAMS_KEY,
   getCurrentWeek,
@@ -37,7 +37,7 @@ function statusLabel(status: SavedProgram["status"]): string {
 
 function statusColor(status: SavedProgram["status"]): string {
   if (status === "active" || status === "completed") return ACCT;
-  if (status === "paused") return "#FF9500";
+  if (status === "paused") return PAUSED_ORANGE;
   return "#8896A7";
 }
 

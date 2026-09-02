@@ -60,6 +60,12 @@ export const ACCT_DEEP = "#0c9f6e";
 // Destructive actions (block, delete). Import this, never hardcode a red literal.
 export const DANGER = "#E5484D";
 
+// ─── Paused ───────────────────────────────────────────────────────────────────
+// A program on hold: the "Paused" badge and the Pause action. Deliberately a
+// deeper orange than the bright yellow-orange WARMUP_ORANGE (#ffbf0f) that
+// "Make Inactive" uses, so the two read as different actions at a glance.
+export const PAUSED_ORANGE = "#FF9500";
+
 // ─── Aurora (soft pastel gradient system) ─────────────────────────────────────
 // Bubbly pastel accents built around the brand green, with an aqua and a blush
 // counterpoint. Base colors are full-strength; surfaces fade them via gradient

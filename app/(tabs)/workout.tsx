@@ -25,7 +25,7 @@ import DumbbellIcon from "../../components/DumbbellIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { computeDurationMins, completedAtISO } from "../../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
@@ -2472,6 +2472,48 @@ export default function WorkoutScreen() {
     );
   }
 
+  // ─── Paused program ─────────────────────────────────────────────────────────
+  // A held program resolves no workout, so without this it would fall through to
+  // the Rest Day screen and look like an ordinary rest day. Sits above that
+  // branch and below the completed-workout check, so a session logged before the
+  // pause still shows its summary.
+  if (activeProgram?.pausedAt && !workoutInfo && !todaysCompletedWorkout && !isFreeWorkout) {
+    return (
+      <FadeScreen style={{ backgroundColor: t.bg }}>
+        <View style={[styles.emptyWrap, { paddingTop: insets.top + 60 }]}>
+          <NeuCard dark={isDark} radius={40} style={styles.emptyIconCard}>
+            <View style={styles.emptyIconInner}>
+              <Ionicons name="pause" size={34} color={PAUSED_ORANGE} />
+            </View>
+          </NeuCard>
+          <Text style={[styles.emptyTitle, { color: t.tp }]}>Program Paused</Text>
+          <Text style={[styles.emptySub, { color: t.ts }]}>
+            {`"${activeProgram.name}" is on hold, so nothing is scheduled and the weeks aren't counting. Resume it whenever you're ready.`}
+          </Text>
+          <BounceButton onPress={() => router.navigate("/programs")} style={{ marginTop: 8 }}>
+            <View style={styles.emptyBtn}>
+              <Text style={styles.emptyBtnText}>Resume Program</Text>
+            </View>
+          </BounceButton>
+          <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 12 }}>
+            <View style={[styles.pausedSecondaryBtn, { borderColor: t.div }]}>
+              <Text style={[styles.pausedSecondaryText, { color: t.tp }]}>Custom Workout</Text>
+            </View>
+          </BounceButton>
+        </View>
+
+        <CustomWorkoutNameSheet
+          visible={customWorkoutNamingOpen}
+          isDark={isDark}
+          t={t}
+          activeProgram={activeProgram}
+          onStart={confirmCustomWorkout}
+          onClose={() => setCustomWorkoutNamingOpen(false)}
+        />
+      </FadeScreen>
+    );
+  }
+
   // ─── Rest day ───────────────────────────────────────────────────────────────
   // A logged workout for the effective day takes precedence over the rest-day
   // screen even when there's no scheduled template (workoutInfo is null) — the
@@ -3247,5 +3289,8 @@ const styles = StyleSheet.create({
   emptySub:       { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center", lineHeight: 22 },
   emptyBtn:       { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, paddingHorizontal: 28, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   emptyBtnText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
+  // Outlined, so Resume stays the primary action on the paused screen.
+  pausedSecondaryBtn:  { borderRadius: 14, borderWidth: 1.5, paddingVertical: 12, paddingHorizontal: 24 },
+  pausedSecondaryText: { fontFamily: FontFamily.bold, fontSize: 14 },
   // Interval Timer / Stopwatch modal styles now live in components/IntervalTimerModal.tsx.
 });

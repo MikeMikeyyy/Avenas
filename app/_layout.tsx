@@ -22,6 +22,7 @@ import { flushCloudPush } from "../lib/syncManager";
 import { reconcileAccountType } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
+import { autoPauseIfIdle } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 
 SplashScreen.preventAutoHideAsync();
@@ -74,6 +75,11 @@ function AppShell() {
   // when signed out or already in sync.
   useEffect(() => { void reconcileAccountType(); }, []);
 
+  // A full week with nothing logged puts the active program on hold by itself,
+  // so it isn't silently marching through weeks you didn't train. No-ops once
+  // paused; also runs on foreground below, since the app is often left open.
+  useEffect(() => { void autoPauseIfIdle(); }, []);
+
   // Two foreground/background jobs:
   //  - Cloud-backup safety net: on leaving the foreground, push any changes from
   //    the last debounce window (flushCloudPush no-ops when signed out / wrong owner).
@@ -90,6 +96,7 @@ function AppShell() {
         if (beat) { clearInterval(beat); beat = null; }
       } else if (state === "active") {
         void touchLastActive();
+        void autoPauseIfIdle();
         if (!beat) beat = setInterval(() => void touchLastActive(), HEARTBEAT_MS);
       }
     });

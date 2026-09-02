@@ -104,6 +104,10 @@ export { parseStoredDate };
 export function getCurrentWeek(program: SavedProgram): number {
   if (program.status === "completed") return program.totalWeeks;
   if (program.status === "paused" || program.status === "created") return program.currentWeek;
+  // A held program keeps status "active", so the freeze above doesn't catch it.
+  // Weeks must not advance while paused — that's what makes the finish date
+  // move back by however long the hold lasted.
+  if (program.pausedAt) return Math.min(Math.max(program.currentWeek || 1, 1), program.totalWeeks);
   const start = parseStoredDate(program.startDate);
   // Corrupt / unparseable startDate: fall back to the stored currentWeek rather
   // than silently treating the program as having started in January year-0.
@@ -121,10 +125,20 @@ export type SavedProgram = {
   name: string;
   totalWeeks: number;
   currentWeek: number;
+  /** NOTE: "paused" here means "shelved mid-run, not the active program" — it's
+   *  what Make Inactive produces. A temporary hold on the ACTIVE program is
+   *  `pausedAt` below, which is a different thing entirely. */
   status: "active" | "completed" | "paused" | "created";
   startDate: string;
   completedDate?: string;
   cycleOffset?: number;
+  /** "YYYY-MM-DD" the active program was put on hold; absent means running.
+   *  While set, nothing is scheduled from this date onward (utils/workout.ts
+   *  resolveDayIndex) and the week counter freezes (getCurrentWeek). Resuming
+   *  shifts startDate forward by the paused days, which both preserves the
+   *  remaining weeks and lands the cycle back on the paused day — see
+   *  utils/programPause.ts. */
+  pausedAt?: string;
   trainingDays: number;
   cycleDays: number;
   cyclePattern: string[];
