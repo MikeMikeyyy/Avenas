@@ -23,14 +23,18 @@ import TrashIcon from "../TrashIcon";
 import PeopleIcon from "../icons/PeopleIcon";
 import SendIcon from "../icons/SendIcon";
 import RecipientPickerSheet from "./RecipientPickerSheet";
+import ProgramPickerSheet from "./ProgramPickerSheet";
+import SimpleSheet from "./SimpleSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgram,
+  addTrainerAsClient,
   appendSharedPrograms,
   loadSharedPrograms,
   migrateCoachReceivedShares,
   removeSharedProgram,
+  removeTrainerAsClient,
   type AssignedPT,
   type Client,
   type SharedProgram,
@@ -72,6 +76,13 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   const [trainers, setTrainers] = useState<AssignedPT[]>([]);
   const [received, setReceived] = useState<SharedProgram[]>([]);
   const [passDownTarget, setPassDownTarget] = useState<SavedProgram | null>(null);
+  /** Which trainers are also my clients — drives the toggle's wording. */
+  const [trainerClientIds, setTrainerClientIds] = useState<Set<string>>(new Set());
+  /** The trainer whose action sheet is open (null = closed). */
+  const [menuFor, setMenuFor] = useState<AssignedPT | null>(null);
+  /** Set while picking which program to send to `sendTo`. */
+  const [sendTo, setSendTo] = useState<AssignedPT | null>(null);
+  const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   // Live "last active" comes from the connection presence poll. Trainers
   // without a real connection (legacy/mock) aren't in the map and show no
   // presence row.
@@ -80,8 +91,14 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   const reload = useCallback(async () => {
     // Backfill the direction flag on any legacy incoming shares before reading.
     await migrateCoachReceivedShares();
-    const [roster, shares] = await Promise.all([resolveTrainerRoster(), loadSharedPrograms()]);
+    const [roster, shares, progs] = await Promise.all([
+      resolveTrainerRoster(),
+      loadSharedPrograms(),
+      getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+    ]);
     setTrainers(roster.trainers);
+    setTrainerClientIds(roster.trainerClientIds);
+    setMyPrograms(Array.isArray(progs) ? progs : []);
     // Incoming = a program another trainer sent ME (receivedFromCoachId).
     setReceived(shares.filter(s => !!s.receivedFromCoachId));
   }, []);
@@ -97,6 +114,55 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate("/connect");
   }, [router]);
+
+  // Take a fellow trainer on as a client, or stop. Only the local filing
+  // changes: the connection stays, so they remain on this page either way and
+  // programs keep flowing in both directions.
+  const toggleAsClient = useCallback(async (trainer: AssignedPT) => {
+    setMenuFor(null);
+    const isClient = trainerClientIds.has(trainer.id);
+    if (isClient) {
+      await removeTrainerAsClient(trainer.id);
+      await reload();
+      Alert.alert("Removed from clients", `${trainer.name} is no longer one of your clients. You're still connected.`);
+      return;
+    }
+    await addTrainerAsClient(trainer.id);
+    await reload();
+    Alert.alert("Added to clients", `${trainer.name} now appears in My Clients, and you can add them to groups.`);
+  }, [trainerClientIds, reload]);
+
+  const openSendProgram = useCallback((trainer: AssignedPT) => {
+    setMenuFor(null);
+    if (myPrograms.length === 0) {
+      Alert.alert("No programs", "Build a program before sending one.");
+      return;
+    }
+    setSendTo(trainer);
+  }, [myPrograms]);
+
+  // Send one program to one trainer. Same cloud path PTHome's send uses, so it
+  // lands in their library exactly like any other share.
+  const handleSendProgram = useCallback(async (program: SavedProgram) => {
+    const target = sendTo;
+    setSendTo(null);
+    if (!target) return;
+    const entry: SharedProgram = {
+      id: `share_${Date.now()}_0`,
+      clientId: target.id,
+      programId: program.id,
+      programName: program.name,
+      sentAtISO: new Date().toISOString(),
+      programSnapshot: program,
+    };
+    try {
+      await appendSharedPrograms([entry]);
+    } catch (e) {
+      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      return;
+    }
+    Alert.alert("Program Sent", `"${program.name}" was sent to ${target.name}.`);
+  }, [sendTo]);
 
   const handleRemoveTrainer = useCallback((trainer: AssignedPT) => {
     Alert.alert(
@@ -272,34 +338,53 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         </NeuCard>
       ) : (
         <View style={{ marginTop: 12, gap: 10 }}>
-          {trainers.map(coach => (
-            <NeuCard key={coach.id} dark={isDark} radius={16}>
-              <View style={styles.coachCard}>
-                <Avatar
-                  uri={coach.photoUri}
-                  initials={coach.initials}
-                  size={48}
-                  backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                  textColor={ACCT}
-                  textStyle={[styles.avatarText, { color: ACCT }]}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.coachLabel, { color: t.ts }]}>TRAINER</Text>
-                  <Text style={[styles.coachName, { color: t.tp }]}>{coach.name}</Text>
-                  {(() => {
-                    const lastActive = presenceById.get(coach.id);
-                    if (!lastActive) return null; // not connected, never active, or sharing off
-                    return (
-                      <View style={styles.presenceRow}>
-                        <View style={[styles.presenceDot, { backgroundColor: isActiveNow(lastActive) ? ACCT : t.ts }]} />
-                        <Text style={[styles.presenceText, { color: t.ts }]}>{presenceLabel(lastActive)}</Text>
+          {trainers.map(coach => {
+            const alsoClient = trainerClientIds.has(coach.id);
+            return (
+              <TouchableOpacity
+                key={coach.id}
+                activeOpacity={0.85}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setMenuFor(coach); }}
+                accessibilityRole="button"
+                accessibilityLabel={`Options for ${coach.name}`}
+              >
+                <NeuCard dark={isDark} radius={16}>
+                  <View style={styles.coachCard}>
+                    <Avatar
+                      uri={coach.photoUri}
+                      initials={coach.initials}
+                      size={48}
+                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+                      textColor={ACCT}
+                      textStyle={[styles.avatarText, { color: ACCT }]}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.labelRow}>
+                        <Text style={[styles.coachLabel, { color: t.ts }]}>TRAINER</Text>
+                        {alsoClient && (
+                          <View style={[styles.clientTag, { backgroundColor: `${ACCT}22` }]}>
+                            <Text style={[styles.clientTagText, { color: ACCT }]}>ALSO YOUR CLIENT</Text>
+                          </View>
+                        )}
                       </View>
-                    );
-                  })()}
-                </View>
-              </View>
-            </NeuCard>
-          ))}
+                      <Text style={[styles.coachName, { color: t.tp }]}>{coach.name}</Text>
+                      {(() => {
+                        const lastActive = presenceById.get(coach.id);
+                        if (!lastActive) return null; // not connected, never active, or sharing off
+                        return (
+                          <View style={styles.presenceRow}>
+                            <View style={[styles.presenceDot, { backgroundColor: isActiveNow(lastActive) ? ACCT : t.ts }]} />
+                            <Text style={[styles.presenceText, { color: t.ts }]}>{presenceLabel(lastActive)}</Text>
+                          </View>
+                        );
+                      })()}
+                    </View>
+                    <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
+                  </View>
+                </NeuCard>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       )}
 
@@ -410,6 +495,77 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         onConfirm={handleConfirmPassDown}
         onClose={() => setPassDownTarget(null)}
       />
+
+      {/* Tapping a trainer's card. Sending a program works whether or not they
+          are also your client — the connection is what allows it, not the
+          filing. */}
+      <SimpleSheet visible={menuFor !== null} onClose={() => setMenuFor(null)}>
+        <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{menuFor?.name || "Trainer"}</Text>
+        <View style={styles.menu}>
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.8}
+            onPress={() => menuFor && openSendProgram(menuFor)}
+            accessibilityRole="button"
+            accessibilityLabel={`Send a program to ${menuFor?.name ?? "this trainer"}`}
+          >
+            <SendIcon size={19} color={t.tp} />
+            <Text style={[styles.menuText, { color: t.tp }]}>Send a program</Text>
+          </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.8}
+            onPress={() => menuFor && router.navigate({ pathname: "/trainer/chat/[id]", params: { id: menuFor.id, name: menuFor.name, initials: menuFor.initials, photo: menuFor.photoUri ?? "" } })}
+            accessibilityRole="button"
+            accessibilityLabel={`Message ${menuFor?.name ?? "this trainer"}`}
+          >
+            <Ionicons name="chatbubble-outline" size={19} color={t.tp} />
+            <Text style={[styles.menuText, { color: t.tp }]}>Message</Text>
+          </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.8}
+            onPress={() => menuFor && toggleAsClient(menuFor)}
+            accessibilityRole="button"
+            accessibilityLabel={menuFor && trainerClientIds.has(menuFor.id) ? "Remove from my clients" : "Add as my client"}
+          >
+            <Ionicons
+              name={menuFor && trainerClientIds.has(menuFor.id) ? "person-remove-outline" : "person-add-outline"}
+              size={19}
+              color={t.tp}
+            />
+            <Text style={[styles.menuText, { color: t.tp }]}>
+              {menuFor && trainerClientIds.has(menuFor.id) ? "Remove from my clients" : "Add as my client"}
+            </Text>
+          </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.8}
+            onPress={() => { const c = menuFor; setMenuFor(null); if (c) handleRemoveTrainer(c); }}
+            accessibilityRole="button"
+            accessibilityLabel={`Remove ${menuFor?.name ?? "this trainer"}`}
+          >
+            <Ionicons name="close-circle-outline" size={19} color={REMOVE_RED} />
+            <Text style={[styles.menuText, { color: REMOVE_RED }]}>Remove trainer</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={[styles.menuHint, { color: t.ts }]}>
+          Adding them as a client lets you put them in groups and send programs to
+          them alongside everyone else. You stay connected either way.
+        </Text>
+      </SimpleSheet>
+
+      <ProgramPickerSheet
+        visible={sendTo !== null}
+        title={`Send to ${sendTo?.name ?? ""}`}
+        subtitle="Pick a program to send."
+        programs={myPrograms}
+        onPick={handleSendProgram}
+        onClose={() => setSendTo(null)}
+      />
     </View>
   );
 });
@@ -432,6 +588,16 @@ const styles = StyleSheet.create({
   coachCard:    { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 16 },
   coachLabel:   { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 1 },
+  labelRow:     { flexDirection: "row", alignItems: "center", gap: 6 },
+  clientTag:    { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  clientTagText:{ fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
+
+  menuName:     { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
+  menu:         { paddingHorizontal: 16, paddingTop: 4 },
+  menuRow:      { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
+  menuDivider:  { height: 1, marginHorizontal: 8 },
+  menuText:     { fontFamily: FontFamily.semibold, fontSize: 16 },
+  menuHint:     { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, textAlign: "center", paddingHorizontal: 24, paddingTop: 10 },
   coachName:    { fontFamily: FontFamily.bold, fontSize: 16, marginTop: 2 },
   presenceRow:  { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   presenceDot:  { width: 6, height: 6, borderRadius: 3 },

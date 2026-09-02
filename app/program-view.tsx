@@ -13,7 +13,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -264,15 +263,9 @@ export default function ProgramViewScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       {/* Trainer-only Edit + Delete pair pinned to the top-right so they stay
@@ -286,15 +279,9 @@ export default function ProgramViewScreen() {
             accessibilityLabel="Edit program"
             accessibilityRole="button"
           >
-            {isGlassEffectAPIAvailable() ? (
-              <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-                <Ionicons name="create-outline" size={20} color={t.tp} />
-              </GlassView>
-            ) : (
-              <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-                <Ionicons name="create-outline" size={20} color={t.tp} />
-              </View>
-            )}
+            <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+              <Ionicons name="create-outline" size={20} color={t.tp} />
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={handleDelete}
@@ -302,15 +289,9 @@ export default function ProgramViewScreen() {
             accessibilityLabel="Delete program"
             accessibilityRole="button"
           >
-            {isGlassEffectAPIAvailable() ? (
-              <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-                <TrashIcon size={20} color="#E53935" />
-              </GlassView>
-            ) : (
-              <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-                <TrashIcon size={20} color="#E53935" />
-              </View>
-            )}
+            <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+              <TrashIcon size={20} color="#E53935" />
+            </View>
           </TouchableOpacity>
         </View>
       )}

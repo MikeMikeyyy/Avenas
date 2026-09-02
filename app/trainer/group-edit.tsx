@@ -15,7 +15,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -147,15 +146,9 @@ export default function GroupEditScreen() {
     <FadeScreen style={{ backgroundColor: t.bg }}>
       <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: t.div }]}>
         <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-          {isGlassEffectAPIAvailable() ? (
-            <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-              <Ionicons name="chevron-back" size={22} color={t.tp} />
-            </GlassView>
-          ) : (
-            <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name="chevron-back" size={22} color={t.tp} />
-            </View>
-          )}
+          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+            <Ionicons name="chevron-back" size={22} color={t.tp} />
+          </View>
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: t.tp }]} numberOfLines={1}>
           {isNew ? "New Group" : isOwner ? "Manage Group" : "Group Members"}
@@ -227,6 +220,11 @@ export default function GroupEditScreen() {
                             textStyle={[styles.avatarText, { color: ACCT }]}
                           />
                           <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
+                          {c.isTrainer && (
+                            <View style={[styles.ownerTag, { backgroundColor: `${ACCT}22` }]}>
+                              <Text style={[styles.ownerTagText, { color: ACCT }]}>TRAINER</Text>
+                            </View>
+                          )}
                           <View style={[styles.check, checked
                             ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
                             : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },

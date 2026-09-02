@@ -20,8 +20,8 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import SegmentedControl from "../components/SegmentedControl";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
-import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { pushAccountType, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
+import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, DANGER, FontFamily } from "../constants/theme";
+import { clearCoachingData, pushAccountType, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
 import { isApplePrivateEmail } from "../lib/auth";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -51,6 +51,7 @@ export default function ProfileScreen() {
   // labelled instead and a separate contact address is offered.
   const usesAppleRelay = isApplePrivateEmail(currentEmail);
   const [contactEmail, setContactEmail] = useState(profile.contactEmail ?? "");
+  const [accountTypeDraft, setAccountTypeDraft] = useState<AccountType>(accountType);
   // Photo changes are STAGED — picking/removing only updates this local preview;
   // nothing uploads or persists until the user taps Save changes (mirrors how
   // name/email commit). null = no pending photo change.
@@ -71,15 +72,43 @@ export default function ProfileScreen() {
   const trimmedContact = contactEmail.trim();
   const contactChanged = usesAppleRelay && trimmedContact !== (profile.contactEmail ?? "");
   const contactValid = trimmedContact === "" || EMAIL_RE.test(trimmedContact);
+  const accountTypeChanged = accountTypeDraft !== accountType;
+  // Trainer → Gym User is the destructive direction: it removes clients, groups
+  // and sent programs. The other way round only unlocks the hub.
+  const isDowngrade = accountTypeChanged && accountTypeDraft === "gym_user";
   const canSave =
     trimmedName.length > 0 &&
     (!emailChanged || EMAIL_RE.test(trimmedEmail)) &&
     contactValid &&
-    (nameChanged || emailChanged || photoChanged || contactChanged);
+    (nameChanged || emailChanged || photoChanged || contactChanged || accountTypeChanged);
+
+  /** Alert as a promise, so the save flow can await a confirmation inline. */
+  const confirmDowngrade = useCallback(
+    () =>
+      new Promise<boolean>(resolve => {
+        Alert.alert(
+          "Switch to Gym User?",
+          "You'll stop being a trainer, and your coaching data is deleted:\n\n" +
+            "• Your client list and everything saved against each client\n" +
+            "• Any groups you created, removed for every member\n" +
+            "• Programs you've sent (clients keep copies they already accepted)\n\n" +
+            "Your own workouts, programs and trainers are not affected. This can't be undone.",
+          [
+            { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+            { text: "Switch and delete", style: "destructive", onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) },
+        );
+      }),
+    [],
+  );
 
   const onSave = async () => {
     if (!userId || busy || !canSave) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Gate the destructive switch before anything else is written, so cancelling
+    // here leaves the whole form untouched.
+    if (isDowngrade && !(await confirmDowngrade())) return;
     setBusy(true);
     try {
       // Commit the staged photo first (upload new / clear) so the new URL is
@@ -108,12 +137,28 @@ export default function ProfileScreen() {
         });
       }
       setPhotoChange(null);
+
+      // Role last, and the server write BEFORE the local teardown: if the push
+      // fails we bail with the coaching data still intact, rather than deleting
+      // clients for a switch that never took.
+      let roleNote = "";
+      if (accountTypeChanged) {
+        await pushAccountType(userId, accountTypeDraft);
+        if (isDowngrade) {
+          await clearCoachingData();
+          roleNote = " Your coaching data has been removed.";
+        } else {
+          roleNote = " The trainer hub is now available, and any trainers you're connected with are under My Trainers.";
+        }
+        setAccountType(accountTypeDraft);
+      }
+
       let emailNote = "";
       if (emailChanged) {
         await updateEmail(trimmedEmail);
         emailNote = ` A confirmation link was sent to ${trimmedEmail} — open it to finish changing your email.`;
       }
-      Alert.alert("Saved", `Your profile has been updated.${emailNote}`, [
+      Alert.alert("Saved", `Your profile has been updated.${roleNote}${emailNote}`, [
         { text: "OK", onPress: () => router.back() },
       ]);
     } catch (e) {
@@ -123,24 +168,13 @@ export default function ProfileScreen() {
     }
   };
 
-  // The role has to reach the server, not just this device: `account_type` on the
-  // profile is what every OTHER account sees through get_my_connections(), and
-  // it's what decides whether a connection is bucketed as a trainer or a client.
-  // A local-only switch left connected accounts seeing a trainer as a member.
-  // Applied optimistically and rolled back if the write fails, so the two copies
-  // can't silently disagree.
-  const onChangeAccountType = useCallback(async (next: AccountType) => {
-    const previous = accountType;
-    if (next === previous) return;
-    setAccountType(next);
-    if (!userId) return; // signed out — reconcileAccountType pushes it on next launch
-    try {
-      await pushAccountType(userId, next);
-    } catch (e) {
-      setAccountType(previous);
-      Alert.alert("Couldn't change account type", e instanceof Error ? e.message : "Check your connection and try again.");
-    }
-  }, [accountType, setAccountType, userId]);
+  // Staged like name/email/photo: picking a role only moves the segmented
+  // control, and nothing happens until Save changes. Switching to Gym User
+  // destroys the coaching side of the account, so it must not fire on a stray tap.
+  const onChangeAccountType = useCallback((next: AccountType) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setAccountTypeDraft(next);
+  }, []);
 
   // Pick from the library and STAGE it as a preview. The upload + persist happen
   // in onSave, so the photo only sticks once the user taps Save changes.
@@ -305,19 +339,24 @@ export default function ProfileScreen() {
           </>
         )}
 
-        {/* Applies immediately (not staged behind Save), same behavior it had on
-            the Settings screen. */}
+        {/* Staged behind Save changes, like everything else on this screen. It
+            used to apply on tap, which meant a stray tap could silently switch
+            the account and (now) delete the coaching side of it. */}
         <Text style={[styles.label, { color: t.ts }]}>ACCOUNT TYPE</Text>
         <SegmentedControl
           options={[
             { key: "gym_user", label: "Gym User" },
             { key: "pt", label: "Trainer" },
           ]}
-          value={accountType}
+          value={accountTypeDraft}
           onChange={onChangeAccountType}
         />
-        <Text style={[styles.hint, { color: t.ts }]}>
-          Trainers get a coaching hub with clients, program sharing, and messaging.
+        <Text style={[styles.hint, { color: isDowngrade ? DANGER : t.ts }]}>
+          {isDowngrade
+            ? "Switching to Gym User deletes your clients, groups and sent programs. You'll be asked to confirm when you save."
+            : accountTypeChanged
+              ? "Tap Save changes to switch to a trainer account."
+              : "Trainers get a coaching hub with clients, program sharing, and messaging."}
         </Text>
 
         <BounceButton style={{ marginTop: 32 }} onPress={onSave} accessibilityRole="button" accessibilityLabel="Save changes">

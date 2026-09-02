@@ -22,9 +22,14 @@ import {
 } from "./mappers";
 import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./database.types";
 import { ACCOUNT_TYPE_KEY, type AccountType } from "../contexts/AccountTypeContext";
-import { clearTrainerData } from "../utils/trainerStore";
+import {
+  CLIENTS_KEY, CLIENT_DATA_PREFIX, PT_SEEDED_KEY, SHARED_PROGRAMS_KEY, TRAINER_CLIENTS_KEY,
+  clearTrainerData,
+} from "../utils/trainerStore";
 import { clearChatData } from "../utils/chatStore";
 import { clearModerationData } from "../utils/moderation";
+import { deleteGroup, fetchMyGroups } from "./groups";
+import { deleteShareRow, fetchMyShareRows, getMyUid } from "./shares";
 import { unregisterPushToken } from "./push";
 
 export type SyncCounts = {
@@ -111,7 +116,15 @@ type CloudSnapshot = {
  * and a failed download can never leave the device half-written or wiped.
  */
 async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
-  const { data: progRows, error: pe } = await supabase.from("programs").select("*").eq("user_id", userId);
+  const { data: progRows, error: pe } = await supabase
+    .from("programs").select("*").eq("user_id", userId)
+    // Oldest-first, matching how local writes append to @avenas/programs. The
+    // array's order is the only record of when a program was created — ids come
+    // back as Supabase uuids (see mappers.programFromRow), losing the
+    // `program_<timestamp>` form local creation uses. Without this the pull
+    // returned rows in whatever order Postgres chose, so "newest first" in the
+    // programs list was arbitrary after any sync.
+    .order("created_at", { ascending: true });
   if (pe) throw new Error(`pull programs: ${pe.message}`);
 
   const { data: woRows, error: we } = await supabase
@@ -387,6 +400,70 @@ export async function reconcileAccountType(): Promise<void> {
     await pushAccountType(user.id, local);
   } catch (e) {
     if (__DEV__) console.warn("[avenas] reconcileAccountType", e);
+  }
+}
+
+/**
+ * Tear down everything that only exists because this account was a TRAINER,
+ * for a Trainer → Gym User downgrade.
+ *
+ * Deliberately narrower than clearTrainerData(), which wipes both sides of the
+ * hub for an account switch. What survives here is everything the user keeps as
+ * a gym user: their own trainers (derived from connections, so untouched),
+ * programs they've RECEIVED and accepted, their library, and their membership
+ * of other people's groups.
+ *
+ * What goes:
+ *   - the local client roster and each client's cached data
+ *   - trainers they had taken on as clients
+ *   - groups they OWN (deleted for every member, since nobody else can run them)
+ *   - programs they SENT (recipients keep any copy they already accepted)
+ *
+ * Lives here rather than in trainerStore because lib/groups.ts imports that
+ * module, so the dependency has to run this direction.
+ *
+ * Local removal happens first and unconditionally; the cloud steps are
+ * best-effort per item, so one failure can't strand the rest half-done.
+ */
+export async function clearCoachingData(): Promise<void> {
+  const allKeys = await AsyncStorage.getAllKeys();
+  const clientData = allKeys.filter(k => k.startsWith(CLIENT_DATA_PREFIX));
+  await AsyncStorage.multiRemove([CLIENTS_KEY, TRAINER_CLIENTS_KEY, PT_SEEDED_KEY, ...clientData]);
+
+  // Local share entries: drop the ones I SENT, keep what a trainer sent me.
+  try {
+    const local = await getJSON<{ receivedFromCoachId?: string }[]>(SHARED_PROGRAMS_KEY, []);
+    await setJSON(SHARED_PROGRAMS_KEY, local.filter(s => !!s.receivedFromCoachId));
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] clearCoachingData local shares", e);
+  }
+
+  const uid = await getMyUid();
+  if (!uid) return; // signed out: the local wipe above is all we can do
+
+  try {
+    for (const g of (await fetchMyGroups(uid)).filter(g => g.isOwner)) {
+      try {
+        await deleteGroup(g.id);
+      } catch (e) {
+        if (__DEV__) console.warn("[avenas] clearCoachingData group", g.id, e);
+      }
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] clearCoachingData groups", e);
+  }
+
+  try {
+    const rows = await fetchMyShareRows(uid);
+    for (const r of rows.filter(r => r.sender_id === uid && r.kind === "share")) {
+      try {
+        await deleteShareRow(r.id);
+      } catch (e) {
+        if (__DEV__) console.warn("[avenas] clearCoachingData share", r.id, e);
+      }
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] clearCoachingData shares", e);
   }
 }
 

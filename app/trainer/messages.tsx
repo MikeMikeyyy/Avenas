@@ -15,7 +15,6 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -220,15 +219,9 @@ export default function MessagesScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       {/* New message (broadcast to many) is a trainer feature — gym users only

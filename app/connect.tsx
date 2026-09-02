@@ -29,6 +29,7 @@ import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, DANGER, FontFamily } from "../constants/theme";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
+import { addTrainerAsClient } from "../utils/trainerStore";
 import type { ReportReason } from "../constants/chat";
 import {
   getMyCode,
@@ -107,6 +108,40 @@ export default function ConnectScreen() {
     }
   };
 
+  /**
+   * Just connected with a fellow TRAINER: offer to also take them on as a
+   * client, while the decision is in mind. Declining costs nothing — the same
+   * toggle lives on their card in My Trainers.
+   *
+   * Trainer-to-trainer only. A gym user has no clients of their own, and a
+   * trainer connecting with a gym user already gets them as a client
+   * automatically (utils/roster.ts buckets by account type).
+   *
+   * Declared above submitCode because that callback lists it as a dependency.
+   */
+  const offerToCoach = useCallback((c: Connection) => {
+    if (accountType !== "pt" || c.accountType !== "pt") return;
+    const who = c.name || "This trainer";
+    Alert.alert(
+      `Also coach ${who}?`,
+      `${who} has a trainer account, so they've been added to My Trainers. Add them as one of your clients too if you're coaching them.`,
+      [
+        { text: "Not now", style: "cancel" },
+        {
+          text: "Add as client",
+          onPress: async () => {
+            try {
+              await addTrainerAsClient(c.otherId);
+              Alert.alert("Added to clients", `${who} now appears in My Clients, and you can add them to groups.`);
+            } catch (e) {
+              if (__DEV__) console.warn("[avenas] addTrainerAsClient", e);
+            }
+          },
+        },
+      ],
+    );
+  }, [accountType]);
+
   const submitCode = useCallback(async (rawCode: string) => {
     const code = extractCode(rawCode);
     if (!code || busy) return;
@@ -148,12 +183,22 @@ export default function ConnectScreen() {
       Alert.alert(title, body);
       if (res === "connected" || res === "requested") setManual("");
       await refresh();
+
+      // "connected" means they had already requested me, so entering their code
+      // accepted it outright — the one path here that produces a live connection.
+      // ("requested" is still pending; the offer comes when they accept.)
+      if (res === "connected") {
+        const nowAccepted = rawConnections.current.find(
+          c => c.status === "accepted" && before.every(b => b.connectionId !== c.connectionId || b.status !== "accepted"),
+        );
+        if (nowAccepted) offerToCoach(nowAccepted);
+      }
     } catch (e) {
       Alert.alert("Couldn't connect", e instanceof Error ? e.message : "Please try again.");
     } finally {
       setBusy(false);
     }
-  }, [busy, refresh]);
+  }, [busy, refresh, offerToCoach]);
 
   // Opened via a QR deep link → confirm, then send the request (once).
   const deepLinkHandled = useRef(false);
@@ -177,6 +222,7 @@ export default function ConnectScreen() {
     try {
       await respondConnection(c.connectionId, accept);
       await refresh();
+      if (accept) offerToCoach(c);
     } catch (e) {
       Alert.alert("Something went wrong", e instanceof Error ? e.message : "Please try again.");
     }

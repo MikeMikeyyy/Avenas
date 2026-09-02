@@ -8,7 +8,6 @@ import { Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -139,15 +138,9 @@ export default function ReviewScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.iconBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>

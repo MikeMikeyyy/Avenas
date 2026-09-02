@@ -10,7 +10,6 @@ import { useCallback, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -174,15 +173,9 @@ export default function ChatThreadScreen() {
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: t.div }]}>
       <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
       <Avatar
         uri={photo || undefined}
@@ -193,15 +186,9 @@ export default function ChatThreadScreen() {
       />
       <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
       <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Conversation options" accessibilityRole="button">
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+        </View>
       </TouchableOpacity>
     </View>
   );

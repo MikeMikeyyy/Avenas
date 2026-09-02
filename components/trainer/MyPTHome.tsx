@@ -526,8 +526,8 @@ export default function MyPTHome() {
             <ChevronToggle expanded={!collapsedSentToTrainer} color={t.ts} />
           </Pressable>
           <BounceButton onPress={() => setSendOpen(true)} accessibilityLabel="Send a program to trainer">
-            <View style={[styles.addBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-              <PlusIcon size={15} color="#fff" />
+            <View style={[styles.addBtn, { backgroundColor: t.ctrl }]}>
+              <PlusIcon size={15} color={t.tp} />
             </View>
           </BounceButton>
         </View>
@@ -740,7 +740,9 @@ const styles = StyleSheet.create({
   sentHeaderRow:{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 24, marginBottom: 12 },
   sectionHeaderRow:{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 12 },
   sectionHeaderTap:{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
-  addBtn:       { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  // Neutral chrome, matching the circular buttons on the trainer hub — a soft
+  // drop shadow rather than the ACCT glow reserved for primary green actions.
+  addBtn:       { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   sentInner:    { padding: 14, gap: 10 },
   sentTopRow:   { flexDirection: "row", alignItems: "center", gap: 12 },
   commentBox:   { paddingTop: 10, borderTopWidth: 1, gap: 6 },

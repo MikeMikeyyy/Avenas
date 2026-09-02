@@ -9,7 +9,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 
 import FadeScreen from "../../components/FadeScreen";
@@ -63,15 +62,9 @@ export default function CoachesScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -81,15 +74,9 @@ export default function CoachesScreen() {
         accessibilityLabel="Add or remove a trainer"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.plusBtn}>
-            <Ionicons name="add" size={24} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.plusBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="add" size={24} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.plusBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="add" size={24} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       <ScrollView

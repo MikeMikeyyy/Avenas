@@ -9,7 +9,6 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT } from "../constants/theme";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
@@ -731,15 +730,9 @@ export default function ProgramsScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
@@ -787,7 +780,7 @@ export default function ProgramsScreen() {
         {/* Active program */}
         {activeProgram !== null && (
           <>
-            <Text style={[styles.sectionLabel, { color: t.ts }]}>ACTIVE</Text>
+            <Text style={[styles.sectionLabel, { color: t.tp }]}>Active</Text>
             <View onLayout={e => { cardOffsets.current[activeProgram.id] = e.nativeEvent.layout.y; }}>
               <ActiveProgramCard
                 program={activeProgram}
@@ -800,11 +793,11 @@ export default function ProgramsScreen() {
 
         {/* All programs */}
         <View style={[styles.rowBetween, { marginBottom: 12 }]}>
-          <Text style={[styles.sectionLabel, { color: t.ts, marginBottom: 0 }]}>ALL PROGRAMS</Text>
+          <Text style={[styles.sectionLabel, { color: t.tp, marginBottom: 0 }]}>All Programs</Text>
           <BounceButton onPress={() => router.navigate("/new-program")} accessibilityLabel="Create new program" accessibilityRole="button">
-            <View style={styles.newProgramBtn}>
-              <Ionicons name="add" size={14} color="#fff" />
-              <Text style={styles.newProgramBtnText}>New</Text>
+            <View style={[styles.newProgramBtn, { backgroundColor: t.ctrl }]}>
+              <Ionicons name="add" size={14} color={t.tp} />
+              <Text style={[styles.newProgramBtnText, { color: t.tp }]}>New</Text>
             </View>
           </BounceButton>
         </View>
@@ -860,7 +853,7 @@ const styles = StyleSheet.create({
   topGradient:        { position: "absolute", left: 0, right: 0, zIndex: 5 },
   backBtn:            { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   header:             { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
-  screenTitle:        { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1 },
+  screenTitle:        { fontFamily: FontFamily.bold, fontSize: 20, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1 },
 
   statsCard:          { marginBottom: 24, borderRadius: 20 },
   statsRow:           { flexDirection: "row" },
@@ -870,7 +863,10 @@ const styles = StyleSheet.create({
   statValue:          { fontFamily: FontFamily.bold, fontSize: 22 },
   statLabel:          { fontFamily: FontFamily.regular, fontSize: 14 },
 
-  sectionLabel:       { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 12 },
+  // Section headings, matching the trainer hub's ("My Clients", "Groups"):
+  // bold 18 in primary text. They were 13px uppercase in secondary grey, which
+  // read as a caption rather than a heading.
+  sectionLabel:       { fontFamily: FontFamily.bold, fontSize: 18, marginBottom: 12 },
 
   activeProgramCard:  { marginBottom: 20, borderRadius: 20 },
   activeProgramInner: { padding: 20, gap: 14 },
@@ -899,7 +895,9 @@ const styles = StyleSheet.create({
   metaRow:            { flexDirection: "row", alignItems: "center", gap: 6 },
   metaDot:            { width: 3, height: 3, borderRadius: 1.5, backgroundColor: "#8896A7" },
   metaText:           { fontFamily: FontFamily.regular, fontSize: 13 },
-  newProgramBtn:      { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: ACCT, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
+  // Neutral chrome (background comes from t.ctrl inline) — a soft drop shadow
+  // rather than the ACCT glow reserved for primary green actions.
+  newProgramBtn:      { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   newProgramBtnText:  { fontFamily: FontFamily.semibold, fontSize: 12, color: "#fff" },
   cardActions:        { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 0 },
   deleteBtnText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#E53935", letterSpacing: 0.2 },

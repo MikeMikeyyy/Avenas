@@ -23,7 +23,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -708,15 +707,9 @@ export default function WorkoutDetailScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.navBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       {/* Action buttons */}
@@ -724,15 +717,9 @@ export default function WorkoutDetailScreen() {
         {isEditing ? (
           <>
             <TouchableOpacity onPress={handleCancel} activeOpacity={0.8}>
-              {isGlassEffectAPIAvailable() ? (
-                <GlassView glassEffectStyle="regular" style={styles.navBtn}>
-                  <Ionicons name="close" size={22} color={t.tp} />
-                </GlassView>
-              ) : (
-                <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-                  <Ionicons name="close" size={22} color={t.tp} />
-                </View>
-              )}
+              <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
+                <Ionicons name="close" size={22} color={t.tp} />
+              </View>
             </TouchableOpacity>
             <TouchableOpacity onPress={handleSave} activeOpacity={0.8} style={{ shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }}>
               <View style={[styles.navBtn, { backgroundColor: ACCT }]}>
@@ -743,26 +730,14 @@ export default function WorkoutDetailScreen() {
         ) : (
           <>
             <TouchableOpacity onPress={() => setIsEditing(true)} activeOpacity={0.8}>
-              {isGlassEffectAPIAvailable() ? (
-                <GlassView glassEffectStyle="regular" style={styles.navBtn}>
-                  <Ionicons name="create-outline" size={20} color={t.tp} />
-                </GlassView>
-              ) : (
-                <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-                  <Ionicons name="create-outline" size={20} color={t.tp} />
-                </View>
-              )}
+              <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
+                <Ionicons name="create-outline" size={20} color={t.tp} />
+              </View>
             </TouchableOpacity>
             <TouchableOpacity onPress={handleDelete} activeOpacity={0.8}>
-              {isGlassEffectAPIAvailable() ? (
-                <GlassView glassEffectStyle="regular" style={styles.navBtn}>
-                  <TrashIcon size={18} color={t.tp} />
-                </GlassView>
-              ) : (
-                <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-                  <TrashIcon size={18} color={t.tp} />
-                </View>
-              )}
+              <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
+                <TrashIcon size={18} color={t.tp} />
+              </View>
             </TouchableOpacity>
           </>
         )}

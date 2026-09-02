@@ -53,6 +53,13 @@ export const COACHES_KEY = "@avenas/pt/coaches";
 // underneath the derived list.
 export const OTHER_TRAINERS_KEY = "@avenas/gym/other_trainers";
 
+// Connected TRAINERS this account has also taken on as a client — a uuid[].
+// Connecting alone never does this (utils/roster.ts routes a PT connection to
+// My Trainers), so coaching a fellow trainer is an explicit opt-in recorded
+// here. Local-only and never synced: it's how THIS account chooses to file a
+// connection, and the other side has their own independent view of it.
+export const TRAINER_CLIENTS_KEY = "@avenas/pt/trainer_clients";
+
 export type Client = {
   id: string;
   name: string;
@@ -481,6 +488,25 @@ export async function removeOtherTrainer(id: string): Promise<void> {
   await setJSON(OTHER_TRAINERS_KEY, existing.filter(p => p.id !== id));
 }
 
+/** Ids of connected trainers this account also coaches. See TRAINER_CLIENTS_KEY. */
+export async function loadTrainerClientIds(): Promise<Set<string>> {
+  return new Set(await getJSON<string[]>(TRAINER_CLIENTS_KEY, []));
+}
+
+/** Take a connected trainer on as a client (idempotent). */
+export async function addTrainerAsClient(id: string): Promise<void> {
+  const ids = await getJSON<string[]>(TRAINER_CLIENTS_KEY, []);
+  if (ids.includes(id)) return;
+  await setJSON(TRAINER_CLIENTS_KEY, [...ids, id]);
+}
+
+/** Stop coaching a connected trainer. The CONNECTION is untouched — they stay
+ *  in My Trainers, you just no longer treat them as one of your clients. */
+export async function removeTrainerAsClient(id: string): Promise<void> {
+  const ids = await getJSON<string[]>(TRAINER_CLIENTS_KEY, []);
+  await setJSON(TRAINER_CLIENTS_KEY, ids.filter(x => x !== id));
+}
+
 /** Legacy/mock entries only — read + delete. Nothing writes new ones: the
  *  trainers who coach a trainer are derived from live connections in
  *  utils/roster.ts, which merges whatever is still stored here underneath. */
@@ -757,6 +783,7 @@ export async function clearTrainerData(): Promise<void> {
     SENT_PROGRAMS_KEY,
     COACHES_KEY,
     OTHER_TRAINERS_KEY,
+    TRAINER_CLIENTS_KEY,
     ...clientData,
   ]);
 }

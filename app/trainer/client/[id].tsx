@@ -8,7 +8,6 @@ import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 
 import NeuCard from "../../../components/NeuCard";
 import BounceButton from "../../../components/BounceButton";
@@ -299,15 +298,9 @@ export default function ClientDetailScreen() {
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-          {isGlassEffectAPIAvailable() ? (
-            <GlassView glassEffectStyle="regular" style={styles.iconBtn}>
-              <Ionicons name="chevron-back" size={22} color={t.tp} />
-            </GlassView>
-          ) : (
-            <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name="chevron-back" size={22} color={t.tp} />
-            </View>
-          )}
+          <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
+            <Ionicons name="chevron-back" size={22} color={t.tp} />
+          </View>
         </TouchableOpacity>
 
         <View style={styles.headerCenter}>
@@ -323,15 +316,9 @@ export default function ClientDetailScreen() {
         </View>
 
         <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Client options" accessibilityRole="button">
-          {isGlassEffectAPIAvailable() ? (
-            <GlassView glassEffectStyle="regular" style={styles.iconBtn}>
-              <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
-            </GlassView>
-          ) : (
-            <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
-            </View>
-          )}
+          <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
+            <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+          </View>
         </TouchableOpacity>
 
         <TouchableOpacity onPress={openChat} activeOpacity={0.8} accessibilityLabel="Chat with client" accessibilityRole="button">

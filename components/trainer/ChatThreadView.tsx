@@ -21,7 +21,6 @@ import {
 import Animated, { useAnimatedStyle, interpolate, Extrapolation, ZoomIn, ZoomOut } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -192,20 +191,13 @@ export default function ChatThreadView<T extends ThreadMessage>({
               <Text style={[styles.emptyText, { color: t.ts }]}>{emptyText}</Text>
             </View>
           )}
-          {/* Jump back to the latest message once scrolled into history.
-              Scale-only entrance — opacity on a GlassView ancestor is not allowed. */}
+          {/* Jump back to the latest message once scrolled into history. */}
           {showJump && (
             <Animated.View entering={ZoomIn.duration(180)} exiting={ZoomOut.duration(140)} style={styles.jumpWrap}>
               <TouchableOpacity onPress={jumpToLatest} activeOpacity={0.8} accessibilityLabel="Scroll to latest message" accessibilityRole="button">
-                {isGlassEffectAPIAvailable() ? (
-                  <GlassView glassEffectStyle="regular" style={styles.jumpBtn}>
-                    <Ionicons name="chevron-down" size={22} color={t.tp} />
-                  </GlassView>
-                ) : (
-                  <View style={[styles.jumpBtn, styles.jumpBtnFallback, { backgroundColor: t.ctrl }]}>
-                    <Ionicons name="chevron-down" size={22} color={t.tp} />
-                  </View>
-                )}
+                <View style={[styles.jumpBtn, styles.jumpBtnFallback, { backgroundColor: t.ctrl }]}>
+                  <Ionicons name="chevron-down" size={22} color={t.tp} />
+                </View>
               </TouchableOpacity>
             </Animated.View>
           )}

@@ -33,6 +33,7 @@ import {
   loadClients,
   loadCoaches,
   loadOtherTrainers,
+  loadTrainerClientIds,
   makeInitials,
   saveAssignedPT,
   type AssignedPT,
@@ -91,41 +92,57 @@ const isStaleCloudEntry = (id: string, live: LiveConnections): boolean =>
   live !== null && isCloudContactId(id) && !live.ids.has(id);
 
 export type TrainerRoster = {
-  /** People this trainer coaches. */
+  /** People this trainer coaches. Includes fellow trainers they've explicitly
+   *  taken on as a client, flagged `isTrainer` so the UI can badge them. */
   clients: Client[];
-  /** Trainers who coach THIS trainer — the "My Trainers" page. */
+  /** Trainers who coach THIS trainer — the "My Trainers" page. A trainer can
+   *  appear in BOTH lists: they coach you and you coach them. */
   trainers: AssignedPT[];
+  /** Which of `trainers` are also clients, so the UI can show the right toggle. */
+  trainerClientIds: Set<string>;
 };
 
 /** The trainer-side roster, split by the counterpart's account type. */
 export async function resolveTrainerRoster(): Promise<TrainerRoster> {
-  const [localClients, localTrainers, { live, blocked }] = await Promise.all([
+  const [localClients, localTrainers, trainerClientIds, { live, blocked }] = await Promise.all([
     loadClients(),
     loadCoaches(),
+    loadTrainerClientIds(),
     fetchLive(),
   ]);
 
-  const liveTrainers = (live?.accepted ?? []).filter(c => c.accountType === "pt").map(toTrainer);
+  const acceptedTrainers = (live?.accepted ?? []).filter(c => c.accountType === "pt");
+  const liveTrainers = acceptedTrainers.map(toTrainer);
   const liveClients = (live?.accepted ?? []).filter(c => c.accountType !== "pt").map(toClient);
   const trainerIds = new Set(liveTrainers.map(t => t.id));
   const clientIds = new Set(liveClients.map(c => c.id));
+
+  // Connected trainers the user has opted to coach. Flagged isTrainer so cards
+  // and pickers can badge them, and so removing them later is distinguishable
+  // from removing an ordinary client.
+  const trainersAsClients: Client[] = acceptedTrainers
+    .filter(c => trainerClientIds.has(c.otherId))
+    .map(c => ({ ...toClient(c), isTrainer: true }));
+  const trainerClientSet = new Set(trainersAsClients.map(c => c.id));
 
   const keepLocal = (id: string, takenBy: Set<string>) =>
     !takenBy.has(id) && !blocked.has(id) && !isStaleCloudEntry(id, live);
 
   return {
-    // A connected trainer is never auto-listed as a client, even when a stale
-    // local entry for them survives (older builds persisted the merged roster
-    // straight back into CLIENTS_KEY). Coaching a fellow trainer is a
-    // deliberate action, not a side effect of connecting.
+    // Connecting alone never makes a trainer a client — that stays an explicit
+    // opt-in (addTrainerAsClient), which is what trainersAsClients carries.
+    // Local entries are still filtered against trainerIds so a stale record
+    // from an older build can't reinstate one behind the user's back.
     clients: [
       ...liveClients,
+      ...trainersAsClients,
       ...localClients.filter(c => keepLocal(c.id, clientIds) && !trainerIds.has(c.id)),
     ],
     trainers: [
       ...liveTrainers,
       ...localTrainers.filter(t => keepLocal(t.id, trainerIds)),
     ],
+    trainerClientIds: trainerClientSet,
   };
 }
 

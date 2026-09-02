@@ -19,7 +19,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -708,15 +707,9 @@ export default function JournalScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
 
@@ -746,11 +739,11 @@ export default function JournalScreen() {
             {activeProgram && (
               <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Active Program</Text>
             )}
-            <BounceButton onPress={() => router.navigate("/program-history")}>
-              <NeuCard dark={isDark} radius={20} innerStyle={styles.allProgramsBtnInner}>
+            <BounceButton onPress={() => router.navigate("/program-history")} accessibilityLabel="View all programs" accessibilityRole="button">
+              <View style={[styles.allProgramsBtn, { backgroundColor: t.ctrl }]}>
                 <Text style={[styles.allProgramsText, { color: t.tp }]}>All Programs</Text>
                 <Ionicons name="chevron-forward" size={14} color={t.tp} />
-              </NeuCard>
+              </View>
             </BounceButton>
           </View>
           {activeProgram && (
@@ -943,7 +936,9 @@ const styles = StyleSheet.create({
   apDate:           { fontFamily: FontFamily.regular, fontSize: 13, color: TS },
   apProgressRow:    { flexDirection: "row", gap: 4, marginTop: 4 },
   apProgressSeg:    { flex: 1, height: 6, borderRadius: 3 },
-  allProgramsBtnInner: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 7, paddingHorizontal: 14 },
+  // Flat chrome pill (background from t.ctrl inline), matching the "+ New"
+  // button on My Programs rather than the neumorphic card it used to be.
+  allProgramsBtn:      { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 50, paddingVertical: 7, paddingHorizontal: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   allProgramsText:     { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.2 },
 
   emptyCard:    { borderRadius: 24, marginBottom: 20 },

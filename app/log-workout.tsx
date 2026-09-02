@@ -10,7 +10,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import * as Haptics from "expo-haptics";
@@ -1303,15 +1302,9 @@ export default function LogWorkoutScreen() {
         style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
         activeOpacity={0.8}
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={s.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       {/* Time button — top right */}
@@ -1320,15 +1313,9 @@ export default function LogWorkoutScreen() {
         style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
         activeOpacity={0.8}
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={s.backBtn}>
-            <Ionicons name="time-outline" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="time-outline" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="time-outline" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: t.bg }}>

@@ -1,9 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
+  TextInput,
   TouchableOpacity,
 } from "react-native";
 import { BlurView } from "expo-blur";
@@ -11,7 +12,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
@@ -25,7 +25,6 @@ import {
   getCurrentWeek,
   type SavedProgram,
 } from "../constants/programs";
-import { parseStoredDate } from "../utils/dates";
 import { useTheme } from "../contexts/ThemeContext";
 
 
@@ -52,6 +51,8 @@ export default function ProgramHistoryScreen() {
   const insets = useSafeAreaInsets();
 
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
   useFocusEffect(
     useCallback(() => {
@@ -61,14 +62,38 @@ export default function ProgramHistoryScreen() {
     }, [])
   );
 
-  const sorted = [...programs].sort((a, b) => {
-    if (a.status === "active") return -1;
-    if (b.status === "active") return 1;
-    const bd = parseStoredDate(b.startDate);
-    const ad = parseStoredDate(a.startDate);
-    if (!bd || !ad) return 0;
-    return bd.getTime() - ad.getTime();
-  });
+  const toggleSearch = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Closing clears the query, so reopening never shows a stale filter.
+    setSearchOpen(open => {
+      if (open) setQuery("");
+      return !open;
+    });
+  }, []);
+
+  const sorted = useMemo(() => {
+    // Creation order comes from the array's position, not the id or startDate:
+    // ids become uuids after a cloud round-trip, and several programs made the
+    // same day share a startDate. Local writes append, and the cloud pull is
+    // ordered by created_at, so a higher index means newer.
+    const byRecency = programs.map((p, createdRank) => ({ p, createdRank }));
+
+    const q = query.trim().toLowerCase();
+    const matched = q
+      ? byRecency.filter(({ p }) => p.name.toLowerCase().includes(q))
+      : byRecency;
+
+    return matched
+      .sort((a, b) => {
+        // The active program stays pinned, searching or not.
+        if (a.p.status === "active") return -1;
+        if (b.p.status === "active") return 1;
+        return b.createdRank - a.createdRank; // newest created first
+      })
+      .map(({ p }) => p);
+  }, [programs, query]);
+
+  const hasQuery = query.trim().length > 0;
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -98,15 +123,22 @@ export default function ProgramHistoryScreen() {
         accessibilityLabel="Go back"
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
+      </TouchableOpacity>
+
+      {/* Search toggle — mirrors the trainer hub's search affordance */}
+      <TouchableOpacity
+        onPress={toggleSearch}
+        style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
+        activeOpacity={0.8}
+        accessibilityLabel={searchOpen ? "Close search" : "Search programs"}
+        accessibilityRole="button"
+      >
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name={searchOpen ? "close" : "search"} size={searchOpen ? 22 : 19} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
       <ScrollView
@@ -120,16 +152,48 @@ export default function ProgramHistoryScreen() {
           <View style={{ width: 66 }} />
         </View>
 
-        {/* Empty state */}
+        {searchOpen && (
+          <View style={[styles.searchBox, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}>
+            <Ionicons name="search" size={16} color={t.ts} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search program names"
+              placeholderTextColor={t.ts}
+              autoFocus
+              autoCorrect={false}
+              returnKeyType="search"
+              style={[styles.searchInput, { color: t.tp }]}
+            />
+            {hasQuery && (
+              <TouchableOpacity onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
+                <Ionicons name="close-circle" size={18} color={t.ts} />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* Empty state — distinguishes "no programs" from "nothing matched" */}
         {sorted.length === 0 && (
-          <NeuCard dark={isDark} style={styles.emptyCard}>
-            <View style={styles.emptyInner}>
-              <Text style={[styles.emptyTitle, { color: t.tp }]}>No programs yet</Text>
-              <Text style={[styles.emptyBody, { color: t.ts }]}>
-                Create a program to start tracking workouts here.
-              </Text>
-            </View>
-          </NeuCard>
+          hasQuery ? (
+            <NeuCard dark={isDark} style={styles.emptyCard}>
+              <View style={styles.emptyInner}>
+                <Text style={[styles.emptyTitle, { color: t.tp }]}>No matches</Text>
+                <Text style={[styles.emptyBody, { color: t.ts }]}>
+                  {`Nothing matched "${query.trim()}". Try a different name.`}
+                </Text>
+              </View>
+            </NeuCard>
+          ) : (
+            <NeuCard dark={isDark} style={styles.emptyCard}>
+              <View style={styles.emptyInner}>
+                <Text style={[styles.emptyTitle, { color: t.tp }]}>No programs yet</Text>
+                <Text style={[styles.emptyBody, { color: t.ts }]}>
+                  Create a program to start tracking workouts here.
+                </Text>
+              </View>
+            </NeuCard>
+          )
         )}
 
         {/* Program cards */}
@@ -202,6 +266,8 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: 20 },
 
   header: { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
+  searchBox: { flexDirection: "row", alignItems: "center", gap: 8, height: 44, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, marginBottom: 16 },
+  searchInput: { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, paddingVertical: 0 },
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textAlign: "center", flex: 1, color: TP },
 
   emptyCard: { borderRadius: 24, marginBottom: 20 },

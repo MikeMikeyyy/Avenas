@@ -22,7 +22,6 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT } from "../constants/theme";
@@ -917,7 +916,7 @@ function Step1({
 
   return (
     <>
-      <Text style={[styles.fieldLabel, { color: t.ts }]}>PROGRAM NAME</Text>
+      <Text style={[styles.sectionHeading, { color: t.tp }]}>Program Name</Text>
       <NeuCard dark={isDark} radius={16} style={styles.inputCard}>
         <TextInput
           style={[styles.textInput, { color: t.tp }]}
@@ -951,7 +950,7 @@ function Step1({
         </View>
       </View>
 
-      <Text style={[styles.fieldLabel, { color: t.ts }]}>CYCLE PATTERN</Text>
+      <Text style={[styles.sectionHeading, { color: t.tp }]}>Cycle Pattern</Text>
       <NeuCard dark={isDark} radius={16} style={styles.cycleCard}>
         <View style={styles.cycleCardInner}>
           {cyclePattern.map((day, i) => {
@@ -2707,15 +2706,9 @@ export default function NewProgramScreen() {
         accessibilityLabel={step === 2 ? "Back to setup" : "Go back"}
         accessibilityRole="button"
       >
-        {isGlassEffectAPIAvailable() ? (
-          <GlassView glassEffectStyle="regular" style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </GlassView>
-        ) : (
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        )}
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
       </TouchableOpacity>
 
 
@@ -3094,7 +3087,7 @@ const styles = StyleSheet.create({
   topGradient:      { position: "absolute", left: 0, right: 0, zIndex: 5 },
   backBtn:          { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   header:           { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 20 },
-  screenTitle:      { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textAlign: "center", flex: 1 },
+  screenTitle:      { fontFamily: FontFamily.bold, fontSize: 20, letterSpacing: 1.5, textAlign: "center", flex: 1 },
 
   // Step indicator
   stepIndicatorWrap: { marginBottom: 28, position: "relative" },
@@ -3106,7 +3099,11 @@ const styles = StyleSheet.create({
   stepDotLabel:      { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.5 },
 
   // Fields
+  // Small caption inside a card (the steppers' "WEEKS" / "DAYS"). Section
+  // headings on this screen use sectionHeading below instead.
   fieldLabel:       { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 10, marginTop: 4 },
+  // Matches the trainer hub's headings ("My Clients", "Groups").
+  sectionHeading:   { fontFamily: FontFamily.bold, fontSize: 18, marginBottom: 10, marginTop: 4 },
   inputCard:        { marginBottom: 20, borderRadius: 16 },
   textInput:        { fontFamily: FontFamily.regular, fontSize: 16, paddingHorizontal: 18, paddingVertical: 16 },
 
