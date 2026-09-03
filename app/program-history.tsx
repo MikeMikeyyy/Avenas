@@ -3,6 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
+  Keyboard,
   ScrollView,
   TextInput,
   TouchableOpacity,
@@ -64,9 +65,13 @@ export default function ProgramHistoryScreen() {
 
   const toggleSearch = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Closing clears the query, so reopening never shows a stale filter.
+    // Closing clears the query AND drops the keyboard together, so the X never
+    // leaves one of the two behind. Reopening shows no stale filter.
     setSearchOpen(open => {
-      if (open) setQuery("");
+      if (open) {
+        setQuery("");
+        Keyboard.dismiss();
+      }
       return !open;
     });
   }, []);
@@ -143,6 +148,9 @@ export default function ProgramHistoryScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
+        // The keyboard would otherwise eat the first tap on the clear button and
+        // on any program card while the search field is focused.
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
       >
         {/* Page header */}

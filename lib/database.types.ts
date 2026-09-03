@@ -82,6 +82,9 @@ export type GroupMemberRow = {
   group_id: string;
   user_id: string;
   added_at: string;
+  /** Owner-only writable (migration 0022). The OWNER is not represented here —
+   *  they're groups.owner_id. */
+  role: "member" | "trainer";
 };
 
 export type GroupMessageRow = {
@@ -107,6 +110,7 @@ export type GroupMemberWithProfile = {
   name: string | null;
   avatar_url: string | null;
   is_owner: boolean;
+  role: "member" | "trainer";
 };
 
 export type ProgramRow = {

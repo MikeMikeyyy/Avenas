@@ -60,6 +60,20 @@ export const ACCT_DEEP = "#0c9f6e";
 // Destructive actions (block, delete). Import this, never hardcode a red literal.
 export const DANGER = "#E5484D";
 
+// ─── Favourites ───────────────────────────────────────────────────────────────
+// The star on a pinned group. Warm gold, distinct from the yellow-orange
+// WARMUP_ORANGE and the deeper PAUSED_ORANGE so the three never read as the
+// same state.
+export const GOLD = "#FFC24B";
+
+// ─── Group roles ──────────────────────────────────────────────────────────────
+// Badges beside a member's name on a group page. The OWNER keeps the brand
+// green (they created the group); trainers and members get their own hues so
+// the three are tellable apart at a glance, in both themes.
+export const ROLE_OWNER   = ACCT;
+export const ROLE_TRAINER = "#A78BFA";  // soft violet
+export const ROLE_MEMBER  = "#60A5FA";  // soft blue
+
 // ─── Paused ───────────────────────────────────────────────────────────────────
 // A program on hold: the "Paused" badge and the Pause action. Deliberately a
 // deeper orange than the bright yellow-orange WARMUP_ORANGE (#ffbf0f) that

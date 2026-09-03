@@ -26,7 +26,7 @@ import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, GOLD } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   appendSharedPrograms,
@@ -47,6 +47,7 @@ import {
 import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { getJSON } from "../../utils/storage";
+import { loadFavouriteGroupIds, sortByFavourite } from "../../utils/groupStore";
 import { fetchAllGroupMemberships, fetchMyGroups } from "../../lib/groups";
 import { getMyUid } from "../../lib/chat";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
@@ -85,6 +86,7 @@ export default function PTHome() {
   const [sharedOut, setSharedOut] = useState<SharedProgram[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupMemberships, setGroupMemberships] = useState<Record<string, string[]>>({});
+  const [favourites, setFavourites] = useState<Set<string>>(new Set());
   const [kbHeight, setKbHeight] = useState(0);
   // Live-ish presence for connected clients + the Connect button badge count.
   // Disconnecting a real connection lives on the Connect screen (app/connect.tsx).
@@ -166,13 +168,18 @@ export default function PTHome() {
       // send flow can offer "everyone in this group" without a second load.
       let groupList: Group[] = [];
       let memberships: Record<string, string[]> = {};
+      let favIds = new Set<string>();
       try {
+        favIds = await loadFavouriteGroupIds();
         const uid = await getMyUid();
         if (uid) {
-          [groupList, memberships] = await Promise.all([
+          const [gs, ms] = await Promise.all([
             fetchMyGroups(uid),
             fetchAllGroupMemberships(uid),
           ]);
+          // Starred groups pinned above the rest, newest-first within each half.
+          groupList = sortByFavourite(gs, favIds);
+          memberships = ms;
         }
       } catch (e) {
         if (__DEV__) console.warn("[avenas] load groups", e);
@@ -195,6 +202,7 @@ export default function PTHome() {
         setActiveProgramByClient(activeMap);
         setGroups(groupList);
         setGroupMemberships(memberships);
+        setFavourites(favIds);
       }
     })();
     return () => { cancelled = true; };
@@ -512,6 +520,9 @@ export default function PTHome() {
                     {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
                   </Text>
                 </View>
+                {/* Display only — favouriting happens in the group's own
+                    options menu, so this row has a single tap target. */}
+                {favourites.has(g.id) && <Ionicons name="star" size={16} color={GOLD} />}
                 <Ionicons name="chevron-forward" size={16} color={t.ts} />
               </TouchableOpacity>
             ))}

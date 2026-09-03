@@ -19,29 +19,27 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
-import FadeScreen from "../../../components/FadeScreen";
-import ChatBubble from "../../../components/trainer/ChatBubble";
-import ChatThreadView from "../../../components/trainer/ChatThreadView";
-import SimpleSheet from "../../../components/trainer/SimpleSheet";
-import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
-import PeopleIcon from "../../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constants/theme";
-import { useTheme } from "../../../contexts/ThemeContext";
+import FadeScreen from "../../../../components/FadeScreen";
+import ChatBubble from "../../../../components/trainer/ChatBubble";
+import ChatThreadView from "../../../../components/trainer/ChatThreadView";
+import SimpleSheet from "../../../../components/trainer/SimpleSheet";
+import ReportReasonSheet from "../../../../components/trainer/ReportReasonSheet";
+import PeopleIcon from "../../../../components/icons/PeopleIcon";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../../constants/theme";
+import { useTheme } from "../../../../contexts/ThemeContext";
 import {
-  deleteGroup,
   deleteGroupMessage,
   fetchGroup,
   fetchGroupMembers,
   fetchGroupThread,
-  leaveGroup,
   markGroupRead,
   sendGroupMessage,
   subscribeToGroup,
-} from "../../../lib/groups";
-import { getMyUid } from "../../../lib/chat";
-import { loadHiddenMessageIds, loadBlockedIds, reportPerson, reportMessage } from "../../../utils/moderation";
-import type { Group, GroupMember, GroupMessage } from "../../../constants/groups";
-import type { ReportReason } from "../../../constants/chat";
+} from "../../../../lib/groups";
+import { getMyUid } from "../../../../lib/chat";
+import { loadHiddenMessageIds, loadBlockedIds, reportPerson, reportMessage } from "../../../../utils/moderation";
+import type { Group, GroupMember, GroupMessage } from "../../../../constants/groups";
+import type { ReportReason } from "../../../../constants/chat";
 
 export default function GroupThreadScreen() {
   const router = useRouter();
@@ -156,49 +154,9 @@ export default function GroupThreadScreen() {
     );
   };
 
-  const onLeave = () => {
+  const openGroupPage = () => {
     setMenuOpen(false);
-    Alert.alert(
-      `Leave ${displayName}?`,
-      "You'll stop receiving messages from this group. The trainer can add you back later.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Leave", style: "destructive", onPress: async () => {
-          try {
-            const uid = await getMyUid();
-            if (!uid) throw new Error("not signed in");
-            await leaveGroup(uid, groupId);
-            router.back();
-          } catch (e) {
-            Alert.alert("Couldn't leave", e instanceof Error ? e.message : "Check your connection and try again.");
-          }
-        } },
-      ],
-    );
-  };
-
-  const onDelete = () => {
-    setMenuOpen(false);
-    Alert.alert(
-      `Delete ${displayName}?`,
-      "The group and its messages are removed for everyone. Programs you've already sent stay in your clients' libraries.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Delete", style: "destructive", onPress: async () => {
-          try {
-            await deleteGroup(groupId);
-            router.back();
-          } catch (e) {
-            Alert.alert("Couldn't delete group", e instanceof Error ? e.message : "Check your connection and try again.");
-          }
-        } },
-      ],
-    );
-  };
-
-  const openManage = () => {
-    setMenuOpen(false);
-    router.navigate({ pathname: "/trainer/group-edit", params: { id: groupId } });
+    router.navigate({ pathname: "/trainer/group/[id]", params: { id: groupId, name: displayName } });
   };
 
   const memberLabel = useMemo(() => {
@@ -248,25 +206,15 @@ export default function GroupThreadScreen() {
 
       <SimpleSheet visible={menuOpen} onClose={() => setMenuOpen(false)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
+        {/* Managing members, deleting and leaving live on the group's page, so
+            there's one place that owns them. From here the menu just gets you
+            there — which matters when you arrived from Messages, where Back
+            returns to the conversation list rather than the group. */}
         <View style={styles.menu}>
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={openManage} accessibilityRole="button" accessibilityLabel="View members">
+          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={openGroupPage} accessibilityRole="button" accessibilityLabel="Open group page">
             <Ionicons name="people-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>
-              {group?.isOwner ? "Manage members" : "View members"}
-            </Text>
+            <Text style={[styles.menuText, { color: t.tp }]}>Group page</Text>
           </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          {group?.isOwner ? (
-            <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onDelete} accessibilityRole="button" accessibilityLabel="Delete group">
-              <Ionicons name="trash-outline" size={20} color={DANGER} />
-              <Text style={[styles.menuText, { color: DANGER }]}>Delete group</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onLeave} accessibilityRole="button" accessibilityLabel="Leave group">
-              <Ionicons name="exit-outline" size={20} color={DANGER} />
-              <Text style={[styles.menuText, { color: DANGER }]}>Leave group</Text>
-            </TouchableOpacity>
-          )}
         </View>
         <Text style={[styles.menuHint, { color: t.ts }]}>
           Press and hold any message to report it.

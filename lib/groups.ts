@@ -71,7 +71,25 @@ export async function fetchGroupMembers(groupId: string): Promise<GroupMember[]>
     initials: makeInitials(r.name || "User"),
     photoUri: r.avatar_url ?? undefined,
     isOwner: r.is_owner,
+    // Ownership outranks the stored role: the owner's own row still says
+    // "member", because their standing comes from groups.owner_id.
+    role: r.is_owner ? "owner" : r.role === "trainer" ? "trainer" : "member",
   }));
+}
+
+/** Promote a member to trainer, or demote back. Owner only — enforced in the
+ *  RPC, which raises rather than silently no-opping for anyone else. */
+export async function setGroupMemberRole(
+  groupId: string,
+  userId: string,
+  role: "member" | "trainer",
+): Promise<void> {
+  const { error } = await supabase.rpc("set_group_member_role", {
+    p_group: groupId,
+    p_user: userId,
+    p_role: role,
+  });
+  if (error) throw new Error(error.message);
 }
 
 /** groupId → member ids, for every group the caller belongs to. One round trip

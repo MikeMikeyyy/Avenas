@@ -7,7 +7,16 @@ import { useTheme } from "../../contexts/ThemeContext";
 import type { Client } from "../../utils/trainerStore";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
 
-export default function ClientCard({ client, activeProgramName, onPress }: { client: Client; activeProgramName?: string; onPress: () => void }) {
+export default function ClientCard({ client, activeProgramName, badge, badgeColor = ACCT, onPress }: {
+  client: Client;
+  activeProgramName?: string;
+  /** Extra tag beside the name, e.g. a group role. Rendered in addition to the
+   *  automatic TRAINER tag, not instead of it. */
+  badge?: string;
+  /** Tint for `badge`. Defaults to the brand accent. */
+  badgeColor?: string;
+  onPress: () => void;
+}) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
@@ -31,6 +40,11 @@ export default function ClientCard({ client, activeProgramName, onPress }: { cli
                   <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
                 </View>
               )}
+              {badge ? (
+                <View style={[styles.trainerTag, { backgroundColor: `${badgeColor}22` }]}>
+                  <Text style={[styles.trainerTagText, { color: badgeColor }]}>{badge}</Text>
+                </View>
+              ) : null}
             </View>
             {activeProgramName ? (
               <View style={styles.programRow}>

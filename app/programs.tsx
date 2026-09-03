@@ -19,7 +19,7 @@ import BounceButton from "../components/BounceButton";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import { formatStoredDate, parseStoredDate } from "../utils/dates";
-import { dayNameAt, pauseProgram, resumeDayOptions, resumeProgram, type ResumeMode } from "../utils/programPause";
+import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
@@ -597,33 +597,11 @@ export default function ProgramsScreen() {
     );
   };
 
-  const commitResume = async (program: SavedProgram, mode: ResumeMode) => {
-    const updated = resumeProgram(programs, program.id, mode);
-    setPrograms(updated);
-    await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
-    scheduleCloudPush();
-  };
-
-  // Resuming only asks which day when the two answers actually differ — pause
-  // and resume on the same day, or on days that land on the same workout, and
-  // there's nothing worth interrupting for.
+  // The prompt, the day maths and the write all live in resumeWithPrompt, so
+  // this and the Workout tab's paused screen can't offer different behaviour.
   const handleResumeProgram = async (program: SavedProgram) => {
-    const { today, whereILeftOff } = resumeDayOptions(program);
-    if (today === whereILeftOff) {
-      await commitResume(program, "whereILeftOff");
-      return;
-    }
-    const todayName = dayNameAt(program, today) ?? "Rest";
-    const leftOffName = dayNameAt(program, whereILeftOff) ?? "Rest";
-    Alert.alert(
-      "Resume Program",
-      `You paused on ${leftOffName}. Where should the cycle pick up?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: `Today (${todayName})`, onPress: () => { void commitResume(program, "today"); } },
-        { text: `Carry on (${leftOffName})`, onPress: () => { void commitResume(program, "whereILeftOff"); } },
-      ],
-    );
+    const updated = await resumeWithPrompt(program.id);
+    if (updated) setPrograms(updated);
   };
 
   const handleCompleteProgram = () => {

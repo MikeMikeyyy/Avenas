@@ -166,7 +166,9 @@ export default function MessagesScreen() {
   const openThread = (r: Row) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (r.kind === "group") {
-      router.navigate({ pathname: "/trainer/group/[id]", params: { id: groupIdFromKey(r.id), name: r.name } });
+      // Straight to the conversation, not the group page — this screen is a
+      // list of threads, so a row is a thread.
+      router.navigate({ pathname: "/trainer/group/[id]/chat", params: { id: groupIdFromKey(r.id), name: r.name } });
       return;
     }
     router.navigate({ pathname: "/trainer/chat/[id]", params: { id: r.id, name: r.name, initials: r.initials, photo: r.photoUri ?? "" } });

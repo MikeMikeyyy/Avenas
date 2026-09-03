@@ -35,6 +35,7 @@ import type { LiveActivityTickAction } from "../../modules/avenas-live-activity"
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
 import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, normalizeExerciseName, type DayOverride } from "../../utils/workout";
+import { resumeWithPrompt } from "../../utils/programPause";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { useDayRollover } from "../../hooks/useDayRollover";
@@ -2453,9 +2454,12 @@ export default function WorkoutScreen() {
           <Text style={[styles.emptySub, { color: t.ts }]}>
             Start a custom workout to log exercises without a program.
           </Text>
-          <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 8 }}>
-            <View style={styles.emptyBtn}>
-              <Text style={styles.emptyBtnText}>Custom Workout</Text>
+          {/* Same pill as the paused screen's pair, but green — it's the only
+              action here, so it's the primary one. */}
+          <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 8 }} accessibilityLabel="Start a custom workout" accessibilityRole="button">
+            <View style={[styles.pausedSecondaryBtn, styles.pausedPrimaryBtn]}>
+              <DumbbellIcon size={17} color="#fff" />
+              <Text style={[styles.pausedSecondaryText, { color: "#fff" }]}>Custom Workout</Text>
             </View>
           </BounceButton>
         </View>
@@ -2490,9 +2494,24 @@ export default function WorkoutScreen() {
           <Text style={[styles.emptySub, { color: t.ts }]}>
             {`"${activeProgram.name}" is on hold, so nothing is scheduled and the weeks aren't counting. Resume it whenever you're ready.`}
           </Text>
-          <BounceButton onPress={() => router.navigate("/programs")} style={{ marginTop: 8 }}>
-            <View style={styles.emptyBtn}>
-              <Text style={styles.emptyBtnText}>Resume Program</Text>
+          {/* Actually resumes, then shows the result on My Programs. Goes
+              through the same resumeWithPrompt as the actions sheet there, so
+              the day choice is offered identically from both entry points. */}
+          <BounceButton
+            onPress={async () => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              const updated = await resumeWithPrompt(activeProgram.id);
+              // Cancelled at the prompt: stay put rather than navigating away
+              // from a program that is still paused.
+              if (updated) router.navigate("/programs");
+            }}
+            style={{ marginTop: 8 }}
+            accessibilityLabel="Resume program"
+            accessibilityRole="button"
+          >
+            <View style={[styles.pausedSecondaryBtn, styles.pausedPrimaryBtn]}>
+              <Ionicons name="play" size={16} color="#fff" />
+              <Text style={[styles.pausedSecondaryText, { color: "#fff" }]}>Resume Program</Text>
             </View>
           </BounceButton>
           <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 12 }} accessibilityLabel="Start a custom workout" accessibilityRole="button">
@@ -3288,11 +3307,12 @@ const styles = StyleSheet.create({
   emptyIconInner: { width: 80, height: 80, alignItems: "center", justifyContent: "center" },
   emptyTitle:     { fontFamily: FontFamily.bold, fontSize: 22, textAlign: "center" },
   emptySub:       { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center", lineHeight: 22 },
-  emptyBtn:       { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, paddingHorizontal: 28, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  emptyBtnText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-  // White chrome pill, matching the rest of the app's neutral buttons. Resume
-  // keeps the green fill above it, so this still reads as the secondary action.
+  // Shared shape for both buttons on the paused screen, so Resume and Custom
+  // Workout are the same pill. Background and shadow come from the variant.
   pausedSecondaryBtn:  { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 50, paddingVertical: 13, paddingHorizontal: 24, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  // Green fill + accent glow, overriding the neutral shadow above so Resume
+  // still reads as the primary action.
+  pausedPrimaryBtn:    { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 10 },
   pausedSecondaryText: { fontFamily: FontFamily.bold, fontSize: 14 },
   // Interval Timer / Stopwatch modal styles now live in components/IntervalTimerModal.tsx.
 });

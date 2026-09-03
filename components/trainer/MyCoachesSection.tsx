@@ -516,7 +516,13 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
           <TouchableOpacity
             style={styles.menuRow}
             activeOpacity={0.8}
-            onPress={() => menuFor && router.navigate({ pathname: "/trainer/chat/[id]", params: { id: menuFor.id, name: menuFor.name, initials: menuFor.initials, photo: menuFor.photoUri ?? "" } })}
+            // Close before navigating: the sheet is a Modal, so leaving it open
+            // parks it on top of the chat screen you just pushed.
+            onPress={() => {
+              const c = menuFor;
+              setMenuFor(null);
+              if (c) router.navigate({ pathname: "/trainer/chat/[id]", params: { id: c.id, name: c.name, initials: c.initials, photo: c.photoUri ?? "" } });
+            }}
             accessibilityRole="button"
             accessibilityLabel={`Message ${menuFor?.name ?? "this trainer"}`}
           >
@@ -552,10 +558,6 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
             <Text style={[styles.menuText, { color: REMOVE_RED }]}>Remove trainer</Text>
           </TouchableOpacity>
         </View>
-        <Text style={[styles.menuHint, { color: t.ts }]}>
-          Adding them as a client lets you put them in groups and send programs to
-          them alongside everyone else. You stay connected either way.
-        </Text>
       </SimpleSheet>
 
       <ProgramPickerSheet
@@ -597,7 +599,6 @@ const styles = StyleSheet.create({
   menuRow:      { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
   menuDivider:  { height: 1, marginHorizontal: 8 },
   menuText:     { fontFamily: FontFamily.semibold, fontSize: 16 },
-  menuHint:     { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, textAlign: "center", paddingHorizontal: 24, paddingTop: 10 },
   coachName:    { fontFamily: FontFamily.bold, fontSize: 16, marginTop: 2 },
   presenceRow:  { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   presenceDot:  { width: 6, height: 6, borderRadius: 3 },

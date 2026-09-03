@@ -22,6 +22,13 @@ export type Group = {
   createdAtISO: string;
 };
 
+/**
+ * Standing inside a group. "owner" is derived from groups.owner_id rather than
+ * stored, so it can never be taken away by a role change; the other two live in
+ * group_members.role (migration 0022).
+ */
+export type GroupRole = "owner" | "trainer" | "member";
+
 /** A member of a group, resolved through get_group_members(). */
 export type GroupMember = {
   id: string;
@@ -29,7 +36,12 @@ export type GroupMember = {
   initials: string;
   photoUri?: string;
   isOwner: boolean;
+  role: GroupRole;
 };
+
+/** Whether this person may send programs to the group. Owner and trainer only —
+ *  mirrors can_coach_in_group(), which is what the database actually enforces. */
+export const canCoachGroup = (role: GroupRole): boolean => role === "owner" || role === "trainer";
 
 /** A message in a group thread. Extends the 1:1 ChatMessage shape with author
  *  identity, which a group needs and a 1:1 thread does not. */
@@ -44,6 +56,15 @@ export type GroupMessage = {
   senderName: string;
   senderPhotoUri?: string;
 };
+
+/**
+ * Group ids this account has starred, as a `string[]`.
+ *
+ * Local-only and never synced: it's a personal ordering preference, and every
+ * member of a group stars it independently. Losing it on a reinstall is a
+ * shrug, which is why it doesn't carry the weight of a synced column.
+ */
+export const GROUP_FAVOURITES_KEY = "@avenas/pt/group_favourites";
 
 /** Prefix that marks a chat-list row / recipient as a GROUP rather than a
  *  person. Group ids and account ids are both uuids, so the id alone can't

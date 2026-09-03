@@ -23,7 +23,9 @@
 // to cancel (2) while keeping (1).
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Alert } from "react-native";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
+import { scheduleCloudPush } from "../lib/syncManager";
 import { formatStoredDate, parseStoredDate, todayYMD, toYMD } from "./dates";
 import { resolveDayIndex } from "./workout";
 
@@ -143,6 +145,50 @@ export function idleDays(program: SavedProgram, workoutDates: string[], today: s
   if (latest) return daysBetween(latest, today);
   const start = parseStoredDate(program.startDate);
   return start ? daysBetween(toYMD(start), today) : 0;
+}
+
+/**
+ * Take a program off hold, asking which day to pick up on when the two answers
+ * differ, then persist. Returns the updated list, or null when the user
+ * cancelled or the program wasn't paused.
+ *
+ * Lives here rather than in a screen because two places resume: the actions
+ * sheet on My Programs and the paused screen on the Workout tab. Duplicating
+ * the prompt would let the two drift, and one of them would eventually stop
+ * offering the day choice.
+ */
+export async function resumeWithPrompt(programId: string): Promise<SavedProgram[] | null> {
+  const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
+  const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
+  const program = programs.find(p => p.id === programId);
+  if (!program?.pausedAt) return null;
+
+  const commit = async (mode: ResumeMode): Promise<SavedProgram[]> => {
+    const updated = resumeProgram(programs, programId, mode);
+    await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    scheduleCloudPush();
+    return updated;
+  };
+
+  const { today, whereILeftOff } = resumeDayOptions(program);
+  // Same day either way (a same-day resume, or two days that land on the same
+  // workout): nothing worth interrupting for.
+  if (today === whereILeftOff) return commit("whereILeftOff");
+
+  const todayName = dayNameAt(program, today) ?? "Rest";
+  const leftOffName = dayNameAt(program, whereILeftOff) ?? "Rest";
+  return new Promise<SavedProgram[] | null>(resolve => {
+    Alert.alert(
+      "Resume Program",
+      `You paused on ${leftOffName}. Where should the cycle pick up?`,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+        { text: `Today (${todayName})`, onPress: () => { void commit("today").then(resolve); } },
+        { text: `Carry on (${leftOffName})`, onPress: () => { void commit("whereILeftOff").then(resolve); } },
+      ],
+      { cancelable: true, onDismiss: () => resolve(null) },
+    );
+  });
 }
 
 /** A week off with nothing logged puts the program on hold by itself. */

@@ -14,6 +14,7 @@ import { getJSON, setJSON } from "./storage";
 import { formatStoredDate } from "./dates";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
+import { GROUP_FAVOURITES_KEY } from "../constants/groups";
 import { ACCOUNT_TYPE_KEY } from "../contexts/AccountTypeContext";
 import { isCloudContactId } from "../lib/chat";
 import {
@@ -784,6 +785,7 @@ export async function clearTrainerData(): Promise<void> {
     COACHES_KEY,
     OTHER_TRAINERS_KEY,
     TRAINER_CLIENTS_KEY,
+    GROUP_FAVOURITES_KEY,
     ...clientData,
   ]);
 }

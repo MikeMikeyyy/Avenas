@@ -13,7 +13,8 @@ import { fetchAllGroupMessages, fetchGroupReads, fetchMyGroups } from "../lib/gr
 import { getMyUid } from "../lib/chat";
 import { countUnreadInThread } from "./chatStore";
 import { loadBlockedIds, loadHiddenMessageIds } from "./moderation";
-import type { Group, GroupMessage } from "../constants/groups";
+import { getJSON, setJSON } from "./storage";
+import { GROUP_FAVOURITES_KEY, type Group, type GroupMessage } from "../constants/groups";
 
 /** A group as the conversations list renders it. */
 export type GroupChatRow = {
@@ -67,4 +68,33 @@ export async function loadGroupRows(): Promise<GroupChatRow[]> {
 /** Total unread across every group — the group half of the Messages badge. */
 export function sumGroupUnread(rows: GroupChatRow[]): number {
   return rows.reduce((n, r) => n + r.unreadCount, 0);
+}
+
+// ─── favourites ──────────────────────────────────────────────────────────────
+
+/** Group ids this account has starred. See GROUP_FAVOURITES_KEY. */
+export async function loadFavouriteGroupIds(): Promise<Set<string>> {
+  return new Set(await getJSON<string[]>(GROUP_FAVOURITES_KEY, []));
+}
+
+/** Star or unstar a group. Returns the new set so callers can update state
+ *  without a second read. */
+export async function toggleFavouriteGroup(groupId: string): Promise<Set<string>> {
+  const ids = await getJSON<string[]>(GROUP_FAVOURITES_KEY, []);
+  const next = ids.includes(groupId) ? ids.filter(id => id !== groupId) : [...ids, groupId];
+  await setJSON(GROUP_FAVOURITES_KEY, next);
+  return new Set(next);
+}
+
+/**
+ * Starred groups first, everything else in the order it arrived.
+ *
+ * A stable partition rather than a sort: `fetchMyGroups` already returns newest
+ * first, and that ordering should survive within each half.
+ */
+export function sortByFavourite<T extends { id: string }>(groups: T[], favourites: Set<string>): T[] {
+  return [
+    ...groups.filter(g => favourites.has(g.id)),
+    ...groups.filter(g => !favourites.has(g.id)),
+  ];
 }
