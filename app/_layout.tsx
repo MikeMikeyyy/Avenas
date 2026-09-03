@@ -18,6 +18,7 @@ import { AuthProvider, useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
+import ForceUpdateGate from "../components/ForceUpdateGate";
 import { flushCloudPush } from "../lib/syncManager";
 import { reconcileAccountType } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
@@ -115,12 +116,16 @@ function AppShell() {
       <StreakProvider>
         <WorkoutTimerProvider>
           <RestTimerProvider>
-            <View style={{ flex: 1, backgroundColor: navBg }}>
-              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
-                <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
-              </Stack>
-              <WorkoutActiveBar />
-            </View>
+            {/* Wraps the navigator, so a blocked build can't reach ANY screen —
+                including via a deep link or a notification tap. */}
+            <ForceUpdateGate>
+              <View style={{ flex: 1, backgroundColor: navBg }}>
+                <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
+                  <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
+                </Stack>
+                <WorkoutActiveBar />
+              </View>
+            </ForceUpdateGate>
           </RestTimerProvider>
         </WorkoutTimerProvider>
       </StreakProvider>
