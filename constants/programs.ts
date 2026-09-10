@@ -58,6 +58,18 @@ export type CompletedWorkout = {
    * Distinguishing "" from undefined is deliberate — see workoutBelongsToProgram.
    */
   programId?: string;
+  /**
+   * Which of the program's cycle days this session was logged against — the
+   * `dayIds` entry of that slot, NOT its name. This is what lets two days that
+   * share a name ("Upper" twice in a cycle) keep separate progress, and what
+   * keeps a session attached to its day after the day is renamed.
+   *   - a string    → that slot, exactly
+   *   - undefined   → a free workout, or a LEGACY record written before this
+   *                   field existed. utils/dayIdMigration.ts backfills what it
+   *                   can; whatever is left falls back to day-name matching
+   *                   (see workoutMatchesDay in utils/progressStats.ts).
+   */
+  dayId?: string;
 };
 
 export type ProgramSet = {
@@ -142,6 +154,56 @@ export type SavedProgram = {
   trainingDays: number;
   cycleDays: number;
   cyclePattern: string[];
+  /**
+   * Stable per-slot ids, parallel to `cyclePattern` (same length, one entry per
+   * slot including Rest days). A day's REAL identity: it survives a rename and
+   * tells two same-named days apart, which `cyclePattern[i]` alone cannot.
+   *
+   * Optional — programs written before this field have none, and `dayIdAt`
+   * (utils/programDays.ts) synthesizes the same deterministic positional id the
+   * one-shot backfill assigns, so the two agree. Reordering the cycle permutes
+   * this array alongside cyclePattern; renaming a day never touches it.
+   */
+  dayIds?: string[];
   workouts: WorkoutMap;
   extraWorkouts?: string[];
+};
+
+/**
+ * One selectable workout day, resolved to a stable identity. Built by
+ * `programDays` / `scopedProgramDays` (utils/programDays.ts, utils/progressStats.ts);
+ * every day-scoped query and every day list should carry one of these rather
+ * than a bare name string.
+ */
+export type ProgramDayRef = {
+  /** Unique across programs — safe as a React key and as a selection identity. */
+  key: string;
+  /** The program's `dayIds` entry for this slot (or its positional fallback).
+   *  `extra:<name>` for a free workout recorded in `extraWorkouts`. */
+  dayId: string;
+  /** Index into `cyclePattern`, -1 for an `extraWorkouts` entry or a historical
+   *  day (one that has logged sessions but no longer exists in the cycle). */
+  index: number;
+  /** Display name — `cyclePattern[index]`. Changes freely; never an identity.
+   *  For a historical day, the name its most recent session was logged under. */
+  label: string;
+  programId: string;
+  programName: string;
+  /** Normalized names of the exercises this day currently programs. Empty for
+   *  an `extraWorkouts` entry and for a historical day — neither has a slot to
+   *  read a prescription from, so nothing on them counts as "swapped out". */
+  programExercises: string[];
+  /** True when this day no longer exists in the program's cycle but still has
+   *  logged sessions — deleted, or forked away by a rename + exercise change
+   *  (see `forkChangedDayIds`). Its sessions are shown as-logged and nothing on
+   *  it is compared against a current prescription. */
+  isHistorical: boolean;
+  /** True for the FIRST day in scope carrying this label. Sessions with no
+   *  `dayId` (legacy / pre-backfill) attach here and nowhere else, so they can
+   *  never be counted twice across same-named days. */
+  absorbsUnidentified: boolean;
+  /** True when another day in scope shares this label, so the UI knows to
+   *  qualify the row (e.g. with the cycle-day number) instead of showing two
+   *  rows that read identically. */
+  duplicateLabel: boolean;
 };

@@ -12,6 +12,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getJSON, setJSON } from "./storage";
 import { formatStoredDate } from "./dates";
+import { forkChangedDayIds, normalizeDayIds } from "./programDays";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 import { GROUP_FAVOURITES_KEY } from "../constants/groups";
@@ -213,6 +214,31 @@ async function fetchCloudRowsSafe(): Promise<{ uid: string; rows: SharedProgramR
 /** Materialise a program snapshot into @avenas/programs. Re-uses (and updates
  *  in place) `priorId` when that program still exists — a re-accept after the
  *  sender edited lands on the same local program. Returns the local id. */
+/**
+ * Day ids for a local program being overwritten by an incoming snapshot.
+ *
+ * The recipient's history points at the LOCAL ids, so those are what survive —
+ * but a day the sender both renamed and re-stocked is a different workout now,
+ * and gets a fresh id so its old sessions stay with the day they were actually
+ * performed on. Same rule the program builder applies to a local edit; the two
+ * write paths must not disagree, or the same change would split the Progress
+ * page one way when you make it and another way when your trainer does.
+ */
+function mergedDayIds(local: SavedProgram, snap: SavedProgram): string[] {
+  return forkChangedDayIds(
+    {
+      cyclePattern: local.cyclePattern,
+      dayIds: normalizeDayIds(local.dayIds, local.cyclePattern.length),
+      workouts: local.workouts ?? {},
+    },
+    {
+      cyclePattern: snap.cyclePattern,
+      dayIds: normalizeDayIds(local.dayIds, snap.cyclePattern.length),
+      workouts: snap.workouts ?? {},
+    },
+  );
+}
+
 async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promise<string> {
   const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
   const existing = priorId ? programs.find(p => p.id === priorId) : undefined;
@@ -224,6 +250,12 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
       trainingDays: snap.trainingDays,
       cycleDays: snap.cycleDays,
       cyclePattern: snap.cyclePattern,
+      // Keep the LOCAL day ids — the recipient's logged sessions point at these,
+      // so adopting the sender's would cut this program's own history loose.
+      // They're then run through the same fork rule a local edit uses, so a day
+      // the sender renamed AND re-stocked splits from its old sessions exactly
+      // as it would if the recipient had made that edit themselves.
+      dayIds: mergedDayIds(p, snap),
       workouts: snap.workouts,
     } : p);
     await setJSON(PROGRAMS_KEY, updated);
@@ -699,6 +731,12 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: st
       trainingDays: snap.trainingDays,
       cycleDays: snap.cycleDays,
       cyclePattern: snap.cyclePattern,
+      // Keep the LOCAL day ids — the recipient's logged sessions point at these,
+      // so adopting the sender's would cut this program's own history loose.
+      // They're then run through the same fork rule a local edit uses, so a day
+      // the sender renamed AND re-stocked splits from its old sessions exactly
+      // as it would if the recipient had made that edit themselves.
+      dayIds: mergedDayIds(p, snap),
       workouts: snap.workouts,
     } : p);
   } else {

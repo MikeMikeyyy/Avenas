@@ -31,11 +31,13 @@ import {
   workoutBelongsToProgram,
   filterByProgramScope,
   programsInScope,
-  uniqueDaysInScope,
+  scopedProgramDays,
+  workoutMatchesDay,
   collectLoggedExercisesForDay,
   sessionCountForDay,
 } from "../utils/progressStats";
-import type { CompletedWorkout, CompletedSet, SavedProgram } from "../constants/programs";
+import { historicalDays, markDayRefLabels, programDays, programDaysWithExtras } from "../utils/programDays";
+import type { CompletedWorkout, CompletedSet, ProgramDayRef, SavedProgram } from "../constants/programs";
 import type { CustomExercise } from "../constants/exercises";
 
 let passed = 0;
@@ -67,6 +69,7 @@ function workout(partial: Partial<CompletedWorkout> & { exercises: CompletedWork
     durationSeconds: partial.durationSeconds ?? 0,
     exercises: partial.exercises,
     ...(partial.programId !== undefined ? { programId: partial.programId } : {}),
+    ...(partial.dayId !== undefined ? { dayId: partial.dayId } : {}),
   };
 }
 function ex(name: string, sets: CompletedSet[], notes = "") {
@@ -349,10 +352,21 @@ if (observesDST) {
   const prs = computePRs(pts, hist, "Plank");
   eq([prs.heaviest, prs.bestSetVolume, prs.bestSessionVolume, prs.oneRepMax], [null, null, null, null], "PR: empty history -> all null");
 }
+// Minimal day ref for the scoping tests below.
+function dayRef(partial: Partial<ProgramDayRef> & { label: string }): ProgramDayRef {
+  return {
+    key: `${partial.programId ?? "pA"}::${partial.dayId ?? "d0"}`,
+    dayId: "d0", index: 0, programId: "pA", programName: "PPL",
+    programExercises: [], isHistorical: false,
+    absorbsUnidentified: true, duplicateLabel: false,
+    ...partial,
+  };
+}
 {
   // Day scoping: the same exercise on two different workout days keeps
-  // separate histories/PRs when dayName is passed (case-insensitive trim),
-  // and merges all days when it is omitted.
+  // separate histories/PRs when a day is passed, and merges all days when it is
+  // omitted. Legacy records (no dayId) still match on the name, trimmed +
+  // case-insensitive.
   const hist = [
     workout({ id: "push1", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", workoutName: "Push", exercises: [
       ex("Lateral Raise", [set("10", "12")]),
@@ -361,14 +375,38 @@ if (observesDST) {
       ex("Lateral Raise", [set("14", "8")]), // heavier than any Push set
     ]}),
   ];
-  const pushPts = collectExerciseHistory(hist, "Lateral Raise", " push ");
+  const push = dayRef({ label: " push ", dayId: "d0" });
+  const arms = dayRef({ label: "Arms", dayId: "d1", index: 1 });
+  const pushPts = collectExerciseHistory(hist, "Lateral Raise", push);
   eq(pushPts.map(p => p.workoutId), ["push1"], "exHistory day-scope: only the matching day's sessions (case-insensitive trim)");
-  const armsPts = collectExerciseHistory(hist, "Lateral Raise", "Arms");
+  const armsPts = collectExerciseHistory(hist, "Lateral Raise", arms);
   eq(armsPts.map(p => p.workoutId), ["arms1"], "exHistory day-scope: the other day sees only its own sessions");
-  eq(collectExerciseHistory(hist, "Lateral Raise").length, 2, "exHistory day-scope: omitted dayName merges all days");
-  const pushPrs = computePRs(pushPts, hist, "Lateral Raise", "Push");
+  eq(collectExerciseHistory(hist, "Lateral Raise").length, 2, "exHistory day-scope: omitted day merges all days");
+  const pushPrs = computePRs(pushPts, hist, "Lateral Raise", push);
   eq(pushPrs.heaviest?.value, 10, "PR day-scope: heaviest ignores the other day's heavier set");
   approx(pushPrs.oneRepMax!.value, 10 * (1 + 12 / 30), "PR day-scope: the 1RM raw-set walk is day-filtered too");
+}
+{
+  // Two days sharing a NAME: the id decides, and a rename doesn't change it.
+  const upperA = dayRef({ label: "Upper A", dayId: "d0", index: 0 });
+  const upperB = dayRef({ label: "Upper B", dayId: "d3", index: 3, absorbsUnidentified: false });
+  const a = workout({ id: "a", programId: "pA", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] });
+  const b = workout({ id: "b", programId: "pA", dayId: "d3", workoutName: "Upper", exercises: [ex("Bench", [set("100", "8")])] });
+  check(workoutMatchesDay(a, upperA) && !workoutMatchesDay(a, upperB), "matchesDay: dayId wins over a stale name");
+  check(workoutMatchesDay(b, upperB) && !workoutMatchesDay(b, upperA), "matchesDay: the second same-named day keeps its own sessions");
+  eq(collectExerciseHistory([a, b], "Bench", upperA).map(p => p.topWeight), [80], "exHistory: same-named days don't pool");
+  eq(collectExerciseHistory([a, b], "Bench", upperB).map(p => p.topWeight), [100], "exHistory: second day sees only its own");
+
+  // Legacy record with no dayId lands on exactly one row, never both.
+  const legacy = workout({ id: "l", programId: "pA", workoutName: "Upper", exercises: [ex("Bench", [set("60", "8")])] });
+  const dupA = dayRef({ label: "Upper", dayId: "d0", index: 0, absorbsUnidentified: true, duplicateLabel: true });
+  const dupB = dayRef({ label: "Upper", dayId: "d3", index: 3, absorbsUnidentified: false, duplicateLabel: true });
+  check(workoutMatchesDay(legacy, dupA), "matchesDay: unidentified record attaches to the absorbing day");
+  check(!workoutMatchesDay(legacy, dupB), "matchesDay: unidentified record is not double counted");
+
+  // Positional ids are only unique within a program, so the guard matters.
+  const otherProgram = dayRef({ label: "Upper A", dayId: "d0", programId: "pB" });
+  check(!workoutMatchesDay(a, otherProgram), "matchesDay: same positional id in another program does not match");
 }
 
 // ── program scope helpers ─────────────────────────────────────────────────────
@@ -414,7 +452,30 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
 }
 {
   const p = makeProgram({ extraWorkouts: ["Conditioning", "conditioning"] }); // dupe case
-  eq(uniqueDaysInScope({ kind: "all" }, [p]), ["Push", "Pull", "Legs", "Conditioning"], "uniqueDaysInScope: dedupe, drop Rest, first-case wins");
+  const days = scopedProgramDays({ kind: "all" }, [p]);
+  // Every SLOT, not every distinct name: the cycle runs Push and Pull twice, so
+  // those are four separate days. extraWorkouts still dedupe by name (they have
+  // no slot to tell them apart).
+  eq(days.map(d => d.label), ["Push", "Pull", "Legs", "Push", "Pull", "Conditioning"], "scopedProgramDays: one row per slot, Rest dropped, extras name-deduped");
+  eq(days.map(d => d.index), [0, 1, 2, 4, 5, -1], "scopedProgramDays: slot index carried, -1 for extras");
+  eq(days.filter(d => d.label === "Push").map(d => d.absorbsUnidentified), [true, false], "scopedProgramDays: only the first same-named day absorbs unidentified sessions");
+  check(days.every(d => d.label !== "Push" || d.duplicateLabel), "scopedProgramDays: repeated labels flagged for the UI");
+  check(new Set(days.map(d => d.key)).size === days.length, "scopedProgramDays: keys are unique");
+}
+{
+  // Renaming a day must not renumber the ids its sessions point at.
+  const before = makeProgram({ dayIds: ["d0", "d1", "d2", "d3", "d4", "d5", "d6"] });
+  const after = { ...before, cyclePattern: ["Upper A", "Pull", "Legs", "Rest", "Upper B", "Pull", "Rest"] };
+  eq(programDays(before).map(d => d.dayId), programDays(after).map(d => d.dayId), "programDays: ids survive a rename");
+  // And a program with no dayIds falls back to the deterministic positional ids.
+  eq(programDays(makeProgram()).map(d => d.dayId), ["d0", "d1", "d2", "d4", "d5"], "programDays: positional fallback for a pre-dayIds program");
+  eq(markDayRefLabels([]).length, 0, "markDayRefLabels: empty list is fine");
+  // Day PICKERS offer the cycle only; free workouts have no slot to schedule.
+  const withExtras = makeProgram({ extraWorkouts: ["Conditioning"] });
+  eq(programDays(withExtras).map(d => d.label), ["Push", "Pull", "Legs", "Push", "Pull"], "programDays: extraWorkouts excluded (pickers offer the cycle)");
+  eq(programDaysWithExtras(withExtras).map(d => d.label).slice(-1), ["Conditioning"], "programDaysWithExtras: extras appended for the Progress list");
+  // A single program's own duplicates are flagged without a scope pass.
+  check(programDays(before).filter(d => d.label === "Pull").every(d => d.duplicateLabel), "programDays: same-named slots flagged within one program");
 }
 
 // ── collectLoggedExercisesForDay / sessionCountForDay ─────────────────────────
@@ -431,14 +492,110 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
       ex("Row", [set("70", "10")]),     // different day, ignored
     ]}),
   ];
-  const rows = collectLoggedExercisesForDay(ws, "Push");
+  const pushDay = dayRef({ label: "Push" });
+  const rows = collectLoggedExercisesForDay(ws, pushDay);
   const bench = rows.find(r => r.name === "Bench")!;
   eq(bench.lastWeight, "90", "loggedForDay: last preview from most recent session");
   eq(bench.lastReps, "5", "loggedForDay: last reps from most recent session");
   eq(bench.sessionCount, 2, "loggedForDay: session count across matching days");
   eq(rows.map(r => r.name).sort(), ["Bench", "Fly"], "loggedForDay: deduped exercises across sessions");
-  eq(sessionCountForDay(ws, "push"), 2, "sessionCountForDay: case-insensitive match");
-  eq(sessionCountForDay(ws, "Legs"), 0, "sessionCountForDay: no sessions -> 0");
+  eq(sessionCountForDay(ws, dayRef({ label: "push" })), 2, "sessionCountForDay: case-insensitive match");
+  eq(sessionCountForDay(ws, dayRef({ label: "Legs", dayId: "d2", index: 2 })), 0, "sessionCountForDay: no sessions -> 0");
+
+  // The same exercise on two same-named days reports separately (different
+  // prescriptions on each), rather than merging into one row.
+  const twin = [
+    workout({ id: "ua", programId: "pA", dayId: "d0", workoutName: "Upper", exercises: [ex("Chest Press", [set("60", "12")])] }),
+    workout({ id: "ub", programId: "pA", dayId: "d3", workoutName: "Upper", exercises: [ex("Chest Press", [set("90", "5")])] }),
+  ];
+  const rowsA = collectLoggedExercisesForDay(twin, dayRef({ label: "Upper A", dayId: "d0" }));
+  const rowsB = collectLoggedExercisesForDay(twin, dayRef({ label: "Upper B", dayId: "d3", index: 3, absorbsUnidentified: false }));
+  eq([rowsA.length, rowsA[0].lastWeight, rowsA[0].lastReps], [1, "60", "12"], "loggedForDay: same-named day A keeps its own numbers");
+  eq([rowsB.length, rowsB[0].lastWeight, rowsB[0].lastReps], [1, "90", "5"], "loggedForDay: same-named day B keeps its own numbers");
+}
+
+// ── editing a running program: what the Progress page shows afterwards ────────
+// End-to-end for the mid-program edit cases. A forked day must appear BESIDE
+// the day that replaced it (its sessions are still real), and an exercise
+// dropped from a day must still be listed, flagged.
+{
+  const bench = [{ id: "e1", name: "Bench", sets: [{ type: "working" as const }] }];
+  const incline = [{ id: "e2", name: "Incline Press", sets: [{ type: "working" as const }] }];
+  const program = makeProgram({
+    id: "pA",
+    cyclePattern: ["Upper A", "Rest"],
+    cycleDays: 2,
+    // "d0" forked away when the day was renamed + re-stocked; the slot now holds
+    // a fresh id and prescribes Incline Press.
+    dayIds: ["fresh", "d1"],
+    workouts: { "0:Upper A": incline },
+    extraWorkouts: undefined,
+  });
+  const history = [
+    // Logged before the edit, against the day as it was then.
+    workout({ id: "old1", date: "2026-04-06", completedAt: "2026-04-06T10:00:00.000Z", programId: "pA", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] }),
+    // Logged after the edit, against the new day.
+    workout({ id: "new1", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", programId: "pA", dayId: "fresh", workoutName: "Upper A", exercises: [ex("Incline Press", [set("60", "10")])] }),
+  ];
+  const days = scopedProgramDays({ kind: "all" }, [program], history);
+  eq(days.map(d => d.label), ["Upper A", "Upper"], "edit: the forked-away day appears beside its replacement");
+  eq(days.map(d => d.isHistorical), [false, true], "edit: only the day that left the program is marked historical");
+  eq(days[1].programName, program.name, "edit: a historical day still names its program");
+  eq(sessionCountForDay(history, days[0]), 1, "edit: the new day counts only sessions logged since");
+  eq(sessionCountForDay(history, days[1]), 1, "edit: the old day keeps its own sessions");
+  eq(collectLoggedExercisesForDay(history, days[1]).map(r => r.name), ["Bench"], "edit: the historical day still lists what was logged on it");
+  check(collectLoggedExercisesForDay(history, days[1]).every(r => r.inProgram), "edit: nothing on a historical day is flagged swapped-out (no prescription to compare)");
+
+  // Same program, but the day was only re-stocked (not renamed) — one row, with
+  // the dropped exercise still listed and flagged.
+  const tuned = makeProgram({ id: "pB", cyclePattern: ["Upper", "Rest"], cycleDays: 2, dayIds: ["d0", "d1"], workouts: { "0:Upper": incline } });
+  const tunedHistory = [
+    workout({ id: "b1", date: "2026-04-06", completedAt: "2026-04-06T10:00:00.000Z", programId: "pB", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] }),
+    workout({ id: "b2", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", programId: "pB", dayId: "d0", workoutName: "Upper", exercises: [ex("Incline Press", [set("60", "10")])] }),
+  ];
+  const tunedDays = scopedProgramDays({ kind: "all" }, [tuned], tunedHistory);
+  eq(tunedDays.length, 1, "swap: swapping an exercise does not add a day row");
+  const rows = collectLoggedExercisesForDay(tunedHistory, tunedDays[0]);
+  eq(rows.map(r => [r.name, r.inProgram]), [["Incline Press", true], ["Bench", false]], "swap: the dropped exercise is still listed, flagged as swapped out");
+  eq(collectExerciseHistory(tunedHistory, "Bench", tunedDays[0]).map(p => p.topWeight), [80], "swap: a swapped-out exercise keeps its progression data");
+
+  // A free workout attached to a program has no prescription, so nothing on it
+  // may be flagged.
+  const withExtra = makeProgram({ id: "pC", cyclePattern: ["Rest"], cycleDays: 1, dayIds: ["d0"], workouts: {}, extraWorkouts: ["Conditioning"] });
+  const extraDay = scopedProgramDays({ kind: "all" }, [withExtra], [])[0];
+  const extraHistory = [workout({ id: "c1", programId: "pC", workoutName: "Conditioning", exercises: [ex("Sled Push", [set("100", "10")])] })];
+  check(collectLoggedExercisesForDay(extraHistory, extraDay).every(r => r.inProgram), "extras: a free workout's exercises are never flagged swapped-out");
+
+  // Renamed only: ONE row, relabelled, with the pre-rename sessions still on it.
+  const renamed = makeProgram({ id: "pD", cyclePattern: ["Upper A", "Rest"], cycleDays: 2, dayIds: ["d0", "d1"], workouts: { "0:Upper A": bench } });
+  const renamedHistory = [
+    workout({ id: "r1", date: "2026-04-06", completedAt: "2026-04-06T10:00:00.000Z", programId: "pD", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] }),
+    workout({ id: "r2", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", programId: "pD", dayId: "d0", workoutName: "Upper A", exercises: [ex("Bench", [set("85", "8")])] }),
+  ];
+  const renamedDays = scopedProgramDays({ kind: "all" }, [renamed], renamedHistory);
+  eq(renamedDays.map(d => d.label), ["Upper A"], "rename: one row, showing the new name");
+  eq(sessionCountForDay(renamedHistory, renamedDays[0]), 2, "rename: sessions logged under the OLD name stay on the day");
+  eq(collectExerciseHistory(renamedHistory, "Bench", renamedDays[0]).map(p => p.topWeight), [80, 85], "rename: one continuous trend across the rename");
+
+  // Moved to another cycle slot: nothing about the page changes.
+  const moved = makeProgram({ id: "pE", cyclePattern: ["Rest", "Upper"], cycleDays: 2, dayIds: ["d1", "d0"], workouts: { "1:Upper": bench } });
+  const movedHistory = [workout({ id: "m1", programId: "pE", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] })];
+  const movedDays = scopedProgramDays({ kind: "all" }, [moved], movedHistory);
+  eq(movedDays.map(d => [d.label, d.isHistorical]), [["Upper", false]], "move: shifting a day to another slot leaves one live row");
+  eq(sessionCountForDay(movedHistory, movedDays[0]), 1, "move: the day keeps its sessions across the move");
+
+  // Sessions whose program is gone don't conjure a row.
+  eq(scopedProgramDays({ kind: "all" }, [], history).length, 0, "edit: a deleted program's sessions produce no historical row");
+  // A day deleted from the cycle keeps its history the same way a forked one does.
+  const shrunk = makeProgram({ id: "pF", cyclePattern: ["Rest"], cycleDays: 1, dayIds: ["d9"], workouts: {} });
+  const shrunkHistory = [workout({ id: "s1", programId: "pF", dayId: "d0", workoutName: "Arms", exercises: [ex("Curl", [set("20", "12")])] })];
+  eq(
+    scopedProgramDays({ kind: "all" }, [shrunk], shrunkHistory).map(d => [d.label, d.isHistorical]),
+    [["Arms", true]],
+    "delete: a day removed from the cycle survives as a historical row",
+  );
+  // A live day is never duplicated as a historical one.
+  eq(historicalDays(history, [program], programDays(program)).map(d => d.dayId), ["d0"], "historicalDays: skips ids the cycle still has");
 }
 
 // ── report ────────────────────────────────────────────────────────────────────

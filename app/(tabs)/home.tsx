@@ -31,6 +31,7 @@ import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERR
 import { toYMD, fmtDuration } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
+import { dayIdAt } from "../../utils/programDays";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
 import InsightsCard from "../../components/InsightsCard";
@@ -310,32 +311,50 @@ export default function HomeScreen() {
     return REST_DAY_QUOTES[seed % REST_DAY_QUOTES.length];
   }, []);
 
+  // Lookup for a workout card's "<program> · session N of M" line, keyed BOTH
+  // by slot id ("id:<dayId>") and by day name ("name:<label>"). A session that
+  // recorded its slot resolves by id, so a renamed day keeps its progress track
+  // instead of falling off the name index; everything else still resolves by
+  // name. Active program wins a name collision (`sorted`).
   const programLookup = useMemo(() => {
     const map: Record<string, { programName: string; totalSessions: number }> = {};
     const sorted = [...programs].sort((a, b) => a.status === "active" ? -1 : b.status === "active" ? 1 : 0);
     for (const prog of sorted) {
-      for (const name of prog.cyclePattern) {
-        if (!name || name.toLowerCase() === "rest" || map[name]) continue;
-        const perCycle = prog.cyclePattern.filter(n => n === name).length;
-        const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
-        map[name] = { programName: prog.name, totalSessions: perCycle * totalCycles };
-      }
+      const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
+      prog.cyclePattern.forEach((name, i) => {
+        if (!name || name.toLowerCase() === "rest") return;
+        // One slot = one session per cycle. The name key keeps the old
+        // behaviour of counting every slot that shares the name.
+        const byId = `id:${dayIdAt(prog, i)}`;
+        if (!map[byId]) map[byId] = { programName: prog.name, totalSessions: totalCycles };
+        const byName = `name:${name}`;
+        if (!map[byName]) {
+          const perCycle = prog.cyclePattern.filter(n => n === name).length;
+          map[byName] = { programName: prog.name, totalSessions: perCycle * totalCycles };
+        }
+      });
       for (const name of (prog.extraWorkouts ?? [])) {
-        if (map[name]) continue;
-        map[name] = { programName: prog.name, totalSessions: 0 };
+        const k = `name:${name}`;
+        if (map[k]) continue;
+        map[k] = { programName: prog.name, totalSessions: 0 };
       }
     }
     return map;
   }, [programs]);
 
+  // "Session 3 of 24" on a workout card. Grouped by the session's DAY, not its
+  // name: keying on the name restarted the count when a day was renamed, and
+  // pooled two same-named days into one run. Sessions with no dayId (free
+  // workouts, records the backfill couldn't attribute) still group by name.
   const sessionNumbers = useMemo(() => {
     const result: Record<string, number> = {};
-    const byName: Record<string, CompletedWorkout[]> = {};
+    const byDay: Record<string, CompletedWorkout[]> = {};
     for (const w of workoutHistory) {
-      if (!byName[w.workoutName]) byName[w.workoutName] = [];
-      byName[w.workoutName].push(w);
+      const k = w.dayId ? `id:${w.dayId}` : `name:${w.workoutName}`;
+      if (!byDay[k]) byDay[k] = [];
+      byDay[k].push(w);
     }
-    for (const group of Object.values(byName)) {
+    for (const group of Object.values(byDay)) {
       group.sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
       group.forEach((w, i) => { result[w.id] = i + 1; });
     }
@@ -421,16 +440,16 @@ export default function HomeScreen() {
         style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}
       >
         <MaskedView
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           maskElement={
             <LinearGradient
               colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
               locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
             />
           }
         >
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </Animated.View>
 
@@ -698,7 +717,8 @@ export default function HomeScreen() {
         )}
 
         {recentWorkouts.map((w) => {
-          const progInfo   = programLookup[w.workoutName] ?? null;
+          const progInfo   = (w.dayId ? programLookup[`id:${w.dayId}`] : undefined)
+            ?? programLookup[`name:${w.workoutName}`] ?? null;
           const sessionNum = sessionNumbers[w.id] ?? 1;
           return (
             <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}>

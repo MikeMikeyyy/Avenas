@@ -22,6 +22,11 @@ import {
   KG_PER_LB,
 } from "../utils/units";
 import { migrateHistoryWeights, migrateProgramWeights } from "../utils/weightMigration";
+import { assignProgramDayIds, backfillHistoryDayIds, resolveHistoricDayId } from "../utils/dayIdMigration";
+import {
+  canonicalizeWorkouts, dayIdAt, dayLabel, forkChangedDayIds, historicalDays,
+  normalizeDayIds, parseDayKey, programDays, trainingDayKeys,
+} from "../utils/programDays";
 import {
   programToRow, programFromRow,
   workoutToRow, workoutFromRow,
@@ -29,7 +34,7 @@ import {
   customToRow, customFromRow,
   toReplaceUserDataPayload,
 } from "../lib/mappers";
-import type { CompletedWorkout, SavedProgram } from "../constants/programs";
+import type { CompletedWorkout, SavedProgram, WorkoutMap } from "../constants/programs";
 import type { ProgramRow, WorkoutRow, JournalRow, CustomExerciseRow } from "../lib/database.types";
 import type { JournalEntry } from "../constants/journal";
 import type { CustomExercise } from "../constants/exercises";
@@ -97,9 +102,9 @@ eq(resolveDayIndex(makeProgram({ cycleOffset: -1 }), "2026-01-01"), 6, "dayIndex
 eq(resolveDayIndex(makeProgram({ startDate: "garbage" }), "2026-01-01"), null, "dayIndex unparseable start -> null");
 
 // ── getWorkoutForDate ──────────────────────────────────────────────────────────
-eq(getWorkoutForDate(p, "2026-01-01"), { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"], programId: "p1" }, "workoutForDate -> Push");
+eq(getWorkoutForDate(p, "2026-01-01"), { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"], programId: "p1", dayId: "d0" }, "workoutForDate -> Push");
 eq(getWorkoutForDate(p, "2026-01-04"), null, "workoutForDate Rest -> null");
-eq(getWorkoutForDate(p, "2026-01-03"), { dayIndex: 2, name: "Legs", exercises: [], programId: "p1" }, "workoutForDate Legs (empty exercises)");
+eq(getWorkoutForDate(p, "2026-01-03"), { dayIndex: 2, name: "Legs", exercises: [], programId: "p1", dayId: "d2" }, "workoutForDate Legs (empty exercises)");
 eq(getWorkoutForDate(makeProgram({ startDate: "nope" }), "2026-01-01"), null, "workoutForDate unparseable -> null");
 
 // ── getTodaysWorkout / resolveTodayWorkout (today-relative) ─────────────────────
@@ -108,7 +113,7 @@ eq(getTodaysWorkout(pToday)?.name, "Push", "getTodaysWorkout (start today) -> Pu
 eq(resolveTodayWorkout(pToday, null)?.name, "Push", "resolveToday no override -> Push");
 eq(
   resolveTodayWorkout(pToday, { date: todayYMD(), workoutName: "Pull" }),
-  { dayIndex: 1, name: "Pull", exercises: pToday.workouts["1:Pull"], programId: "p1" },
+  { dayIndex: 1, name: "Pull", exercises: pToday.workouts["1:Pull"], programId: "p1", dayId: "d1" },
   "resolveToday override -> Pull",
 );
 eq(resolveTodayWorkout(pToday, { date: "2020-01-01", workoutName: "Pull" })?.name, "Push", "resolveToday stale override ignored");
@@ -122,12 +127,12 @@ eq(resolveTodayWorkout(null, null), null, "resolveToday null program + null over
 // ── resolveWorkoutForDate (explicit-date, override-aware) ───────────────────────
 eq(
   resolveWorkoutForDate(p, null, "2026-01-01"),
-  { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"], programId: "p1" },
+  { dayIndex: 0, name: "Push", exercises: p.workouts["0:Push"], programId: "p1", dayId: "d0" },
   "resolveForDate no override -> scheduled",
 );
 eq(
   resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Pull" }, "2026-01-01"),
-  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"], programId: "p1" },
+  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"], programId: "p1", dayId: "d1" },
   "resolveForDate override matching date -> override day",
 );
 eq(
@@ -161,12 +166,12 @@ const pOther = makeProgram({
 });
 eq(
   resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Upper", programId: "p2" }, "2026-01-01", [p, pOther]),
-  { dayIndex: 0, name: "Upper", exercises: pOther.workouts["0:Upper"], programId: "p2" },
+  { dayIndex: 0, name: "Upper", exercises: pOther.workouts["0:Upper"], programId: "p2", dayId: "d0" },
   "resolveForDate cross-program override -> source program's exercises",
 );
 eq(
   resolveWorkoutForDate(p, { date: "2026-01-01", workoutName: "Pull", programId: "p1" }, "2026-01-01", [p, pOther]),
-  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"], programId: "p1" },
+  { dayIndex: 1, name: "Pull", exercises: p.workouts["1:Pull"], programId: "p1", dayId: "d1" },
   "resolveForDate override with the active program's own id -> active day",
 );
 eq(
@@ -419,6 +424,201 @@ for (const bw of ["BW", "", "—"]) {
   const pOut = migrateProgramWeights(progs);
   eq(pOut[0].workouts["0:Push"][0].sets[0].weightKg, trimNumber(135 * KG_PER_LB, 3), "migrate program: 135lb -> kg");
   eq(pOut[0].workouts["0:Push"][0].sets[1].weightKg, undefined, "migrate program: missing weightKg untouched");
+}
+
+// ── day ids: normalization ─────────────────────────────────────────────────────
+{
+  eq(normalizeDayIds(undefined, 4), ["d0", "d1", "d2", "d3"], "dayIds: legacy program gets deterministic positional ids");
+  eq(normalizeDayIds(["a", "b"], 4).slice(0, 2), ["a", "b"], "dayIds: existing entries preserved when growing");
+  eq(normalizeDayIds(["a", "b", "c", "d"], 2), ["a", "b"], "dayIds: trimmed when the cycle shrinks");
+  const grown = normalizeDayIds(["a", "b"], 3);
+  check(grown[2] !== "a" && grown[2] !== "b" && grown.length === 3, "dayIds: new slot gets a distinct id");
+  // A reorder that lands a real id in the position whose positional id is taken
+  // must not hand out a duplicate.
+  const reordered = normalizeDayIds(["d1", undefined as unknown as string, "d0"], 3);
+  check(new Set(reordered).size === 3, "dayIds: gap fill never duplicates an existing id");
+  eq(dayIdAt({ dayIds: undefined }, 3), "d3", "dayIdAt: falls back to the positional id");
+  eq(dayIdAt({ dayIds: ["x", "y"] }, 1), "y", "dayIdAt: uses the stored id");
+}
+
+// ── day keys: rename must not drop a day's exercises ───────────────────────────
+// The builder's map is keyed `${index}:${label}`, so renaming a day changes its
+// key. Every reload/save path re-keys through canonicalizeWorkouts, which
+// carries exercises across by cycle INDEX — looking the new key up directly is
+// what used to empty a renamed day.
+{
+  const bench = [{ id: "e1", name: "Bench", sets: [{ type: "working" as const }] }];
+  const squat = [{ id: "e2", name: "Squat", sets: [{ type: "working" as const }] }];
+  const before = { "0:Upper": bench, "1:Lower": squat };
+  const isTraining = [true, true];
+
+  // Both days renamed at once — the exact case that lost them.
+  const renamed = canonicalizeWorkouts(before, ["Upper A", "Lower B"], isTraining);
+  eq(Object.keys(renamed).sort(), ["0:Upper A", "1:Lower B"], "canonicalize: keys follow the new names");
+  eq(renamed["0:Upper A"], bench, "canonicalize: renamed day keeps its exercises");
+  eq(renamed["1:Lower B"], squat, "canonicalize: the other renamed day keeps its own");
+
+  // Two days renamed to the SAME name stay separate — the index disambiguates.
+  const twins = canonicalizeWorkouts(before, ["Upper", "Upper"], isTraining);
+  eq(twins["0:Upper"], bench, "canonicalize: first same-named day keeps its exercises");
+  eq(twins["1:Upper"], squat, "canonicalize: second same-named day is not merged into the first");
+
+  // Turning a day into Rest drops it; an unnamed training day is keyed "Workout".
+  eq(Object.keys(canonicalizeWorkouts(before, ["Upper", "Lower"], [true, false])), ["0:Upper"], "canonicalize: a day switched to Rest leaves the map");
+  eq(Object.keys(canonicalizeWorkouts(before, ["", "Lower"], isTraining)), ["0:Workout", "1:Lower"], "canonicalize: unnamed training day keyed 'Workout'");
+  eq(canonicalizeWorkouts({}, ["Upper"], [true]), { "0:Upper": [] }, "canonicalize: a brand-new day starts empty");
+  // A malformed key can't poison the carry-over.
+  eq(canonicalizeWorkouts({ "junk": bench }, ["Upper"], [true]), { "0:Upper": [] }, "canonicalize: malformed keys are skipped, not re-keyed");
+
+  eq(trainingDayKeys(["Push", "", "Pull"], [true, false, true]), ["0:Push", "2:Pull"], "trainingDayKeys: rest days skipped, index preserved");
+  eq(dayLabel("3:Push"), "Push", "dayLabel: strips the index");
+  eq(dayLabel("3:A:B"), "A:B", "dayLabel: a label containing ':' round-trips");
+  eq(parseDayKey("3:A:B"), { idx: 3, label: "A:B" }, "parseDayKey: splits on the first colon only");
+  eq(parseDayKey("x:Push"), null, "parseDayKey: non-numeric index -> null");
+  eq(parseDayKey(":Push"), null, "parseDayKey: missing index -> null");
+}
+
+// ── day ids: forking a day whose identity changed mid-program ──────────────────
+// Editing a running program must not silently pool two different workouts into
+// one trend, nor split a day that only moved or only got a new label. A day
+// forks (new id, old sessions become a historical day) ONLY when its name AND
+// its exercise list both changed.
+{
+  const bench = [{ id: "e1", name: "Bench", sets: [{ type: "working" as const }] }];
+  const incline = [{ id: "e2", name: "Incline Press", sets: [{ type: "working" as const }] }];
+  const squat = [{ id: "e3", name: "Squat", sets: [{ type: "working" as const }] }];
+  type DaySnapshot = { cyclePattern: string[]; dayIds: string[]; workouts: WorkoutMap };
+  const before: DaySnapshot = {
+    cyclePattern: ["Upper", "Lower", "Rest"],
+    dayIds: ["d0", "d1", "d2"],
+    workouts: { "0:Upper": bench, "1:Lower": squat },
+  };
+  const fork = (after: DaySnapshot) => forkChangedDayIds(before, after);
+
+  // Nothing changed at all.
+  eq(fork(before), ["d0", "d1", "d2"], "fork: an untouched program keeps every id");
+
+  // Renamed only — same workout, new label. One continuous trend.
+  eq(
+    fork({ ...before, cyclePattern: ["Upper A", "Lower", "Rest"], workouts: { "0:Upper A": bench, "1:Lower": squat } }),
+    ["d0", "d1", "d2"],
+    "fork: rename alone does NOT fork",
+  );
+
+  // Exercises swapped only — normal in-program tuning, stays one day.
+  eq(
+    fork({ ...before, workouts: { "0:Upper": incline, "1:Lower": squat } }),
+    ["d0", "d1", "d2"],
+    "fork: swapping exercises alone does NOT fork",
+  );
+
+  // Sets/reps/weight edited under the same names — programming, not a new day.
+  eq(
+    fork({
+      ...before,
+      cyclePattern: ["Upper A", "Lower", "Rest"],
+      workouts: {
+        "0:Upper A": [{ id: "e1", name: "Bench", sets: [{ type: "working" as const, reps: "5" }, { type: "working" as const }] }],
+        "1:Lower": squat,
+      },
+    }),
+    ["d0", "d1", "d2"],
+    "fork: rename + set/rep edits (same exercises) does NOT fork",
+  );
+
+  // Moved to another slot, carrying its id and exercises — the Progress page
+  // does not care which cycle day a session fell on.
+  eq(
+    fork({
+      cyclePattern: ["Lower", "Upper", "Rest"],
+      dayIds: ["d1", "d0", "d2"],
+      workouts: { "0:Lower": squat, "1:Upper": bench },
+    }),
+    ["d1", "d0", "d2"],
+    "fork: moving a day to another slot does NOT fork",
+  );
+
+  // Renamed AND re-stocked → forks. Only that day; the untouched one is stable.
+  {
+    const out = fork({
+      ...before,
+      cyclePattern: ["Upper A", "Lower", "Rest"],
+      workouts: { "0:Upper A": incline, "1:Lower": squat },
+    });
+    check(out[0] !== "d0", "fork: rename + exercise change mints a new id");
+    eq(out.slice(1), ["d1", "d2"], "fork: only the changed day forks");
+  }
+
+  // Adding an exercise counts as an exercise change (the chosen threshold).
+  {
+    const out = fork({
+      ...before,
+      cyclePattern: ["Upper A", "Lower", "Rest"],
+      workouts: { "0:Upper A": [...bench, ...incline], "1:Lower": squat },
+    });
+    check(out[0] !== "d0", "fork: rename + an added exercise forks");
+  }
+
+  // A slot that didn't exist before has nothing to fork from.
+  eq(
+    forkChangedDayIds(before, {
+      cyclePattern: ["Upper", "Lower", "Arms"],
+      dayIds: ["d0", "d1", "brand-new"],
+      workouts: { "0:Upper": bench, "1:Lower": squat, "2:Arms": incline },
+    }),
+    ["d0", "d1", "brand-new"],
+    "fork: a newly added day keeps the id it was given",
+  );
+}
+
+// ── day ids: history backfill ──────────────────────────────────────────────────
+// The rename case the whole feature exists for: a cycle ran "Upper" on days 0
+// and 4, sessions were logged under that name, then the days were renamed to
+// "Upper A" / "Upper B". No day still carries the logged name, so each session
+// is attributed by the cycle math for the date it was performed on.
+{
+  const renamed = makeProgram({
+    id: "pR",
+    startDate: "01 Jan 2026",
+    cyclePattern: ["Upper A", "Lower", "Rest", "Rest", "Upper B", "Rest", "Rest"],
+    dayIds: ["d0", "d1", "d2", "d3", "d4", "d5", "d6"],
+    workouts: {},
+  });
+  const hist: CompletedWorkout[] = [
+    // 01 Jan 2026 is cycle day 0 -> "Upper A"
+    { id: "h1", date: "2026-01-01", completedAt: "2026-01-01T10:00:00.000Z", workoutName: "Upper", durationSeconds: 0, exercises: [], programId: "pR" },
+    // 05 Jan 2026 is cycle day 4 -> "Upper B"
+    { id: "h2", date: "2026-01-05", completedAt: "2026-01-05T10:00:00.000Z", workoutName: "Upper", durationSeconds: 0, exercises: [], programId: "pR" },
+    // Name still matches exactly one slot -> that slot wins over the date.
+    { id: "h3", date: "2026-01-05", completedAt: "2026-01-05T11:00:00.000Z", workoutName: "Lower", durationSeconds: 0, exercises: [], programId: "pR" },
+    // Free workout: no slot to point at.
+    { id: "h4", date: "2026-01-06", completedAt: "2026-01-06T10:00:00.000Z", workoutName: "Upper", durationSeconds: 0, exercises: [], programId: "" },
+    // Already attributed: left exactly as-is.
+    { id: "h5", date: "2026-01-01", completedAt: "2026-01-01T12:00:00.000Z", workoutName: "Upper", durationSeconds: 0, exercises: [], programId: "pR", dayId: "d4" },
+  ];
+  const out = backfillHistoryDayIds(hist, [renamed]);
+  eq(out.map(w => w.dayId), ["d0", "d4", "d1", undefined, "d4"], "backfill: renamed days attributed by date, names by name, free workouts skipped");
+  eq(out[3], hist[3], "backfill: an unattributable record is returned untouched");
+
+  // A hold placed on the program afterwards must not un-attribute its history.
+  const held = { ...renamed, pausedAt: "2026-01-02" };
+  eq(resolveHistoricDayId(hist[1], held), "d4", "backfill: a later hold doesn't erase which day a session was performed on");
+
+  // Two slots that still share the name: the date breaks the tie.
+  const twins = makeProgram({
+    id: "pT",
+    cyclePattern: ["Upper", "Lower", "Rest", "Rest", "Upper", "Rest", "Rest"],
+    dayIds: ["d0", "d1", "d2", "d3", "d4", "d5", "d6"],
+    workouts: {},
+  });
+  eq(resolveHistoricDayId({ ...hist[1], programId: "pT" }, twins), "d4", "backfill: same-named slots disambiguated by the session's date");
+  // Off-schedule session (that date is a Rest slot) falls back to the first match.
+  eq(resolveHistoricDayId({ ...hist[1], date: "2026-01-03", programId: "pT" }, twins), "d0", "backfill: off-schedule same-named session lands on the first slot");
+
+  // Programs without ids get the deterministic set, and one that has them is untouched.
+  const [filled] = assignProgramDayIds([makeProgram({ dayIds: undefined })]);
+  eq(filled.dayIds, ["d0", "d1", "d2", "d3", "d4", "d5", "d6"], "assignProgramDayIds: fills a legacy program");
+  check(assignProgramDayIds([renamed])[0] === renamed, "assignProgramDayIds: a complete program is returned by identity");
 }
 
 // ── report ─────────────────────────────────────────────────────────────────────

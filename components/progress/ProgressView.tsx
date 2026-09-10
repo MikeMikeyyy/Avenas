@@ -21,7 +21,7 @@ import DumbbellIcon from "../DumbbellIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
-import { type CompletedWorkout, type SavedProgram } from "../../constants/programs";
+import { type CompletedWorkout, type ProgramDayRef, type SavedProgram } from "../../constants/programs";
 import { type CustomExercise, type SelectableMuscle } from "../../constants/exercises";
 import type { ExerciseSelection, MetricKey, MuscleGroupStat, ProgramScope, RangeKey, StrengthMetricKey } from "../../constants/progress";
 import {
@@ -39,7 +39,7 @@ import {
   getRangeOption,
   previousComparableWindow,
   rangeWindow,
-  uniqueDaysInScope,
+  scopedProgramDays,
   windowLengthDays,
 } from "../../utils/progressStats";
 import { toDisplayWeight } from "../../utils/units";
@@ -96,7 +96,9 @@ export default function ProgressView({
   const [metric, setMetric] = useState<MetricKey>("volume");
   const [strengthMetric, setStrengthMetric] = useState<StrengthMetricKey>("load");
   // Day-qualified: the same exercise on two days (lateral raises on Push and
-  // on Arms) is two separate selections with separate progress data.
+  // on Arms) is two separate selections with separate progress data. The day is
+  // held as an identified ref, so two days that share a NAME are two selections
+  // too.
   const [selectedExercise, setSelectedExercise] = useState<ExerciseSelection | null>(null);
   const [scopeFallbackNote, setScopeFallbackNote] = useState<string | null>(null);
 
@@ -184,15 +186,30 @@ export default function ProgressView({
     }
   }, [range]);
 
-  const daysInScope = useMemo(() => uniqueDaysInScope(scope, programs), [scope, programs]);
+  // Scoped sessions are passed in so days that have LEFT the program (deleted,
+  // or renamed + rebuilt into a new day) still appear, reconstructed from the
+  // sessions logged against them.
+  const daysInScope = useMemo(
+    () => scopedProgramDays(scope, programs, scopedWorkouts),
+    [scope, programs, scopedWorkouts],
+  );
+
+  // The live ref behind the selection. Derived rather than stored, so a scope
+  // switch or a program edit can't leave a stale day pinned: a renamed day
+  // keeps its chart (the key is the id, not the label) and a day that left the
+  // scope resolves to null, which hides the section.
+  const selectedDay = useMemo(
+    () => (selectedExercise ? daysInScope.find(d => d.key === selectedExercise.dayKey) ?? null : null),
+    [daysInScope, selectedExercise],
+  );
 
   const { exerciseHistory, prs } = useMemo(() => {
-    if (!selectedExercise) return { exerciseHistory: [], prs: null };
+    if (!selectedExercise || !selectedDay) return { exerciseHistory: [], prs: null };
     // Day-scoped: only sessions of the selected day row feed the chart + PRs.
-    const eh = collectExerciseHistory(scopedWorkouts, selectedExercise.name, selectedExercise.day);
-    const p = computePRs(eh, scopedWorkouts, selectedExercise.name, selectedExercise.day);
+    const eh = collectExerciseHistory(scopedWorkouts, selectedExercise.name, selectedDay);
+    const p = computePRs(eh, scopedWorkouts, selectedExercise.name, selectedDay);
     return { exerciseHistory: eh, prs: p };
-  }, [scopedWorkouts, selectedExercise]);
+  }, [scopedWorkouts, selectedExercise, selectedDay]);
 
   // ── kg → display-unit conversion for the charts ──────────────────────────────
   // All stats are computed in canonical kg; convert the weight/volume-valued
@@ -263,15 +280,15 @@ export default function ProgressView({
     return () => cancelAnimationFrame(id);
   }, [selectedExercise, insets.top, insets.bottom]);
 
-  const onSelectExercise = useCallback((day: string, name: string) => {
+  const onSelectExercise = useCallback((day: ProgramDayRef, name: string) => {
     // Keep the previous object identity on a same-pair reselect so the
     // scroll-into-view effect (keyed on the selection) doesn't refire.
     setSelectedExercise(prev =>
       prev &&
-      prev.day.trim().toLowerCase() === day.trim().toLowerCase() &&
+      prev.dayKey === day.key &&
       prev.name.trim().toLowerCase() === name.trim().toLowerCase()
         ? prev
-        : { day, name },
+        : { dayKey: day.key, name },
     );
   }, []);
 
@@ -287,16 +304,16 @@ export default function ProgressView({
       {asScreen && withTopInset && (
         <Animated.View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
           <MaskedView
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
             maskElement={
               <LinearGradient
                 colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
                 locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
-                style={StyleSheet.absoluteFillObject}
+                style={StyleSheet.absoluteFill}
               />
             }
           >
-            <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+            <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
           </MaskedView>
         </Animated.View>
       )}
@@ -371,7 +388,7 @@ export default function ProgressView({
           </>
         )}
 
-        {selectedExercise && displayPrs ? (
+        {selectedExercise && selectedDay && displayPrs ? (
           <View
             onLayout={e => {
               exerciseSectionY.current = e.nativeEvent.layout.y;
@@ -380,7 +397,8 @@ export default function ProgressView({
           >
             <ExerciseProgressionChart
               exerciseName={selectedExercise.name}
-              dayName={selectedExercise.day}
+              dayName={selectedDay.label}
+              dayId={selectedDay.dayId}
               history={displayExerciseHistory}
               prs={displayPrs}
               unit={unit}

@@ -218,14 +218,14 @@ export default function MyPTHome() {
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
-        <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
+        <MaskedView style={StyleSheet.absoluteFill} maskElement={
           <LinearGradient
             colors={["black", "rgba(0,0,0,0.8)", "rgba(0,0,0,0.5)", "transparent"]}
             locations={[0, 0.6, 0.85, 1]}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
         }>
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </View>
 

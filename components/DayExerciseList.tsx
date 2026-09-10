@@ -9,25 +9,38 @@ import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { collectLoggedExercisesForDay, sessionCountForDay } from "../utils/progressStats";
-import type { CompletedWorkout } from "../constants/programs";
+import type { CompletedWorkout, ProgramDayRef } from "../constants/programs";
 import type { ExerciseSelection, LoggedExerciseRow } from "../constants/progress";
 
 interface Props {
-  /** Unique non-Rest day names from the in-scope program(s). */
-  days: string[];
+  /** Every non-Rest day of the in-scope program(s), as identified refs. Two
+   *  days that share a name are two entries here, not one. */
+  days: ProgramDayRef[];
   /** Workouts already filtered to the active scope. */
   workouts: CompletedWorkout[];
   /**
-   * Currently selected (day, exercise) pair (both case-insensitive), or null.
-   * The day is part of the identity: the same exercise under a different day
-   * row is a different selection and does NOT highlight.
+   * Currently selected (day, exercise) pair, or null. The day is part of the
+   * identity: the same exercise under a different day row is a different
+   * selection and does NOT highlight — including under a day that merely
+   * shares the selected day's name.
    */
   selectedExercise: ExerciseSelection | null;
-  onSelectExercise: (day: string, name: string) => void;
+  onSelectExercise: (day: ProgramDayRef, name: string) => void;
 }
 
 // Lowercase-trim match used across the codebase for exercise/day names.
 const norm = (s: string) => s.trim().toLowerCase();
+
+/** Extra line under a day's name. Explains a day that has left the program, and
+ *  otherwise disambiguates two days that read alike. */
+function dayQualifier(day: ProgramDayRef): string | null {
+  // Always shown for a historical day: it's the answer to "why are there two
+  // Upper rows?", and it has to read even when the label happens to be unique.
+  if (day.isHistorical) return "No longer in your program";
+  if (!day.duplicateLabel) return null;
+  if (day.index < 0) return `${day.programName} · extra`;
+  return `${day.programName} · day ${day.index + 1}`;
+}
 
 // Accordion panel — animates height between 0 and the children's measured
 // natural height. The content view is absolutely positioned, so it always lays
@@ -87,12 +100,14 @@ const RotatingChevron = ({ color, rotated }: { color: string; rotated: boolean }
 export default function DayExerciseList({ days, workouts, selectedExercise, onSelectExercise }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  // Keyed by ProgramDayRef.key, not by name — two "Upper" rows expand
+  // independently.
   const [expandedDay, setExpandedDay] = useState<string | null>(null);
 
   // Precompute counts per day so the row labels are stable.
   const counts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const d of days) m.set(d, sessionCountForDay(workouts, d));
+    for (const d of days) m.set(d.key, sessionCountForDay(workouts, d));
     return m;
   }, [days, workouts]);
 
@@ -112,18 +127,24 @@ export default function DayExerciseList({ days, workouts, selectedExercise, onSe
       <Text style={[styles.sectionTitle, { color: t.tp }]}>Exercise Progress</Text>
 
       {days.map((day, i) => {
-        const isOpen = expandedDay === day;
-        const c = counts.get(day) ?? 0;
+        const isOpen = expandedDay === day.key;
+        const c = counts.get(day.key) ?? 0;
+        const qualifier = dayQualifier(day);
         return (
-          <View key={day} style={{ marginTop: i === 0 ? 0 : 12 }}>
+          <View key={day.key} style={{ marginTop: i === 0 ? 0 : 12 }}>
             <NeuCard dark={isDark} radius={20}>
               <BounceButton
-                onPress={() => setExpandedDay(prev => (prev === day ? null : day))}
+                onPress={() => setExpandedDay(prev => (prev === day.key ? null : day.key))}
                 accessibilityRole="button"
-                accessibilityLabel={`${day} — ${c} session${c === 1 ? "" : "s"} logged`}
+                accessibilityLabel={`${day.label}${qualifier ? `, ${qualifier}` : ""} — ${c} session${c === 1 ? "" : "s"} logged`}
               >
                 <View style={styles.dayRow}>
-                  <Text style={[styles.dayName, { color: t.tp }]} numberOfLines={1}>{day}</Text>
+                  <View style={styles.dayNameCol}>
+                    <Text style={[styles.dayName, { color: t.tp }]} numberOfLines={1}>{day.label}</Text>
+                    {qualifier ? (
+                      <Text style={[styles.dayQualifier, { color: t.ts }]} numberOfLines={1}>{qualifier}</Text>
+                    ) : null}
+                  </View>
                   <Text style={[styles.daySub, { color: t.ts }]} numberOfLines={1}>
                     {c === 0 ? "No sessions yet" : `${c} session${c === 1 ? "" : "s"}`}
                   </Text>
@@ -161,9 +182,9 @@ function ExpandedExercises({
   divider,
 }: {
   workouts: CompletedWorkout[];
-  day: string;
+  day: ProgramDayRef;
   selectedExercise: ExerciseSelection | null;
-  onSelectExercise: (day: string, name: string) => void;
+  onSelectExercise: (day: ProgramDayRef, name: string) => void;
   textPrimary: string;
   textSecondary: string;
   divider: string;
@@ -184,9 +205,10 @@ function ExpandedExercises({
   }
 
   // Highlight only within the selection's own day row — the same exercise
-  // name under another day is a different (day, exercise) pair.
+  // name under another day is a different (day, exercise) pair, and so is the
+  // same name under a day that merely reads the same.
   const selKey =
-    selectedExercise && norm(selectedExercise.day) === norm(day)
+    selectedExercise && selectedExercise.dayKey === day.key
       ? norm(selectedExercise.name)
       : "";
 
@@ -209,9 +231,17 @@ function ExpandedExercises({
             accessibilityState={{ selected }}
           >
             {selected ? <View style={styles.exAccent} /> : null}
-            <Text style={[styles.exName, { color: selected ? ACCT : textPrimary, flex: 1 }]} numberOfLines={1}>
+            <Text style={[styles.exName, { color: selected ? ACCT : textPrimary, flexShrink: 1 }]} numberOfLines={1}>
               {r.name}
             </Text>
+            {r.inProgram ? null : (
+              // Logged on this day, but the program doesn't prescribe it any
+              // more. Shown so the trend ending mid-run reads as an edit.
+              <View style={[styles.swappedChip, { borderColor: textSecondary }]}>
+                <Text style={[styles.swappedText, { color: textSecondary }]}>Swapped out</Text>
+              </View>
+            )}
+            <View style={{ flex: 1 }} />
             <Ionicons name="chevron-forward" size={14} color={selected ? ACCT : textSecondary} />
           </TouchableOpacity>
         );
@@ -230,7 +260,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: 8,
   },
+  dayNameCol: { flexShrink: 1 },
   dayName: { fontFamily: FontFamily.bold, fontSize: 15 },
+  dayQualifier: { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 1 },
   daySub: { fontFamily: FontFamily.regular, fontSize: 12 },
 
   expandedBody: {
@@ -257,6 +289,14 @@ const styles = StyleSheet.create({
     backgroundColor: ACCT,
   },
   exName: { fontFamily: FontFamily.semibold, fontSize: 14 },
+  swappedChip: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    opacity: 0.7,
+  },
+  swappedText: { fontFamily: FontFamily.semibold, fontSize: 10 },
   placeholder: { fontFamily: FontFamily.regular, fontSize: 13, paddingVertical: 8, textAlign: "center" },
 
   empty: {

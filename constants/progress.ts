@@ -161,14 +161,19 @@ export type PRs = {
 // page itself only uses kind: "current" | "all" | "program".
 export const CUSTOM_PROGRAM_ID = "__custom__";
 
-// The Progress drill-down's selection: a (workout day, exercise) pair, both
-// matched case-insensitively (trim + lowercase). The day is part of the
-// identity because the same exercise can be programmed on two different days
-// (e.g. lateral raises on both Push and Arms) and each day's progress is
-// tracked separately — see collectExerciseHistory / computePRs `dayName`.
+// The Progress drill-down's selection: a (workout day, exercise) pair. The day
+// is part of the identity because the same exercise can be programmed on two
+// different days (e.g. lateral raises on both Push and Arms) and each day's
+// progress is tracked separately — see collectExerciseHistory / computePRs.
+//
+// The day is held as a ProgramDayRef.key, not a name: a cycle can schedule two
+// days called "Upper", and selecting one of them must not pull in the other's
+// sessions. Storing the key (rather than the ref) keeps the selection valid
+// across a refresh — the live ref is looked up from the day list at render, so
+// a renamed day keeps its chart and a deleted one clears it, with no syncing.
 export type ExerciseSelection = {
-  day: string;  // workout-day label, matched against CompletedWorkout.workoutName
-  name: string; // exercise name
+  dayKey: string;
+  name: string; // exercise name, matched case-insensitively (trim + lowercase)
 };
 
 // Exercise row data used by the day drill-down.
@@ -178,4 +183,14 @@ export type LoggedExerciseRow = {
   lastReps: string;     // raw stored string
   lastDate: string;     // YYYY-MM-DD
   sessionCount: number; // # of sessions in scope that included this exercise
+  /**
+   * Whether the day still programs this exercise. False means it was logged
+   * here but has since been swapped out of the program — its history stays on
+   * the page (it happened), flagged so the drop-off in the trend reads as an
+   * edit rather than missed sessions.
+   *
+   * Always true for a day with no prescription to compare against (a free
+   * workout, or a historical day) — see ProgramDayRef.programExercises.
+   */
+  inProgram: boolean;
 };

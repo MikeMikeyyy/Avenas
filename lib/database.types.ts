@@ -130,6 +130,10 @@ export type ProgramRow = {
   training_days: number;
   cycle_days: number;
   cycle_pattern: string[];
+  /** Stable per-slot ids, parallel to cycle_pattern (migration 0023). Empty for
+   *  a program written before the column existed; the client's positional
+   *  fallback covers those. See SavedProgram.dayIds. */
+  day_ids: string[];
   workouts: Record<string, unknown>;  // WorkoutMap — Exercise[] per "idx:Name" key
   extra_workouts: string[];
   created_at: string;
@@ -143,6 +147,10 @@ export type WorkoutRow = {
   date: string;                   // YYYY-MM-DD
   completed_at: string;           // ISO timestamp
   workout_name: string;
+  /** Which cycle slot of program_id this session was performed on (migration
+   *  0023). Null for a free workout and for records logged before the column
+   *  existed. See CompletedWorkout.dayId. */
+  day_id: string | null;
   duration_seconds: number;
   exercises: unknown[];           // CompletedExercise[]
   session_notes: string | null;

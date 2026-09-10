@@ -156,7 +156,7 @@ export default function ProgramScopePicker({ scope, programs, onChange }: Props)
           <TouchableWithoutFeedback onPress={() => setOpen(false)}>
             <Animated.View
               style={[
-                StyleSheet.absoluteFillObject,
+                StyleSheet.absoluteFill,
                 { backgroundColor: "rgba(0,0,0,0.45)", opacity: backdropOpacity },
               ]}
             />
@@ -346,7 +346,7 @@ const styles = StyleSheet.create({
   },
 
   sheetWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: "flex-end",
   },
   sheet: {

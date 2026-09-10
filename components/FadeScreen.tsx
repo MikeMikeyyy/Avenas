@@ -1,6 +1,8 @@
 import { useRef, useCallback } from "react";
 import { Animated, StyleProp, ViewStyle } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
+// From expo-router, not @react-navigation/native: as of SDK 56 expo-router no
+// longer runs on react-navigation and importing it fails the bundle.
+import { useFocusEffect } from "expo-router";
 
 interface FadeScreenProps {
   children: React.ReactNode;

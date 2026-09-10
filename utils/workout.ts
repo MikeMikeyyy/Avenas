@@ -10,6 +10,7 @@
 // log-workout.tsx; keeping one copy stops the screens from drifting.
 
 import { parseStoredDate, toYMD, todayYMD } from "./dates";
+import { dayIdAt, indexOfDayId, workoutKey } from "./programDays";
 import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
@@ -21,6 +22,10 @@ export type ResolvedWorkout = {
   /** Id of the program the exercises came from. Undefined when the workout
    *  matched no program (free-workout override, or its source program is gone). */
   programId?: string;
+  /** Stable id of the cycle slot these exercises came from — what a completed
+   *  session records so it stays attached to this day across a rename, and so
+   *  two same-named days never share progress. Undefined alongside programId. */
+  dayId?: string;
 };
 
 export type DayOverride = {
@@ -31,6 +36,11 @@ export type DayOverride = {
    *  overrides and on overrides written before this field existed — those
    *  resolve against the active program, as before. */
   programId?: string;
+  /** The chosen day's stable slot id. Set by change-day so a cycle with two
+   *  same-named days resolves to the slot the user actually tapped — a name
+   *  lookup always returned the first one. Absent on free-workout overrides
+   *  and legacy records, which fall back to matching by name. */
+  dayId?: string;
 };
 
 /** Parse a "YYYY-MM-DD" string to a local Date at midnight, or null. */
@@ -57,6 +67,18 @@ export function resolveDayIndex(program: SavedProgram, dateYMD: string): number 
   // when a program is paused. Both sides are "YYYY-MM-DD", so a string compare
   // is a date compare.
   if (program.pausedAt && dateYMD >= program.pausedAt) return null;
+  return cycleIndexForDate(program, dateYMD);
+}
+
+/**
+ * The raw cycle index for `dateYMD`, ignoring any hold on the program.
+ *
+ * Scheduling must respect a hold — that's `resolveDayIndex` above — but the
+ * one-shot dayId backfill asks a different question: "which slot was this
+ * session, already logged on this date, performed on?" A hold applied later
+ * must not erase the answer, so the backfill reads the cycle math directly.
+ */
+export function cycleIndexForDate(program: SavedProgram, dateYMD: string): number | null {
   const start = parseStoredDate(program.startDate);
   const target = ymdToLocalDate(dateYMD);
   if (!start || !target) return null;
@@ -74,8 +96,8 @@ export function getWorkoutForDate(program: SavedProgram, dateYMD: string): Resol
   if (dayIndex === null) return null;
   const name = program.cyclePattern[dayIndex];
   if (!name || name === "Rest") return null;
-  const exercises = program.workouts[`${dayIndex}:${name}`] ?? [];
-  return { dayIndex, name, exercises, programId: program.id };
+  const exercises = program.workouts[workoutKey(dayIndex, name)] ?? [];
+  return { dayIndex, name, exercises, programId: program.id, dayId: dayIdAt(program, dayIndex) };
 }
 
 /** The program's scheduled workout for today (local date). */
@@ -96,6 +118,11 @@ export function getTodaysWorkout(program: SavedProgram): ResolvedWorkout | null 
  * or `allPrograms` not supplied — the name is surfaced with no exercises (or
  * against the active program's same-named day, matching pre-programId behavior).
  *
+ * Inside that program the slot is found by `override.dayId` when the override
+ * carries one. Falling back to `cyclePattern.indexOf(name)` — the only option
+ * for a free-workout or pre-dayId override — always lands on the FIRST day with
+ * that name, which is wrong whenever a cycle schedules the same name twice.
+ *
  * Callers should pass the effective training date (see getEffectiveToday) as
  * `dateYMD`, not the raw calendar date, so late-night sessions resolve to the
  * right day.
@@ -114,9 +141,19 @@ export function resolveWorkoutForDate(
         ? allPrograms?.find(p => p.id === override.programId) ?? null
         : program;
     if (src) {
-      const dayIndex = src.cyclePattern.indexOf(name);
-      const exercises = dayIndex >= 0 ? (src.workouts[`${dayIndex}:${name}`] ?? []) : [];
-      return { dayIndex, name, exercises, programId: dayIndex >= 0 ? src.id : undefined };
+      const byId = override.dayId ? indexOfDayId(src, override.dayId) : -1;
+      const dayIndex = byId >= 0 ? byId : src.cyclePattern.indexOf(name);
+      const label = dayIndex >= 0 ? (src.cyclePattern[dayIndex] ?? name) : name;
+      const exercises = dayIndex >= 0 ? (src.workouts[workoutKey(dayIndex, label)] ?? []) : [];
+      return {
+        dayIndex,
+        // A day resolved by id shows its CURRENT name, so a rename since the
+        // override was written surfaces the new label rather than the stale one.
+        name: label,
+        exercises,
+        programId: dayIndex >= 0 ? src.id : undefined,
+        dayId: dayIndex >= 0 ? dayIdAt(src, dayIndex) : undefined,
+      };
     }
     return { dayIndex: -1, name, exercises: [] };
   }
@@ -203,11 +240,17 @@ export function normalizeExerciseName(name: string): string {
  * done on this day (first time running the day, exercise swapped in, free
  * workout) so they still show a reference instead of nothing. Day names match
  * trimmed + case-insensitive, like exercise names.
+ *
+ * `dayId` (the slot's stable id) refines that: sessions that recorded a dayId
+ * are matched on it, so two days sharing a name keep their own numbers, and a
+ * renamed day still finds its own history. Sessions with no dayId (legacy, or
+ * free workouts) still match on the name, which is the best they can offer.
  */
 export function buildPrevByName(
   history: CompletedWorkout[],
   beforeDate?: string,
   dayName?: string,
+  dayId?: string,
 ): Record<string, string[]> {
   const sorted = [...history].sort(
     (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
@@ -217,7 +260,11 @@ export function buildPrevByName(
   const anyDay: Record<string, string[]> = {};
   const sameDay: Record<string, string[]> = {};
   for (const workout of filtered) {
-    const matchesDay = dayKey !== null && (workout.workoutName ?? "").trim().toLowerCase() === dayKey;
+    const matchesDay =
+      dayKey !== null &&
+      (workout.dayId && dayId
+        ? workout.dayId === dayId
+        : (workout.workoutName ?? "").trim().toLowerCase() === dayKey);
     for (const ex of workout.exercises) {
       const key = normalizeExerciseName(ex.name);
       const wantAny = !anyDay[key];

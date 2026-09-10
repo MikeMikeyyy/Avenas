@@ -72,7 +72,7 @@ export default function ExerciseHistoryScreen() {
   // `dayName` (optional) scopes the list to one workout day — progress is
   // tracked per (day, exercise) pair, and the progression chart forwards its
   // day so this page shows the same slice the chart plotted.
-  const { exerciseName, dayName } = useLocalSearchParams<{ exerciseName: string; dayName?: string }>();
+  const { exerciseName, dayName, dayId } = useLocalSearchParams<{ exerciseName: string; dayName?: string; dayId?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
@@ -113,6 +113,10 @@ export default function ExerciseHistoryScreen() {
     if (!exerciseName) return [];
     const want = key(exerciseName);
     const wantDay = typeof dayName === "string" && dayName.trim() ? key(dayName) : null;
+    // The slot id when we have it. Sessions that recorded one are matched on it
+    // (so a renamed day keeps its history, and two same-named days don't pool);
+    // sessions without one still fall back to the day name.
+    const wantDayId = typeof dayId === "string" && dayId.trim() ? dayId : null;
     // Date cutoff for the active range — sessions older than this are dropped.
     const cutoff = new Date();
     cutoff.setHours(0, 0, 0, 0);
@@ -121,7 +125,9 @@ export default function ExerciseHistoryScreen() {
 
     const rows: SessionRow[] = [];
     for (const w of history) {
-      if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
+      if (wantDayId !== null && w.dayId) {
+        if (w.dayId !== wantDayId) continue;
+      } else if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
       // Filter by date window first (cheaper than walking exercises).
       const [yy, mm, dd] = w.date.split("-").map(Number);
       if (!Number.isFinite(yy) || !Number.isFinite(mm) || !Number.isFinite(dd)) continue;
@@ -151,7 +157,7 @@ export default function ExerciseHistoryScreen() {
     // Newest first.
     rows.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
     return rows;
-  }, [history, programs, exerciseName, dayName, rangeOption.days]);
+  }, [history, programs, exerciseName, dayName, dayId, rangeOption.days]);
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -163,16 +169,16 @@ export default function ExerciseHistoryScreen() {
       {/* Top gradient blur — mirrors program-history-detail.tsx */}
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           maskElement={
             <LinearGradient
               colors={["black", "rgba(0,0,0,0.8)", "rgba(0,0,0,0.6)", "rgba(0,0,0,0.4)", "rgba(0,0,0,0.2)", "transparent"]}
               locations={[0, 0.45, 0.65, 0.8, 0.9, 1]}
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
             />
           }
         >
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </View>
 

@@ -35,6 +35,9 @@ interface Props {
    * and forwarded to the full-history page so it stays on the same slice.
    */
   dayName?: string;
+  /** Stable id of that day, forwarded alongside the label so the full-history
+   *  page can scope to THIS day rather than to everything sharing its name. */
+  dayId?: string;
   history: ExerciseDataPoint[];
   prs: PRs;
   /** "kg" | "lbs" */
@@ -138,7 +141,7 @@ const GIFTED_TOP_PAD = 10;
  * - Tapping a point highlights it and shows date/weight/reps above the chart.
  * - Tapping a PR tile routes to that PR's source workout via /workout-detail.
  */
-export default function ExerciseProgressionChart({ exerciseName, dayName, history, prs, unit }: Props) {
+export default function ExerciseProgressionChart({ exerciseName, dayName, dayId, history, prs, unit }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
@@ -570,7 +573,7 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, histor
       onPress={() => {
         router.navigate({
           pathname: "/exercise-history",
-          params: { exerciseName, ...(dayName ? { dayName } : {}) },
+          params: { exerciseName, ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}) },
         });
       }}
       accessibilityRole="button"

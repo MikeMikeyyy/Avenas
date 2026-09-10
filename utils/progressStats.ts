@@ -11,9 +11,10 @@
 //   - Exercise name match is case-insensitive trim across the whole module.
 //   - Date math always uses Date objects + toYMD; never string arithmetic.
 
-import { CompletedWorkout, SavedProgram } from "../constants/programs";
+import { CompletedWorkout, ProgramDayRef, SavedProgram } from "../constants/programs";
 import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
 import { MONTH_NAMES, toYMD, parseStoredDate } from "./dates";
+import { historicalDays, markDayRefLabels, programDaysWithExtras } from "./programDays";
 import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
 import type {
   ExerciseDataPoint,
@@ -477,22 +478,22 @@ export function bucketVolumeByMonth(
  * One ExerciseDataPoint per workout that contains `exerciseName` (case-insensitive trim).
  * Sorted ascending by completedAt so it can feed a left-to-right line chart.
  *
- * `dayName` (optional, case-insensitive trim) restricts the walk to workouts
- * whose `workoutName` matches — the Progress drill-down tracks progress per
- * (day, exercise) pair, so an exercise programmed on two days (lateral raises
- * on both Push and Arms) never mixes the two contexts' numbers. Omit it for
- * the day-agnostic view (e.g. the post-workout summary's PR check).
+ * `day` (optional) restricts the walk to sessions logged on that workout day —
+ * the Progress drill-down tracks progress per (day, exercise) pair, so an
+ * exercise programmed on two days (lateral raises on both Push and Arms) never
+ * mixes the two contexts' numbers, and two days that merely share a NAME stay
+ * separate too (see workoutMatchesDay). Omit it for the day-agnostic view
+ * (e.g. the post-workout summary's PR check).
  */
 export function collectExerciseHistory(
   workouts: CompletedWorkout[],
   exerciseName: string,
-  dayName?: string,
+  day?: ProgramDayRef,
 ): ExerciseDataPoint[] {
   const want = key(exerciseName);
-  const wantDay = dayName == null ? null : key(dayName);
   const points: ExerciseDataPoint[] = [];
   for (const w of workouts) {
-    if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
+    if (day && !workoutMatchesDay(w, day)) continue;
     let topWeight = 0;
     let topReps = 0;
     let bestSetVolume = 0;
@@ -564,7 +565,7 @@ function epley(weight: number, reps: number): number {
  * 1RM PR walks the entire set list (not just the session's top set) so that a
  * lighter-but-higher-rep set can take the 1RM crown.
  */
-export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exerciseName: string, dayName?: string): PRs {
+export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exerciseName: string, day?: ProgramDayRef): PRs {
   const heaviest = history.reduce<{ p: ExerciseDataPoint; reps: number } | null>((acc, p) => {
     if (!acc || p.topWeight > acc.p.topWeight) return { p, reps: p.topReps };
     return acc;
@@ -583,10 +584,9 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
   // `history` arrives already day-filtered, so the raw walk must match or a
   // set from the other day's session could take the 1RM crown.
   const want = key(exerciseName);
-  const wantDay = dayName == null ? null : key(dayName);
   let oneRm: { value: number; workoutId: string; date: string; weight: number; reps: number; completedAt: string } | null = null;
   for (const w of workouts) {
-    if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
+    if (day && !workoutMatchesDay(w, day)) continue;
     for (const ex of w.exercises) {
       if (key(ex.name) !== want) continue;
       for (const s of ex.sets) {
@@ -686,42 +686,78 @@ export function programsInScope(scope: ProgramScope, programs: SavedProgram[]): 
 }
 
 /**
- * Unique non-Rest day names across the programs in scope. Case-insensitive trim
- * dedupe; preserves the case of the first occurrence in iteration order.
+ * Every workout day across the programs in scope, as identified refs — cycle
+ * order per program, then that program's extraWorkouts.
+ *
+ * Deliberately NOT deduped by name. A cycle that schedules "Upper" twice is two
+ * separate days that happen to read the same, with their own exercises and
+ * their own numbers; collapsing them into one row is what merged the two into a
+ * single "Upper" everywhere downstream. The refs come back marked so the UI can
+ * qualify same-named rows (`duplicateLabel`) and so pre-dayId sessions land on
+ * exactly one of them (`absorbsUnidentified`).
  */
-export function uniqueDaysInScope(scope: ProgramScope, programs: SavedProgram[]): string[] {
-  const seen = new Map<string, string>();
-  for (const p of programsInScope(scope, programs)) {
-    for (const name of p.cyclePattern) {
-      if (!name) continue;
-      const k = key(name);
-      if (k === "rest") continue;
-      if (!seen.has(k)) seen.set(k, name);
-    }
-    for (const name of p.extraWorkouts ?? []) {
-      if (!name) continue;
-      const k = key(name);
-      if (k === "rest") continue;
-      if (!seen.has(k)) seen.set(k, name);
-    }
+export function scopedProgramDays(
+  scope: ProgramScope,
+  programs: SavedProgram[],
+  scopedWorkouts: CompletedWorkout[] = [],
+): ProgramDayRef[] {
+  const inScope = programsInScope(scope, programs);
+  const refs: ProgramDayRef[] = [];
+  for (const p of inScope) refs.push(...programDaysWithExtras(p));
+  // Days the program no longer has but that were trained under it — appended
+  // after the live cycle so the page reads "here's your program, and here's
+  // what came before it". Without this, editing a day out of a program (or
+  // renaming + rebuilding one) would delete its history from the page.
+  refs.push(...historicalDays(scopedWorkouts, inScope, refs));
+  // Re-mark across the FULL scope: a label unique inside one program can be
+  // duplicated once a second program joins, and only one day in the whole scope
+  // may absorb the sessions that carry no dayId.
+  return markDayRefLabels(refs);
+}
+
+/**
+ * Does completed session `w` belong to workout day `day`?
+ *
+ *   - The session recorded a `dayId` → exact slot match. Two days that share a
+ *     name never trade sessions, and a renamed day keeps its own.
+ *   - No `dayId` (free workout, or a record the backfill couldn't attribute) →
+ *     fall back to the day's NAME, but only onto the first day in scope with
+ *     that name (`absorbsUnidentified`), so an ambiguous record is counted once
+ *     rather than on every same-named row.
+ *
+ * The programId guard keeps the positional fallback ids (`d0`, `d1`, …, which
+ * are only unique within a program) from matching across programs under the
+ * "All programs" scope.
+ */
+export function workoutMatchesDay(w: CompletedWorkout, day: ProgramDayRef): boolean {
+  if (w.dayId) {
+    if (w.dayId !== day.dayId) return false;
+    return !w.programId || !day.programId || w.programId === day.programId;
   }
-  return Array.from(seen.values());
+  if (key(w.workoutName) !== key(day.label)) return false;
+  // "" = free workout: belongs to no program, so it isn't excluded by the guard.
+  if (w.programId && day.programId && w.programId !== day.programId) return false;
+  return day.absorbsUnidentified;
 }
 
 // ─── public: exercises logged for a workout day ──────────────────────────────
 
 /**
- * Across the in-scope completed workouts whose `workoutName` matches `dayName`,
- * collect a deduped list of exercises (case-insensitive trim). Each row reports
- * the most recent weight × reps and the total session count.
+ * Across the in-scope completed workouts logged on `day` (matched by identity,
+ * see workoutMatchesDay), collect a deduped list of exercises (case-insensitive
+ * trim). Each row reports the most recent weight × reps and the total session
+ * count.
+ *
+ * Two days that share a name therefore produce two independent lists, so the
+ * same exercise programmed on both — a chest press at different sets and reps
+ * on each — is reported separately per day rather than merged.
  *
  * Sorted by lastDate desc (most recently logged first).
  */
 export function collectLoggedExercisesForDay(
   workouts: CompletedWorkout[],
-  dayName: string,
+  day: ProgramDayRef,
 ): LoggedExerciseRow[] {
-  const want = key(dayName);
   // exerciseKey → { name (preserve case), latestSet, lastDate, lastCompletedAt, sessionCount }
   const acc = new Map<
     string,
@@ -735,7 +771,7 @@ export function collectLoggedExercisesForDay(
     }
   >();
   for (const w of workouts) {
-    if (key(w.workoutName) !== want) continue;
+    if (!workoutMatchesDay(w, day)) continue;
     // For each exercise in this workout, find the latest "working+done" set
     // to use as the "lastWeight × lastReps" preview.
     for (const ex of w.exercises) {
@@ -764,6 +800,12 @@ export function collectLoggedExercisesForDay(
       }
     }
   }
+  // An exercise the day no longer programs was swapped out mid-run. Its history
+  // stays (it happened) but is flagged, so the reader knows the trend stops
+  // because the programming changed. Days with no prescription to compare
+  // against (free workouts, historical days) report everything as in-program.
+  const programmed = new Set(day.programExercises);
+  const comparable = programmed.size > 0;
   return Array.from(acc.values())
     .sort((a, b) => b.lastCompletedAt.localeCompare(a.lastCompletedAt))
     .map(r => ({
@@ -772,20 +814,20 @@ export function collectLoggedExercisesForDay(
       lastReps: r.lastReps,
       lastDate: r.lastDate,
       sessionCount: r.sessionCount,
+      inProgram: !comparable || programmed.has(key(r.name)),
     }));
 }
 
 /**
- * Session count for `dayName` across in-scope workouts (used in the day row).
+ * Session count for `day` across in-scope workouts (used in the day row).
  */
 export function sessionCountForDay(
   workouts: CompletedWorkout[],
-  dayName: string,
+  day: ProgramDayRef,
 ): number {
-  const want = key(dayName);
   let n = 0;
   for (const w of workouts) {
-    if (key(w.workoutName) === want) n += 1;
+    if (workoutMatchesDay(w, day)) n += 1;
   }
   return n;
 }

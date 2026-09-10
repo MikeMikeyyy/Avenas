@@ -23,6 +23,7 @@ import { flushCloudPush } from "../lib/syncManager";
 import { reconcileAccountType } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
+import { runDayIdMigrationIfNeeded } from "../utils/dayIdMigration";
 import { autoPauseIfIdle } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 
@@ -140,11 +141,15 @@ export default function RootLayout() {
     Nunito_700Bold,
   });
 
-  // One-shot lb→kg weight migration. Gate the whole app on it so no screen ever
-  // renders pre-migration data through the new kg-canonical display lens.
+  // One-shot data migrations, run in sequence (both rewrite @avenas/programs and
+  // @avenas/workout_history, so they must not interleave). The whole app is
+  // gated on them: no screen may render pre-migration data through the new
+  // kg-canonical display lens, or read a program day before it has a stable id.
   const [migrated, setMigrated] = useState(false);
   useEffect(() => {
-    runWeightUnitMigrationIfNeeded().finally(() => setMigrated(true));
+    runWeightUnitMigrationIfNeeded()
+      .then(runDayIdMigrationIfNeeded)
+      .finally(() => setMigrated(true));
   }, []);
 
   // Splash stays up until fonts load here, then until the profile context

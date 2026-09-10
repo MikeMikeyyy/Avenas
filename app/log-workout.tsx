@@ -30,6 +30,7 @@ import {
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
 import { buildPrevByName, normalizeExerciseName } from "../utils/workout";
+import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -846,8 +847,8 @@ function ExerciseCard({
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function LogWorkoutScreen() {
-  const { date, workoutName, programId, addToProgramId } = useLocalSearchParams<{
-    date: string; workoutName: string; programId?: string; addToProgramId?: string;
+  const { date, workoutName, programId, addToProgramId, dayId } = useLocalSearchParams<{
+    date: string; workoutName: string; programId?: string; addToProgramId?: string; dayId?: string;
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -995,12 +996,18 @@ export default function LogWorkoutScreen() {
       const prog = progs.find(p => p.id === pid);
       if (!prog) return;
 
-      const entry = Object.entries(prog.workouts).find(([key]) =>
-        key === workoutName || key.endsWith(`:${workoutName}`)
-      );
-      if (!entry) return;
+      // Prefer the exact slot: a name lookup matches the FIRST day called
+      // "Upper", which loads the wrong template when the cycle has two.
+      const slot = dayId && dayId.length > 0 ? indexOfDayId(prog, dayId) : -1;
+      const template =
+        slot >= 0
+          ? prog.workouts[workoutKey(slot, prog.cyclePattern[slot] ?? workoutName)]
+          : Object.entries(prog.workouts).find(([key]) =>
+              key === workoutName || key.endsWith(`:${workoutName}`)
+            )?.[1];
+      if (!template) return;
 
-      const loaded: LogExercise[] = entry[1].map(ex => {
+      const loaded: LogExercise[] = template.map(ex => {
         const sets = normaliseSets(ex);
         return {
           id: makeId(),
@@ -1013,7 +1020,7 @@ export default function LogWorkoutScreen() {
       });
       setExercises(loaded);
     }).catch(() => {});
-  }, [draftRestored, programId, workoutName]);
+  }, [draftRestored, programId, workoutName, dayId]);
 
   // Autosave draft on change after restoration. Only persist once the user has actually
   // engaged (entered something, customised the list, or set a workout time), to avoid
@@ -1042,7 +1049,7 @@ export default function LogWorkoutScreen() {
       if (!raw) return;
       // Scope previous values to the day being logged (same-day sessions win,
       // any-day is only a fallback) — see buildPrevByName.
-      setPrevByName(buildPrevByName(JSON.parse(raw), date, workoutName));
+      setPrevByName(buildPrevByName(JSON.parse(raw), date, workoutName, dayId || undefined));
     }).catch(() => {});
   }, []);
 
@@ -1189,6 +1196,10 @@ export default function LogWorkoutScreen() {
       completedAt,
       workoutName: workoutName ?? "",
       programId: owningProgramId,
+      // The cycle slot the user picked. Absent for a free workout, and for a
+      // session logged from a surface that doesn't know the slot — those fall
+      // back to name matching on the Progress page.
+      dayId: dayId && dayId.length > 0 ? dayId : undefined,
       durationSeconds,
       sessionNotes: notes.trim() || undefined,
       exercises: exercises.map(ex => ({
@@ -1283,16 +1294,16 @@ export default function LogWorkoutScreen() {
       {/* Top gradient blur */}
       <View pointerEvents="none" style={[s.topGradient, { height: insets.top + 10 }]}>
         <MaskedView
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           maskElement={
             <LinearGradient
               colors={["black","rgba(0,0,0,0.8)","rgba(0,0,0,0.6)","rgba(0,0,0,0.3)","transparent"]}
               locations={[0, 0.45, 0.65, 0.85, 1]}
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
             />
           }
         >
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </View>
 

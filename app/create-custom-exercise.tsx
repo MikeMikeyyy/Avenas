@@ -249,14 +249,14 @@ export default function CreateCustomExerciseScreen() {
       </TouchableOpacity>
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
-        <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
+        <MaskedView style={StyleSheet.absoluteFill} maskElement={
           <LinearGradient
             colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
             locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
         }>
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </View>
 

@@ -227,7 +227,7 @@ export default function ChatThreadView<T extends ThreadMessage>({
 }
 
 const styles = StyleSheet.create({
-  empty:      { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
+  empty:      { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center" },
   emptyText:  { fontFamily: FontFamily.regular, fontSize: 14 },
 
   dayWrap:    { alignItems: "center", marginVertical: 10 },

@@ -64,12 +64,12 @@ export default function Scanner({
 }
 
 const styles = StyleSheet.create({
-  root:        { ...StyleSheet.absoluteFillObject, backgroundColor: "#000", zIndex: 50 },
+  root:        { ...StyleSheet.absoluteFill, backgroundColor: "#000", zIndex: 50 },
   permWrap:    { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 40, gap: 16 },
   permText:    { fontFamily: FontFamily.regular, fontSize: 15, color: "#fff", textAlign: "center", lineHeight: 21 },
   permBtn:     { backgroundColor: ACCT, borderRadius: 50, paddingVertical: 13, paddingHorizontal: 28 },
   permBtnText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-  overlay:     { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", gap: 20 },
+  overlay:     { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: 20 },
   frame:       { width: 230, height: 230, borderRadius: 28, borderWidth: 3, borderColor: "rgba(255,255,255,0.9)" },
   hint:        { fontFamily: FontFamily.semibold, fontSize: 15, color: "#fff" },
   closeBtn:    { position: "absolute", top: 56, right: 22, width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center" },

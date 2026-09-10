@@ -35,7 +35,8 @@ export default function VideoDemo({ uri, size, radius = 16, muted = false }: Pro
         // `contain` letterboxes so portrait and landscape clips both show whole.
         contentFit="contain"
         nativeControls
-        allowsFullscreen
+        // SDK 57 replaced the `allowsFullscreen` boolean with fullscreenOptions.
+        fullscreenOptions={{ enable: true }}
         allowsPictureInPicture={false}
       />
     </View>

@@ -43,10 +43,15 @@ import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
 import { formatStoredDate } from "../utils/dates";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { musclesForExercise } from "../utils/muscleGroups";
+import { canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, trainingDayKeys } from "../utils/programDays";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DRAFT_KEY = "@avenas/new_program_draft";
+
+// Stable empty list, so a closed sheet doesn't hand its list a fresh array
+// identity on every render (which would rebuild its drag PanResponders).
+const NO_EXERCISES: Exercise[] = [];
 
 // Dev-only warning helper. Compiled out of release builds via `__DEV__`.
 function warnStorage(op: string, key: string, err: unknown) {
@@ -96,6 +101,10 @@ type ProgramDraft = {
   totalWeeks: number;
   cycleDays: number;
   cyclePattern: string[];
+  /** Parallel to cyclePattern — see SavedProgram.dayIds. Carried through the
+   *  draft so a day keeps the id its logged sessions point at across an
+   *  interrupted edit. Absent in drafts written before this field existed. */
+  dayIds?: string[];
   isTrainingDay: boolean[];
   workouts: WorkoutMap;
   editId?: string;
@@ -107,21 +116,9 @@ function clamp(val: number, min: number, max: number) {
   return Math.max(min, Math.min(max, val));
 }
 
-// Returns a unique key per training day in format "index:label"
-function trainingDayKeys(names: string[], isTraining: boolean[]): string[] {
-  const result: string[] = [];
-  for (let i = 0; i < isTraining.length; i++) {
-    if (!isTraining[i]) continue;
-    const label = names[i].trim() || "Workout";
-    result.push(`${i}:${label}`);
-  }
-  return result;
-}
-
-// Extracts the display label from a day key ("3:Push" → "Push")
-function dayLabel(key: string): string {
-  return key.split(":").slice(1).join(":");
-}
+// Day-key helpers (trainingDayKeys / dayLabel / parseDayKey) and the rename-safe
+// re-key pass (canonicalizeWorkouts) live in utils/programDays.ts — pure logic,
+// covered by scripts/verify-data-layer.ts.
 
 // Collision-proof exercise id. A bare `Date.now()` collides when two exercises
 // are added on the same millisecond (multi-select batches, or a second add
@@ -343,6 +340,31 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
   }));
 
   const [collapsingSetIdx, setCollapsingSetIdx] = useState<number | null>(null);
+  // Removing a set must not hinge on the collapse animation finishing either.
+  // The Remove Set button is disabled while a collapse is pending, so a
+  // withTiming that never reported `finished` left the row invisible AND the
+  // button dead for the rest of the session. The ref latch keeps the animation
+  // callback and the safety timer from both trimming a set.
+  const setsRef = useRef(sets);
+  setsRef.current = sets;
+  const setRemovalPending = useRef(false);
+  const setCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commitRemoveSet = useCallback(() => {
+    if (!setRemovalPending.current) return;
+    setRemovalPending.current = false;
+    if (setCollapseTimer.current) { clearTimeout(setCollapseTimer.current); setCollapseTimer.current = null; }
+    setCollapsingSetIdx(null);
+    onUpdateSets(setsRef.current.slice(0, -1));
+  }, [onUpdateSets]);
+  const startRemoveSet = useCallback(() => {
+    if (setsRef.current.length <= 1 || setRemovalPending.current) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRemovalPending.current = true;
+    setCollapsingSetIdx(setsRef.current.length - 1);
+    setCollapseTimer.current = setTimeout(commitRemoveSet, 340);
+  }, [commitRemoveSet]);
+  useEffect(() => () => { if (setCollapseTimer.current) clearTimeout(setCollapseTimer.current); }, []);
+
   const prevSetCount = useRef(sets.length);
   const newlyAddedIdx = sets.length > prevSetCount.current ? sets.length - 1 : null;
   const setRowHeight = useRef(0);
@@ -538,7 +560,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           <CollapsibleCard
             key={idx}
             isCollapsing={idx === collapsingSetIdx}
-            onCollapsed={() => { setCollapsingSetIdx(null); onUpdateSets(sets.slice(0, -1)); }}
+            onCollapsed={commitRemoveSet}
             expanding={idx === newlyAddedIdx}
             naturalHeight={idx === newlyAddedIdx ? setRowHeight.current : undefined}
           >
@@ -635,11 +657,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
       {/* Add / Remove row */}
       <View style={[styles.exAddRemoveRow, { borderTopColor: divider }]}>
         <BounceButton
-          onPress={() => {
-            if (sets.length <= 1 || collapsingSetIdx !== null) return;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            setCollapsingSetIdx(sets.length - 1);
-          }}
+          onPress={startRemoveSet}
           style={{ opacity: sets.length <= 1 ? 0.35 : 1, flex: 1, marginRight: 6 }}
         >
           <NeuCard dark={isDark} radius={10} shadowSize="sm" style={{ borderRadius: 10 }}>
@@ -1068,6 +1086,11 @@ function DraggableExerciseList({
   const onDragStateRef = useRef(onDragStateChange);
   onDragStateRef.current = onDragStateChange;
 
+  // Unmounting mid-drag skips onPanResponderRelease/Terminate, so the parent's
+  // scroll lock would stay on with no gesture left to lift it — the sheet then
+  // looks frozen. Always hand the lock back on the way out.
+  useEffect(() => () => { onDragStateRef.current(false); }, []);
+
   // After a reorder, React commits the new order to native then this fires before the frame
   // paints — resetting all offsets to 0 is invisible because exercises are already at their
   // correct rendered positions. Always reset on exercises change; no flag needed.
@@ -1082,6 +1105,10 @@ function DraggableExerciseList({
         onStartShouldSetPanResponderCapture: () => true,
         onMoveShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponderCapture: () => true,
+        // An enclosing ScrollView must not be able to take the gesture back: a
+        // steal ends the drag without a release, which is how the scroll lock
+        // used to get stuck on.
+        onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: () => {
           activeIdxRef.current = idx;
           hoverIdxRef.current = idx;
@@ -1219,6 +1246,9 @@ interface ReorderSheetProps {
 function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, onRemoveExercise, onEditExercise, onClose }: ReorderSheetProps) {
   const slideY = useRef(new Animated.Value(500)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
+  // The list scrolls (a day can hold more rows than fit), so it must not fight
+  // row drags — same trick as the Workout Summary sheet.
+  const [listScrollEnabled, setListScrollEnabled] = useState(true);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -1248,6 +1278,7 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
 
   useEffect(() => {
     if (visible) {
+      setListScrollEnabled(true);
       slideY.setValue(500);
       backdropOpacity.setValue(0);
       Animated.parallel([
@@ -1257,12 +1288,19 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
     }
   }, [visible]);
 
-  const closeSheet = useCallback(() => {
+  // Slide the sheet away, THEN run cb. Anything that opens the exercise picker
+  // has to go through this: two RN Modals presented from the same screen at once
+  // is a dead end on iOS (UIKit refuses the second presentation while RN has
+  // already latched _isPresented, so the picker never opens again). See the
+  // single-modal note on NewProgramScreen.
+  const animateOut = useCallback((cb: () => void) => {
     Animated.parallel([
       Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
-  }, [slideY, backdropOpacity, onClose]);
+    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); cb(); });
+  }, [slideY, backdropOpacity]);
+
+  const closeSheet = useCallback(() => animateOut(onClose), [animateOut, onClose]);
 
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
 
@@ -1279,18 +1317,26 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
             <Text style={[styles.restTitle, { color: t.tp }]}>Reorder Exercises</Text>
             <Text style={[styles.restSubtitle, { color: t.ts }]}>{dayLabel(day)}</Text>
           </View>
-          <View style={styles.reorderListWrap}>
+          {/* Scrollable + height-capped: without both, a day with a dozen
+              exercises grew the sheet past the top of the screen and its first
+              rows (and the drag handle) became unreachable. */}
+          <ScrollView
+            style={{ flexGrow: 0 }}
+            scrollEnabled={listScrollEnabled}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.reorderListWrap}
+          >
             <DraggableExerciseList
               exercises={exercises}
               day={day}
               isDark={isDark}
               t={t}
               onReorderExercises={onReorderExercises}
-              onDragStateChange={() => {}}
+              onDragStateChange={dragging => setListScrollEnabled(!dragging)}
               onRemoveExercise={onRemoveExercise}
-              onEditExercise={onEditExercise}
+              onEditExercise={(exDay, id) => animateOut(() => onEditExercise(exDay, id))}
             />
-          </View>
+          </ScrollView>
           <View style={styles.restDoneRow}>
             <BounceButton
               onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}
@@ -1351,6 +1397,9 @@ function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercis
   const onDragStateRef = useRef(onDragStateChange);
   onDragStateRef.current = onDragStateChange;
 
+  // See DraggableExerciseList: never leave the parent's scroll lock held.
+  useEffect(() => () => { onDragStateRef.current(false); }, []);
+
   useLayoutEffect(() => {
     rowAnims.current.forEach(a => a.setValue(0));
   }, [cyclePattern, isTrainingDay]);
@@ -1362,6 +1411,7 @@ function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercis
         onStartShouldSetPanResponderCapture: () => true,
         onMoveShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: () => {
           activeIdxRef.current = idx;
           hoverIdxRef.current = idx;
@@ -1696,8 +1746,6 @@ interface DayCardProps {
   onApplyRestToAll: (secs: number) => void;
   onRemoveExercise: (day: string, id: string) => void;
   onStartCollapse: (day: string, id: string) => void;
-  onReorderExercises: (day: string, exercises: Exercise[]) => void;
-  onDragStateChange: (dragging: boolean) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   onOpenReorder: (day: string) => void;
   onMeasureDay: (day: string, y: number) => void;
@@ -1710,7 +1758,7 @@ interface DayCardProps {
 const DayCard = memo(function DayCard({
   day, exercises, isDark, collapsingIds, customImageByName,
   onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll,
-  onRemoveExercise, onStartCollapse, onReorderExercises, onDragStateChange,
+  onRemoveExercise, onStartCollapse,
   onInputFocus, onOpenReorder, onMeasureDay,
 }: DayCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -1797,7 +1845,7 @@ const DayCard = memo(function DayCard({
 });
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, onReorderExercises, onDragStateChange, isDark, collapsingIds, onStartCollapse, onInputFocus, customImageByName, onMeasureDay,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, isDark, collapsingIds, onStartCollapse, onInputFocus, customImageByName, onMeasureDay, onOpenReorder,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1806,20 +1854,17 @@ function Step2({
   onUpdateExerciseSets: (day: string, id: string, sets: ProgramSet[]) => void;
   onApplyRestToAll: (secs: number) => void;
   onRemoveExercise: (day: string, id: string) => void;
-  onReorderExercises: (day: string, exercises: Exercise[]) => void;
-  onDragStateChange: (dragging: boolean) => void;
   isDark: boolean;
   collapsingIds: Set<string>;
   onStartCollapse: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   customImageByName: Record<string, string>;
   onMeasureDay: (day: string, y: number) => void;
+  /** Opens the Reorder sheet, which the SCREEN owns — every modal on this
+      screen is mounted from one place so two can never be presented at once. */
+  onOpenReorder: (day: string) => void;
 }) {
-  const t = isDark ? APP_DARK : APP_LIGHT;
   const days = Object.keys(workouts);
-  const [reorderDay, setReorderDay] = useState<string | null>(null);
-
-  const openReorder = useCallback((day: string) => setReorderDay(day), []);
 
   return (
     <>
@@ -1838,10 +1883,8 @@ function Step2({
           onApplyRestToAll={onApplyRestToAll}
           onRemoveExercise={onRemoveExercise}
           onStartCollapse={onStartCollapse}
-          onReorderExercises={onReorderExercises}
-          onDragStateChange={onDragStateChange}
           onInputFocus={onInputFocus}
-          onOpenReorder={openReorder}
+          onOpenReorder={onOpenReorder}
           onMeasureDay={onMeasureDay}
         />
       ))}
@@ -1849,18 +1892,6 @@ function Step2({
       {/* No "Create Program" button down here any more — it's a floating pill
           paired with Summary at the bottom of the screen, so it's reachable
           without scrolling to the end of a long program. */}
-
-      <ReorderSheet
-        visible={reorderDay !== null}
-        day={reorderDay ?? ""}
-        exercises={reorderDay ? (workouts[reorderDay] ?? []) : []}
-        isDark={isDark}
-        t={t}
-        onReorderExercises={onReorderExercises}
-        onRemoveExercise={onRemoveExercise}
-        onEditExercise={onEditExercise}
-        onClose={() => setReorderDay(null)}
-      />
     </>
   );
 }
@@ -1879,11 +1910,15 @@ export default function NewProgramScreen() {
   const isSharedEditMode = !!sharedId && !editId && !reviewId;
 
   const [step, setStep] = useState<1 | 2>(1);
-  const [scrollEnabled, setScrollEnabled] = useState(true);
   const [name, setName] = useState("");
   const [totalWeeks, setTotalWeeks] = useState(8);
   const [cycleDays, setCycleDays] = useState(7);
   const [cyclePattern, setCyclePattern] = useState<string[]>(Array(7).fill(""));
+  // Stable per-slot ids, parallel to cyclePattern. Renaming a day leaves these
+  // untouched (that's the whole point); reordering permutes them alongside it,
+  // and a cycle resize grows/trims them. Saved onto the program so completed
+  // sessions can point at a day rather than at its current name.
+  const [dayIds, setDayIds] = useState<string[]>(() => normalizeDayIds(undefined, 7));
   const [isTrainingDay, setIsTrainingDay] = useState<boolean[]>([true, true, true, false, false, false, false]);
   const [workouts, setWorkouts] = useState<WorkoutMap>({});
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
@@ -1897,9 +1932,21 @@ export default function NewProgramScreen() {
     return map;
   }, [customExercises]);
   const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
+  // ── Modals ──────────────────────────────────────────────────────────────────
+  // Every modal surface on this screen is owned here, and AT MOST ONE may be
+  // mounted at a time. iOS presents each RN <Modal> from this screen's view
+  // controller, and UIKit silently refuses a second presentation while the first
+  // is up — but RN has already set its internal _isPresented flag, so that modal
+  // is then permanently stuck "presented" and never appears again for the life of
+  // the screen (RCTModalHostViewComponentView.mm: ensurePresentedOnlyIfNeeded).
+  // That is what froze the builder: the Reorder sheet opened the picker without
+  // closing itself, and Add Exercise / tap-to-swap died until you left the page.
+  // So: sheet openers close the others, and the picker render is gated below.
   const [pickerState, setPickerState] = useState<{ day: string; replaceId?: string } | null>(null);
   // Workout Summary sheet (floating button on Step 2).
   const [summaryOpen, setSummaryOpen] = useState(false);
+  // Per-day Reorder sheet (drag handle on an exercise row).
+  const [reorderDay, setReorderDay] = useState<string | null>(null);
   // First-run coach mark teaching the tap-to-toggle Training/Rest interaction.
   const [showCycleCoach, setShowCycleCoach] = useState(false);
   // First-run coach mark for Step 2 — two pages: (1) set badges toggle
@@ -1957,7 +2004,11 @@ export default function NewProgramScreen() {
   // Set to true before intentional navigation so beforeRemove skips the dialog
   const isLeavingIntentionally = useRef(false);
   // Snapshot of the program state as it was loaded in edit mode
-  const originalEdit = useRef<{ name: string; totalWeeks: number; cycleDays: number; isTrainingDay: boolean[]; cyclePattern: string[]; workouts: WorkoutMap } | null>(null);
+  // `dayIds` rides along purely so the save can tell which days changed identity
+  // (see forkChangedDayIds). It is deliberately NOT part of `hasChanges` — ids
+  // are internal, and a program whose ids were just filled in by the one-shot
+  // backfill must not read as edited.
+  const originalEdit = useRef<{ name: string; totalWeeks: number; cycleDays: number; isTrainingDay: boolean[]; cyclePattern: string[]; dayIds: string[]; workouts: WorkoutMap } | null>(null);
   // Remembers which day's picker was open before navigating to create-custom-exercise
   const pendingPickerDay = useRef<string | null>(null);
 
@@ -2046,15 +2097,15 @@ export default function NewProgramScreen() {
           if (snap) {
             const isTraining = snap.cyclePattern.map(d => d !== "Rest");
             const names = snap.cyclePattern.map(d => d === "Rest" ? "" : d);
-            const canonicalDays = trainingDayKeys(names, isTraining);
-            const rawWorkouts: WorkoutMap = {};
-            canonicalDays.forEach(d => { rawWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
-            const canonicalWorkouts = dedupeExerciseIds(rawWorkouts);
+            const canonicalWorkouts = dedupeExerciseIds(
+              canonicalizeWorkouts(snap.workouts ?? {}, names, isTraining),
+            );
             setName(snap.name);
             setTotalWeeks(snap.totalWeeks);
             setCycleDays(snap.cycleDays);
             setIsTrainingDay(isTraining);
             setCyclePattern(names);
+            setDayIds(normalizeDayIds(snap.dayIds, snap.cyclePattern.length));
             setWorkouts(canonicalWorkouts);
             originalEdit.current = {
               name: snap.name,
@@ -2062,6 +2113,7 @@ export default function NewProgramScreen() {
               cycleDays: snap.cycleDays,
               isTrainingDay: isTraining,
               cyclePattern: names,
+              dayIds: normalizeDayIds(snap.dayIds, snap.cyclePattern.length),
               workouts: canonicalWorkouts,
             };
           }
@@ -2076,15 +2128,15 @@ export default function NewProgramScreen() {
           if (snap) {
             const isTraining = snap.cyclePattern.map(d => d !== "Rest");
             const names = snap.cyclePattern.map(d => d === "Rest" ? "" : d);
-            const canonicalDays = trainingDayKeys(names, isTraining);
-            const rawWorkouts: WorkoutMap = {};
-            canonicalDays.forEach(d => { rawWorkouts[d] = (snap.workouts ?? {})[d] ?? []; });
-            const canonicalWorkouts = dedupeExerciseIds(rawWorkouts);
+            const canonicalWorkouts = dedupeExerciseIds(
+              canonicalizeWorkouts(snap.workouts ?? {}, names, isTraining),
+            );
             setName(snap.name);
             setTotalWeeks(snap.totalWeeks);
             setCycleDays(snap.cycleDays);
             setIsTrainingDay(isTraining);
             setCyclePattern(names);
+            setDayIds(normalizeDayIds(snap.dayIds, snap.cyclePattern.length));
             setWorkouts(canonicalWorkouts);
             originalEdit.current = {
               name: snap.name,
@@ -2092,6 +2144,7 @@ export default function NewProgramScreen() {
               cycleDays: snap.cycleDays,
               isTrainingDay: isTraining,
               cyclePattern: names,
+              dayIds: normalizeDayIds(snap.dayIds, snap.cyclePattern.length),
               workouts: canonicalWorkouts,
             };
           }
@@ -2099,6 +2152,10 @@ export default function NewProgramScreen() {
           // Edit mode — check for an in-progress draft first, then fall back to saved program
           const draftRaw = await AsyncStorage.getItem(DRAFT_KEY);
           let loadedFromDraft = false;
+          // Day ids the draft supplied, if any. A draft written before this
+          // field existed has none, so the saved program's ids are used below
+          // rather than minting a second set that its history wouldn't match.
+          let draftDayIds: string[] | null = null;
           if (draftRaw) {
             const draft = JSON.parse(draftRaw) as ProgramDraft;
             if (draft.editId === editId) {
@@ -2109,12 +2166,19 @@ export default function NewProgramScreen() {
               if (draft.cycleDays) setCycleDays(draft.cycleDays);
               if (draft.cyclePattern) setCyclePattern(draft.cyclePattern);
               if (draft.isTrainingDay) setIsTrainingDay(draft.isTrainingDay);
+              if (draft.dayIds) {
+                draftDayIds = normalizeDayIds(draft.dayIds, (draft.cyclePattern ?? draft.dayIds).length);
+                setDayIds(draftDayIds);
+              }
               if (draft.workouts) {
-                // Canonicalize draft workouts so stale key formats don't cause false "hasChanges"
-                const draftDays = trainingDayKeys(draft.cyclePattern ?? [], draft.isTrainingDay ?? []);
-                const canonical: WorkoutMap = {};
-                draftDays.forEach(d => { canonical[d] = draft.workouts[d] ?? []; });
-                setWorkouts(dedupeExerciseIds(canonical));
+                // Canonicalize draft workouts so stale key formats don't cause
+                // false "hasChanges" — carrying by index, because a draft saved
+                // mid-rename holds the OLD key for a day the pattern already
+                // calls something else. Looking up the new key alone is what
+                // used to wipe that day's exercises on reopen.
+                setWorkouts(dedupeExerciseIds(
+                  canonicalizeWorkouts(draft.workouts, draft.cyclePattern ?? [], draft.isTrainingDay ?? []),
+                ));
               }
               loadedFromDraft = true;
             }
@@ -2128,10 +2192,9 @@ export default function NewProgramScreen() {
             const names = program.cyclePattern.map(d => d === "Rest" ? "" : d);
             // Canonicalize workouts to the same key format `handleNext` produces so
             // navigating between steps never triggers a spurious "hasChanges" diff.
-            const canonicalDays = trainingDayKeys(names, isTraining);
-            const rawWorkouts: WorkoutMap = {};
-            canonicalDays.forEach(d => { rawWorkouts[d] = (program.workouts ?? {})[d] ?? []; });
-            const canonicalWorkouts = dedupeExerciseIds(rawWorkouts);
+            const canonicalWorkouts = dedupeExerciseIds(
+              canonicalizeWorkouts(program.workouts ?? {}, names, isTraining),
+            );
             if (!loadedFromDraft) {
               setName(program.name);
               setTotalWeeks(program.totalWeeks);
@@ -2140,12 +2203,17 @@ export default function NewProgramScreen() {
               setCyclePattern(names);
               setWorkouts(canonicalWorkouts);
             }
+            // The saved program's ids are the ones its logged sessions point at,
+            // so they win unless the draft carried its own (a cycle resize mid-
+            // draft, say). Never mint a fresh set here.
+            if (!draftDayIds) setDayIds(normalizeDayIds(program.dayIds, program.cyclePattern.length));
             originalEdit.current = {
               name: program.name,
               totalWeeks: program.totalWeeks,
               cycleDays: program.cycleDays,
               isTrainingDay: isTraining,
               cyclePattern: names,
+              dayIds: normalizeDayIds(program.dayIds, program.cyclePattern.length),
               workouts: canonicalWorkouts,
             };
           }
@@ -2161,7 +2229,12 @@ export default function NewProgramScreen() {
             if (draft.cycleDays) setCycleDays(draft.cycleDays);
             if (draft.cyclePattern) setCyclePattern(draft.cyclePattern);
             if (draft.isTrainingDay) setIsTrainingDay(draft.isTrainingDay);
-            if (draft.workouts) setWorkouts(dedupeExerciseIds(draft.workouts));
+            if (draft.dayIds) setDayIds(normalizeDayIds(draft.dayIds, (draft.cyclePattern ?? draft.dayIds).length));
+            if (draft.workouts) {
+              setWorkouts(dedupeExerciseIds(
+                canonicalizeWorkouts(draft.workouts, draft.cyclePattern ?? [], draft.isTrainingDay ?? []),
+              ));
+            }
           }
         }
       } catch { /* corrupt data — use defaults */ }
@@ -2184,7 +2257,7 @@ export default function NewProgramScreen() {
   useEffect(() => {
     if (!isDraftLoaded.current) return;
     if (isReviewMode || isSharedEditMode) return;
-    const draft: ProgramDraft = { step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, ...(editId ? { editId } : {}) };
+    const draft: ProgramDraft = { step, name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, ...(editId ? { editId } : {}) };
     pendingDraft.current = draft;
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
     draftSaveTimer.current = setTimeout(() => {
@@ -2194,7 +2267,7 @@ export default function NewProgramScreen() {
       AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
         .catch((e) => warnStorage("setItem", DRAFT_KEY, e));
     }, 400);
-  }, [step, name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, editId, isReviewMode, isSharedEditMode]);
+  }, [step, name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, editId, isReviewMode, isSharedEditMode]);
   useEffect(() => () => {
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
     const pending = pendingDraft.current;
@@ -2255,6 +2328,10 @@ export default function NewProgramScreen() {
                 // SentProgram snapshot before navigating away.
                 const programName = name.trim() || "My Program";
                 const savedCyclePattern = cyclePattern.map((n, i) => isTrainingDay[i] ? (n.trim() || "Workout") : "Rest");
+                const savedDayIds = normalizeDayIds(dayIds, savedCyclePattern.length);
+                // Same re-key as handleFinish — this path can fire from Step 1,
+                // where a typed rename hasn't been folded into the keys yet.
+                const savedWorkouts = canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay);
                 const trainingDays = isTrainingDay.filter(Boolean).length;
                 try {
                   const list = await loadSentPrograms();
@@ -2271,7 +2348,8 @@ export default function NewProgramScreen() {
                     trainingDays,
                     cycleDays,
                     cyclePattern: savedCyclePattern,
-                    workouts,
+                    dayIds: savedDayIds,
+                    workouts: savedWorkouts,
                     extraWorkouts: prev?.extraWorkouts,
                     cycleOffset: prev?.cycleOffset,
                     completedDate: prev?.completedDate,
@@ -2287,7 +2365,7 @@ export default function NewProgramScreen() {
       );
     });
     return unsubscribe;
-  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern]);
+  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern, dayIds]);
 
   const handleCycleDaysChange = useCallback((next: number) => {
     const clamped = clamp(next, 2, 14);
@@ -2298,6 +2376,9 @@ export default function NewProgramScreen() {
     setIsTrainingDay(prev =>
       clamped > prev.length ? [...prev, ...Array(clamped - prev.length).fill(false)] : prev.slice(0, clamped)
     );
+    // Grow/trim alongside the pattern. Existing slots keep their ids, so
+    // shrinking and re-growing the cycle doesn't renumber the days that stayed.
+    setDayIds(prev => normalizeDayIds(prev, clamped));
   }, []);
 
   const toggleDay = useCallback((index: number) => {
@@ -2313,15 +2394,19 @@ export default function NewProgramScreen() {
     setWorkouts(prev => {
       const prevKeys = Object.keys(prev);
       if (prevKeys.length === days.length && days.every(d => d in prev)) return prev;
-      const next: WorkoutMap = {};
-      days.forEach((d: string) => { next[d] = prev[d] ?? []; });
-      return next;
+      return canonicalizeWorkouts(prev, cyclePattern, isTrainingDay);
     });
     setStep(2);
   }, [cyclePattern, isTrainingDay]);
 
   const addExercise = useCallback((day: string, exName: string, setCount = 1) => {
     setWorkouts(prev => {
+      // A stale day key must not conjure a phantom day into the map (it would
+      // render as a bogus day card and get saved with the program).
+      if (!(day in prev)) {
+        if (__DEV__) console.warn("[avenas] addExercise: unknown day key", day);
+        return prev;
+      }
       // New exercises inherit the prevailing rest timer: the most common
       // restSeconds (> 0) across the whole draft. Once the user sets a rest
       // anywhere (or applies one to all), later additions follow it — no
@@ -2353,18 +2438,23 @@ export default function NewProgramScreen() {
     });
   }, []);
 
+  // `day` is a captured key string ("2:Push"), and several paths re-key the
+  // workouts map (day reorder, a rename between steps). A stale key used to
+  // throw here (`prev[day].map` on undefined); it has to be a no-op instead.
   const updateExercise = useCallback((day: string, id: string, field: keyof Exercise, value: string | number | boolean) => {
-    setWorkouts(prev => ({
-      ...prev,
-      [day]: prev[day].map(e => e.id === id ? { ...e, [field]: value } : e),
-    }));
+    setWorkouts(prev => {
+      const list = prev[day];
+      if (!list) return prev;
+      return { ...prev, [day]: list.map(e => e.id === id ? { ...e, [field]: value } : e) };
+    });
   }, []);
 
   const updateExerciseSets = useCallback((day: string, id: string, sets: ProgramSet[]) => {
-    setWorkouts(prev => ({
-      ...prev,
-      [day]: prev[day].map(e => e.id === id ? { ...e, sets } : e),
-    }));
+    setWorkouts(prev => {
+      const list = prev[day];
+      if (!list) return prev;
+      return { ...prev, [day]: list.map(e => e.id === id ? { ...e, sets } : e) };
+    });
   }, []);
 
   // "Apply to All" in the rest picker: one rest value for every exercise on
@@ -2379,25 +2469,78 @@ export default function NewProgramScreen() {
     });
   }, []);
 
+  // Pending "remove after the collapse animation" timers, keyed by exercise id.
+  const collapseTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  // Idempotent: a no-op when the day key is stale or the exercise is already
+  // gone, and it returns the SAME workouts object so it can't spawn a phantom
+  // draft write. Both the animation callback and the safety timer call it.
   const removeExercise = useCallback((day: string, id: string) => {
-    setWorkouts(prev => ({ ...prev, [day]: prev[day].filter(e => e.id !== id) }));
-    setCollapsingIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+    const timer = collapseTimers.current.get(id);
+    if (timer) { clearTimeout(timer); collapseTimers.current.delete(id); }
+    setWorkouts(prev => {
+      const list = prev[day];
+      if (list?.some(e => e.id === id)) return { ...prev, [day]: list.filter(e => e.id !== id) };
+      // The day key can be rewritten between the tap and the removal (a day
+      // reorder re-indexes every key), so fall back to whichever day holds the
+      // id. Exercise ids are unique across the whole map — dedupeExerciseIds
+      // guarantees it — so this stays exact, and a delete can never be lost.
+      const owner = Object.keys(prev).find(k => prev[k]?.some(e => e.id === id));
+      if (!owner) return prev;
+      return { ...prev, [owner]: prev[owner].filter(e => e.id !== id) };
+    });
+    setCollapsingIds(prev => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }, []);
 
+  // The collapse animation is cosmetic; the removal is NOT allowed to depend on
+  // it. CollapsibleCard only removes the exercise from its withTiming callback
+  // when `finished` is true and latches so it can never retry — so an animation
+  // cut short (a reorder re-parenting the keyed card, a re-render storm) used to
+  // leave the exercise sitting at height 0: invisible, still counted in the day
+  // badge, still saved on Update, impossible to delete. Schedule it either way.
   const startCollapse = useCallback((day: string, id: string) => {
-    setCollapsingIds(prev => new Set(prev).add(id));
+    setCollapsingIds(prev => prev.has(id) ? prev : new Set(prev).add(id));
+    const existing = collapseTimers.current.get(id);
+    if (existing) clearTimeout(existing);
+    // Slightly past CollapsibleCard's 280ms collapse, so the animation normally
+    // lands first and this only fires when it didn't.
+    collapseTimers.current.set(id, setTimeout(() => removeExercise(day, id), 340));
+  }, [removeExercise]);
+
+  useEffect(() => () => {
+    collapseTimers.current.forEach(clearTimeout);
+    collapseTimers.current.clear();
   }, []);
 
   // Stable identities for the Step 2 handlers that end up as DayCard /
   // ExerciseRow props — inline arrows here would defeat their memo() and make
   // every keystroke in a set input re-render every day card (that lag was
   // user-visible on device).
-  const openPickerForDay = useCallback((day: string) => setPickerState({ day }), []);
-  const editExerciseInPicker = useCallback((day: string, id: string) => setPickerState({ day, replaceId: id }), []);
-  const handleDragStateChange = useCallback((dragging: boolean) => setScrollEnabled(!dragging), []);
+  //
+  // Both picker openers close the sheets first: see the single-modal note above.
+  const openPickerForDay = useCallback((day: string) => {
+    setSummaryOpen(false);
+    setReorderDay(null);
+    setPickerState({ day });
+  }, []);
+  const editExerciseInPicker = useCallback((day: string, id: string) => {
+    setSummaryOpen(false);
+    setReorderDay(null);
+    setPickerState({ day, replaceId: id });
+  }, []);
+  const openReorderForDay = useCallback((day: string) => {
+    setSummaryOpen(false);
+    setPickerState(null);
+    setReorderDay(day);
+  }, []);
 
   const reorderExercises = useCallback((day: string, exercises: Exercise[]) => {
-    setWorkouts(prev => ({ ...prev, [day]: exercises }));
+    setWorkouts(prev => (day in prev ? { ...prev, [day]: exercises } : prev));
   }, []);
 
   // Reorder the cycle (Workout Summary sheet): move the day at `from` to `to`,
@@ -2411,13 +2554,24 @@ export default function NewProgramScreen() {
     order.splice(to, 0, moved);
     setCyclePattern(order.map(i => cyclePattern[i]));
     setIsTrainingDay(order.map(i => isTrainingDay[i]));
+    // Ids travel WITH their day, so a completed session logged against day 3
+    // still points at that workout after it's dragged to position 1.
+    setDayIds(prev => normalizeDayIds(order.map(i => prev[i]), order.length));
     setWorkouts(prev => {
+      // Re-index the keys the map ALREADY has, keeping each key's own label.
+      // Rebuilding the label from cyclePattern instead meant a day whose stored
+      // label had drifted from the pattern looked up a key that wasn't there,
+      // and its exercises were silently replaced with [].
+      const newIdxOf = new Map<number, number>();
+      order.forEach((oldIdx, newIdx) => newIdxOf.set(oldIdx, newIdx));
       const next: WorkoutMap = {};
-      order.forEach((oldIdx, newIdx) => {
-        if (!isTrainingDay[oldIdx]) return;
-        const label = cyclePattern[oldIdx].trim() || "Workout";
-        next[`${newIdx}:${label}`] = prev[`${oldIdx}:${label}`] ?? [];
-      });
+      for (const key of Object.keys(prev)) {
+        const parsed = parseDayKey(key);
+        if (!parsed) continue;
+        const newIdx = newIdxOf.get(parsed.idx);
+        if (newIdx === undefined) continue;
+        next[`${newIdx}:${parsed.label}`] = prev[key] ?? [];
+      }
       return next;
     });
   }, [cyclePattern, isTrainingDay]);
@@ -2443,6 +2597,28 @@ export default function NewProgramScreen() {
     const savedCyclePattern = cyclePattern.map((n, i) => isTrainingDay[i] ? (n.trim() || "Workout") : "Rest");
     const trainingDays = isTrainingDay.filter(Boolean).length;
     const startDate = formatStoredDate(new Date());
+    // Re-key onto the names being saved. Step 2 already produces this form, but
+    // Update is reachable from Step 1 — a rename typed there would otherwise be
+    // written with the day labelled one thing and its exercises filed under the
+    // old label, which reads to every other screen as an empty day.
+    const savedWorkouts = canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay);
+    // A day that was BOTH renamed and re-stocked is a different workout now, so
+    // it gets a new id and its logged sessions stay with the old one — which the
+    // Progress page then shows as a historical day beside the new one. Renaming
+    // alone, re-stocking alone, and moving a day to another slot all keep the id
+    // (and so keep one continuous trend). Only meaningful against a program that
+    // already exists: a fresh one has no sessions to strand.
+    const editedFrom = originalEdit.current;
+    const savedDayIds = editedFrom
+      ? forkChangedDayIds(
+          { cyclePattern: editedFrom.cyclePattern, dayIds: editedFrom.dayIds, workouts: editedFrom.workouts },
+          {
+            cyclePattern: savedCyclePattern,
+            dayIds: normalizeDayIds(dayIds, savedCyclePattern.length),
+            workouts: savedWorkouts,
+          },
+        )
+      : normalizeDayIds(dayIds, savedCyclePattern.length);
 
     if (isSharedEditMode && sharedId) {
       // Shared-edit mode — write the edited program back into the SharedProgram
@@ -2463,7 +2639,8 @@ export default function NewProgramScreen() {
             trainingDays,
             cycleDays,
             cyclePattern: savedCyclePattern,
-            workouts,
+            dayIds: savedDayIds,
+            workouts: savedWorkouts,
             extraWorkouts: prev?.extraWorkouts,
             cycleOffset: prev?.cycleOffset,
             completedDate: prev?.completedDate,
@@ -2505,7 +2682,8 @@ export default function NewProgramScreen() {
             trainingDays,
             cycleDays,
             cyclePattern: savedCyclePattern,
-            workouts,
+            dayIds: savedDayIds,
+            workouts: savedWorkouts,
             extraWorkouts: prev?.extraWorkouts,
             cycleOffset: prev?.cycleOffset,
             completedDate: prev?.completedDate,
@@ -2535,7 +2713,8 @@ export default function NewProgramScreen() {
             trainingDays,
             cycleDays,
             cyclePattern: savedCyclePattern,
-            workouts,
+            dayIds: savedDayIds,
+            workouts: savedWorkouts,
           } : p);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
           draftDeleted.current = true;
@@ -2563,7 +2742,8 @@ export default function NewProgramScreen() {
       trainingDays,
       cycleDays,
       cyclePattern: savedCyclePattern,
-      workouts,
+      dayIds: savedDayIds,
+      workouts: savedWorkouts,
     };
 
     const save = async (makeActive: boolean) => {
@@ -2616,7 +2796,7 @@ export default function NewProgramScreen() {
         { text: "Cancel", style: "cancel" },
       ]
     );
-  }, [name, totalWeeks, cycleDays, cyclePattern, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId]);
+  }, [name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId]);
 
   const handleBack = () => { if (step === 2) setStep(1); else router.back(); };
 
@@ -2640,8 +2820,21 @@ export default function NewProgramScreen() {
   const daysOrder = useMemo(() => Object.keys(workouts), [workouts]);
   const PIN_TOP = insets.top + 16;   // screen-Y where a day docks (aligns with back button)
   const PIN_H = 40;                  // one title row's height / roll distance
+  // Coalesced to one re-render per frame: a CollapsibleCard's height animation
+  // re-lays-out every day below it on every frame, so a bump per changed day
+  // meant N full-screen renders per frame while an exercise was collapsing.
+  const bumpFrame = useRef<number | null>(null);
   const onMeasureDay = useCallback((day: string, y: number) => {
-    if (dayOffsets.current[day] !== y) { dayOffsets.current[day] = y; bumpOffsets(v => v + 1); }
+    if (dayOffsets.current[day] === y) return;
+    dayOffsets.current[day] = y;
+    if (bumpFrame.current !== null) return;
+    bumpFrame.current = requestAnimationFrame(() => {
+      bumpFrame.current = null;
+      bumpOffsets(v => v + 1);
+    });
+  }, []);
+  useEffect(() => () => {
+    if (bumpFrame.current !== null) cancelAnimationFrame(bumpFrame.current);
   }, []);
 
   // Jump the long Step 2 page to a day (Workout Summary's "Go to Day"). Lands
@@ -2694,6 +2887,10 @@ export default function NewProgramScreen() {
       ? stripTYNode.interpolate({ inputRange: [-(i + 1) * PIN_H, -i * PIN_H, -(i - 1) * PIN_H], outputRange: [0, 1, 0], extrapolate: "clamp" })
       : 0;
   const updateBtnGap = isEditMode || isReviewMode || isSharedEditMode;   // leave room for the Update button
+  // Is a modal surface already presented? Nothing else may mount its <Modal>
+  // while this is true — see the single-modal note where these states are declared.
+  const sheetUp = summaryOpen || reorderDay !== null;
+  const modalUp = sheetUp || pickerState !== null;
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
@@ -2750,14 +2947,14 @@ export default function NewProgramScreen() {
       )}
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
-        <MaskedView style={StyleSheet.absoluteFillObject} maskElement={
+        <MaskedView style={StyleSheet.absoluteFill} maskElement={
           <LinearGradient
             colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
             locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
         }>
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </View>
 
@@ -2771,7 +2968,6 @@ export default function NewProgramScreen() {
         indicatorStyle={isDark ? "white" : "black"}
         keyboardShouldPersistTaps="handled"
         automaticallyAdjustKeyboardInsets
-        scrollEnabled={scrollEnabled}
         scrollEventThrottle={16}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
         // Clearance for the floating pills, whose top edge sits at roughly
@@ -2812,14 +3008,13 @@ export default function NewProgramScreen() {
             onUpdateExerciseSets={updateExerciseSets}
             onApplyRestToAll={applyRestToAll}
             onRemoveExercise={removeExercise}
-            onReorderExercises={reorderExercises}
-            onDragStateChange={handleDragStateChange}
             isDark={isDark}
             collapsingIds={collapsingIds}
             onStartCollapse={startCollapse}
             onInputFocus={handleInputFocus}
             customImageByName={customImageByName}
             onMeasureDay={onMeasureDay}
+            onOpenReorder={openReorderForDay}
           />
         )}
       </Animated.ScrollView>
@@ -2932,14 +3127,31 @@ export default function NewProgramScreen() {
         onReorderDays={reorderCycleDays}
         onReorderExercises={reorderExercises}
         onRemoveExercise={removeExercise}
-        onEditExercise={(day, id) => { setSummaryOpen(false); setPickerState({ day, replaceId: id }); }}
-        onAddExercise={(day) => { setSummaryOpen(false); setPickerState({ day }); }}
+        onEditExercise={editExerciseInPicker}
+        onAddExercise={openPickerForDay}
         onJumpToDay={(i) => { setSummaryOpen(false); jumpToDay(i); }}
         onClose={() => setSummaryOpen(false)}
       />
 
-      {/* Exercise picker — rendered above ScrollView so it's never clipped */}
-      {pickerState !== null && (
+      {/* Per-day Reorder sheet. Lives here, not in Step 2, so that all three
+          modal surfaces are opened and closed from one place. */}
+      <ReorderSheet
+        visible={reorderDay !== null}
+        day={reorderDay ?? ""}
+        exercises={reorderDay ? (workouts[reorderDay] ?? NO_EXERCISES) : NO_EXERCISES}
+        isDark={isDark}
+        t={t}
+        onReorderExercises={reorderExercises}
+        onRemoveExercise={removeExercise}
+        onEditExercise={editExerciseInPicker}
+        onClose={() => setReorderDay(null)}
+      />
+
+      {/* Exercise picker — rendered above ScrollView so it's never clipped, and
+          never while a sheet is still up. The openers above already close the
+          sheets; this gate is what makes a missed one recoverable (the picker
+          opens as soon as the sheet goes) instead of permanently dead. */}
+      {pickerState !== null && !sheetUp && (
         <ExercisePicker
           visible
           subtitle={dayLabel(pickerState.day).toUpperCase()}
@@ -2972,7 +3184,7 @@ export default function NewProgramScreen() {
       {/* First-run coach mark — teaches that each day's pill is tappable to
           switch between Training and Rest. Shown once (CYCLE_COACHMARK_KEY),
           only on Step 1 where the cycle pattern is visible. */}
-      {showCycleCoach && step === 1 && (
+      {showCycleCoach && step === 1 && !modalUp && (
         <Modal visible transparent animationType="fade" onRequestClose={dismissCycleCoach}>
           <View style={styles.coachBackdrop}>
             <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissCycleCoach} />
@@ -3011,7 +3223,7 @@ export default function NewProgramScreen() {
           toggles working/warmup, (2) the green Add Exercise button opens a
           multi-select picker. Shown once (WORKOUTS_COACHMARK_KEY), only when
           the Workouts step is visible. Backdrop tap dismisses either page. */}
-      {showWorkoutsCoach && step === 2 && (
+      {showWorkoutsCoach && step === 2 && !modalUp && (
         <Modal visible transparent animationType="fade" onRequestClose={dismissWorkoutsCoach}>
           <View style={styles.coachBackdrop}>
             <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissWorkoutsCoach} />
@@ -3239,7 +3451,7 @@ const styles = StyleSheet.create({
   restItemText:     { fontSize: 20 },
 
   // Reorder sheet
-  reorderSheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36 },
+  reorderSheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36, maxHeight: "82%" },
   reorderHandle:    { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
   reorderListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
 

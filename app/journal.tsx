@@ -32,8 +32,9 @@ import JournalCalendar from "../components/JournalCalendar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
-  getCurrentWeek, type SavedProgram, type CompletedWorkout,
+  getCurrentWeek, type SavedProgram, type CompletedWorkout, type ProgramDayRef,
 } from "../constants/programs";
+import { indexOfDayId, programDays } from "../utils/programDays";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { fmtDuration } from "../utils/dates";
@@ -274,7 +275,10 @@ type PickerStep = "menu" | "active" | "others" | "program" | "custom";
 function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect, onClose }: {
   visible: boolean; isDark: boolean;
   activeProgram: SavedProgram | null; programs: SavedProgram[];
-  onSelect: (name: string, addToProgramId?: string, fromProgramId?: string) => void; onClose: () => void;
+  /** `day` is the picked program slot (identity, not just a name) — undefined
+   *  for the free-workout step, which has no slot to point at. */
+  onSelect: (name: string, addToProgramId?: string, fromProgramId?: string, dayId?: string) => void;
+  onClose: () => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -339,11 +343,11 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
   }, [visible]);
 
   const otherPrograms = programs.filter(p => p.id !== activeProgram?.id);
-  const activeWorkouts = activeProgram
-    ? [...new Set(activeProgram.cyclePattern.filter(n => n && n !== "Rest"))]
-    : [];
+  // Every training slot, not a name-deduped set: a cycle that schedules "Upper"
+  // twice offers both, and each logs against its own day.
+  const activeWorkouts = activeProgram ? programDays(activeProgram) : [];
 
-  const pick = (name: string, fromProgramId?: string) => { dismiss(); onSelect(name, undefined, fromProgramId); };
+  const pick = (day: ProgramDayRef) => { dismiss(); onSelect(day.label, undefined, day.programId, day.dayId); };
 
   // ── Step header with back button ──
   function StepHeader({ title, onBack }: { title: string; onBack: () => void }) {
@@ -359,13 +363,16 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
   }
 
   // ── Workout row ──
-  function WorkoutRow({ name, accent, fromProgramId }: { name: string; accent?: boolean; fromProgramId?: string }) {
+  function WorkoutRow({ day, accent }: { day: ProgramDayRef; accent?: boolean }) {
     return (
-      <BounceButton style={{ marginBottom: 16 }} onPress={() => pick(name, fromProgramId)}>
+      <BounceButton style={{ marginBottom: 16 }} onPress={() => pick(day)}>
         <NeuCard dark={isDark} radius={14}>
           <View style={styles.pickerOptionInner}>
             <WorkoutIcon size={18} color={accent ? ACCT : t.ts} />
-            <Text style={[styles.pickerOptionText, { color: t.tp }]}>{name}</Text>
+            <Text style={[styles.pickerOptionText, { color: t.tp }]}>
+              {/* Only qualified when the name repeats in this program. */}
+              {day.duplicateLabel ? `${day.label} · day ${day.index + 1}` : day.label}
+            </Text>
             <Ionicons name="chevron-forward" size={16} color={t.ts} />
           </View>
         </NeuCard>
@@ -427,7 +434,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
           <StepHeader title="Active Program" onBack={() => setStep("menu")} />
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
             <Text style={[styles.pickerSection, { color: t.tp }]}>{activeProgram?.name.toUpperCase()}</Text>
-            {activeWorkouts.map(name => <WorkoutRow key={name} name={name} fromProgramId={activeProgram?.id} />)}
+            {activeWorkouts.map(day => <WorkoutRow key={day.key} day={day} />)}
           </ScrollView>
         </>
       );
@@ -459,12 +466,11 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
     }
 
     if (step === "program" && focusedProgram) {
-      const workouts = [...new Set(focusedProgram.cyclePattern.filter(n => n && n !== "Rest"))];
       return (
         <>
           <StepHeader title={focusedProgram.name} onBack={() => setStep("others")} />
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
-            {workouts.map(name => <WorkoutRow key={name} name={name} fromProgramId={focusedProgram.id} />)}
+            {programDays(focusedProgram).map(day => <WorkoutRow key={day.key} day={day} />)}
           </ScrollView>
         </>
       );
@@ -610,6 +616,7 @@ export default function JournalScreen() {
     workoutName: string,
     addToProgramId?: string,
     fromProgramId?: string,
+    dayId?: string,
   ) => {
     router.navigate({
       pathname: "/log-workout",
@@ -618,6 +625,9 @@ export default function JournalScreen() {
         workoutName,
         programId: fromProgramId ?? "",
         addToProgramId: addToProgramId ?? "",
+        // The exact slot picked, so the backdated session attaches to that day
+        // rather than to whichever day happens to share its name.
+        dayId: dayId ?? "",
       },
     });
   }, [router, selectedDate]);
@@ -643,19 +653,28 @@ export default function JournalScreen() {
   const progInfoOf = (w: CompletedWorkout) => {
     const prog = owningProgramByWorkoutId[w.id];
     if (!prog) return null;
-    const perCycle = prog.cyclePattern.filter(n => n === w.workoutName).length;
+    // A dayId names ONE slot, so the program schedules it once per cycle. The
+    // name count is the fallback for sessions with no dayId — and it reads 0
+    // once the day has been renamed, which is why the id is preferred.
+    const perCycle =
+      w.dayId && indexOfDayId(prog, w.dayId) >= 0
+        ? 1
+        : prog.cyclePattern.filter(n => n === w.workoutName).length;
     const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
     return { programName: prog.name, totalSessions: perCycle * totalCycles };
   };
 
   // workoutId → session number (1-based, ordered by completedAt). Numbered
-  // within the owning program, so two programs reusing a day name don't share
-  // a counter.
+  // within the owning program AND within the day, so two programs reusing a
+  // day name don't share a counter — and neither do two days of one program
+  // that share a name. Sessions with no dayId (free workouts, records the
+  // backfill couldn't attribute) fall back to the day name.
   const sessionNumbers = useMemo(() => {
     const result: Record<string, number> = {};
     const byKey: Record<string, CompletedWorkout[]> = {};
     for (const w of workoutHistory) {
-      const k = `${owningProgramByWorkoutId[w.id]?.id ?? ""}:${w.workoutName}`;
+      const day = w.dayId ? `id:${w.dayId}` : `name:${w.workoutName}`;
+      const k = `${owningProgramByWorkoutId[w.id]?.id ?? ""}:${day}`;
       if (!byKey[k]) byKey[k] = [];
       byKey[k].push(w);
     }
@@ -686,16 +705,16 @@ export default function JournalScreen() {
       {/* Top gradient blur */}
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           maskElement={
             <LinearGradient
               colors={["black", "rgba(0,0,0,0.8)", "rgba(0,0,0,0.6)", "rgba(0,0,0,0.4)", "rgba(0,0,0,0.2)", "transparent"]}
               locations={[0, 0.45, 0.65, 0.8, 0.9, 1]}
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
             />
           }
         >
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </View>
 

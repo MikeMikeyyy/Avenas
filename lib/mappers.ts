@@ -58,6 +58,7 @@ export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
     training_days: p.trainingDays,
     cycle_days: p.cycleDays,
     cycle_pattern: p.cyclePattern,
+    day_ids: p.dayIds ?? [],
     workouts: p.workouts as Record<string, unknown>,
     extra_workouts: p.extraWorkouts ?? [],
   };
@@ -77,6 +78,9 @@ export function programFromRow(r: ProgramRow): SavedProgram {
     trainingDays: r.training_days,
     cycleDays: r.cycle_days,
     cyclePattern: r.cycle_pattern,
+    // Empty array = a row written before the column existed; leave it undefined
+    // so the client's positional fallback applies rather than a bogus [].
+    dayIds: r.day_ids && r.day_ids.length > 0 ? r.day_ids : undefined,
     workouts: r.workouts as unknown as WorkoutMap,
     extraWorkouts: r.extra_workouts,
   };
@@ -92,6 +96,7 @@ export function workoutToRow(w: CompletedWorkout, userId: string, programUuid: s
     date: w.date,
     completed_at: w.completedAt,
     workout_name: w.workoutName,
+    day_id: w.dayId ?? null,
     duration_seconds: w.durationSeconds,
     exercises: w.exercises as unknown[],
     session_notes: w.sessionNotes ?? null,
@@ -108,6 +113,7 @@ export function workoutFromRow(r: WorkoutRow): CompletedWorkout {
     exercises: r.exercises as unknown as CompletedExercise[],
     sessionNotes: r.session_notes ?? undefined,
     programId: r.program_id ?? "",  // null (free / legacy) -> "" free-workout marker
+    dayId: r.day_id ?? undefined,
   };
 }
 

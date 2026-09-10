@@ -28,7 +28,8 @@ import { computeDurationMins, completedAtISO } from "../../components/TimeWheelP
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { programDays, workoutKey } from "../../utils/programDays";
 import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
 import { buildLiveActivityPayload } from "../../utils/liveActivity";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
@@ -115,7 +116,7 @@ function SetRow({ isActive, children }: { isActive: boolean; children: React.Rea
       {children}
       <Reanimated.View
         pointerEvents="none"
-        style={[StyleSheet.absoluteFillObject, { borderWidth: 1, borderColor: ACCT, borderRadius: 14 }, borderStyle]}
+        style={[StyleSheet.absoluteFill, { borderWidth: 1, borderColor: ACCT, borderRadius: 14 }, borderStyle]}
       />
     </Reanimated.View>
   );
@@ -523,10 +524,13 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
 
 // ─── ChangeDaySheet ────────────────────────────────────────────────────────────
 
-function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWorkoutName, onSelectDay, onClose, onDismiss }: {
+function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWorkoutName, currentDayId, onSelectDay, onClose, onDismiss }: {
   visible: boolean; isDark: boolean; t: typeof APP_LIGHT | typeof APP_DARK;
   activeProgram: SavedProgram; programs: SavedProgram[]; currentWorkoutName: string;
-  onSelectDay: (dayName: string, fromProgram?: SavedProgram) => void;
+  /** Stable id of the day currently loaded, so the tick lands on the right row
+   *  when the cycle schedules the same name twice. */
+  currentDayId?: string;
+  onSelectDay: (day: ProgramDayRef | "Rest", fromProgram?: SavedProgram) => void;
   onClose: () => void; onDismiss: () => void;
 }) {
   const slideY = useRef(new Animated.Value(500)).current;
@@ -577,14 +581,10 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
     }
   }, [visible]);
 
-  const workoutDays = useMemo(() => {
-    const seen = new Set<string>();
-    const result: string[] = [];
-    for (const name of activeProgram.cyclePattern) {
-      if (name && name !== "Rest" && !seen.has(name)) { seen.add(name); result.push(name); }
-    }
-    return result;
-  }, [activeProgram]);
+  // Every training slot, NOT deduped by name: a cycle that schedules "Upper"
+  // twice has two distinct days with their own exercises, and collapsing them
+  // made the second one unreachable (and resolved a tap onto the first).
+  const workoutDays = useMemo(() => programDays(activeProgram), [activeProgram]);
 
   const otherPrograms = useMemo(() => programs.filter(p => p.id !== activeProgram.id), [programs, activeProgram]);
 
@@ -614,13 +614,21 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
     </BounceButton>
   );
 
-  const renderDayCard = (dayName: string, prog: SavedProgram) => {
-    const isActive = prog.id === activeProgram.id && dayName === currentWorkoutName;
+  const renderDayCard = (day: ProgramDayRef, prog: SavedProgram) => {
+    // Match on the slot id when we know it — two days can read "Upper", and only
+    // one of them is the one currently loaded. Name match is the fallback for a
+    // session started before ids existed.
+    const isActive =
+      prog.id === activeProgram.id &&
+      (currentDayId ? day.dayId === currentDayId : day.label === currentWorkoutName);
     return renderOptionCard(
-      dayName, dayName,
+      day.key,
+      // Only qualify a name that appears twice in this program, so the common
+      // case stays a plain "Push".
+      day.duplicateLabel ? `${day.label} · day ${day.index + 1}` : day.label,
       <DumbbellIcon size={18} color={isActive ? ACCT : t.tp} />,
       isActive,
-      () => onSelectDay(dayName, prog.id !== activeProgram.id ? prog : undefined),
+      () => onSelectDay(day, prog.id !== activeProgram.id ? prog : undefined),
     );
   };
 
@@ -657,7 +665,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.woPickerContent}>
             {step === "menu" && (
               <>
-                {workoutDays.map(dayName => renderDayCard(dayName, activeProgram))}
+                {workoutDays.map(day => renderDayCard(day, activeProgram))}
                 {renderRestCard()}
                 {otherPrograms.length > 0 && (
                   <BounceButton style={{ marginBottom: 16 }} onPress={() => setStep("others")}>
@@ -679,6 +687,8 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.woPickerOptionText, { color: t.tp }]}>{prog.name}</Text>
                       <Text style={[styles.woPickerOptionSub, { color: t.ts }]}>
+                        {/* Summary line only — deduped so a cycle that repeats a
+                            day doesn't read "Push · Pull · Push · Pull". */}
                         {[...new Set(prog.cyclePattern.filter(n => n && n !== "Rest"))].join(" · ")}
                       </Text>
                     </View>
@@ -689,9 +699,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
             ))}
             {step === "program" && focusedProgram && (
               <>
-                {[...new Set(focusedProgram.cyclePattern.filter(n => n && n !== "Rest"))].map(dayName =>
-                  renderDayCard(dayName, focusedProgram)
-                )}
+                {programDays(focusedProgram).map(day => renderDayCard(day, focusedProgram))}
               </>
             )}
           </ScrollView>
@@ -1439,7 +1447,10 @@ export default function WorkoutScreen() {
   // setters (all spread prev) and is persisted/restored with the draft. It's the
   // program whose day this session is; undefined for a free workout not added to
   // a program → stamped as "" on the CompletedWorkout (definitively no program).
-  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[]; programId?: string } | null>(null);
+  // `dayId` rides along the same way: the stable id of the cycle slot, so the
+  // finished session stays attached to THIS day even after it's renamed, and two
+  // days that share a name never pool their history.
+  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[]; programId?: string; dayId?: string } | null>(null);
   const [log, setLog] = useState<WorkoutLog>({});
   // Latest committed log for reads inside the stable set-handlers below. Updated
   // in an effect (post-commit), so handlers fired from user events always see
@@ -1608,7 +1619,7 @@ export default function WorkoutScreen() {
         // Pass the full program list so a change-day override that picked a day
         // from a NON-active program re-resolves to that program's exercises.
         const workout = resolveWorkoutForDate(found, override, effective, programs);
-        setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: workout.programId } : null);
+        setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: workout.programId, dayId: workout.dayId } : null);
         if (workout) {
           setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
           setLog(initLog(workout.exercises));
@@ -1995,23 +2006,32 @@ export default function WorkoutScreen() {
   // Change-day picker selection (shared by the rest-day and active-workout
   // renders). A "Rest" selection clears the workout so the rest screen shows;
   // resolveWorkoutForDate maps the stored "Rest" override back to null on reload.
-  const handleSelectDay = useCallback((dayName: string, fromProgram?: SavedProgram) => {
+  const handleSelectDay = useCallback((day: ProgramDayRef | "Rest", fromProgram?: SavedProgram) => {
     setIsFreeWorkout(false);
     setFreeWorkoutAddToProgram(false);
-    let override: DayOverride = { date: effectiveTodayRef.current, workoutName: dayName };
-    if (dayName === "Rest") {
+    if (day === "Rest") {
       setWorkoutInfo(null);
       setLog({});
-    } else {
-      const src = fromProgram ?? activeProgram;
-      const dayIndex = src?.cyclePattern.indexOf(dayName) ?? -1;
-      const exercises = src?.workouts[`${dayIndex}:${dayName}`] ?? [];
-      setWorkoutInfo({ name: dayName, exercises, programId: src?.id });
-      setLog(initLog(exercises));
-      // Record the source program so re-resolution (tab refocus / relaunch)
-      // restores THIS program's exercises, not the active program's.
-      override = { ...override, programId: src?.id };
+      AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: effectiveTodayRef.current, workoutName: "Rest" }))
+        .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
+      setChangeDayOpen(false);
+      return;
     }
+    const src = fromProgram ?? activeProgram;
+    // The ref already carries the exact slot — no `indexOf(name)`, which always
+    // returned the first day of that name and so loaded the wrong exercises for
+    // the second one.
+    const exercises = src?.workouts[workoutKey(day.index, day.label)] ?? [];
+    setWorkoutInfo({ name: day.label, exercises, programId: src?.id, dayId: day.dayId });
+    setLog(initLog(exercises));
+    // Record the source program AND slot so re-resolution (tab refocus /
+    // relaunch) restores THIS day of THIS program.
+    const override: DayOverride = {
+      date: effectiveTodayRef.current,
+      workoutName: day.label,
+      programId: src?.id,
+      dayId: day.dayId,
+    };
     AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify(override))
       .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     setChangeDayOpen(false);
@@ -2049,6 +2069,9 @@ export default function WorkoutScreen() {
       // "" (not undefined) marks a definitive "no program" so the Progress page
       // never treats a free workout as a legacy record to attribute by name.
       programId: workoutInfo.programId ?? "",
+      // The cycle slot this session was performed on. Absent for a free workout
+      // (no slot to point at); Progress falls back to the name for those.
+      dayId: workoutInfo.dayId,
       durationSeconds: elapsedSeconds,
       // sessionNotes always saves whatever text was written — opening, leaving
       // open, or ticking the notes card all persist it. It's only dropped when
@@ -2237,14 +2260,16 @@ export default function WorkoutScreen() {
       .catch((e) => warnStorage("setItem", CUSTOM_KEY, e));
   };
 
-  // Previous-set suggestions derive from history + the CURRENT day name, so an
+  // Previous-set suggestions derive from history + the CURRENT day, so an
   // exercise programmed on two days (e.g. Lateral Raise on Push and on Arms)
-  // suggests that day's last numbers, not wherever it last appeared. Deriving
-  // (rather than storing the built map) keeps it correct when the day changes
-  // mid-screen — change-day override, free workout, day rollover.
+  // suggests that day's last numbers, not wherever it last appeared. The slot id
+  // carries that further: two days that merely share a name keep their own
+  // numbers too. Deriving (rather than storing the built map) keeps it correct
+  // when the day changes mid-screen — change-day override, free workout, day
+  // rollover.
   const [prevHistory, setPrevHistory] = useState<CompletedWorkout[]>([]);
   const prevByName = useMemo(
-    () => buildPrevByName(prevHistory, undefined, workoutInfo?.name),
+    () => buildPrevByName(prevHistory, undefined, workoutInfo?.name, workoutInfo?.dayId),
     [prevHistory, workoutInfo],
   );
   // Pre-formatted "prev" hint strings per normalized exercise name. Memoized so
@@ -2631,16 +2656,16 @@ export default function WorkoutScreen() {
         style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}
       >
         <MaskedView
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           maskElement={
             <LinearGradient
               colors={["black", "rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.65)", "rgba(0, 0, 0, 0.5)", "rgba(0, 0, 0, 0.4)", "rgba(0, 0, 0, 0.3)", "rgba(0, 0, 0, 0.25)", "rgba(0, 0, 0, 0.1)", "transparent"]}
               locations={[0, 0.5, 0.6, 0.7, 0.75, 0.85, 0.9, 0.95, 1]}
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
             />
           }
         >
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFillObject} />
+          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
         </MaskedView>
       </View>
     <KeyboardAvoidingView
@@ -3065,6 +3090,7 @@ export default function WorkoutScreen() {
           activeProgram={activeProgram}
           programs={allPrograms}
           currentWorkoutName={workoutInfo?.name ?? ""}
+          currentDayId={workoutInfo?.dayId}
           onSelectDay={handleSelectDay}
           onClose={() => { setChangeDayOpen(false); setWorkoutOptionsOpen(true); }}
           onDismiss={() => setChangeDayOpen(false)}
