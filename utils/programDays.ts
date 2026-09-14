@@ -176,6 +176,57 @@ export function canonicalizeWorkouts(
 }
 
 /**
+ * Move the cycle slot at `from` to `to`, carrying everything that belongs to
+ * that day: its Training/Rest flag, its stable id, and its exercises.
+ *
+ * Ids travel WITH the day, so a session logged against slot 3 still points at
+ * that workout once it's dragged to slot 1 — moving a day is not an edit to the
+ * day, and `forkChangedDayIds` sees no change to fork on.
+ *
+ * The workouts map has to be re-keyed because its keys embed the slot index.
+ * Each key keeps its OWN label rather than having one rebuilt from
+ * `cyclePattern`: a day whose stored label had drifted from the pattern would
+ * otherwise look up a key that isn't there, and the `?? []` behind that lookup
+ * would silently empty the day.
+ *
+ * Returns the input unchanged when the move is a no-op or out of range.
+ */
+export function reorderCycleSlots(
+  from: number,
+  to: number,
+  cycle: {
+    cyclePattern: string[];
+    isTrainingDay: boolean[];
+    dayIds: string[];
+    workouts: WorkoutMap;
+  },
+): { cyclePattern: string[]; isTrainingDay: boolean[]; dayIds: string[]; workouts: WorkoutMap } {
+  const length = cycle.cyclePattern.length;
+  if (from === to || from < 0 || to < 0 || from >= length || to >= length) return cycle;
+  const order = cycle.cyclePattern.map((_, i) => i);
+  const [moved] = order.splice(from, 1);
+  order.splice(to, 0, moved);
+
+  const newIdxOf = new Map<number, number>();
+  order.forEach((oldIdx, newIdx) => newIdxOf.set(oldIdx, newIdx));
+  const workouts: WorkoutMap = {};
+  for (const key of Object.keys(cycle.workouts)) {
+    const parsed = parseDayKey(key);
+    if (!parsed) continue;
+    const newIdx = newIdxOf.get(parsed.idx);
+    if (newIdx === undefined) continue;
+    workouts[workoutKey(newIdx, parsed.label)] = cycle.workouts[key] ?? [];
+  }
+
+  return {
+    cyclePattern: order.map(i => cycle.cyclePattern[i]),
+    isTrainingDay: order.map(i => cycle.isTrainingDay[i]),
+    dayIds: normalizeDayIds(order.map(i => cycle.dayIds[i]), order.length),
+    workouts,
+  };
+}
+
+/**
  * Every training day of `program`'s cycle, as identified refs in cycle order.
  *
  * Deliberately NOT deduped by name: a cycle that schedules "Upper" twice has two

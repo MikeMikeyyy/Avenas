@@ -15,6 +15,7 @@ import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
 import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS, PAUSED_ORANGE } from "../../constants/theme";
+import { pill, pillGlow, PILL_RADIUS } from "../../constants/buttons";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
@@ -817,8 +818,8 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: "row", gap: 20 },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaText: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
-  startBtnDark: { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  startBtn: { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, justifyContent: "center", overflow: "hidden" },
+  startBtnDark: { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  startBtn: { ...pill(), backgroundColor: ACCT, overflow: "hidden" },
   startBtnContent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
   startBtnText: { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
   continueTimer: { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.3, opacity: 0.7 },

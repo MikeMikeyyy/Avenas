@@ -26,6 +26,7 @@ import RecipientPickerSheet from "./RecipientPickerSheet";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import SimpleSheet from "./SimpleSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgram,
@@ -584,7 +585,7 @@ const styles = StyleSheet.create({
   emptyIcon:    { width: 56, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 16, textAlign: "center" },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },
-  cta:          { borderRadius: 14, paddingVertical: 12, paddingHorizontal: 22, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  cta:          { ...pill(PILL_H_SM), paddingHorizontal: 22, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
 
   coachCard:    { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
@@ -613,13 +614,13 @@ const styles = StyleSheet.create({
   acceptedPillText: { fontFamily: FontFamily.semibold, fontSize: 11 },
 
   actionRow:    { flexDirection: "row", alignItems: "center", gap: 8 },
-  acceptBtn:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderRadius: 12, paddingVertical: 11, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  acceptBtn:    { ...pill(PILL_H_XS), gap: 6, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
   acceptBtnText:{ fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
-  removeBtn:    { flexDirection: "row", alignItems: "center", justifyContent: "center", borderRadius: 12, paddingVertical: 11, borderWidth: 1.5 },
+  removeBtn:    { ...pill(PILL_H_XS), borderWidth: 1.5 },
   removeBtnText:{ fontFamily: FontFamily.bold, fontSize: 13 },
   removeIconBtnInner: { alignItems: "center", justifyContent: "center", paddingVertical: 12, paddingHorizontal: 20, minHeight: 44 },
 
-  passBtn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 12, paddingVertical: 12, minHeight: 44, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  passBtn:      { ...pill(PILL_H_SM), gap: 8, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
   passBtnText:  { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
 
   cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4 },

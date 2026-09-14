@@ -14,6 +14,7 @@ import {
   resolveWorkoutForDate,
   getEffectiveToday,
   buildPrevByName,
+  prevDayScopeFor,
   normalizeExerciseName,
 } from "../utils/workout";
 import { parseStoredDate, formatStoredDate, todayYMD } from "../utils/dates";
@@ -271,25 +272,86 @@ eq(buildPrevByName([weekLast, week3ago])["bench"], ["90×5"], "prev multi: array
 
 // ── buildPrevByName day scoping ─────────────────────────────────────────────────
 // The same exercise programmed on two days (Lateral Raise heavier on Push than
-// on Arms). With a dayName, previous values come from the last session of THAT
-// day — not the most recent appearance overall — and fall back to any-day only
-// for exercises never done on the given day.
-const mkDaySession = (id: string, date: string, workoutName: string, exs: [string, string, string][]): CompletedWorkout => ({
+// on Arms). With a day scope, previous values come ONLY from sessions of THAT
+// day — never from the most recent appearance overall, and never borrowed from
+// another day for an exercise the day has no history for.
+const mkDaySession = (
+  id: string, date: string, workoutName: string, exs: [string, string, string][],
+  ids?: { dayId?: string; programId?: string },
+): CompletedWorkout => ({
   id, date, completedAt: `${date}T10:00:00.000Z`, workoutName, durationSeconds: 0,
+  dayId: ids?.dayId, programId: ids?.programId,
   exercises: exs.map(([name, w, r]) => ({ name, notes: "", sets: [mkSet(w, r)] })),
 });
 const dayHist = [
   mkDaySession("push1", "2026-06-01", "Push", [["Lateral Raise", "12", "10"], ["Bench", "100", "5"]]),
   mkDaySession("arms1", "2026-06-04", "Arms", [["Lateral Raise", "8", "15"], ["Curl", "20", "12"]]),
 ];
-eq(buildPrevByName(dayHist, undefined, "Push")["lateral raise"], ["12×10"], "prev day-scoped: Push day shows Push numbers even though Arms session is newer");
-eq(buildPrevByName(dayHist, undefined, "Arms")["lateral raise"], ["8×15"], "prev day-scoped: Arms day shows Arms numbers");
+eq(buildPrevByName(dayHist, undefined, { name: "Push" })["lateral raise"], ["12×10"], "prev day-scoped: Push day shows Push numbers even though Arms session is newer");
+eq(buildPrevByName(dayHist, undefined, { name: "Arms" })["lateral raise"], ["8×15"], "prev day-scoped: Arms day shows Arms numbers");
 eq(buildPrevByName(dayHist)["lateral raise"], ["8×15"], "prev unscoped: newest appearance on any day wins (unchanged)");
-eq(buildPrevByName(dayHist, undefined, "Push")["curl"], ["20×12"], "prev day-scoped: exercise never done on this day falls back to any-day");
-eq(buildPrevByName(dayHist, undefined, " push ")["lateral raise"], ["12×10"], "prev day-scoped: day match is trimmed + case-insensitive");
-eq(buildPrevByName(dayHist, "2026-06-04", "Arms")["lateral raise"], ["12×10"], "prev day-scoped + beforeDate: no earlier Arms session -> falls back to earlier Push");
+eq(buildPrevByName(dayHist, undefined, { name: "Push" })["curl"], undefined, "prev day-scoped: exercise never done on this day shows NOTHING (no any-day borrow)");
+eq(buildPrevByName(dayHist, undefined, { name: " push " })["lateral raise"], ["12×10"], "prev day-scoped: day match is trimmed + case-insensitive");
+eq(buildPrevByName(dayHist, "2026-06-04", { name: "Arms" })["lateral raise"], undefined, "prev day-scoped + beforeDate: no earlier Arms session -> blank, not the earlier Push one");
 const dayHist2 = [...dayHist, mkDaySession("push2", "2026-06-08", "Push", [["Lateral Raise", "14", "8"]])];
-eq(buildPrevByName(dayHist2, undefined, "Push")["lateral raise"], ["14×8"], "prev day-scoped: newest session OF the day wins");
+eq(buildPrevByName(dayHist2, undefined, { name: "Push" })["lateral raise"], ["14×8"], "prev day-scoped: newest session OF the day wins");
+
+// Two days of one program that SHARE a name — the case a name alone can't tell
+// apart. "Upper" at cycle slots d0 and d3, the same press on both.
+const twoUpper = [
+  mkDaySession("u0a", "2026-07-08", "Upper", [["Incline Press", "30", "10"]], { dayId: "d0", programId: "P" }),
+  mkDaySession("u3", "2026-07-11", "Upper", [["Incline Press", "40", "8"]], { dayId: "d3", programId: "P" }),
+  mkDaySession("u0b", "2026-07-12", "Upper", [["Incline Press", "32", "10"]], { dayId: "d0", programId: "P" }),
+];
+const upperA = { name: "Upper", dayId: "d0", programId: "P", absorbsUnidentified: true };
+const upperB = { name: "Upper", dayId: "d3", programId: "P", absorbsUnidentified: false };
+eq(buildPrevByName(twoUpper, undefined, upperB)["incline press"], ["40×8"], "prev two same-named days: 2nd Upper keeps its own numbers");
+eq(buildPrevByName(twoUpper, undefined, upperA)["incline press"], ["32×10"], "prev two same-named days: 1st Upper keeps its own numbers");
+
+// A session the dayId backfill couldn't attribute (or a free workout) carries no
+// dayId, so it can only be matched by name. It attaches to the FIRST day with
+// that name and to no other — otherwise the 2nd Upper shows weights that were
+// actually lifted on the 1st.
+const unidentified = [
+  mkDaySession("u3", "2026-07-11", "Upper", [["Incline Press", "40", "8"]], { dayId: "d3", programId: "P" }),
+  mkDaySession("uX", "2026-07-12", "Upper", [["Incline Press", "32", "10"]], { programId: "P" }),
+];
+eq(buildPrevByName(unidentified, undefined, upperB)["incline press"], ["40×8"], "prev unidentified session: does NOT leak onto the 2nd same-named day");
+eq(buildPrevByName(unidentified, undefined, upperA)["incline press"], ["32×10"], "prev unidentified session: absorbed by the 1st same-named day");
+
+// Positional fallback ids (d0, d1, …) are only unique within a program, so a
+// slot id must never match across programs.
+const crossProgram = [
+  mkDaySession("old", "2026-07-12", "Upper", [["Incline Press", "20", "10"]], { dayId: "d3", programId: "OLD" }),
+  mkDaySession("cur", "2026-07-08", "Upper", [["Incline Press", "40", "8"]], { dayId: "d3", programId: "P" }),
+];
+eq(buildPrevByName(crossProgram, undefined, upperB)["incline press"], ["40×8"], "prev cross-program: another program's slot d3 does not match this program's d3");
+
+// prevDayScopeFor marks the day against its own program: first "Upper" absorbs,
+// the second does not.
+{
+  const twoUpperProgram: SavedProgram = {
+    id: "P", name: "UL", totalWeeks: 6, currentWeek: 1, status: "active",
+    startDate: "01 Jul 2026", trainingDays: 4, cycleDays: 6,
+    cyclePattern: ["Upper", "Lower", "Rest", "Upper", "Lower", "Rest"],
+    workouts: {},
+  };
+  eq(
+    prevDayScopeFor({ name: "Upper", programId: "P", dayId: "d0" }, twoUpperProgram),
+    { name: "Upper", dayId: "d0", programId: "P", absorbsUnidentified: true },
+    "prevDayScopeFor: first same-named day absorbs unidentified sessions",
+  );
+  eq(
+    prevDayScopeFor({ name: "Upper", programId: "P", dayId: "d3" }, twoUpperProgram).absorbsUnidentified,
+    false,
+    "prevDayScopeFor: second same-named day does not absorb",
+  );
+  eq(
+    prevDayScopeFor({ name: "Freestyle" }, null).absorbsUnidentified,
+    true,
+    "prevDayScopeFor: free workout (no program, no dayId) absorbs",
+  );
+}
 
 eq(normalizeExerciseName("  Bench Press  "), "bench press", "normalizeExerciseName trims + lowercases");
 

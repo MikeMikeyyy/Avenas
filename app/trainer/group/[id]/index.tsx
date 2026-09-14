@@ -27,6 +27,7 @@ import ChatIcon from "../../../../components/icons/ChatIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER, GOLD } from "../../../../constants/theme";
+import { pill, PILL_H_SM } from "../../../../constants/buttons";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { deleteGroup, fetchGroup, fetchGroupMembers, leaveGroup, setGroupMemberRole } from "../../../../lib/groups";
 import { getMyUid } from "../../../../lib/chat";
@@ -535,7 +536,7 @@ const styles = StyleSheet.create({
   // Layout only. The shadow lives on the variants below, because sharing one
   // shadow meant the white button rendered it with the default BLACK colour at
   // 0.35 opacity — a heavy dark halo that only looked right under the green.
-  actionBtn:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, borderRadius: 14, paddingVertical: 13, minHeight: 46 },
+  actionBtn:    { ...pill(PILL_H_SM), gap: 7, paddingHorizontal: 12 },
   actionPrimary:{ backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.35, shadowRadius: 8 },
   // The app's standard white chrome: soft neutral shadow, never a coloured glow.
   actionChrome: { shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },

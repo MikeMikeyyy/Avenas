@@ -27,6 +27,7 @@ import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, GOLD } from "../../constants/theme";
+import { pill, pillGlow } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   appendSharedPrograms,
@@ -839,7 +840,7 @@ const styles = StyleSheet.create({
   search:       { fontFamily: FontFamily.regular, fontSize: 15, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11 },
   summaryAvatar:    { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   summaryAvatarText:{ fontFamily: FontFamily.bold, fontSize: 11 },
-  broadcast:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 14, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  broadcast:    { ...pill(), gap: 10, ...pillGlow(ACCT, 0.4) },
   broadcastText:{ fontFamily: FontFamily.bold, fontSize: 15, color: "#fff", letterSpacing: 0.2 },
   emptyInner:   { padding: 28, alignItems: "center", gap: 10 },
   noMatchRow:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10 },

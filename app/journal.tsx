@@ -30,6 +30,7 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
+import { pill, pillGlow, PILL_H_SM } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   getCurrentWeek, type SavedProgram, type CompletedWorkout, type ProgramDayRef,
@@ -996,9 +997,9 @@ const styles = StyleSheet.create({
   deleteSheet:    { position: "absolute", bottom: 0, left: 0, right: 0, borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   deleteTitle:    { fontFamily: FontFamily.bold, fontSize: 20, color: TP },
   deleteSubtitle: { fontFamily: FontFamily.regular, fontSize: 14, color: TS, lineHeight: 20 },
-  deleteBtn:      { borderRadius: 14, paddingVertical: 15, alignItems: "center", backgroundColor: "#FF3B30", shadowColor: "#FF3B30", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10 },
+  deleteBtn:      { ...pill(PILL_H_SM), backgroundColor: "#FF3B30", ...pillGlow("#FF3B30", 0.35) },
   deleteBtnText:  { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff" },
-  cancelBtn:      { borderRadius: 14, paddingVertical: 15, alignItems: "center" },
+  cancelBtn:      { ...pill(PILL_H_SM) },
   cancelBtnText:  { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
 
   // Workout picker sheet

@@ -18,6 +18,7 @@ import BounceButton from "../BounceButton";
 import Avatar from "../Avatar";
 import PeopleIcon from "../icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { resolveMyTrainers, setPrimaryTrainer } from "../../utils/roster";
 import { unaddContact } from "../../utils/moderation";
@@ -229,7 +230,7 @@ const styles = StyleSheet.create({
   emptyIcon:    { width: 56, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 16, textAlign: "center" },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },
-  cta:          { borderRadius: 14, paddingVertical: 12, paddingHorizontal: 22, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  cta:          { ...pill(PILL_H_SM), paddingHorizontal: 22, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
 
   trainerCard:  { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },

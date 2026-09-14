@@ -23,13 +23,14 @@ import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
+import { pill, pillGlow } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
   normaliseSets, type SavedProgram, type CompletedWorkout, type ProgramSet,
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
-import { buildPrevByName, normalizeExerciseName } from "../utils/workout";
+import { buildPrevByName, prevDayScopeFor, normalizeExerciseName } from "../utils/workout";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
@@ -1045,11 +1046,21 @@ export default function LogWorkoutScreen() {
   }, [draftRestored, draftKey, exercises, notes, workoutTime, isKg]);
 
   useEffect(() => {
-    AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
-      if (!raw) return;
-      // Scope previous values to the day being logged (same-day sessions win,
-      // any-day is only a fallback) — see buildPrevByName.
-      setPrevByName(buildPrevByName(JSON.parse(raw), date, workoutName, dayId || undefined));
+    // Previous values come only from earlier sessions of the day being logged —
+    // see buildPrevByName. Programs are read alongside history because the day's
+    // own program decides whether it absorbs sessions that recorded no dayId.
+    Promise.all([
+      AsyncStorage.getItem(WORKOUT_HISTORY_KEY),
+      AsyncStorage.getItem(PROGRAMS_KEY),
+    ]).then(([histRaw, progRaw]) => {
+      if (!histRaw) return;
+      const pid = programId && programId.length > 0 ? programId : undefined;
+      const progs: SavedProgram[] = progRaw ? JSON.parse(progRaw) : [];
+      const scope = prevDayScopeFor(
+        { name: workoutName, programId: pid, dayId: dayId || undefined },
+        pid ? progs.find(p => p.id === pid) ?? null : null,
+      );
+      setPrevByName(buildPrevByName(JSON.parse(histRaw), date, scope));
     }).catch(() => {});
   }, []);
 
@@ -1609,7 +1620,8 @@ const s = StyleSheet.create({
 
   // Save button
   saveRow:    { position: "absolute", left: 20, right: 20 },
-  saveBtn:    { borderRadius: 16, paddingVertical: 16, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, shadowColor: "#000", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.45, shadowRadius: 8 },
+  // Slate, not accent — glow matches the workout screen's slate Finish pill.
+  saveBtn:    { ...pill(), gap: 8, ...pillGlow("#4a5568", 0.3) },
   saveBtnText:{ fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.3 },
 
   // Reorder sheet

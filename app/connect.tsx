@@ -28,6 +28,7 @@ import SimpleSheet from "../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, DANGER, FontFamily } from "../constants/theme";
+import { pill, pillGlow, PILL_H_SM, PILL_H_XS } from "../constants/buttons";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
 import { addTrainerAsClient } from "../utils/trainerStore";
 import type { ReportReason } from "../constants/chat";
@@ -532,14 +533,14 @@ const styles = StyleSheet.create({
   qrWrap:      { width: 200, height: 200, borderRadius: 16, backgroundColor: "#ffffff", alignItems: "center", justifyContent: "center" },
   codeText:    { fontFamily: FontFamily.bold, fontSize: 24, letterSpacing: 4 },
   codeActions: { flexDirection: "row", gap: 12, alignSelf: "stretch" },
-  smallBtn:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, borderWidth: 1, borderRadius: 12, paddingVertical: 11 },
+  smallBtn:    { ...pill(PILL_H_XS), gap: 7, borderWidth: 1 },
   smallBtnText:{ fontFamily: FontFamily.semibold, fontSize: 14 },
-  scanWrap:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, borderRadius: 16, paddingVertical: 15, shadowColor: ACCT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  scanWrap:    { ...pill(), gap: 9, ...pillGlow(ACCT, 0.4) },
   scanText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff" },
   manualRow:   { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
   manualField: { flex: 1, borderRadius: 14 },
   input:       { fontFamily: FontFamily.regular, fontSize: 16, paddingVertical: 14, paddingHorizontal: 16, letterSpacing: 2 },
-  connectBtn:  { borderRadius: 14, paddingVertical: 15, paddingHorizontal: 22, alignItems: "center", justifyContent: "center", minWidth: 110 },
+  connectBtn:  { ...pill(PILL_H_SM), paddingHorizontal: 22, minWidth: 110, ...pillGlow(ACCT, 0.35) },
   connectBtnText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   disabled:    { opacity: 0.4 },
   reqCard:     { borderRadius: 16, marginBottom: 10 },

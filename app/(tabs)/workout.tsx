@@ -26,6 +26,7 @@ import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { computeDurationMins, completedAtISO } from "../../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE } from "../../constants/theme";
+import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, normaliseSets, getCurrentWeek } from "../../constants/programs";
@@ -35,7 +36,7 @@ import { buildLiveActivityPayload } from "../../utils/liveActivity";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
-import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, normalizeExerciseName, type DayOverride } from "../../utils/workout";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, prevDayScopeFor, normalizeExerciseName, type DayOverride } from "../../utils/workout";
 import { resumeWithPrompt } from "../../utils/programPause";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
@@ -2262,15 +2263,24 @@ export default function WorkoutScreen() {
 
   // Previous-set suggestions derive from history + the CURRENT day, so an
   // exercise programmed on two days (e.g. Lateral Raise on Push and on Arms)
-  // suggests that day's last numbers, not wherever it last appeared. The slot id
-  // carries that further: two days that merely share a name keep their own
-  // numbers too. Deriving (rather than storing the built map) keeps it correct
-  // when the day changes mid-screen — change-day override, free workout, day
-  // rollover.
+  // suggests that day's last numbers and nothing else. The slot id carries that
+  // further: two days that merely share a name keep their own numbers too.
+  // Deriving (rather than storing the built map) keeps it correct when the day
+  // changes mid-screen — change-day override, free workout, day rollover.
   const [prevHistory, setPrevHistory] = useState<CompletedWorkout[]>([]);
+  // Resolved against the day's OWN program (change-day can pick a day from a
+  // non-active one), which is what decides whether this day absorbs sessions
+  // that recorded no dayId.
+  const prevDayScope = useMemo(() => {
+    if (!workoutInfo) return undefined;
+    const src = workoutInfo.programId
+      ? allPrograms.find(p => p.id === workoutInfo.programId) ?? null
+      : null;
+    return prevDayScopeFor(workoutInfo, src);
+  }, [workoutInfo, allPrograms]);
   const prevByName = useMemo(
-    () => buildPrevByName(prevHistory, undefined, workoutInfo?.name, workoutInfo?.dayId),
-    [prevHistory, workoutInfo],
+    () => buildPrevByName(prevHistory, undefined, prevDayScope),
+    [prevHistory, prevDayScope],
   );
   // Pre-formatted "prev" hint strings per normalized exercise name. Memoized so
   // each card's `prevSets` prop keeps its identity across keystrokes (a fresh
@@ -2406,10 +2416,13 @@ export default function WorkoutScreen() {
   const renderActionCluster = () => (
     <View style={styles.actionCluster}>
       <BounceButton onPress={openNotes} accessibilityLabel="Session notes">
+        {/* Same flat white circle as the top bar's timer / +  controls, rather
+            than a raised NeuCard — the green + badge stays pinned to its
+            top-right corner, so the button still reads as "add a note". */}
         <View style={styles.notesToggleBtn}>
-          <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+          <View style={[styles.topIconBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}>
             <Ionicons name="document-text-outline" size={20} color={t.tp} />
-          </NeuCard>
+          </View>
           <View style={styles.notesTogglePlus}>
             <Text style={styles.notesTogglePlusText}>+</Text>
           </View>
@@ -2724,22 +2737,23 @@ export default function WorkoutScreen() {
               </Text>
             </View>
 
-            {/* Edit in Journal + Discard row */}
+            {/* Edit in Journal + Discard row. Pills, not the chunky neumorphic
+                Finish button — these are secondary actions on a finished
+                session, so they take the top bar's control styling (see
+                completedActionBtn). */}
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 16 }}>
               <BounceButton onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id } })} style={{ flex: 1 }}>
-                <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, shadowColor: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.45)" }]}>
-                  <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
-                    <Ionicons name="create-outline" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
-                    <Text style={[styles.finishBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Edit Workout</Text>
-                  </View>
+                <View style={[styles.completedActionBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+                  <Ionicons name="create-outline" size={17} color={isDark ? APP_DARK.bg : "#fff"} />
+                  <Text style={[styles.completedActionText, { color: isDark ? APP_DARK.bg : "#fff" }]} numberOfLines={1}>Edit Workout</Text>
                 </View>
               </BounceButton>
               <BounceButton onPress={handleDiscardCompleted} style={{ flex: 1 }}>
-                <View style={[styles.finishWrap, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? "#000" : "#a3afc0", shadowOpacity: isDark ? 0.35 : 0.5 }]}>
-                  <View style={[styles.finishBtn, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)", shadowColor: isDark ? "transparent" : "#FFFFFF", shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4, paddingVertical: 15 }]}>
-                    <TrashIcon size={16} color="#ef4444" />
-                    <Text style={[styles.finishBtnText, { color: "#ef4444" }]}>Discard Workout</Text>
-                  </View>
+                {/* t.ctrl is the same white the timer pill and the +/back
+                    circles sit on, so the row reads as one control family. */}
+                <View style={[styles.completedActionBtn, { backgroundColor: t.ctrl }]}>
+                  <TrashIcon size={15} color="#ef4444" />
+                  <Text style={[styles.completedActionText, { color: "#ef4444" }]} numberOfLines={1}>Discard Workout</Text>
                 </View>
               </BounceButton>
             </View>
@@ -3264,11 +3278,18 @@ const styles = StyleSheet.create({
   addHintTail:        { width: 0, height: 0, marginTop: -0.5, borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: ACCT },
 
   // Finish button
-  finishWrap:       { borderRadius: 16, backgroundColor: "#8896A7", shadowColor: "#4a5568", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.45, shadowRadius: 8 },
-  finishWrapActive: { backgroundColor: ACCT, shadowColor: "#1a9e68" },
-  finishBtn:        { borderRadius: 16, backgroundColor: "#8896A7", paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  finishWrap:       { borderRadius: PILL_RADIUS, backgroundColor: "#8896A7", ...pillGlow("#4a5568", 0.3) },
+  finishWrapActive: { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  finishBtn:        { ...pill(), backgroundColor: "#8896A7", gap: 8 },
   finishBtnActive:  { backgroundColor: ACCT },
   finishBtnText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
+
+  // Completed-workout actions (Edit / Discard). Same control family as the top
+  // bar's timer pill and round icon buttons: pill height, fully rounded ends,
+  // and a soft drop shadow rather than the Finish button's offset neumorphic
+  // one — thinner and quieter, since the session is already saved.
+  completedActionBtn: { ...pill(PILL_H_SM), gap: 7, paddingHorizontal: 12, ...PILL_SHADOW },
+  completedActionText: { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.3, flexShrink: 1 },
 
   // Focus mode compact Back button (icon-only circle, matches finish button height)
   focusBackWrap:    { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowRadius: 8 },
@@ -3308,7 +3329,7 @@ const styles = StyleSheet.create({
   woPickerOptionInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
   woPickerOptionText:  { fontFamily: FontFamily.semibold, fontSize: 15, flex: 1 },
   woPickerOptionSub:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  woPickerCancelBtn:   { borderRadius: 14, paddingVertical: 15, alignItems: "center" },
+  woPickerCancelBtn:   { ...pill(PILL_H_SM) },
   woPickerCancelText:  { fontFamily: FontFamily.bold, fontSize: 16 },
 
   // Custom workout naming sheet

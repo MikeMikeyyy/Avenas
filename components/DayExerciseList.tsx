@@ -162,6 +162,7 @@ export default function DayExerciseList({ days, workouts, selectedExercise, onSe
                   textPrimary={t.tp}
                   textSecondary={t.ts}
                   divider={t.div}
+                  isDark={isDark}
                 />
               </ExpandablePanel>
             </NeuCard>
@@ -180,6 +181,7 @@ function ExpandedExercises({
   textPrimary,
   textSecondary,
   divider,
+  isDark,
 }: {
   workouts: CompletedWorkout[];
   day: ProgramDayRef;
@@ -188,6 +190,7 @@ function ExpandedExercises({
   textPrimary: string;
   textSecondary: string;
   divider: string;
+  isDark: boolean;
 }) {
   const rows: LoggedExerciseRow[] = useMemo(
     () => collectLoggedExercisesForDay(workouts, day),
@@ -227,7 +230,7 @@ function ExpandedExercises({
             }}
             style={[styles.exRow, i > 0 && { marginTop: 2 }]}
             accessibilityRole="button"
-            accessibilityLabel={r.name}
+            accessibilityLabel={r.inProgram ? r.name : `${r.name}, swapped out of this day`}
             accessibilityState={{ selected }}
           >
             {selected ? <View style={styles.exAccent} /> : null}
@@ -236,8 +239,13 @@ function ExpandedExercises({
             </Text>
             {r.inProgram ? null : (
               // Logged on this day, but the program doesn't prescribe it any
-              // more. Shown so the trend ending mid-run reads as an edit.
-              <View style={[styles.swappedChip, { borderColor: textSecondary }]}>
+              // more. Shown so a trend that stops mid-run reads as a change to
+              // the programming rather than as someone quietly dropping the
+              // exercise. Deliberately quiet — a soft fill and the muted text
+              // colour, never the accent — so it annotates the row instead of
+              // flagging it as a problem.
+              <View style={[styles.swappedChip, { backgroundColor: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.05)" }]}>
+                <Ionicons name="swap-horizontal" size={11} color={textSecondary} />
                 <Text style={[styles.swappedText, { color: textSecondary }]}>Swapped out</Text>
               </View>
             )}
@@ -290,11 +298,12 @@ const styles = StyleSheet.create({
   },
   exName: { fontFamily: FontFamily.semibold, fontSize: 14 },
   swappedChip: {
-    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
     borderRadius: 8,
     paddingHorizontal: 6,
     paddingVertical: 2,
-    opacity: 0.7,
   },
   swappedText: { fontFamily: FontFamily.semibold, fontSize: 10 },
   placeholder: { fontFamily: FontFamily.regular, fontSize: 13, paddingVertical: 8, textAlign: "center" },

@@ -15,6 +15,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "../components/NeuCard";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { pill, PILL_H_XS } from "../constants/buttons";
 import { loadBlocked, unblockUser } from "../utils/moderation";
 import type { BlockedUser } from "../constants/chat";
 
@@ -133,7 +134,7 @@ const styles = StyleSheet.create({
   avatar:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   avatarText:  { fontFamily: FontFamily.bold, fontSize: 14 },
   name:        { flex: 1, fontFamily: FontFamily.semibold, fontSize: 15 },
-  unblockBtn:  { borderWidth: 1.5, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 7 },
+  unblockBtn:  { ...pill(PILL_H_XS), borderWidth: 1.5, paddingHorizontal: 14 },
   unblockText: { fontFamily: FontFamily.bold, fontSize: 13 },
   emptyInner:  { padding: 24, alignItems: "center", gap: 8 },
   emptyTitle:  { fontFamily: FontFamily.bold, fontSize: 17 },

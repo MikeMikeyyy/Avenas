@@ -10,7 +10,7 @@
 // log-workout.tsx; keeping one copy stops the screens from drifting.
 
 import { parseStoredDate, toYMD, todayYMD } from "./dates";
-import { dayIdAt, indexOfDayId, workoutKey } from "./programDays";
+import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
 import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
@@ -222,6 +222,68 @@ export function normalizeExerciseName(name: string): string {
 }
 
 /**
+ * The workout day a previous-values lookup is scoped to. A narrow view of
+ * `ProgramDayRef` so the two screens that build one don't have to synthesize a
+ * full ref — but the matching rules are deliberately identical to
+ * `workoutMatchesDay` (utils/progressStats.ts), because "which day was this
+ * session performed on" must have exactly one answer app-wide.
+ */
+export type PrevDayScope = {
+  /** Display name of the day. The only handle for sessions with no `dayId`. */
+  name: string;
+  /** The day's stable slot id, when it has one (absent for a free workout). */
+  dayId?: string;
+  /** The program the day belongs to. Required to scope the positional fallback
+   *  ids (`d0`, `d1`, …), which are only unique WITHIN one program — without it
+   *  an old program's slot `d3` matches the current program's slot `d3`. */
+  programId?: string;
+  /** False when an earlier day of the program already carries this name, so a
+   *  session that recorded no `dayId` attaches to that day and not to this one.
+   *  See `ProgramDayRef.absorbsUnidentified`. */
+  absorbsUnidentified?: boolean;
+};
+
+/** Was completed session `w` performed on `day`? Mirrors `workoutMatchesDay`. */
+function sessionIsOnDay(w: CompletedWorkout, day: PrevDayScope): boolean {
+  // Program scoping first, so it covers both branches below. "" = free workout:
+  // it belongs to no program, so it isn't excluded by the guard.
+  if (w.programId && day.programId && w.programId !== day.programId) return false;
+  // Both sides identified → exact slot match. Two days sharing a name never
+  // trade numbers, and a renamed day still finds its own history.
+  if (w.dayId && day.dayId) return w.dayId === day.dayId;
+  if (normalizeDayName(w.workoutName ?? "") !== normalizeDayName(day.name)) return false;
+  // The session can't say WHICH same-named day it was performed on (legacy
+  // record the backfill couldn't attribute, or a free workout). It attaches to
+  // the first day carrying the name and to no other — otherwise the second
+  // "Upper" would show numbers that were actually lifted on the first.
+  return day.absorbsUnidentified !== false;
+}
+
+/**
+ * The previous-values scope for a resolved workout, resolving
+ * `absorbsUnidentified` against the day's own program. Pass the program the
+ * workout came from (`resolvedWorkout.programId` looked up in the stored list);
+ * a free workout, or a day whose program is gone, absorbs unidentified sessions
+ * since there is no sibling day to lose them to.
+ */
+export function prevDayScopeFor(
+  workout: { name: string; programId?: string; dayId?: string },
+  program?: SavedProgram | null,
+): PrevDayScope {
+  const scope: PrevDayScope = {
+    name: workout.name,
+    dayId: workout.dayId,
+    programId: workout.programId,
+    absorbsUnidentified: true,
+  };
+  if (!program || !workout.dayId) return scope;
+  // programDays() comes back already marked, in cycle order.
+  const ref = programDays(program).find(d => d.dayId === workout.dayId);
+  if (ref) scope.absorbsUnidentified = ref.absorbsUnidentified;
+  return scope;
+}
+
+/**
  * Map of normalized exercise name → that exercise's set list from the most
  * recent prior session, formatted as "weight×reps" (or weight/reps/"—").
  * History is sorted newest-first, so the first time a name is seen wins.
@@ -232,51 +294,37 @@ export function normalizeExerciseName(name: string): string {
  * UTC day, so a string compare against the local `beforeDate` would wrongly
  * include a same-day session. Comparing local date to local date is exact.
  *
- * When `dayName` (the workout day being logged, e.g. "Push") is given, sessions
- * of that day take priority: an exercise programmed on two days (Lateral Raise
- * on both Push and Arms, trained at different weights) gets its previous values
- * from the last session of THIS day, not from wherever it last appeared. The
- * most recent appearance on any day is kept as a fallback for exercises never
- * done on this day (first time running the day, exercise swapped in, free
- * workout) so they still show a reference instead of nothing. Day names match
- * trimmed + case-insensitive, like exercise names.
+ * When `day` is given the walk is restricted to sessions performed on THAT day
+ * (see `sessionIsOnDay`) — strictly, with no any-day fallback. An exercise
+ * programmed on two days (Lateral Raise on both Push and Arms, or a push
+ * movement on both of two days called "Upper") shows the numbers it was last
+ * lifted at on the day in front of the user, and shows nothing at all until it
+ * has been logged there. Borrowing another day's numbers reads identically to
+ * the day's own, which is exactly how the second "Upper" came to display the
+ * first one's weights.
  *
- * `dayId` (the slot's stable id) refines that: sessions that recorded a dayId
- * are matched on it, so two days sharing a name keep their own numbers, and a
- * renamed day still finds its own history. Sessions with no dayId (legacy, or
- * free workouts) still match on the name, which is the best they can offer.
+ * Omit `day` for the day-agnostic map (most recent appearance anywhere).
  */
 export function buildPrevByName(
   history: CompletedWorkout[],
   beforeDate?: string,
-  dayName?: string,
-  dayId?: string,
+  day?: PrevDayScope,
 ): Record<string, string[]> {
   const sorted = [...history].sort(
     (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
   );
-  const filtered = beforeDate ? sorted.filter(w => w.date < beforeDate) : sorted;
-  const dayKey = dayName ? dayName.trim().toLowerCase() : null;
-  const anyDay: Record<string, string[]> = {};
-  const sameDay: Record<string, string[]> = {};
-  for (const workout of filtered) {
-    const matchesDay =
-      dayKey !== null &&
-      (workout.dayId && dayId
-        ? workout.dayId === dayId
-        : (workout.workoutName ?? "").trim().toLowerCase() === dayKey);
+  const out: Record<string, string[]> = {};
+  for (const workout of sorted) {
+    if (beforeDate && !(workout.date < beforeDate)) continue;
+    if (day && !sessionIsOnDay(workout, day)) continue;
     for (const ex of workout.exercises) {
       const key = normalizeExerciseName(ex.name);
-      const wantAny = !anyDay[key];
-      const wantSame = matchesDay && !sameDay[key];
-      if (!wantAny && !wantSame) continue;
-      const sets = ex.sets.map(s => {
+      if (out[key]) continue; // newest session wins
+      out[key] = ex.sets.map(s => {
         if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
         return s.weight || s.reps || "—";
       });
-      if (wantAny) anyDay[key] = sets;
-      if (wantSame) sameDay[key] = sets;
     }
   }
-  return dayKey === null ? anyDay : { ...anyDay, ...sameDay };
+  return out;
 }

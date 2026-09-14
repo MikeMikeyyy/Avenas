@@ -14,6 +14,7 @@ import * as Haptics from "expo-haptics";
 
 import BounceButton from "../BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { COMMUNITY_GUIDELINES, COMMUNITY_PLEDGE } from "../../constants/community";
 
@@ -119,8 +120,8 @@ const styles = StyleSheet.create({
   listBody:      { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
   link:          { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", paddingVertical: 6 },
   actions:       { paddingTop: 12 },
-  primaryBtn:    { borderRadius: 14, paddingVertical: 15, alignItems: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  primaryBtn:    { ...pill(), shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   primaryText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-  secondaryBtn:  { borderRadius: 14, paddingVertical: 14, alignItems: "center" },
+  secondaryBtn:  { ...pill(PILL_H_SM) },
   secondaryText: { fontFamily: FontFamily.bold, fontSize: 14 },
 });

@@ -26,6 +26,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { pill, pillGlow } from "../constants/buttons";
 import {
   CUSTOM_KEY, MAX_CUSTOM, MUSCLE_GROUPS,
   type SelectableMuscle, type CustomExercise,
@@ -504,8 +505,8 @@ const styles = StyleSheet.create({
   stepNumText:     { fontFamily: FontFamily.bold, fontSize: 13 },
   stepInput:       { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21, paddingTop: 6, paddingBottom: 6, minHeight: 38 },
   stepRemoveBtn:   { marginTop: 6 },
-  addStepBtn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderWidth: 1, borderStyle: "dashed", borderRadius: 16, paddingVertical: 15, marginBottom: 20 },
+  addStepBtn:      { ...pill(), gap: 8, borderWidth: 1, borderStyle: "dashed", marginBottom: 20 },
   addStepText:     { fontFamily: FontFamily.semibold, fontSize: 15 },
-  saveBtn:         { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: ACCT, borderRadius: 16, paddingVertical: 16 },
+  saveBtn:         { ...pill(), gap: 8, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
   saveBtnText:     { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
 });

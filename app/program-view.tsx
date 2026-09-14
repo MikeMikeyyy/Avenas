@@ -23,6 +23,7 @@ import BounceButton from "../components/BounceButton";
 import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
+import { pill, PILL_H_SM } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { formatWeightForDisplay } from "../utils/units";
@@ -639,7 +640,7 @@ const styles = StyleSheet.create({
   commentBox: { padding: 14, gap: 6 },
   commentLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.8 },
   commentBody: { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
-  primaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  primaryBtn: { ...pill(PILL_H_SM), gap: 8, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   primaryBtnText: { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
   floatingBtnWrap: { position: "absolute", left: 20, right: 20, zIndex: 20 },
 });

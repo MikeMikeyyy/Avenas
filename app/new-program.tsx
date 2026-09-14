@@ -25,6 +25,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT } from "../constants/theme";
+import { pill, pillGlow, PILL_RADIUS } from "../constants/buttons";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -43,7 +44,7 @@ import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
 import { formatStoredDate } from "../utils/dates";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { musclesForExercise } from "../utils/muscleGroups";
-import { canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, trainingDayKeys } from "../utils/programDays";
+import { canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, reorderCycleSlots, trainingDayKeys } from "../utils/programDays";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2544,37 +2545,16 @@ export default function NewProgramScreen() {
   }, []);
 
   // Reorder the cycle (Workout Summary sheet): move the day at `from` to `to`,
-  // carrying its Training/Rest flag AND its exercises. Workout keys embed the
-  // day index (`${i}:${label}`), so the map is rebuilt against new positions —
-  // same canonical form handleNext produces, so no phantom "hasChanges" diffs.
+  // carrying its Training/Rest flag, its stable id AND its exercises. The rules
+  // live in utils/programDays.ts (day identity owns them, and they're covered by
+  // scripts/verify-program-edits.ts); this just fans the result into state.
   const reorderCycleDays = useCallback((from: number, to: number) => {
-    if (from === to) return;
-    const order = cyclePattern.map((_, i) => i);
-    const [moved] = order.splice(from, 1);
-    order.splice(to, 0, moved);
-    setCyclePattern(order.map(i => cyclePattern[i]));
-    setIsTrainingDay(order.map(i => isTrainingDay[i]));
-    // Ids travel WITH their day, so a completed session logged against day 3
-    // still points at that workout after it's dragged to position 1.
-    setDayIds(prev => normalizeDayIds(order.map(i => prev[i]), order.length));
-    setWorkouts(prev => {
-      // Re-index the keys the map ALREADY has, keeping each key's own label.
-      // Rebuilding the label from cyclePattern instead meant a day whose stored
-      // label had drifted from the pattern looked up a key that wasn't there,
-      // and its exercises were silently replaced with [].
-      const newIdxOf = new Map<number, number>();
-      order.forEach((oldIdx, newIdx) => newIdxOf.set(oldIdx, newIdx));
-      const next: WorkoutMap = {};
-      for (const key of Object.keys(prev)) {
-        const parsed = parseDayKey(key);
-        if (!parsed) continue;
-        const newIdx = newIdxOf.get(parsed.idx);
-        if (newIdx === undefined) continue;
-        next[`${newIdx}:${parsed.label}`] = prev[key] ?? [];
-      }
-      return next;
-    });
-  }, [cyclePattern, isTrainingDay]);
+    const next = reorderCycleSlots(from, to, { cyclePattern, isTrainingDay, dayIds, workouts });
+    setCyclePattern(next.cyclePattern);
+    setIsTrainingDay(next.isTrainingDay);
+    setDayIds(next.dayIds);
+    setWorkouts(next.workouts);
+  }, [cyclePattern, isTrainingDay, dayIds, workouts]);
 
   const deleteCustomExercise = useCallback((exName: string) => {
     const next = customExercises.filter(e => e.name !== exName);
@@ -3354,8 +3334,8 @@ const styles = StyleSheet.create({
   coachBtnText:     { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
 
   // Primary button
-  primaryBtnWrap:   { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  primaryBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
+  primaryBtnWrap:   { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  primaryBtn:       { ...pill(), backgroundColor: ACCT, gap: 8 },
   primaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
   updateBtn:        { height: 40, borderRadius: 20, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
   updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.3 },

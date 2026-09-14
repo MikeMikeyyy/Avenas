@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
 import { DEFAULT_SET_COUNT_KEY } from "../constants/programs";
 import { getJSON, setJSON } from "../utils/storage";
 import {
@@ -501,7 +502,7 @@ const styles = StyleSheet.create({
   setCountMid:         { alignItems: "center", minWidth: 32 },
   setCountNum:         { fontFamily: FontFamily.bold, fontSize: 16, lineHeight: 19 },
   setCountLabel:       { fontFamily: FontFamily.semibold, fontSize: 9, letterSpacing: 0.6, textTransform: "uppercase" },
-  createCustomBtnWrap: { borderRadius: 14, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  createCustomBtn:     { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 14, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
+  createCustomBtnWrap: { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  createCustomBtn:     { ...pill(PILL_H_SM), backgroundColor: ACCT, gap: 8 },
   createCustomBtnText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
 });

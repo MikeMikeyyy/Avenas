@@ -14,6 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
+import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import ChevronToggle from "../components/ChevronToggle";
@@ -991,8 +992,8 @@ const styles = StyleSheet.create({
   activeProgramInner: { padding: 20, gap: 14 },
   activeProgramName:  { fontFamily: FontFamily.bold, fontSize: 18, flex: 1, marginRight: 8 },
   activeBtnRow:           { flexDirection: "row", gap: 10 },
-  activePrimaryBtnWrap:   { borderRadius: 14, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  activePrimaryBtn:       { borderRadius: 14, backgroundColor: ACCT, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
+  activePrimaryBtnWrap:   { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  activePrimaryBtn:       { ...pill(PILL_H_SM), backgroundColor: ACCT, gap: 7 },
   activePrimaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff", letterSpacing: 0.2 },
   activeSecondaryBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12 },
   activeSecondaryBtnText:  { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.2, lineHeight: 20 },
