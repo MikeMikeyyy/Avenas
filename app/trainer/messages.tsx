@@ -27,6 +27,7 @@ import PeopleIcon from "../../components/icons/PeopleIcon";
 import MessageComposeSheet from "../../components/trainer/MessageComposeSheet";
 import Avatar from "../../components/Avatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
 import { loadChatContacts, loadAllThreads, broadcastMessage, loadReads, countUnreadInThread } from "../../utils/chatStore";
@@ -253,9 +254,12 @@ export default function MessagesScreen() {
           <View style={{ width: 44 }} />
         </View>
 
+        {/* Same field as the exercise picker's — a filled, fully rounded pill on
+            t.ctrl, not a faint tinted box. This screen is shared by the trainer
+            and gym views, so it matches PTHome's client search too. */}
         {rows.length > 0 && (
-          <View style={[styles.searchBox, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}>
-            <Ionicons name="search" size={16} color={t.ts} />
+          <View style={[styles.searchBox, { backgroundColor: t.ctrl, borderColor: t.div }]}>
+            <Ionicons name="search" size={17} color={t.ts} />
             <TextInput
               value={search}
               onChangeText={setSearch}
@@ -346,7 +350,7 @@ const styles = StyleSheet.create({
   title:       { flex: 1, fontFamily: FontFamily.bold, fontSize: 22, textAlign: "center" },
   newBtn:      { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
 
-  searchBox:   { flexDirection: "row", alignItems: "center", gap: 8, height: 44, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, marginBottom: 16 },
+  searchBox:   { flexDirection: "row", alignItems: "center", gap: 9, height: 42, borderWidth: 1, borderRadius: PILL_RADIUS, paddingHorizontal: 14, marginBottom: 16, ...PILL_SHADOW },
   searchInput: { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, paddingVertical: 0 },
   noMatch:     { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
 

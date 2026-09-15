@@ -16,20 +16,30 @@ const TINT_BLOBS: Record<AuroraTint, Blob[]> = {
     { color: AURORA.aqua,  o: 0.16, cx: 0.95, cy: 0.16, rx: 0.72, ry: 0.46 },
     { color: AURORA.blush, o: 0.13, cx: 0.55, cy: 0.62, rx: 0.85, ry: 0.42 },
   ],
-  // Mint's base (ACCT) is far more electric than aqua/blush, so its lead blob
-  // runs at a lower opacity to land at the same perceived weight as the other
-  // two pages' glows.
+  // New Program (creating one — editing borrows the aqua tint). Leads with
+  // `seafoam` so it tracks that page's orb; `mint` stays Home's lead and the
+  // counter-glow on My Programs.
+  //
+  // Opacity is back up to 0.17 from the 0.14 this used to run at. That was
+  // compensation for leading with ACCT itself, which is far more electric than
+  // the other pages' colours; seafoam is lighter, so at 0.14 it read weaker
+  // than its siblings rather than matching them.
   green: [
-    { color: AURORA.mint,  o: 0.14, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
-    { color: AURORA.aqua,  o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },
+    { color: AURORA.seafoam, o: 0.17, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
+    { color: AURORA.aqua,    o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },
   ],
+  // My Programs. Leads with `sky` so it tracks that page's orb; `aqua` stays the
+  // counter-glow elsewhere and in the Home mix.
   aqua: [
-    { color: AURORA.aqua,  o: 0.19, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
-    { color: AURORA.mint,  o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },
+    { color: AURORA.sky,  o: 0.19, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
+    { color: AURORA.mint, o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },
   ],
+  // The journal family (journal, log-workout, workout-detail, program-history
+  // and its detail page). Leads with `orchid` rather than `blush` so it tracks
+  // the violet journal orb; the Home mix still uses `blush` and is unaffected.
   blush: [
-    { color: AURORA.blush, o: 0.18, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
-    { color: AURORA.aqua,  o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },
+    { color: AURORA.orchid, o: 0.18, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
+    { color: AURORA.aqua,   o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },
   ],
 };
 

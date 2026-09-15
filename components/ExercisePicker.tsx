@@ -7,7 +7,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, GOLD, GOLD_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, GOLD, GOLD_DARK, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { DEFAULT_SET_COUNT_KEY } from "../constants/programs";
 import { getJSON, setJSON } from "../utils/storage";
@@ -306,7 +306,14 @@ export default function ExercisePicker({
           onPress={ev => { ev.stopPropagation(); toggleFav(name); }}
           activeOpacity={0.7}
           hitSlop={10}
-          style={[styles.favBadge, { backgroundColor: t.bg }]}
+          style={[styles.favBadge, {
+            backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
+            // The outline is what makes it read as a button, and it's also what
+            // lets the disc sit half off the thumbnail without looking broken:
+            // the circle is defined by its edge, not by fill-vs-background
+            // contrast. t.div disappears on dark, hence the explicit rgba.
+            borderColor: isDark ? "rgba(255,255,255,0.22)" : t.div,
+          }]}
           accessibilityRole="button"
           accessibilityLabel={starred ? `Unfavourite ${name}` : `Favourite ${name}`}
           accessibilityState={{ selected: starred }}
@@ -657,7 +664,13 @@ const styles = StyleSheet.create({
   searchInput:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0 },
   chromeDivider:       { height: StyleSheet.hairlineWidth },
   thumbWrap:           { width: 52, height: 52 },
-  favBadge:            { position: "absolute", top: -7, right: -7, width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  // Perched on the thumbnail's top-right CORNER, mostly outside it, so it clips
+  // about a ninth of the artwork instead of sitting on top of the subject.
+  // It survives hanging off the edge because the outline + opaque fill define
+  // the circle on their own; the earlier version had neither, filled itself
+  // with the row's own background, and so only showed up where it happened to
+  // overlap the image.
+  favBadge:            { position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 11, borderWidth: 1, alignItems: "center", justifyContent: "center", ...PILL_SHADOW },
   // The hollow star sits on every unstarred row, so it has to recede rather
   // than read as 800 controls demanding attention.
   favBadgeIdle:        { opacity: 0.45 },

@@ -19,7 +19,7 @@ import BounceButton from "../components/BounceButton";
 import DropdownPicker from "../components/DropdownPicker";
 import FadeScreen from "../components/FadeScreen";
 import DumbbellIcon from "../components/DumbbellIcon";
-import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
 import { formatWeightForDisplay } from "../utils/units";
 import {
   PROGRAMS_KEY,
@@ -221,17 +221,16 @@ export default function ExerciseHistoryScreen() {
         </View>
 
         {/* Time-range dropdown — identical button + sheet as the ones on the
-            Progress page chart cards. Session count is wrapped in a matching
-            NeuCard pill sized to the dropdown trigger so the row reads as
-            two paired controls instead of raw text against the background. */}
+            Progress page chart cards. The session count is the SAME white
+            bubble pill as the dropdown trigger beside it (white in both themes,
+            like the SegmentedControl thumb), so the row reads as two matching
+            controls rather than a raised card next to a floating pill. */}
         <View style={styles.rangeRow}>
-          <NeuCard dark={isDark} radius={12} shadowSize="sm">
-            <View style={styles.countPill}>
-              <Text style={[styles.countText, { color: t.tp }]} numberOfLines={1}>
-                {sessions.length} session{sessions.length === 1 ? "" : "s"}
-              </Text>
-            </View>
-          </NeuCard>
+          <View style={[styles.countPill, { shadowOpacity: isDark ? 0.3 : 0.12 }]}>
+            <Text style={styles.countText} numberOfLines={1}>
+              {sessions.length} session{sessions.length === 1 ? "" : "s"}
+            </Text>
+          </View>
           <DropdownPicker<ExerciseRangeKey>
             value={range}
             options={EXERCISE_RANGE_OPTIONS}
@@ -375,15 +374,26 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 12,
   },
+  // Mirrors DropdownPicker's `btn` exactly — change one and change the other,
+  // or the two controls in this row stop matching.
   countPill: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: BUBBLE_LIGHT,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 3,
   },
   countText: {
     fontFamily: FontFamily.semibold,
     fontSize: 12,
+    // The pill is white in both themes, so the label is always the on-white
+    // colour rather than the active theme's.
+    color: APP_LIGHT.tp,
   },
 
   cardInner: {

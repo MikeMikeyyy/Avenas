@@ -27,7 +27,7 @@ import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { pill, pillGlow } from "../../constants/buttons";
+import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import FavouriteStar from "../FavouriteStar";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
@@ -414,14 +414,28 @@ export default function PTHome() {
 
         {searchOpen && (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(140)} style={styles.searchRow}>
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search clients"
-              placeholderTextColor={t.ts}
-              autoFocus
-              style={[styles.search, { color: t.tp, backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}
-            />
+            {/* Same field as the exercise picker's: a filled, fully rounded
+                pill on t.ctrl rather than a faint tinted box, so it reads as
+                something you type into. */}
+            <View style={[styles.search, { backgroundColor: t.ctrl, borderColor: t.div }]}>
+              <Ionicons name="search" size={17} color={t.ts} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search clients"
+                placeholderTextColor={t.ts}
+                autoFocus
+                autoCorrect={false}
+                returnKeyType="search"
+                clearButtonMode="never"
+                style={[styles.searchInput, { color: t.tp }]}
+              />
+              {search.length > 0 && (
+                <TouchableOpacity onPress={() => setSearch("")} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
+                  <Ionicons name="close-circle" size={19} color={t.ts} />
+                </TouchableOpacity>
+              )}
+            </View>
           </Animated.View>
         )}
 
@@ -838,7 +852,8 @@ const styles = StyleSheet.create({
   searchBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   msgBadge:     { position: "absolute", top: -5, right: -5 },
   searchRow:    { marginBottom: 14 },
-  search:       { fontFamily: FontFamily.regular, fontSize: 15, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11 },
+  search:       { flexDirection: "row", alignItems: "center", gap: 9, height: 42, paddingHorizontal: 14, borderRadius: PILL_RADIUS, borderWidth: 1, ...PILL_SHADOW },
+  searchInput:  { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0 },
   summaryAvatar:    { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   summaryAvatarText:{ fontFamily: FontFamily.bold, fontSize: 11 },
   broadcast:    { ...pill(), gap: 10, ...pillGlow(ACCT, 0.4) },

@@ -21,10 +21,13 @@ import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import ExerciseImage from "../components/ExerciseImage";
 import VideoDemo from "../components/VideoDemo";
+import FavouriteStar from "../components/FavouriteStar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
-import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
+import { pill, pillGlow } from "../constants/buttons";
+import { CUSTOM_KEY, FAVOURITE_EXERCISES_KEY, type CustomExercise } from "../constants/exercises";
 import { useTheme } from "../contexts/ThemeContext";
-import { getJSON } from "../utils/storage";
+import { getJSON, setJSON } from "../utils/storage";
+import { isFavourite as isFav, toggleFavourite } from "../utils/exerciseFavourites";
 import { exerciseByName, exerciseIdByName } from "../utils/exerciseLookup";
 
 // "middle back" → "Middle Back". Catalogue secondary muscles are free-text
@@ -48,6 +51,33 @@ export default function ExerciseSummaryScreen() {
   // the user's saved list for muscles/description/photo.
   const bundled = exerciseByName(name);
   const [custom, setCustom] = useState<CustomExercise | null>(null);
+
+  // Favourite state. Re-read on focus rather than on mount: the picker writes
+  // the same key, so coming back here after starring something there must not
+  // show a stale star.
+  const [favourites, setFavourites] = useState<string[]>([]);
+  const starred = isFav(favourites, name);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      getJSON<string[]>(FAVOURITE_EXERCISES_KEY, []).then(v => {
+        if (!cancelled && Array.isArray(v)) {
+          setFavourites(v.filter((n): n is string => typeof n === "string"));
+        }
+      }).catch(() => {});
+      return () => { cancelled = true; };
+    }, []),
+  );
+
+  const toggleStar = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setFavourites(prev => {
+      const next = toggleFavourite(prev, name);
+      setJSON(FAVOURITE_EXERCISES_KEY, next).catch(() => {});
+      return next;
+    });
+  }, [name]);
 
   useFocusEffect(
     useCallback(() => {
@@ -101,6 +131,22 @@ export default function ExerciseSummaryScreen() {
       >
         <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
           <Ionicons name="chevron-back" size={22} color={t.tp} />
+        </View>
+      </TouchableOpacity>
+
+      {/* Favourite toggle — mirrors the back button on the other side, so the
+          star reads as a control rather than decoration. Same gold and the same
+          storage key as the picker's star, so the two always agree. */}
+      <TouchableOpacity
+        onPress={toggleStar}
+        style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
+        activeOpacity={0.8}
+        accessibilityLabel={starred ? `Remove ${name} from favourites` : `Add ${name} to favourites`}
+        accessibilityRole="button"
+        accessibilityState={{ selected: starred }}
+      >
+        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+          <FavouriteStar size={20} filled={starred} inactiveColor={t.ts} />
         </View>
       </TouchableOpacity>
 
@@ -276,20 +322,7 @@ const styles = StyleSheet.create({
   chipText: { fontFamily: FontFamily.semibold, fontSize: 13 },
 
   historyBtnWrap: { alignSelf: "stretch", marginTop: 20 },
-  historyBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    gap: 10,
-    borderRadius: 20,
-    backgroundColor: ACCT,
-    shadowColor: ACCT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 8,
-    elevation: 8,
-  },
+  historyBtn: { ...pill(), paddingHorizontal: 18, gap: 10, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4), elevation: 8 },
   historyBtnLabel: {
     fontFamily: FontFamily.bold,
     fontSize: 15,

@@ -30,7 +30,7 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
-import { pill, pillGlow, PILL_H_SM } from "../constants/buttons";
+import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   getCurrentWeek, type SavedProgram, type CompletedWorkout, type ProgramDayRef,
@@ -948,7 +948,10 @@ const styles = StyleSheet.create({
   apCardInner:      { padding: 18, gap: 8 },
   apNameRow:        { flexDirection: "row", alignItems: "center", gap: 8 },
   apName:           { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
-  activeBadge:     { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: ACCT, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
+  // Fully rounded like every other button in the app. paddingHorizontal goes up
+  // with it: rounded ends eat into the usable width, so the same 10 that looked
+  // balanced at radius 10 reads tight on a pill.
+  activeBadge:     { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: ACCT, borderRadius: PILL_RADIUS, paddingHorizontal: 12, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
   activeBadgeDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   activeBadgeText: { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff", letterSpacing: 0.3 },
   apSub:            { fontFamily: FontFamily.regular, fontSize: 13, color: TS },

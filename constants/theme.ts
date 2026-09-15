@@ -97,15 +97,24 @@ export const AURORA = {
   mint:  ACCT,
   aqua:  "#45c4f5",
   blush: "#ff9ec2",
+  // ── Page lead glows ────────────────────────────────────────────────────────
+  // Each is derived from its orb's DEEP stop by the same shift that produced
+  // `blush` from the old pink orb: same hue, lightened ~8%. They exist as their
+  // own tokens rather than replacing `mint`/`aqua`/`blush`, because those three
+  // are still doing duty as counter-glows on other pages and in the Home mix —
+  // repointing them would move backdrops that aren't part of this change.
+  orchid:  "#F18BFF",  // journal family  — from ORB_GRADS.blush #ed64ff
+  sky:     "#70E2FF",  // My Programs     — from ORB_GRADS.aqua  #47daff
+  seafoam: "#56F5C5",  // New Program     — from ORB_GRADS.green #2ff3b8
 } as const;
 
 // Gradient orb buttons (Home quick actions). `glow` doubles as the shadow color.
 // Green is deliberately softer than raw ACCT — at full saturation it shouts
 // over its aqua/blush siblings, so it's pulled toward their pastel weight.
 export const ORB_GRADS = {
-  green: { colors: ["#a5f0d3", "#43dda6"] as const, glow: "#43dda6" },
-  aqua:  { colors: ["#9ce0ff", "#3eb8f2"] as const, glow: "#3eb8f2" },
-  blush: { colors: ["#ffc7db", "#f77fae"] as const, glow: "#f77fae" },
+  green: { colors: ["#a2ffe8ff", "#2ff3b8ff"] as const, glow: "#37d19bff" },
+  aqua:  { colors: ["#94f8ffff", "#47daffff"] as const, glow: "#3dbdf8ff" },
+  blush: { colors: ["#ffc7ecff", "#ed64ffff"] as const, glow: "#c17ff7ff" },
 } as const;
 
 

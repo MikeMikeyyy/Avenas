@@ -39,6 +39,18 @@ import InsightsCard from "../../components/InsightsCard";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
 
+/**
+ * Where the streak badge sits below the safe area, chosen so the streak NUMBER
+ * lines up with the avatar's centre — not so the badge's box does.
+ *
+ * The avatar is 48 tall and sits at insets.top, so its centre is insets.top+24.
+ * Inside the badge the row is as tall as the flame (36 * FlameIcon's FILL ≈ 31),
+ * the text centres in that at ~15.5, and the digits sit ~1.8 above their own
+ * box's centre because a text box reserves descender space digits never use.
+ * 24 - (15.5 - 1.8) ≈ 10. The flame moves down with it, keeping its own offset.
+ */
+const STREAK_BADGE_TOP = 10;
+
 const RING_SIZE          = 110;
 const RING_STROKE        = 7;
 const RING_RADIUS        = (RING_SIZE - RING_STROKE) / 2;
@@ -759,7 +771,7 @@ export default function HomeScreen() {
       <Image source={require("../../assets/images/logo.png")} style={[styles.logo, { position: "absolute", top: insets.top, left: 20, zIndex: 10 }]} resizeMode="contain" />
 
       {/* Streak badge — fixed, always visible */}
-      <View style={[styles.streakFloat, { top: insets.top + 6 }]}>
+      <View style={[styles.streakFloat, { top: insets.top + STREAK_BADGE_TOP }]}>
         <BounceButton onPress={() => router.navigate("/streak")}>
           <View style={styles.streakBadge}>
             {/* Nudged up to sit optically level with the DIGITS rather than with

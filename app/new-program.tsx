@@ -2874,8 +2874,11 @@ export default function NewProgramScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      {/* Pastel glow matching the green New Program orb on Home */}
-      <AuroraBackdrop dark={isDark} tint="green" />
+      {/* Glow matches where you came FROM, not the file you're in: creating a
+          program is the green New Program orb on Home, editing one is reached
+          through My Programs and carries that page's blue. Review and
+          shared-edit are also edits of an existing program, so they follow it. */}
+      <AuroraBackdrop dark={isDark} tint={isEditMode || isReviewMode || isSharedEditMode ? "aqua" : "green"} />
 
       {/* Back button */}
       <TouchableOpacity
