@@ -61,10 +61,19 @@ export const ACCT_DEEP = "#0c9f6e";
 export const DANGER = "#E5484D";
 
 // ─── Favourites ───────────────────────────────────────────────────────────────
-// The star on a pinned group. Warm gold, distinct from the yellow-orange
-// WARMUP_ORANGE and the deeper PAUSED_ORANGE so the three never read as the
-// same state.
-export const GOLD = "#FFC24B";
+// The star on a pinned group. A true yellow gold — the old #FFC24B carried
+// enough blue to read dull and muddy next to the brand green. Still distinct
+// from the yellow-orange WARMUP_ORANGE and the deeper PAUSED_ORANGE so the
+// three never read as the same state.
+//
+// Dark mode gets its own value rather than reusing the light one: a fully
+// saturated gold vibrates against a dark navy card, so GOLD_DARK is lifted in
+// lightness and pulled back in saturation. Render both through
+// <FavouriteStar /> (components/FavouriteStar.tsx), which also carries the
+// glow — deliberately softer on dark, where a bloom on a dark ground reads far
+// stronger than the same values do on light.
+export const GOLD      = "#FFC61F";
+export const GOLD_DARK = "#FFD35C";
 
 // ─── Group roles ──────────────────────────────────────────────────────────────
 // Badges beside a member's name on a group page. The OWNER keeps the brand

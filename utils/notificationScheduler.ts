@@ -25,8 +25,9 @@ import * as Notifications from "expo-notifications";
 import { SchedulableTriggerInputTypes } from "expo-notifications";
 
 import { getJSON } from "./storage";
-import { toYMD, todayYMD, fmtDuration } from "./dates";
+import { fromYMD, toYMD, todayYMD, fmtDuration } from "./dates";
 import { getWorkoutForDate, resolveWorkoutForDate, type DayOverride } from "./workout";
+import { streakBreakDate } from "./streak";
 import {
   PROGRAMS_KEY,
   WORKOUT_DATES_KEY,
@@ -135,6 +136,14 @@ function at(daysFromToday: number, hour: number, minute: number): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysFromToday, hour, minute, 0);
 }
 
+/** A local time on a specific "YYYY-MM-DD". Null when the date is malformed. */
+function atYMD(ymd: string, hour: number, minute: number): Date | null {
+  const d = fromYMD(ymd);
+  if (!d) return null;
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
 async function schedule(
   category: NotificationCategory,
   title: string,
@@ -160,12 +169,15 @@ async function doResync(): Promise<void> {
   const now = new Date();
   const today = todayYMD();
 
+  // Read once: both the workout reminders and the streak reminder need to know
+  // which of the coming days the program actually schedules a workout for.
+  const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+  const active = programs.find((p) => p.status === "active") ?? null;
+
   // Workout reminders: one one-shot per scheduled (non-Rest) day at the user's
   // chosen time. Today is skipped once its workout is already logged, and the
   // change-day override is honored for today only (its only valid day).
   if (prefs.categories.workoutReminders) {
-    const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-    const active = programs.find((p) => p.status === "active") ?? null;
     if (active) {
       const override = await getJSON<DayOverride | null>(WORKOUT_DAY_OVERRIDE_KEY, null);
       const doneDates = await getJSON<string[]>(WORKOUT_DATES_KEY, []);
@@ -190,17 +202,28 @@ async function doResync(): Promise<void> {
     }
   }
 
-  // Streak reminders: an evening heads-up on days the app hasn't been opened.
-  // Today never needs one from this device's point of view (scheduling happens
-  // while the app is open, which is exactly what keeps the streak alive), so
-  // one-shots start tomorrow and each later open cancels + reschedules.
+  // Streak reminder: ONE one-shot, on the evening the streak would actually end.
+  //
+  // This used to queue a nag for every one of the next 7 nights and lean on the
+  // next resync to cancel the wrong ones — which is why a reminder still landed
+  // on nights the app had been opened. Now the date is derived: the app is open
+  // right now (resync only runs while it is), so today counts as attended, and
+  // if it is never opened again the streak dies at the end of the second
+  // scheduled workout day from here. Every night before that is a rest day or
+  // still inside the grace allowance, and is owed no reminder at all.
+  //
+  // Scheduling the far night in advance means it survives the days in between
+  // with no resync. Opening the app before then re-derives it from the new
+  // last-opened date, which pushes it back.
   if (prefs.categories.streakReminders) {
-    for (let i = 1; i <= HORIZON_DAYS; i++) {
+    const breakDay = streakBreakDate(active, today, HORIZON_DAYS);
+    const fireAt = breakDay ? atYMD(breakDay, STREAK_REMINDER.hour, STREAK_REMINDER.minute) : null;
+    if (fireAt && fireAt.getTime() > now.getTime()) {
       await schedule(
         "streakReminders",
         "Keep your streak alive",
         "Open Avenas before midnight to keep your streak going.",
-        { type: SchedulableTriggerInputTypes.DATE, date: at(i, STREAK_REMINDER.hour, STREAK_REMINDER.minute) },
+        { type: SchedulableTriggerInputTypes.DATE, date: fireAt },
       );
     }
   }

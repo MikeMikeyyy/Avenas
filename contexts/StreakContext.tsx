@@ -1,7 +1,10 @@
 import { createContext, useContext, useEffect, useState, useMemo } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { toYMD } from "../utils/dates";
+import { daysBetweenYMD, toYMD } from "../utils/dates";
+import { getJSON } from "../utils/storage";
 import { notifyAchievement } from "../utils/notificationScheduler";
+import { streakSurvives } from "../utils/streak";
+import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 
 const STORAGE_KEY = "avenas_streak_data";
 
@@ -37,9 +40,11 @@ const StreakContext = createContext<StreakContextValue>({
   isLoaded: false,
 });
 
+/** Local calendar days from `a` to `b`. Only used to tell "already opened
+ *  today" (<= 0) from "a gap to measure" — the gap itself is measured in
+ *  SCHEDULED WORKOUT days by utils/streak.ts, not in calendar days. */
 function daysBetween(a: string, b: string): number {
-  const msPerDay = 1000 * 60 * 60 * 24;
-  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / msPerDay);
+  return daysBetweenYMD(a, b) ?? 0;
 }
 
 function isValidStreakData(parsed: unknown): parsed is StreakData {
@@ -118,13 +123,13 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
       // Day boundaries are LOCAL calendar days (toYMD) — the same basis as every
       // other date in the app. Records written before `dayBasis` existed used UTC
       // days (toISOString), which lag local by one in positive-UTC timezones (an
-      // 8am AEST open recorded yesterday's UTC date). Bridge that once: a legacy
-      // gap of exactly 2 is almost always yesterday's UTC-shifted open, so credit
-      // it instead of resetting an honest streak. Legacy openedDates entries may
-      // sit a day off — display-only, and fades as new local-based opens accrue.
+      // 8am AEST open recorded yesterday's UTC date). That used to need an
+      // explicit bridge; the grace day below now absorbs it, since a legacy gap
+      // of 2 leaves a single day in between and one missed day is free. Legacy
+      // openedDates entries may sit a day off — display-only, and fades as new
+      // local-based opens accrue.
       const isLegacy = saved.dayBasis !== "local";
-      let diff = daysBetween(saved.lastOpenedDate, today);
-      if (isLegacy && diff === 2) diff = 1;
+      const diff = daysBetween(saved.lastOpenedDate, today);
 
       if (diff <= 0) {
         // Same local day — or a legacy UTC date from a negative-UTC timezone
@@ -137,10 +142,18 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      // A gap only costs the streak if SCHEDULED WORKOUT days went by unopened.
+      // Rest days, a held program and the one free missed workout day all leave
+      // it standing — see utils/streak.ts. The active program is read here (not
+      // held in state) because this effect runs once, as the app opens.
+      const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+      const activeProgram = programs.find(p => p.status === "active") ?? null;
+      const survives = streakSurvives(activeProgram, saved.lastOpenedDate, today);
+
       let next: StreakData;
 
-      if (diff === 1) {
-        // Opened yesterday — keep streak going
+      if (survives) {
+        // Within the allowance — showing up today continues the run.
         next = {
           count: saved.count + 1,
           startDate: saved.startDate,
@@ -156,7 +169,8 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
           );
         }
       } else {
-        // Missed 2+ days — reset streak but preserve highest
+        // Two or more scheduled workout days passed unopened — reset, but keep
+        // the personal best.
         next = {
           count: 1,
           startDate: today,

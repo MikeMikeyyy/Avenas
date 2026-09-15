@@ -1,5 +1,8 @@
 export const CUSTOM_KEY = "@avenas/custom_exercises";
 export const MAX_CUSTOM = 5;
+/** Exercise names the user starred, catalogue and custom alike. Device-local
+ *  preference — never in the cloud snapshot. See utils/exerciseFavourites.ts. */
+export const FAVOURITE_EXERCISES_KEY = "@avenas/favourite_exercises";
 
 export const MUSCLE_GROUPS = ["All", "Chest", "Back", "Shoulders", "Legs", "Arms", "Core"] as const;
 export type MuscleGroup = typeof MUSCLE_GROUPS[number];

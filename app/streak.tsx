@@ -8,7 +8,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../components/NeuCard";
-import FlameIcon from "../components/FlameIcon";
+import FlameIcon, { flameHeight, flameWidth } from "../components/FlameIcon";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { useStreak } from "../contexts/StreakContext";
@@ -20,6 +20,27 @@ import {
 } from "../constants/streakTiers";
 
 const WEEK_LABELS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+
+/** Size passed to the milestone row's flames, and the width they render at —
+ *  the tier numbers underneath are laid out to that width so each sits centred
+ *  under its flame. Keep the two in step. */
+const MILESTONE_FLAME_SIZE = 48;
+const MILESTONE_FLAME_W = flameWidth(MILESTONE_FLAME_SIZE);
+
+/**
+ * Hero flame + the soft tier-coloured circle behind it.
+ *
+ * The glow is absolutely positioned and LARGER than the flame's box, so it
+ * overhangs it top and bottom. A margin below the hero is measured from the box,
+ * not the circle — so it has to clear the overhang before it buys any visible
+ * space. Deriving it means the gap survives a change to the flame size or to
+ * FlameIcon's FILL, both of which silently ate into it before.
+ */
+const HERO_FLAME_SIZE = 160;
+const HERO_GLOW_SIZE = 200;
+const HERO_GLOW_OVERHANG = Math.max(0, (HERO_GLOW_SIZE - flameHeight(HERO_FLAME_SIZE)) / 2);
+/** Space you actually see between the bottom of the glow and the streak number. */
+const HERO_GAP = 24;
 
 export default function StreakScreen() {
   const insets = useSafeAreaInsets();
@@ -115,7 +136,7 @@ export default function StreakScreen() {
         {/* Hero flame */}
         <View style={styles.hero}>
           <View style={[styles.glow, { backgroundColor: displayTier.color + "20" }]} />
-          <FlameIcon size={160} color={displayTier.color} />
+          <FlameIcon size={HERO_FLAME_SIZE} color={displayTier.color} />
         </View>
 
         {/* Streak number */}
@@ -191,26 +212,33 @@ export default function StreakScreen() {
 
             {/* Flame — bar — flame on the same row */}
             <View style={styles.milestoneBarRow}>
-              <FlameIcon size={48} color={displayTier.color} />
+              <View style={styles.milestoneFlame}>
+                <FlameIcon size={MILESTONE_FLAME_SIZE} color={displayTier.color} />
+              </View>
               <View style={[styles.progressTrack, { backgroundColor: t.div }]}>
                 <View style={[styles.progressFill, {
                   width: `${Math.min(100, Math.round(progress * 100))}%`,
                   backgroundColor: displayTier.color,
                 }]} />
               </View>
-              <View style={{ opacity: isMax ? 1 : 0.3 }}>
-                <FlameIcon size={48} color={isMax ? displayTier.color : nextTier!.color} animated={isMax} />
+              <View style={[styles.milestoneFlame, { opacity: isMax ? 1 : 0.3 }]}>
+                <FlameIcon size={MILESTONE_FLAME_SIZE} color={isMax ? displayTier.color : nextTier!.color} animated={isMax} />
               </View>
             </View>
 
-            {/* Tier labels below */}
+            {/* Tier labels below. BOTH are muted — they're scale markers for the
+                bar, not a status, so the tier colour stays on the flames and the
+                bar fill. Each is laid out to the flame's RENDERED width, not its
+                `size`: the icon's box hugs the artwork, so the old hardcoded 48
+                centred every number under a box 20px wider than the flame really
+                is, putting it ~10px off. */}
             {isMax ? (
               <Text style={[styles.milestoneTierLabel, { color: displayTier.color, textAlign: "center" }]}>MAX</Text>
             ) : (
               <View style={styles.milestoneLabelRow}>
-                <Text style={[styles.milestoneTierLabel, { color: displayTier.color, width: 48, textAlign: "center" }]}>{tier.min}</Text>
+                <Text style={[styles.milestoneTierLabel, { color: t.ts, width: MILESTONE_FLAME_W, textAlign: "center" }]}>{tier.min}</Text>
                 <View style={{ flex: 1 }} />
-                <Text style={[styles.milestoneTierLabel, { color: t.ts, width: 48, textAlign: "center" }]}>{nextTier?.min}</Text>
+                <Text style={[styles.milestoneTierLabel, { color: t.ts, width: MILESTONE_FLAME_W, textAlign: "center" }]}>{nextTier?.min}</Text>
               </View>
             )}
           </View>
@@ -269,8 +297,8 @@ const styles = StyleSheet.create({
 
   backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
 
-  hero: { alignItems: "center", justifyContent: "center", marginBottom: 40 },
-  glow: { position: "absolute", width: 200, height: 200, borderRadius: 100 },
+  hero: { alignItems: "center", justifyContent: "center", marginBottom: HERO_GLOW_OVERHANG + HERO_GAP },
+  glow: { position: "absolute", width: HERO_GLOW_SIZE, height: HERO_GLOW_SIZE, borderRadius: HERO_GLOW_SIZE / 2 },
   heroFlame: { width: 200, height: 200 },
 
   numberRow: { alignItems: "center", marginBottom: 28 },
@@ -296,8 +324,13 @@ const styles = StyleSheet.create({
 
   milestoneContent:   { padding: 20, gap: 12 },
   milestoneText:      { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: "center", lineHeight: 18 },
-  milestoneBarRow:    { flexDirection: "row", alignItems: "center", gap: 8 },
-  milestoneFlame:     { width: 48, height: 48 },
+  // gap 14, not 8: the track is flex:1, so widening the gap shortens the line
+  // and pulls it off the flames rather than crowding them.
+  milestoneBarRow:    { flexDirection: "row", alignItems: "center", gap: 14 },
+  // Optical lift. The flame is geometrically centred on the track already, but
+  // its mass sits in the bulb at the bottom, so it reads low beside a 6px line.
+  // transform, so the row height and the tier labels below don't move.
+  milestoneFlame:     { transform: [{ translateY: -4 }] },
   progressTrack:      { flex: 1, height: 6, borderRadius: 3, overflow: "hidden" },
   progressFill:       { height: "100%", borderRadius: 3 },
   milestoneLabelRow:  { flexDirection: "row", justifyContent: "space-between" },

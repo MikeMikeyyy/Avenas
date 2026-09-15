@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts && npx tsx scripts/verify-workout-summary.ts && npx tsx scripts/verify-program-edits.ts",
+    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts && npx tsx scripts/verify-workout-summary.ts && npx tsx scripts/verify-program-edits.ts && npx tsx scripts/verify-streak.ts && npx tsx scripts/verify-exercise-favourites.ts",
     "verify:stats": "npx tsx scripts/verify-progress-stats.ts"
   },
   "dependencies": {

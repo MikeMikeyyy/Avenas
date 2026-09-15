@@ -1,22 +1,24 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Modal, View, Text, StyleSheet, ScrollView, FlatList,
   TextInput, TouchableOpacity, Animated, Easing, PanResponder,
-  Alert,
+  Alert, Keyboard, Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, GOLD, GOLD_DARK } from "../constants/theme";
+import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { DEFAULT_SET_COUNT_KEY } from "../constants/programs";
 import { getJSON, setJSON } from "../utils/storage";
 import {
-  MUSCLE_GROUPS, MAX_CUSTOM,
+  MUSCLE_GROUPS, MAX_CUSTOM, FAVOURITE_EXERCISES_KEY,
   type SelectableMuscle, type CustomExercise, type Exercise,
 } from "../constants/exercises";
 import { EXERCISES } from "../constants/exerciseData";
+import { isFavourite as isFav, sortByMuscleThenName, toggleFavourite } from "../utils/exerciseFavourites";
 import ExerciseImage from "./ExerciseImage";
+import FavouriteStar from "./FavouriteStar";
 import TrashIcon from "./TrashIcon";
 import BounceButton from "./BounceButton";
 
@@ -59,6 +61,18 @@ type Row =
 const ROW_H = 73;
 const HEADER_H = 36;
 
+/** Label colour on the active gold chip. GOLD and GOLD_DARK are both light, so
+ *  white would sit at roughly 1.9:1 against them; this dark ink is ~8:1. */
+const GOLD_INK = APP_LIGHT.tp;
+
+/** The lift under an active filter chip, in whatever colour the chip is. */
+const chipGlow = (color: string, opacity = 0.5) => ({
+  shadowColor: color,
+  shadowOffset: { width: 0, height: 3 },
+  shadowOpacity: opacity,
+  shadowRadius: 8,
+});
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const MIN_SET_COUNT = 1;
@@ -74,8 +88,36 @@ export default function ExercisePicker({
   const [selectedMuscles, setSelectedMuscles] = useState<Set<SelectableMuscle>>(new Set());
   const [pickedOrder, setPickedOrder] = useState<string[]>([]);
   const [setCount, setSetCount] = useState(FALLBACK_SET_COUNT);
+  const [favourites, setFavourites] = useState<string[]>([]);
+  const [favouritesOnly, setFavouritesOnly] = useState(false);
+  const gold = isDark ? GOLD_DARK : GOLD;
+  const noFilters = selectedMuscles.size === 0 && !favouritesOnly;
+  // Height of the keyboard, and of the bottom bar it overlaps. The list needs
+  // to scroll past whatever the keyboard hides — see the contentContainerStyle.
+  const [kbHeight, setKbHeight] = useState(0);
+  const [bottomBarH, setBottomBarH] = useState(0);
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  // iOS fires the `will` pair (ahead of the animation, so the padding lands in
+  // step with it); Android only ever fires the `did` pair.
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const show = Keyboard.addListener(showEvt, e => setKbHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener(hideEvt, () => setKbHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
+  const toggleFav = useCallback((name: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setFavourites(prev => {
+      const next = toggleFavourite(prev, name);
+      // Optimistic: the list re-sorts on this tick, storage catches up.
+      setJSON(FAVOURITE_EXERCISES_KEY, next).catch(() => {});
+      return next;
+    });
+  }, []);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -139,6 +181,11 @@ export default function ExercisePicker({
     if (visible) {
       setPickedOrder([]);
       setSearch("");
+      // Re-read on every open: another picker instance (workout, log-workout)
+      // may have starred something since this one last mounted.
+      getJSON<string[]>(FAVOURITE_EXERCISES_KEY, []).then(v => {
+        if (Array.isArray(v)) setFavourites(v.filter((n): n is string => typeof n === "string"));
+      }).catch(() => {});
       slideY.setValue(600);
       backdropOpacity.setValue(0);
       Animated.parallel([
@@ -151,6 +198,12 @@ export default function ExercisePicker({
   // ─── Filtering + list assembly ──────────────────────────────────────────────
   // Returns both the rows and a precomputed layout (length + offset per row) so
   // FlatList's getItemLayout is O(1) and the scrollbar is accurate immediately.
+  //
+  // Starred exercises are HOISTED to a FAVOURITES block at the top, ordered by
+  // muscle group then name, and removed from the section they came from — the
+  // same exercise appearing twice in one sheet reads as a bug. Search and the
+  // muscle chips filter favourites exactly like everything else, so a filtered
+  // view never shows a favourite that doesn't match.
   const { listData, layout } = useMemo(() => {
     const q = search.trim().toLowerCase();
     const muscleOk = (m: SelectableMuscle) => selectedMuscles.size === 0 || selectedMuscles.has(m);
@@ -165,13 +218,40 @@ export default function ExercisePicker({
       muscleOk(e.primaryMuscle)
     );
 
+    const favCustoms = customs.filter(e => isFav(favourites, e.name));
+    const favMatched = matched.filter(e => isFav(favourites, e.name));
+    // The Favourites chip is a second filter axis, ANDed with the muscle chips:
+    // Favourites + Chest means starred chest exercises, not one or the other.
+    const restCustoms = favouritesOnly ? [] : customs.filter(e => !isFav(favourites, e.name));
+    const restMatched = favouritesOnly ? [] : matched.filter(e => !isFav(favourites, e.name));
+
     const rows: Row[] = [];
-    if (customs.length) {
+
+    if (favCustoms.length || favMatched.length) {
+      // With the filter on, everything below IS a favourite, so the header would
+      // just be labelling the whole list.
+      if (!favouritesOnly) rows.push({ type: "header", key: "h:fav", label: "FAVOURITES" });
+      // One ordering across both kinds, so a starred custom sits with the other
+      // exercises for its muscle group rather than in a clump of its own.
+      const favRows: Row[] = [
+        ...favCustoms.map((e): Row => ({ type: "custom", key: `fav-custom:${e.name}`, exercise: e })),
+        ...favMatched.map((e): Row => ({ type: "exercise", key: `fav-ex:${e.id}`, exercise: e })),
+      ];
+      sortByMuscleThenName(
+        favRows,
+        r => (r.type === "custom" ? r.exercise.muscles[0] : r.type === "exercise" ? r.exercise.primaryMuscle : undefined),
+        r => (r.type === "header" ? r.label : r.exercise.name),
+      ).forEach(r => rows.push(r));
+    }
+
+    if (restCustoms.length) {
       rows.push({ type: "header", key: "h:custom", label: "CUSTOM" });
-      customs.forEach(e => rows.push({ type: "custom", key: `custom:${e.name}`, exercise: e }));
+      restCustoms.forEach(e => rows.push({ type: "custom", key: `custom:${e.name}`, exercise: e }));
+    }
+    if (restMatched.length && (rows.length > 0)) {
       rows.push({ type: "header", key: "h:ex", label: "EXERCISES" });
     }
-    matched.forEach(e => rows.push({ type: "exercise", key: `ex:${e.id}`, exercise: e }));
+    restMatched.forEach(e => rows.push({ type: "exercise", key: `ex:${e.id}`, exercise: e }));
 
     let offset = 0;
     const layout = rows.map(r => {
@@ -181,7 +261,7 @@ export default function ExercisePicker({
       return entry;
     });
     return { listData: rows, layout };
-  }, [search, selectedMuscles, customExercises]);
+  }, [search, selectedMuscles, customExercises, favourites, favouritesOnly]);
 
   const canAddCustom = customExercises.length < MAX_CUSTOM;
 
@@ -214,6 +294,34 @@ export default function ExercisePicker({
     );
   };
 
+  /** The thumbnail with its star badge. The star lives ON the image rather than
+   *  in the row's button cluster so custom rows don't end up with four controls
+   *  side by side — and so catalogue and custom rows toggle in the same place. */
+  const renderThumb = (name: string, thumb: React.ReactNode) => {
+    const starred = isFav(favourites, name);
+    return (
+      <View style={styles.thumbWrap}>
+        {thumb}
+        <TouchableOpacity
+          onPress={ev => { ev.stopPropagation(); toggleFav(name); }}
+          activeOpacity={0.7}
+          hitSlop={10}
+          style={[styles.favBadge, { backgroundColor: t.bg }]}
+          accessibilityRole="button"
+          accessibilityLabel={starred ? `Unfavourite ${name}` : `Favourite ${name}`}
+          accessibilityState={{ selected: starred }}
+        >
+          <FavouriteStar
+            size={13}
+            filled={starred}
+            inactiveColor={t.ts}
+            style={starred ? undefined : styles.favBadgeIdle}
+          />
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   const renderRow = (item: Row) => {
     if (item.type === "header") {
       return (
@@ -231,8 +339,10 @@ export default function ExercisePicker({
           activeOpacity={0.6}
           style={[styles.pickerRow, { borderBottomColor: t.div }]}
         >
-          <ExerciseImage exerciseId={`custom:${e.name}`} overrideUri={e.imageUri} variant="thumb" size={52} radius={10}
-            backgroundColor={t.div} fallbackColor={t.ts} />
+          {renderThumb(e.name, (
+            <ExerciseImage exerciseId={`custom:${e.name}`} overrideUri={e.imageUri} variant="thumb" size={52} radius={10}
+              backgroundColor={t.div} fallbackColor={t.ts} />
+          ))}
           <View style={{ flex: 1 }}>
             <Text style={[styles.pickerExName, { color: t.tp }]} numberOfLines={1}>{e.name}</Text>
             <Text style={[styles.pickerExMeta, { color: t.ts }]} numberOfLines={1}>
@@ -276,8 +386,10 @@ export default function ExercisePicker({
         activeOpacity={0.6}
         style={[styles.pickerRow, { borderBottomColor: t.div }]}
       >
-        <ExerciseImage exerciseId={e.id} variant="thumb" size={52} radius={10}
-          backgroundColor={t.div} fallbackColor={t.ts} />
+        {renderThumb(e.name, (
+          <ExerciseImage exerciseId={e.id} variant="thumb" size={52} radius={10}
+            backgroundColor={t.div} fallbackColor={t.ts} />
+        ))}
         <View style={{ flex: 1 }}>
           <Text style={[styles.pickerExName, { color: t.tp }]} numberOfLines={1}>{e.name}</Text>
           <Text style={[styles.pickerExMeta, { color: t.ts }]} numberOfLines={1}>
@@ -310,50 +422,112 @@ export default function ExercisePicker({
             <View style={styles.pickerHandle} />
           </View>
 
-          {/* Header */}
-          <View style={[styles.pickerHeader, { borderBottomColor: t.div }]}>
+          {/* Header. The chrome below it used to be three bands each with its own
+              hairline (header / chips / search), which is what made the sheet
+              feel crowded — now the whole cluster is one block and a single
+              divider separates it from the list. */}
+          <View style={styles.pickerHeader}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.pickerTitle, { color: t.tp }]}>Add Exercise</Text>
               <Text style={[styles.pickerSubtitle, { color: t.ts }]}>{subtitle}</Text>
             </View>
-            <TouchableOpacity onPress={dismiss} activeOpacity={0.7}>
+            <TouchableOpacity onPress={dismiss} activeOpacity={0.7} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
               <Ionicons name="close" size={22} color={t.tp} />
             </TouchableOpacity>
+          </View>
+
+          {/* Search. A filled, fully-rounded field rather than a bare row of text
+              between two hairlines — it reads as something you can type into. */}
+          <View style={[styles.searchRow, { backgroundColor: t.ctrl, borderColor: t.div }]}>
+            <Ionicons name="search" size={17} color={t.ts} />
+            <TextInput
+              style={[styles.searchInput, { color: t.tp }]}
+              placeholder="Search exercises"
+              placeholderTextColor={t.ts}
+              value={search}
+              onChangeText={setSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+              clearButtonMode="never"
+            />
+            {search.length > 0 && (
+              <TouchableOpacity onPress={() => setSearch("")} activeOpacity={0.7} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
+                <Ionicons name="close-circle" size={19} color={t.ts} />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Muscle group filter chips */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            style={[styles.muscleChipScroll, { borderBottomColor: t.div }]}
+            style={styles.muscleChipScroll}
             contentContainerStyle={styles.muscleChipContent}
           >
-            {MUSCLE_GROUPS.map(group => {
-              const isAll = group === "All";
-              const active = isAll ? selectedMuscles.size === 0 : selectedMuscles.has(group as SelectableMuscle);
+            {/* All — the reset. Active only when nothing else is, favourites
+                included, since Favourites is a second filter axis and not a
+                muscle group. */}
+            <TouchableOpacity
+              onPress={() => { setSelectedMuscles(new Set()); setFavouritesOnly(false); }}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityState={{ selected: noFilters }}
+              style={[styles.muscleChip, noFilters
+                ? { backgroundColor: ACCT, ...chipGlow(ACCT) }
+                : { backgroundColor: t.div }]}
+            >
+              <Text style={[styles.muscleChipText, { color: noFilters ? "#fff" : t.ts }]}>All</Text>
+            </TouchableOpacity>
+
+            {/* Favourites — gold rather than the accent green, so the filter
+                matches the stars it selects for. Combines with the muscle chips
+                (Favourites + Chest = starred chest exercises). */}
+            <TouchableOpacity
+              onPress={() => setFavouritesOnly(v => !v)}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Filter to favourites"
+              accessibilityState={{ selected: favouritesOnly }}
+              style={[styles.muscleChip, styles.favChip, favouritesOnly
+                ? { backgroundColor: gold, ...chipGlow(gold, isDark ? 0.4 : 0.55) }
+                : { backgroundColor: t.div }]}
+            >
+              {/* A plain glyph, not <FavouriteStar />: on an active gold chip a
+                  gold star with a gold glow disappears into its own background.
+                  This star labels the filter, it isn't a favourite indicator. */}
+              <Ionicons
+                name={favouritesOnly ? "star" : "star-outline"}
+                size={12}
+                color={favouritesOnly ? GOLD_INK : t.ts}
+              />
+              {/* Gold is light in both themes, so white text on it is barely
+                  legible — the active label takes a dark ink instead. */}
+              <Text style={[styles.muscleChipText, { color: favouritesOnly ? GOLD_INK : t.ts }]}>
+                Favourites
+              </Text>
+            </TouchableOpacity>
+
+            {MUSCLE_GROUPS.filter(g => g !== "All").map(group => {
+              const muscle = group as SelectableMuscle;
+              const active = selectedMuscles.has(muscle);
               return (
                 <TouchableOpacity
                   key={group}
                   onPress={() => {
-                    if (isAll) {
-                      setSelectedMuscles(new Set());
-                    } else {
-                      setSelectedMuscles(prev => {
-                        const next = new Set(prev);
-                        if (next.has(group as SelectableMuscle)) next.delete(group as SelectableMuscle);
-                        else next.add(group as SelectableMuscle);
-                        return next;
-                      });
-                    }
+                    setSelectedMuscles(prev => {
+                      const next = new Set(prev);
+                      if (next.has(muscle)) next.delete(muscle);
+                      else next.add(muscle);
+                      return next;
+                    });
                   }}
                   activeOpacity={0.7}
-                  style={[styles.muscleChip, active ? {
-                    backgroundColor: ACCT,
-                    shadowColor: ACCT,
-                    shadowOffset: { width: 0, height: 3 },
-                    shadowOpacity: 0.5,
-                    shadowRadius: 8,
-                  } : { backgroundColor: t.div }]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  style={[styles.muscleChip, active
+                    ? { backgroundColor: ACCT, ...chipGlow(ACCT) }
+                    : { backgroundColor: t.div }]}
                 >
                   <Text style={[styles.muscleChipText, { color: active ? "#fff" : t.ts }]}>{group}</Text>
                 </TouchableOpacity>
@@ -361,24 +535,7 @@ export default function ExercisePicker({
             })}
           </ScrollView>
 
-          {/* Search */}
-          <View style={[styles.searchRow, { borderBottomColor: t.div }]}>
-            <Ionicons name="search-outline" size={16} color={t.ts} />
-            <TextInput
-              style={[styles.searchInput, { color: t.tp }]}
-              placeholder="Search exercises..."
-              placeholderTextColor={t.ts}
-              value={search}
-              onChangeText={setSearch}
-              autoCapitalize="none"
-              returnKeyType="search"
-            />
-            {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch("")} activeOpacity={0.7} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
-                <Ionicons name="close-circle" size={20} color={t.ts} />
-              </TouchableOpacity>
-            )}
-          </View>
+          <View style={[styles.chromeDivider, { backgroundColor: t.div }]} />
 
           {/* Exercise list. Images are bundled require() assets (synchronous),
               so FlatList virtualization stays smooth even across 800+ rows. */}
@@ -395,9 +552,18 @@ export default function ExercisePicker({
               return { length: l.length, offset: l.offset, index };
             }}
             ListEmptyComponent={
-              <Text style={[styles.pickerEmpty, { color: t.ts }]}>No exercises found</Text>
+              <Text style={[styles.pickerEmpty, { color: t.ts }]}>
+                {favouritesOnly && favourites.length === 0
+                  ? "No favourites yet. Tap the star on an exercise to add one."
+                  : "No exercises found"}
+              </Text>
             }
-            contentContainerStyle={{ paddingBottom: 8 }}
+            // The sheet is a fixed height anchored to the screen bottom, so the
+            // keyboard covers the bottom bar first and then eats into the list.
+            // Padding by exactly the overlap lets the last row scroll clear of
+            // the keyboard, and collapses back to the default when it goes down
+            // so the list still ends at the bottom of the sheet.
+            contentContainerStyle={{ paddingBottom: 8 + Math.max(0, kbHeight - bottomBarH) }}
             initialNumToRender={14}
             maxToRenderPerBatch={12}
             windowSize={11}
@@ -405,7 +571,10 @@ export default function ExercisePicker({
           />
 
           {/* Bottom bar — confirm picks OR create custom */}
-          <View style={[styles.customSection, { borderTopColor: t.div, paddingBottom: insets.bottom + 16 }]}>
+          <View
+            onLayout={e => setBottomBarH(e.nativeEvent.layout.height)}
+            style={[styles.customSection, { borderTopColor: t.div, paddingBottom: insets.bottom + 16 }]}
+          >
             {pickedOrder.length > 0 ? (
               <View style={styles.confirmRow}>
                 {withSetCount && (
@@ -474,17 +643,24 @@ const styles = StyleSheet.create({
   pickerBackdrop:      { flex: 1, justifyContent: "flex-end" },
   pickerOverlay:       { backgroundColor: "rgba(0,0,0,0.45)" },
   pickerRoot:          { height: "88%", borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
-  pickerHandleArea:    { paddingVertical: 12, alignItems: "center" },
+  pickerHandleArea:    { paddingTop: 10, paddingBottom: 6, alignItems: "center" },
   pickerHandle:        { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
-  pickerHeader:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 1 },
+  pickerHeader:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 },
   pickerTitle:         { fontFamily: FontFamily.bold, fontSize: 20, marginBottom: 2 },
   pickerSubtitle:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1 },
-  muscleChipScroll:    { flexGrow: 0, flexShrink: 0, borderBottomWidth: 1 },
-  muscleChipContent:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10 },
-  muscleChip:          { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  muscleChipScroll:    { flexGrow: 0, flexShrink: 0 },
+  muscleChipContent:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12 },
+  muscleChip:          { paddingHorizontal: 14, paddingVertical: 7, borderRadius: PILL_RADIUS, alignItems: "center", justifyContent: "center" },
+  favChip:             { flexDirection: "row", gap: 5, paddingLeft: 11 },
   muscleChipText:      { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
-  searchRow:           { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
-  searchInput:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 15 },
+  searchRow:           { flexDirection: "row", alignItems: "center", gap: 9, marginHorizontal: 16, paddingHorizontal: 14, height: 42, borderRadius: PILL_RADIUS, borderWidth: 1, ...PILL_SHADOW },
+  searchInput:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0 },
+  chromeDivider:       { height: StyleSheet.hairlineWidth },
+  thumbWrap:           { width: 52, height: 52 },
+  favBadge:            { position: "absolute", top: -7, right: -7, width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  // The hollow star sits on every unstarred row, so it has to recede rather
+  // than read as 800 controls demanding attention.
+  favBadgeIdle:        { opacity: 0.45 },
   pickerSectionHeader: { height: HEADER_H, justifyContent: "flex-end", paddingHorizontal: 16, paddingBottom: 6 },
   pickerSectionLabel:  { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 1.2 },
   pickerRow:           { height: ROW_H, flexDirection: "row", alignItems: "center", paddingHorizontal: 16, borderBottomWidth: 1, gap: 12 },

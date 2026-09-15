@@ -26,8 +26,9 @@ import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, GOLD } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { pill, pillGlow } from "../../constants/buttons";
+import FavouriteStar from "../FavouriteStar";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   appendSharedPrograms,
@@ -523,7 +524,7 @@ export default function PTHome() {
                 </View>
                 {/* Display only — favouriting happens in the group's own
                     options menu, so this row has a single tap target. */}
-                {favourites.has(g.id) && <Ionicons name="star" size={16} color={GOLD} />}
+                {favourites.has(g.id) && <FavouriteStar size={16} />}
                 <Ionicons name="chevron-forward" size={16} color={t.ts} />
               </TouchableOpacity>
             ))}

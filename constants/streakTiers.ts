@@ -1,8 +1,8 @@
-const LOTTIE_ORANGE = require("../assets/lottie/Fire Streak Orange.json");
-const LOTTIE_GREEN  = require("../assets/lottie/Streak Fire Green.json");
-const LOTTIE_BLUE   = require("../assets/lottie/Streak Fire Blue.json");
-const LOTTIE_PURPLE = require("../assets/lottie/Streak Fire Purple.json");
-const LOTTIE_RED    = require("../assets/lottie/Fire Streak Red.json");
+const LOTTIE_ORANGE = require("../assets/lottie/streak-flame-orange.json");
+const LOTTIE_GREEN  = require("../assets/lottie/streak-flame-green.json");
+const LOTTIE_BLUE   = require("../assets/lottie/streak-flame-blue.json");
+const LOTTIE_PURPLE = require("../assets/lottie/streak-flame-purple.json");
+const LOTTIE_RED    = require("../assets/lottie/streak-flame-red.json");
 
 export interface StreakTier {
   name: string;
@@ -13,12 +13,19 @@ export interface StreakTier {
   lottie: any;
 }
 
+/**
+ * `color` is the tier's UI accent — the progress bar, the day-cell background,
+ * milestone text, the Home badge. It is the DEEP BASE of that tier's flame
+ * gradient (the flames run pale tip → mid → base), so the artwork and the
+ * chrome around it read as one colour. Change a flame and this must move with
+ * it, or the two drift apart.
+ */
 export const STREAK_TIERS: StreakTier[] = [
-  { name: "Orange", color: "#FF6B4A", min: 0,  next: 10,   lottie: LOTTIE_ORANGE },
-  { name: "Green",  color: "#1deca0", min: 10, next: 20,   lottie: LOTTIE_GREEN  },
-  { name: "Blue",   color: "#00B4FF", min: 20, next: 30,   lottie: LOTTIE_BLUE   },
-  { name: "Purple", color: "#A855F7", min: 30, next: 40,   lottie: LOTTIE_PURPLE },
-  { name: "Red",    color: "#FF2D55", min: 40, next: null, lottie: LOTTIE_RED    },
+  { name: "Orange", color: "#FF5300", min: 0,  next: 10,   lottie: LOTTIE_ORANGE },
+  { name: "Green",  color: "#00FFDB", min: 10, next: 20,   lottie: LOTTIE_GREEN  },
+  { name: "Blue",   color: "#0087FF", min: 20, next: 30,   lottie: LOTTIE_BLUE   },
+  { name: "Purple", color: "#8400FF", min: 30, next: 40,   lottie: LOTTIE_PURPLE },
+  { name: "Red",    color: "#E60037", min: 40, next: null, lottie: LOTTIE_RED    },
 ];
 
 export const MAX_TIER_DAYS = 40;

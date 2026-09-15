@@ -762,7 +762,14 @@ export default function HomeScreen() {
       <View style={[styles.streakFloat, { top: insets.top + 6 }]}>
         <BounceButton onPress={() => router.navigate("/streak")}>
           <View style={styles.streakBadge}>
-            <FlameIcon size={36} color={activeColor} />
+            {/* Nudged up to sit optically level with the DIGITS rather than with
+                the text box. A text box reserves descender space that digits
+                never use, so centring against it leaves the flame low and opens
+                a gap above it. transform, not margin, so the row's height and
+                the badge's tap target are untouched. */}
+            <View style={styles.streakBadgeFlame}>
+              <FlameIcon size={36} color={activeColor} />
+            </View>
             <Text style={[styles.streakBadgeText, { color: t.ts }]}>{streakDays}</Text>
           </View>
         </BounceButton>
@@ -804,8 +811,21 @@ const styles = StyleSheet.create({
   todayFloat:  { position: "absolute", left: 0, right: 0, zIndex: 9, alignItems: "center" },
   todayLabel:  { fontFamily: FontFamily.bold, fontSize: 17, color: TP },
   todayDate:   { fontFamily: FontFamily.regular, fontSize: 17, color: TS, marginTop: 1 },
+  // Anchored by its RIGHT edge with no width, so the row sizes to its content:
+  // a two- or three-digit streak widens the number and pushes the flame further
+  // left, instead of the number growing into the avatar. Never give this a
+  // width or a `left` — that's what would pin the flame and clip the count.
   streakFloat:     { position: "absolute", right: 80, zIndex: 10 },
-  streakBadge:     { flexDirection: "row", alignItems: "center", gap: 2 },
+  // gap 8, not 2: FlameIcon's box hugs the artwork now, so it no longer carries
+  // the dead side-padding a square box used to provide. Without this the flame
+  // sits almost touching the number.
+  streakBadge:     { flexDirection: "row", alignItems: "center", gap: 8 },
+  // Optical centring against the DIGITS, which sit above their text box's centre
+  // because the box reserves descender space they never use. Home only — nothing
+  // else pairs a flame with text. Was -3 when FlameIcon also rested low inside
+  // its own box; that's fixed at the source now, so this only has the text
+  // baseline left to correct.
+  streakBadgeFlame: { transform: [{ translateY: -2 }] },
   streakBadgeText: { fontFamily: FontFamily.semibold, fontSize: 18, color: TS },
   streakDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: TS, opacity: 0.4 },
   workoutCard: { marginBottom: 20, borderRadius: 24 },

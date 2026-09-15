@@ -99,6 +99,13 @@ function AppShell() {
       } else if (state === "active") {
         void touchLastActive();
         void autoPauseIfIdle();
+        // Also resync on the way IN, not just on the way out. iOS keeps this app
+        // resident for days, so a return from the background is often the first
+        // time a new day is seen — and the schedule left behind still assumes
+        // the app went unopened. Without this, the streak reminder queued for
+        // tonight survives right up until the next background, and fires on a
+        // day the user did open the app.
+        resyncScheduledNotifications();
         if (!beat) beat = setInterval(() => void touchLastActive(), HEARTBEAT_MS);
       }
     });

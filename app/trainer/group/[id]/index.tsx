@@ -26,8 +26,9 @@ import UnreadBadge from "../../../../components/UnreadBadge";
 import ChatIcon from "../../../../components/icons/ChatIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER, GOLD } from "../../../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
 import { pill, PILL_H_SM } from "../../../../constants/buttons";
+import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { deleteGroup, fetchGroup, fetchGroupMembers, leaveGroup, setGroupMemberRole } from "../../../../lib/groups";
 import { getMyUid } from "../../../../lib/chat";
@@ -58,6 +59,8 @@ export default function GroupPageScreen() {
   const { id, name } = useLocalSearchParams<{ id: string; name?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  // The options-menu label sits beside the star and must match it exactly.
+  const favouriteGold = useFavouriteGold();
   const insets = useSafeAreaInsets();
 
   const groupId = id ?? "";
@@ -281,7 +284,7 @@ export default function GroupPageScreen() {
           </View>
         </TouchableOpacity>
         <View style={styles.headerTitleRow}>
-          {isFavourite && <Ionicons name="star" size={16} color={GOLD} />}
+          {isFavourite && <FavouriteStar size={16} />}
           <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
         </View>
         <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Group options" accessibilityRole="button">
@@ -438,8 +441,8 @@ export default function GroupPageScreen() {
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
         <View style={styles.menu}>
           <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onToggleFavourite} accessibilityRole="button" accessibilityLabel={isFavourite ? "Remove from favourites" : "Add to favourites"}>
-            <Ionicons name={isFavourite ? "star" : "star-outline"} size={20} color={isFavourite ? GOLD : t.tp} />
-            <Text style={[styles.menuText, { color: isFavourite ? GOLD : t.tp }]}>
+            <FavouriteStar size={20} filled={isFavourite} inactiveColor={t.tp} />
+            <Text style={[styles.menuText, { color: isFavourite ? favouriteGold : t.tp }]}>
               {isFavourite ? "Remove from favourites" : "Add to favourites"}
             </Text>
           </TouchableOpacity>

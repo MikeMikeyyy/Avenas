@@ -997,6 +997,10 @@ interface ExerciseCardProps {
 function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, hideIndexLabel = false, numberBadge }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
+  // Taken from the hook rather than passed in: a prop would be a new value on
+  // every parent render and would defeat MemoExerciseCard, which is what keeps
+  // typing in a set from re-rendering every other card.
+  const router = useRouter();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const [editing, setEditing] = useState(false);
   const weightRefs = useRef<(TextInput | null)[]>([]);
@@ -1030,12 +1034,25 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
               <Text style={[styles.exNumText, { color: ACCT }]}>{numberBadge}</Text>
             </NeuCard>
           )}
-          <View style={styles.exTitleBlock}>
+          {/* Tapping the name opens that exercise's summary page (with a button
+              on to full history) — the same destination the program builder's
+              thumbnail goes to. There's no thumbnail on this card, so the name
+              is the tap target here. Works on a locked completed workout too. */}
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.navigate({ pathname: "/exercise-summary", params: { exerciseName: exercise.name } });
+            }}
+            activeOpacity={0.7}
+            style={styles.exTitleBlock}
+            accessibilityRole="button"
+            accessibilityLabel={`View ${exercise.name} summary`}
+          >
             {!hideIndexLabel && (
               <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
             )}
             <Text style={[styles.exName, { color: t.tp }]}>{exercise.name}</Text>
-          </View>
+          </TouchableOpacity>
           {!isLocked && (
             <TouchableOpacity
               onPress={() => setEditing(e => !e)}
