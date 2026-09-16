@@ -31,6 +31,7 @@ import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../../../constants/buttons";
+import { CARD_INNER, CARD_META, CARD_PAD, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP } from "../../../../constants/cards";
 import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { deleteGroup, fetchGroup, fetchGroupMembers, leaveGroup, setGroupMemberRole } from "../../../../lib/groups";
@@ -38,7 +39,7 @@ import { getMyUid } from "../../../../lib/chat";
 import { scheduleCloudPush } from "../../../../lib/syncManager";
 import { loadFavouriteGroupIds, loadGroupRows, toggleFavouriteGroup } from "../../../../utils/groupStore";
 import { resolveTrainerRoster } from "../../../../utils/roster";
-import { acceptSharedProgramBatch, appendSharedPrograms, batchKeyOf, loadClientData, loadGroupSharedPrograms, removeGroupSharedProgramBatch, type Client, type SharedProgram } from "../../../../utils/trainerStore";
+import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, batchKeyOf, loadClientData, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, setGroupReviewDone, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
 import { getJSON } from "../../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../../constants/programs";
 import { canCoachGroup, type Group, type GroupMember, type GroupRole } from "../../../../constants/groups";
@@ -80,13 +81,25 @@ export default function GroupPageScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
   /** The member whose role sheet is open (owner only; null = closed). */
   const [memberMenu, setMemberMenu] = useState<GroupMember | null>(null);
-  const [sendOpen, setSendOpen] = useState(false);
+  // One picker sheet serving both directions rather than two mounted sheets:
+  // "send" is a coach pushing a program out to the group, "review" a member
+  // posting one in. Never both, which is also what keeps this screen clear of
+  // the two-RN-Modals-at-once trap.
+  const [picker, setPicker] = useState<"send" | "review" | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [isFavourite, setIsFavourite] = useState(false);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   const [groupShares, setGroupShares] = useState<SharedProgram[]>([]);
   const [expandedSent, setExpandedSent] = useState<Set<string>>(new Set());
+  // The group's review queue: programs members posted here, still open. Empty
+  // for a member — RLS returns a group's reviews to its coaches only.
+  const [groupReviews, setGroupReviews] = useState<SentProgram[]>([]);
+
+  // Declared up here because the handlers below name it: a const referenced in
+  // a useCallback dependency array is read during render, not when the callback
+  // runs, so a later declaration is a temporal-dead-zone error.
+  const displayName = group?.name || name || "Group";
 
   /** Owner or trainer here — the same test the database enforces for sending to
    *  this group, and what separates "can remove this" from "can take a copy". */
@@ -108,11 +121,68 @@ export default function GroupPageScreen() {
    *  both actions below, so the list never shows a stale state. */
   const refreshGroupShares = useCallback(async () => {
     try {
-      setGroupShares(await loadGroupSharedPrograms(groupId));
+      const [shares, reviews] = await Promise.all([
+        loadGroupSharedPrograms(groupId),
+        loadGroupReviewPrograms(groupId),
+      ]);
+      setGroupShares(shares);
+      setGroupReviews(reviews);
     } catch (err) {
       if (__DEV__) console.warn("[avenas] refresh group shares", err);
     }
   }, [groupId]);
+
+  /** Clear a review out of the group's queue. Coach-only at the database, so
+   *  this button never renders for anyone else. */
+  const handleCompleteReview = useCallback((entry: SentProgram) => {
+    Alert.alert(
+      "Mark as done",
+      `Clear "${entry.programName}" from this group's review list? ${entry.returnedAtISO ? "The member keeps the feedback on their own page." : "It hasn't been sent back yet."}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Mark done",
+          onPress: async () => {
+            try {
+              await setGroupReviewDone(entry.id, true);
+            } catch (e) {
+              Alert.alert("Couldn't update", e instanceof Error ? e.message : "Check your connection and try again.");
+              return;
+            }
+            setGroupReviews(prev => prev.filter(r => r.id !== entry.id));
+          },
+        },
+      ],
+    );
+  }, []);
+
+  /** Post one of my programs to this group for whichever coach picks it up. */
+  const handleAskForReview = useCallback(async (program: SavedProgram) => {
+    setPicker(null);
+    const ownerId = group?.ownerId;
+    if (!ownerId) {
+      Alert.alert("Group unavailable", "Reopen the group and try again.");
+      return;
+    }
+    const entry: SentProgram = {
+      id: `sent_${Date.now()}`,
+      programId: program.id,
+      programName: program.name,
+      sentAtISO: new Date().toISOString(),
+      status: "sent",
+      programSnapshot: program,
+      // What makes this the GROUP's to review rather than the owner's, even
+      // though the owner is the addressed recipient.
+      groupId,
+    };
+    try {
+      await appendSentProgram(entry, ownerId);
+    } catch (e) {
+      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      return;
+    }
+    Alert.alert("Sent for Review", `"${program.name}" was sent to the trainers in ${displayName}. You'll see it on your trainer page too.`);
+  }, [group?.ownerId, groupId, displayName]);
 
   const handleDeleteBatch = useCallback((batchKey: string, programName: string) => {
     Alert.alert(
@@ -165,15 +235,13 @@ export default function GroupPageScreen() {
       .sort((a, b) => (a.sentAtISO < b.sentAtISO ? 1 : -1));
   }, [groupShares]);
 
-  const displayName = group?.name || name || "Group";
-
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     (async () => {
       try {
         const uid = await getMyUid();
         if (!uid || !groupId) return;
-        const [g, roster, { clients: allClients }, rows, progs, favIds, shares] = await Promise.all([
+        const [g, roster, { clients: allClients }, rows, progs, favIds, shares, reviews] = await Promise.all([
           fetchGroup(uid, groupId),
           fetchGroupMembers(groupId),
           resolveTrainerRoster(),
@@ -181,6 +249,7 @@ export default function GroupPageScreen() {
           getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
           loadFavouriteGroupIds(),
           loadGroupSharedPrograms(groupId),
+          loadGroupReviewPrograms(groupId),
         ]);
         if (cancelled) return;
         setIsFavourite(favIds.has(groupId));
@@ -198,6 +267,7 @@ export default function GroupPageScreen() {
         // Already scoped to this group, in both directions — what arrived here
         // is a group's noticeboard, not my own inbox.
         setGroupShares(shares);
+        setGroupReviews(reviews);
 
         // Active program per member, same as the hub's client list.
         const byClient: Record<string, string> = {};
@@ -288,7 +358,7 @@ export default function GroupPageScreen() {
   })();
 
   const handleSendProgram = useCallback(async (program: SavedProgram) => {
-    setSendOpen(false);
+    setPicker(null);
     if (recipientIds.length === 0) {
       Alert.alert("No one to send to", "This group has no other members yet.");
       return;
@@ -437,17 +507,93 @@ export default function GroupPageScreen() {
                     <UnreadBadge count={unread} style={styles.actionBadge} />
                   </View>
                 </BounceButton>
-                {canCoach && (
-                  <BounceButton style={{ flex: 1 }} onPress={() => setSendOpen(true)} accessibilityLabel="Send a program to this group">
+                {canCoach ? (
+                  <BounceButton style={{ flex: 1 }} onPress={() => setPicker("send")} accessibilityLabel="Send a program to this group">
                     <View style={[styles.actionBtn, styles.actionPrimary]}>
                       <SendIcon size={17} color="#fff" />
                       <Text style={[styles.actionText, { color: "#fff" }]}>Send Program</Text>
+                    </View>
+                  </BounceButton>
+                ) : (
+                  /* The other direction: a member posts a program here and
+                     whichever coach is free picks it up. One request to the
+                     group rather than one per trainer, so a gym with three
+                     trainers doesn't produce three reviews of one program. */
+                  <BounceButton style={{ flex: 1 }} onPress={() => setPicker("review")} accessibilityLabel="Send a program to this group for review">
+                    <View style={[styles.actionBtn, styles.actionPrimary]}>
+                      <SendIcon size={17} color="#fff" />
+                      <Text style={[styles.actionText, { color: "#fff" }]}>Ask for Review</Text>
                     </View>
                   </BounceButton>
                 )}
               </View>
             </View>
           </NeuCard>
+
+          {/* The group's review queue: programs members posted here for a coach
+              to look at. Coaches only — a member can read their OWN row (they
+              sent it), but this is a work list, not a status board, and the
+              member already tracks their request on their own trainer page.
+
+              Anything marked done has left the list entirely; that's the point
+              of it being a queue rather than a log. */}
+          {iCoachGroup && groupReviews.length > 0 && (
+            <>
+              <View style={styles.sectionRow}>
+                <Text style={[styles.sectionHeading, { color: t.tp }]}>For Review</Text>
+                <View style={[styles.countBadge, { backgroundColor: ACCT }]}>
+                  <Text style={styles.countBadgeText}>{groupReviews.length}</Text>
+                </View>
+              </View>
+              {groupReviews.map(r => {
+                const returned = !!r.returnedAtISO;
+                return (
+                  <NeuCard key={r.id} dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+                    <View style={styles.sentRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.sentName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
+                        <Text style={[styles.sentMeta, { color: t.ts }]} numberOfLines={1}>
+                          {returned ? "Sent back, waiting on the member" : "Waiting for a trainer"}
+                        </Text>
+                      </View>
+                      <View style={[styles.statusPill, returned
+                        ? { backgroundColor: `${ACCT}22` }
+                        : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
+                      ]}>
+                        <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+                          {returned ? "Reviewed" : "New"}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.sentActions}>
+                      <BounceButton
+                        style={styles.sentActionSlot}
+                        onPress={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id, groupId } })}
+                        accessibilityLabel={`Review ${r.programName}`}
+                      >
+                        <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
+                          <Text style={[styles.sentActionText, { color: t.tp }]}>{returned ? "View" : "Review"}</Text>
+                        </View>
+                      </BounceButton>
+                      {/* Closing the item is what keeps this a queue rather than
+                          an ever-growing log. It only clears the GROUP's copy —
+                          the member keeps the feedback on their own page. */}
+                      <BounceButton
+                        style={styles.sentActionSlot}
+                        onPress={() => handleCompleteReview(r)}
+                        accessibilityLabel={`Mark ${r.programName} as done`}
+                      >
+                        <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                          <Ionicons name="checkmark" size={15} color="#fff" />
+                          <Text style={[styles.sentActionText, { color: "#fff" }]}>Mark Done</Text>
+                        </View>
+                      </BounceButton>
+                    </View>
+                  </NeuCard>
+                );
+              })}
+            </>
+          )}
 
           {/* Programs sent to this group. A send writes one row per member, so
               they're collapsed by batch key into one card each — the same key
@@ -595,14 +741,21 @@ export default function GroupPageScreen() {
                 client={clientFor(m)}
                 activeProgramName={activeProgramByClient[m.id]}
                 // get_group_members orders owner, then trainers, then members,
-                // so the badges read top to bottom in rank order.
-                badge={ROLE_LABEL[m.role]}
-                badgeColor={ROLE_COLOR[m.role]}
-                // The owner gets a sheet to promote or demote; everyone else
-                // goes straight through to the client page.
-                onPress={() => (group?.isOwner && m.id !== myUid
-                  ? openMemberMenu(m)
-                  : router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } }))}
+                // so the badges read top to bottom in rank order. An outstanding
+                // invite outranks the role: what they'd be once they join is
+                // less useful than knowing they haven't joined.
+                badge={m.accepted ? ROLE_LABEL[m.role] : "INVITED"}
+                badgeColor={m.accepted ? ROLE_COLOR[m.role] : t.ts}
+                // The owner gets a sheet to promote or demote. A coach of the
+                // group opens the client page. Everyone else — a gym user
+                // looking at who else is in their group — gets a roster entry
+                // and nothing more: the client page is a coaching surface
+                // (progress, journal, send a program) and opening it on a
+                // fellow member would claim a relationship that isn't there.
+                onPress={() => {
+                  if (group?.isOwner && m.id !== myUid) { openMemberMenu(m); return; }
+                  if (iCoachGroup) router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } });
+                }}
               />
             ))
           )}
@@ -680,12 +833,14 @@ export default function GroupPageScreen() {
       </SimpleSheet>
 
       <ProgramPickerSheet
-        visible={sendOpen}
-        title={`Send to ${displayName}`}
-        subtitle={`Everyone in this group receives it (${recipientIds.length} member${recipientIds.length === 1 ? "" : "s"}).`}
+        visible={picker !== null}
+        title={picker === "review" ? "Ask for a Review" : `Send to ${displayName}`}
+        subtitle={picker === "review"
+          ? `A trainer in ${displayName} will look at it and send it back with their notes.`
+          : `Everyone in this group receives it (${recipientIds.length} member${recipientIds.length === 1 ? "" : "s"}).`}
         programs={myPrograms}
-        onPick={handleSendProgram}
-        onClose={() => setSendOpen(false)}
+        onPick={picker === "review" ? handleAskForReview : handleSendProgram}
+        onClose={() => setPicker(null)}
       />
     </FadeScreen>
   );
@@ -720,13 +875,18 @@ const styles = StyleSheet.create({
 
   sectionRow:   { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 12 },
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18 },
-  sentRow:  { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 14 },
-  sentName: { fontFamily: FontFamily.bold, fontSize: 15 },
-  sentMeta: { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
+  // Shares the card geometry the hub uses, so that when this section gains the
+  // same list/cards toggle the title is already in the place a summary row
+  // would put it.
+  sentRow:  { ...CARD_INNER, ...CARD_TOP },
+  sentName: { ...CARD_TITLE },
+  sentMeta: { ...CARD_META },
+  statusPill: { ...CARD_PILL },
+  statusText: { ...CARD_PILL_TEXT },
   // Wraps because a trainer who is also a member gets three buttons. Two share
   // a row; the third takes a full row of its own rather than being squeezed to
   // a third of a phone's width.
-  sentActions:   { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: 16, paddingBottom: 14 },
+  sentActions:   { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: CARD_PAD, paddingBottom: CARD_PAD },
   sentActionSlot: { flexGrow: 1, flexBasis: "45%" },
   sentActionBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   sentActionText: { fontFamily: FontFamily.bold, fontSize: 14 },

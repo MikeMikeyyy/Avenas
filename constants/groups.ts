@@ -37,6 +37,29 @@ export type GroupMember = {
   photoUri?: string;
   isOwner: boolean;
   role: GroupRole;
+  /** False while their invite is outstanding (migration 0027). They're listed
+   *  anyway — an unanswered invite is something the owner needs to see, and a
+   *  group program send goes to everyone invited. */
+  accepted: boolean;
+};
+
+/**
+ * A group someone has been added to but hasn't answered yet.
+ *
+ * Deliberately thin: this is everything a pending invitee may know about the
+ * group, and it comes from get_my_group_invites() rather than from the group
+ * row, so declining leaves them having seen nothing more than this.
+ */
+export type GroupInvite = {
+  groupId: string;
+  name: string;
+  ownerId: string;
+  ownerName: string;
+  ownerInitials: string;
+  ownerPhotoUri?: string;
+  /** Accepted members only. */
+  memberCount: number;
+  invitedAtISO: string;
 };
 
 /** Whether this person may send programs to the group. Owner and trainer only —

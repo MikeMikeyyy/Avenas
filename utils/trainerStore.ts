@@ -25,6 +25,7 @@ import {
   fetchShareRow,
   getMyUid,
   insertShareRows,
+  setGroupReviewCompleted,
   updateShareRow,
   type NewShareRow,
   type SharedProgramRow,
@@ -157,6 +158,15 @@ export type SentProgram = {
   appliedAtISO?: string;
   /** Stamped whenever the trainer saves edits in the program builder during review. Used to detect unsent updates after a Send Back. */
   lastEditedAtISO?: string;
+  /** Set when this was posted to a GROUP for review rather than sent to one
+   *  trainer (migration 0028). Any coach of that group can review it, and it
+   *  appears in that group's queue — a direct send to a trainer has no groupId
+   *  and must never show up there. */
+  groupId?: string;
+  /** A group coach marked it dealt with, so it leaves the group's queue. The
+   *  sender keeps it on their own page regardless: it's their record of having
+   *  asked, not the coaches' to-do item. */
+  completedAtISO?: string;
 };
 
 export const clientDataKey = (clientId: string) => `${CLIENT_DATA_PREFIX}${clientId}`;
@@ -221,6 +231,8 @@ function rowToSent(row: SharedProgramRow): SentProgram {
     trainerComments: row.trainer_comments ?? undefined,
     appliedAtISO: row.accepted_at ?? undefined,
     lastEditedAtISO: row.last_edited_at ?? undefined,
+    groupId: row.group_id ?? undefined,
+    completedAtISO: row.completed_at ?? undefined,
   };
 }
 
@@ -664,7 +676,14 @@ async function loadLocalSentPrograms(): Promise<SentProgram[]> {
 
 /** The viewer's review entries: local ones merged with cloud 'review' rows.
  *  Direction is viewer-dependent — a trainer sees their reviews INBOX
- *  (recipient side, minus ones they dismissed), a gym user their SENT list. */
+ *  (recipient side, minus ones they dismissed), a gym user their SENT list.
+ *
+ *  A trainer's inbox deliberately excludes GROUP reviews: those belong to the
+ *  group's queue, where every coach sees the same list and any of them can
+ *  close it. Leaving them here too would put the group's backlog on the hub of
+ *  whichever trainer happens to own the group, which is the pile-up this was
+ *  meant to avoid. The SENDER's side is unfiltered — a program they posted to a
+ *  group is still a program they sent, and belongs on their own page. */
 export async function loadSentPrograms(): Promise<SentProgram[]> {
   const local = await loadLocalSentPrograms();
   const cloud = await fetchCloudRowsSafe();
@@ -672,16 +691,53 @@ export async function loadSentPrograms(): Promise<SentProgram[]> {
   const isPT = await viewerIsPT();
   const mapped = cloud.rows
     .filter(r => r.kind === "review")
-    .filter(r => (isPT ? r.recipient_id === cloud.uid && !r.deleted_by_recipient_at : r.sender_id === cloud.uid))
+    .filter(r => (isPT
+      ? r.recipient_id === cloud.uid && !r.deleted_by_recipient_at && !r.group_id
+      : r.sender_id === cloud.uid))
     .map(rowToSent);
   return [...mapped, ...local].sort(
     (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
   );
 }
 
+/**
+ * One group's review queue, from the group's point of view rather than mine.
+ *
+ * A group review is a single row addressed to the group's owner, so
+ * `loadSentPrograms` would only ever surface it to that one person. Every coach
+ * of the group is entitled to it (migration 0028), and RLS is what decides
+ * that, so the same call serves a trainer and returns nothing to a member.
+ *
+ * Completed reviews are dropped: the queue is what's still to do.
+ */
+export async function loadGroupReviewPrograms(groupId: string): Promise<SentProgram[]> {
+  const uid = await getMyUid().catch(() => null);
+  if (!uid) return [];
+  let rows: SharedProgramRow[];
+  try {
+    rows = await fetchGroupShareRows(groupId);
+  } catch (e) {
+    warnShares("loadGroupReviews", e);
+    return [];
+  }
+  return rows
+    .filter(r => r.kind === "review" && !r.completed_at)
+    .map(rowToSent);
+}
+
+/** Mark a group review dealt with (or reopen it). Coach-only — the RPC raises
+ *  for anyone else rather than silently no-opping. */
+export async function setGroupReviewDone(id: string, done: boolean): Promise<void> {
+  await setGroupReviewCompleted(id, done);
+}
+
 /** Send a program for review. When the trainer is a REAL account (uuid),
  *  the entry rides the cloud table and THROWS on failure so callers can tell
- *  the user; a local/mock trainer keeps the on-device path. */
+ *  the user; a local/mock trainer keeps the on-device path.
+ *
+ *  `entry.groupId` makes it a GROUP review: `recipientId` is then the group's
+ *  owner (the column is NOT NULL and they're the group's responsible party),
+ *  but group_id is what decides which coaches can act on it. */
 export async function appendSentProgram(entry: SentProgram, recipientId?: string): Promise<void> {
   if (recipientId && isCloudContactId(recipientId)) {
     const uid = await getMyUid();
@@ -696,6 +752,7 @@ export async function appendSentProgram(entry: SentProgram, recipientId?: string
       programName: entry.programName,
       snapshot,
       sentKey: entry.sentAtISO,
+      groupId: entry.groupId,
     }]);
     return;
   }

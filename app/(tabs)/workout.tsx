@@ -1267,6 +1267,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           <>
             {/* Move row */}
             <View style={[styles.editMoveRow, { borderTopColor: divider }]}>
+              {/* Icon AND label in one target. The handle alone was a 36pt box
+                  with the words sitting outside it, so the obvious thing to
+                  aim at wasn't the thing that worked. */}
               <TouchableOpacity
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(); }}
                 activeOpacity={0.7}
@@ -1274,9 +1277,12 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                 accessibilityLabel="Reorder exercises"
                 accessibilityRole="button"
               >
-                <DragHandleIcon color={t.ts} />
+                <View style={styles.exReorderIcon}>
+                  <DragHandleIcon color={t.ts} />
+                </View>
+                <Text style={[styles.editMoveLabel, { color: t.ts }]}>Move exercise</Text>
               </TouchableOpacity>
-              <Text style={[styles.editMoveLabel, { color: t.ts, flex: 1 }]}>Move exercise</Text>
+              <View style={{ flex: 1 }} />
               <TouchableOpacity
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(exercise.id); }}
                 activeOpacity={0.8}
@@ -3328,7 +3334,10 @@ const styles = StyleSheet.create({
   kbFloatBtn: { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
 
   // Reorder button in exercise edit panel
-  exReorderBtn:   { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  // The whole handle-plus-label run, with slack past the words so the target
+  // doesn't end exactly where the text does.
+  exReorderBtn:   { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 36, paddingRight: 14 },
+  exReorderIcon:  { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
 
   // Workout reorder sheet
   woReorderBackdrop:  { flex: 1, justifyContent: "flex-end" },

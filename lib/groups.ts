@@ -13,12 +13,13 @@
 import { supabase } from "./supabase";
 import { makeInitials } from "../utils/trainerStore";
 import type {
+  GroupInviteRow,
   GroupMemberWithProfile,
   GroupMessageRow,
   GroupReadRow,
   GroupRow,
 } from "./database.types";
-import type { Group, GroupMember, GroupMessage } from "../constants/groups";
+import type { Group, GroupInvite, GroupMember, GroupMessage } from "../constants/groups";
 
 /** Every group the signed-in account belongs to (owned or joined), with its
  *  member count. Newest first. */
@@ -74,7 +75,45 @@ export async function fetchGroupMembers(groupId: string): Promise<GroupMember[]>
     // Ownership outranks the stored role: the owner's own row still says
     // "member", because their standing comes from groups.owner_id.
     role: r.is_owner ? "owner" : r.role === "trainer" ? "trainer" : "member",
+    // Absent on a roster read that predates 0027; those rows are all accepted.
+    accepted: r.accepted !== false,
   }));
+}
+
+/** Groups I've been added to but haven't answered yet.
+ *
+ *  Fails soft: an invite that can't be loaded shouldn't take the hub down with
+ *  it, and it'll be there on the next focus. */
+export async function fetchMyGroupInvites(): Promise<GroupInvite[]> {
+  const { data, error } = await supabase.rpc("get_my_group_invites");
+  if (error) {
+    if (__DEV__) console.warn("[avenas] load group invites", error.message);
+    return [];
+  }
+  return ((data as GroupInviteRow[] | null) ?? []).map(r => ({
+    groupId: r.group_id,
+    name: r.name,
+    ownerId: r.owner_id,
+    ownerName: r.owner_name || "Your trainer",
+    ownerInitials: makeInitials(r.owner_name || "Your trainer"),
+    ownerPhotoUri: r.owner_avatar ?? undefined,
+    memberCount: r.member_count,
+    invitedAtISO: r.invited_at,
+  }));
+}
+
+/** Join a group I was invited to. Idempotent in the RPC, so a double tap on a
+ *  slow connection is not an error. */
+export async function acceptGroupInvite(groupId: string): Promise<void> {
+  const { error } = await supabase.rpc("accept_group_invite", { p_group: groupId });
+  if (error) throw new Error(error.message);
+}
+
+/** Turn down an invite. Refuses to touch an ACCEPTED membership — leaving a
+ *  group you're in is `leaveGroup`, a different action with a different prompt. */
+export async function declineGroupInvite(groupId: string): Promise<void> {
+  const { error } = await supabase.rpc("decline_group_invite", { p_group: groupId });
+  if (error) throw new Error(error.message);
 }
 
 /** Promote a member to trainer, or demote back. Owner only — enforced in the

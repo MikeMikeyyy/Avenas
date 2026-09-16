@@ -39,6 +39,7 @@ import {
   getRangeOption,
   previousComparableWindow,
   rangeWindow,
+  yearBarCount,
   scopedProgramDays,
   windowLengthDays,
 } from "../../utils/progressStats";
@@ -133,19 +134,32 @@ export default function ProgressView({
     [history, scope, programs],
   );
 
+  /** First day there's a session for, in the CURRENT scope — switching to one
+   *  program shortens the year chart to that program's own history, same as
+   *  every other number on this page. */
+  const earliestWorkoutYMD = useMemo(() => {
+    let min: string | null = null;
+    // "YYYY-MM-DD" sorts lexicographically as a date, so no parsing needed.
+    for (const w of scopedWorkouts) if (min === null || w.date < min) min = w.date;
+    return min;
+  }, [scopedWorkouts]);
+
   const buckets = useMemo(() => {
     const aggregate =
       metric === "volume" ? computeWorkoutTonnage :
       metric === "reps" ? computeWorkoutReps :
       computeWorkoutDurationMinutes;
     const rangeOpt = getRangeOption(range);
-    const { startYMD, endYMD } = rangeWindow(range, new Date());
+    // chartEndYMD, not endYMD: a week in progress still draws Monday through
+    // Sunday. The days ahead bucket to zero and read as rest days, which beats
+    // the unlabelled blank slots the chart padded them out to before.
+    const { startYMD, chartEndYMD } = rangeWindow(range, new Date(), earliestWorkoutYMD);
     switch (rangeOpt.bucket) {
-      case "day":          return bucketMetricByDay(scopedWorkouts, startYMD, endYMD, aggregate);
-      case "rollingWeeks": return bucketMetricByRollingWeeks(scopedWorkouts, startYMD, endYMD, aggregate);
-      case "month":        return bucketMetricByMonth(scopedWorkouts, startYMD, endYMD, aggregate);
+      case "day":          return bucketMetricByDay(scopedWorkouts, startYMD, chartEndYMD, aggregate);
+      case "rollingWeeks": return bucketMetricByRollingWeeks(scopedWorkouts, startYMD, chartEndYMD, aggregate);
+      case "month":        return bucketMetricByMonth(scopedWorkouts, startYMD, chartEndYMD, aggregate);
     }
-  }, [scopedWorkouts, range, metric]);
+  }, [scopedWorkouts, range, metric, earliestWorkoutYMD]);
 
   // Strength radar: program scope applies, but the window is PINNED to this
   // week vs last week — deliberately independent of the Volume chart's range
@@ -166,15 +180,19 @@ export default function ProgressView({
     };
   }, [scopedWorkouts, customExercises]);
 
+  // The slot grid the chart lays out against. Fixed for the ranges whose shape
+  // is fixed; for the year it's whatever the window produced, because that one
+  // grows from 3 bars to 12 as history accumulates. Reserving 12 regardless
+  // would put the growth back as empty space.
   const volumeSlotsCount = useMemo(() => {
     switch (range) {
       case "thisWeek":
       case "lastWeek":    return 7;
       case "thisMonth":   return 4;
       case "last3Months": return 3;
-      case "year":        return 12;
+      case "year":        return yearBarCount(new Date(), earliestWorkoutYMD);
     }
-  }, [range]);
+  }, [range, earliestWorkoutYMD]);
 
   const volumeRangeText = useMemo(() => {
     switch (range) {

@@ -738,14 +738,20 @@ function ExerciseCard({
           <>
             {/* Move row + Add Set */}
             <View style={[s.editMoveRow, { borderTopColor: divider }]}>
+              {/* Icon AND label in one target — see workout.tsx. */}
               <TouchableOpacity
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(); }}
                 activeOpacity={0.7}
                 style={s.exReorderBtn}
+                accessibilityLabel="Reorder exercises"
+                accessibilityRole="button"
               >
-                <DragHandleIcon color={t.ts} />
+                <View style={s.exReorderIcon}>
+                  <DragHandleIcon color={t.ts} />
+                </View>
+                <Text style={[s.editMoveLabel, { color: t.ts }]}>Move exercise</Text>
               </TouchableOpacity>
-              <Text style={[s.editMoveLabel, { color: t.ts, flex: 1 }]}>Move exercise</Text>
+              <View style={{ flex: 1 }} />
               <TouchableOpacity
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(); }}
                 activeOpacity={0.8}
@@ -1566,7 +1572,8 @@ const s = StyleSheet.create({
   // Edit mode
   editMoveRow:  { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
   editMoveLabel:{ fontFamily: FontFamily.regular, fontSize: 12, marginLeft: 2 },
-  exReorderBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  exReorderBtn: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 36, paddingRight: 14 },
+  exReorderIcon:{ width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   editChipsRow: { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
   editChip:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, paddingHorizontal: 8, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   editChipText: { fontFamily: FontFamily.semibold, fontSize: 12 },

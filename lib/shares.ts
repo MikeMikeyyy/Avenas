@@ -99,6 +99,14 @@ export async function updateShareRow(
   if (error) throw new Error(`update share: ${error.message}`);
 }
 
+/** Mark a group review dealt with, or reopen it. Coach-only — the RPC checks
+ *  coaches_group() and raises otherwise, so a sender cannot close their own
+ *  review by patching the column. */
+export async function setGroupReviewCompleted(id: string, done: boolean): Promise<void> {
+  const { error } = await supabase.rpc("set_group_review_completed", { p_share: id, p_done: done });
+  if (error) throw new Error(error.message);
+}
+
 /** Sender-only (RLS): unsend a share/review entirely. */
 export async function deleteShareRow(id: string): Promise<void> {
   const { error } = await supabase.from("shared_programs").delete().eq("id", id);

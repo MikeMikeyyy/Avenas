@@ -194,46 +194,97 @@ function mondayOf(d: Date): Date {
   return out;
 }
 
+/** Floor and cap on the "Last Year" chart's bar count. Three so the chart is
+ *  still a chart on a new account; twelve because past that it stops being a
+ *  year. */
+export const YEAR_MIN_BARS = 3;
+export const YEAR_MAX_BARS = 12;
+
+/** How many monthly bars the "Last Year" range should draw, given the first day
+ *  there's any data for. Exported for the chart's slot grid, which has to
+ *  reserve the same number. */
+export function yearBarCount(today: Date, earliestYMD?: string | null): number {
+  if (!earliestYMD) return YEAR_MIN_BARS;
+  const first = ymdToDate(earliestYMD);
+  const spanned =
+    (today.getFullYear() - first.getFullYear()) * 12 +
+    (today.getMonth() - first.getMonth()) + 1;
+  return Math.min(YEAR_MAX_BARS, Math.max(YEAR_MIN_BARS, spanned));
+}
+
 /**
- * Resolve the [start, end] inclusive YMD window for a range.
+ * Resolve the inclusive YMD window for a range.
  *   - thisWeek:    Monday → Sunday of the current ISO week (end capped at today)
  *   - lastWeek:    Monday → Sunday of the previous ISO week
  *   - thisMonth:   Monday of (currentWeek-3) → today                (4 rolling weekly bars)
  *   - last3Months: 1st of (currentMonth-2) → today                  (3 monthly bars)
+ *
+ * TWO ends, because the chart and the statistics want different things from
+ * a week that isn't over yet:
+ *
+ *   - `endYMD` stops at today. Everything that AGGREGATES uses this, because
+ *     `previousComparableWindow` derives its length from it: a Mon–Wed week has
+ *     to be compared against last Mon–Wed, not against a full seven days, or
+ *     every trend arrow points down until Sunday.
+ *   - `chartEndYMD` runs to Sunday. A bar chart of the week should have seven
+ *     labelled days in it; the days still to come read as zero exactly like a
+ *     rest day does, which is what they are so far.
+ *
+ * They differ only for `thisWeek`, and only before Sunday.
+ *
+ * `earliestYMD` is the first day the caller has any data for, and only the
+ * `year` range reads it — see that case. Null or omitted means "nothing", which
+ * gives the smallest chart rather than the largest: twelve empty bars is the
+ * failure this is here to avoid, so it must not also be the fallback.
  */
-export function rangeWindow(range: RangeKey, today: Date): { startYMD: string; endYMD: string } {
+export function rangeWindow(
+  range: RangeKey,
+  today: Date,
+  earliestYMD?: string | null,
+): { startYMD: string; endYMD: string; chartEndYMD: string } {
   const base = new Date(today);
   base.setHours(0, 0, 0, 0);
   switch (range) {
     case "thisWeek": {
       const mon = mondayOf(base);
       const sun = addDays(mon, 6);
-      // Cap end at today so future days don't show empty bars.
       const end = sun.getTime() > base.getTime() ? base : sun;
-      return { startYMD: toYMD(mon), endYMD: toYMD(end) };
+      return { startYMD: toYMD(mon), endYMD: toYMD(end), chartEndYMD: toYMD(sun) };
     }
     case "lastWeek": {
       const thisMonday = mondayOf(base);
       const lastMon = addDays(thisMonday, -7);
       const lastSun = addDays(lastMon, 6);
-      return { startYMD: toYMD(lastMon), endYMD: toYMD(lastSun) };
+      return { startYMD: toYMD(lastMon), endYMD: toYMD(lastSun), chartEndYMD: toYMD(lastSun) };
     }
     case "thisMonth": {
       // Monday of the current week, then walk back 3 weeks for the start.
       const currentMonday = mondayOf(base);
       const start = addDays(currentMonday, -21);
-      return { startYMD: toYMD(start), endYMD: toYMD(base) };
+      return { startYMD: toYMD(start), endYMD: toYMD(base), chartEndYMD: toYMD(base) };
     }
     case "last3Months": {
       // First day of the month two months before the current month.
       const threeMonthsStart = new Date(base.getFullYear(), base.getMonth() - 2, 1);
-      return { startYMD: toYMD(threeMonthsStart), endYMD: toYMD(base) };
+      return { startYMD: toYMD(threeMonthsStart), endYMD: toYMD(base), chartEndYMD: toYMD(base) };
     }
     case "year": {
-      // First day of the month eleven months before the current month —
-      // produces exactly 12 monthly buckets (current month inclusive).
-      const yearStart = new Date(base.getFullYear(), base.getMonth() - 11, 1);
-      return { startYMD: toYMD(yearStart), endYMD: toYMD(base) };
+      // Twelve months is the CAP, not the shape. A fixed twelve meant a new
+      // account opened this view to nine empty bars and one short one, which
+      // reads as a year of missed training rather than as three weeks of
+      // history — the empty space says more than the data does.
+      //
+      // So the window grows with the history: three months until there's more
+      // than that, then one bar per month spanned, up to twelve. Spanned from
+      // the earliest session, not "months that contain data" — a gap between
+      // January and September is part of the story, and counting only months
+      // with sessions would drop January off the chart entirely.
+      const start = new Date(
+        base.getFullYear(),
+        base.getMonth() - (yearBarCount(base, earliestYMD) - 1),
+        1,
+      );
+      return { startYMD: toYMD(start), endYMD: toYMD(base), chartEndYMD: toYMD(base) };
     }
   }
 }
@@ -415,7 +466,9 @@ export function bucketVolumeByRollingWeeks(
  * Labels are the short month name (e.g. "Mar"). The last bucket's endYMD is
  * clamped to endYMD (today), so partial months sum only logged days.
  *
- * Used by the "3M" range — produces exactly 3 bars (one per month).
+ * Used by the "3M" range, which always spans 3 months, and by "Last Year",
+ * whose span grows from 3 months to 12 with the account's history — so the bar
+ * count here follows the window and is not a constant.
  */
 export function bucketMetricByMonth(
   workouts: CompletedWorkout[],

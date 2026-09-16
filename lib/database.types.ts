@@ -85,6 +85,10 @@ export type GroupMemberRow = {
   /** Owner-only writable (migration 0022). The OWNER is not represented here —
    *  they're groups.owner_id. */
   role: "member" | "trainer";
+  /** When the invitee accepted (migration 0027). Null means invited but not yet
+   *  in the group: is_group_member() returns false for them, so they're out of
+   *  the thread, the roster and the read stamps until they answer. */
+  accepted_at: string | null;
 };
 
 export type GroupMessageRow = {
@@ -111,6 +115,24 @@ export type GroupMemberWithProfile = {
   avatar_url: string | null;
   is_owner: boolean;
   role: "member" | "trainer";
+  /** False while an invite is outstanding (migration 0027). Pending members are
+   *  still listed: the owner needs to see who hasn't answered, and a group
+   *  program send reads this roster — it goes to everyone invited. */
+  accepted: boolean;
+};
+
+/** Row shape returned by get_my_group_invites() — the ONLY thing a pending
+ *  invitee can read about a group they haven't joined, and exactly what the
+ *  invite card renders (migration 0027). */
+export type GroupInviteRow = {
+  group_id: string;
+  name: string;
+  owner_id: string;
+  owner_name: string | null;
+  owner_avatar: string | null;
+  /** Accepted members only, so the card doesn't count other pending invitees. */
+  member_count: number;
+  invited_at: string;
 };
 
 export type ProgramRow = {
@@ -212,6 +234,11 @@ export type SharedProgramRow = {
   returned_at: string | null;
   trainer_comments: string | null;
   returned_snapshot: Record<string, unknown> | null;
+  /** A group coach marked this review dealt with (migration 0028). Null = still
+   *  in the group's queue. Only meaningful with a group_id; written through the
+   *  set_group_review_completed RPC, never as a column patch, so the sender
+   *  can't close their own review. */
+  completed_at: string | null;
 };
 
 // ── push tokens (server-sent notifications; migration 0012) ───────────────────

@@ -22,8 +22,13 @@ import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import ProgramPickerSheet from "./ProgramPickerSheet";
+import GroupInviteCard from "./GroupInviteCard";
+import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites } from "../../lib/groups";
+import { loadGroupRows, type GroupChatRow } from "../../utils/groupStore";
+import type { GroupInvite } from "../../constants/groups";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
 import { haloGlow, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { CARD_INNER, CARD_META, CARD_PAD, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, SUMMARY_ROW } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgramBatch,
@@ -72,6 +77,12 @@ export default function MyPTHome() {
   const [expandedSent, setExpandedSent] = useState<Set<string>>(new Set());
   const [collapsedFromTrainer, setCollapsedFromTrainer] = useState(false);
   const [collapsedSentToTrainer, setCollapsedSentToTrainer] = useState(false);
+  // Groups I've joined, and the ones still waiting on an answer. Invites come
+  // from their own RPC rather than from the group rows: until you accept, the
+  // group itself is not readable to you (migration 0027).
+  const [groups, setGroups] = useState<GroupChatRow[]>([]);
+  const [groupInvites, setGroupInvites] = useState<GroupInvite[]>([]);
+  const [collapsedGroups, setCollapsedGroups] = useState(false);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   const [sendOpen, setSendOpen] = useState(false);
 
@@ -82,6 +93,10 @@ export default function MyPTHome() {
   const toggleSentToTrainer = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCollapsedSentToTrainer(v => !v);
+  }, []);
+  const toggleGroups = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCollapsedGroups(v => !v);
   }, []);
 
   const toggleReceived = useCallback((id: string) => {
@@ -110,11 +125,13 @@ export default function MyPTHome() {
       await backfillAcceptedProgramIds();
       const clientsForMigration = await loadClients();
       await migrateBroadcastShares(clientsForMigration);
-      const [myTrainers, r, s, progs] = await Promise.all([
+      const [myTrainers, r, s, progs, groupRows, invites] = await Promise.all([
         resolveMyTrainers(),
         loadSharedPrograms(),
         loadSentPrograms(),
         getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+        loadGroupRows(),
+        fetchMyGroupInvites(),
       ]);
       if (cancelled) return;
       // Dedupe per batch — broadcasts expand into N per-client entries, but
@@ -140,6 +157,8 @@ export default function MyPTHome() {
       setReceived(dedupedReceived);
       setSent(s);
       setMyPrograms(Array.isArray(progs) ? progs : []);
+      setGroups(groupRows);
+      setGroupInvites(invites);
     })();
     return () => { cancelled = true; };
   }, []));
@@ -150,6 +169,44 @@ export default function MyPTHome() {
   };
 
 
+
+  /** Join a group I was invited to. The group only becomes readable once the
+   *  RPC returns, so the list is re-read rather than moved across optimistically
+   *  — a failed accept must not leave a group card that opens to nothing. */
+  const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {
+    try {
+      await acceptGroupInvite(invite.groupId);
+    } catch (e) {
+      Alert.alert("Couldn't join group", e instanceof Error ? e.message : "Check your connection and try again.");
+      return;
+    }
+    const [groupRows, invites] = await Promise.all([loadGroupRows(), fetchMyGroupInvites()]);
+    setGroups(groupRows);
+    setGroupInvites(invites);
+  }, []);
+
+  const handleDeclineInvite = useCallback((invite: GroupInvite) => {
+    Alert.alert(
+      `Decline ${invite.name}?`,
+      `${invite.ownerName} can invite you again later.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Decline",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await declineGroupInvite(invite.groupId);
+            } catch (e) {
+              Alert.alert("Couldn't decline", e instanceof Error ? e.message : "Check your connection and try again.");
+              return;
+            }
+            setGroupInvites(prev => prev.filter(i => i.groupId !== invite.groupId));
+          },
+        },
+      ],
+    );
+  }, []);
 
   const handleApplyReturned = useCallback(async (entry: SentProgram) => {
     if (entry.appliedAtISO) return;
@@ -535,8 +592,13 @@ export default function MyPTHome() {
                     <View style={styles.sentTopRow}>
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
-                        <Text style={[styles.itemMeta, { color: t.ts }]}>
+                        {/* Where it went matters here: a program posted to a
+                            group could come back from any trainer in it, and
+                            the name is looked up live so a renamed group reads
+                            correctly on old sends. */}
+                        <Text style={[styles.itemMeta, { color: t.ts }]} numberOfLines={1}>
                           Sent {fmtAgo(s.sentAtISO)}
+                          {s.groupId ? ` · ${groups.find(g => g.group.id === s.groupId)?.group.name ?? "a group"}` : ""}
                           {returned && s.returnedAtISO ? ` · Returned ${fmtAgo(s.returnedAtISO)}` : ""}
                         </Text>
                       </View>
@@ -667,6 +729,63 @@ export default function MyPTHome() {
             })}
           </NeuCard>
         ) : null}
+
+        {/* Groups a trainer has put me in. The section only exists once there's
+            something in it: a gym user who has never been added to one has no
+            use for an empty Groups heading.
+
+            Invites sit above the joined groups and are the only thing here that
+            isn't a link — until you accept, there is no group page to open. */}
+        {(groups.length > 0 || groupInvites.length > 0) && (
+          <>
+            <Pressable onPress={toggleGroups} style={styles.sectionHeaderRow} accessibilityRole="button">
+              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Groups</Text>
+              <ChevronToggle expanded={!collapsedGroups} color={t.ts} />
+              {groupInvites.length > 0 && <UnreadBadge count={groupInvites.length} />}
+            </Pressable>
+            {!collapsedGroups && (
+              <>
+                {groupInvites.map(inv => (
+                  <GroupInviteCard
+                    key={inv.groupId}
+                    invite={inv}
+                    onAccept={handleAcceptInvite}
+                    onDecline={handleDeclineInvite}
+                  />
+                ))}
+                {groups.length > 0 && (
+                  <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+                    {groups.map((g, i) => (
+                      <TouchableOpacity
+                        key={g.group.id}
+                        onPress={() => router.navigate({ pathname: "/trainer/group/[id]", params: { id: g.group.id, name: g.group.name } })}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open group ${g.group.name}`}
+                        style={[
+                          styles.summaryRow,
+                          { borderBottomColor: t.div, borderBottomWidth: i === groups.length - 1 ? 0 : 1 },
+                        ]}
+                      >
+                        <View style={[styles.groupIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
+                          <PeopleIcon size={16} color={ACCT} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.group.name}</Text>
+                          <Text style={[styles.groupMeta, { color: t.ts }]}>
+                            {g.group.memberCount} member{g.group.memberCount === 1 ? "" : "s"}
+                          </Text>
+                        </View>
+                        <UnreadBadge count={g.unreadCount} />
+                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                      </TouchableOpacity>
+                    ))}
+                  </NeuCard>
+                )}
+              </>
+            )}
+          </>
+        )}
       </ScrollView>
 
       <ProgramPickerSheet
@@ -706,11 +825,13 @@ const styles = StyleSheet.create({
   presenceDot:  { width: 6, height: 6, borderRadius: 3 },
   presenceText: { fontFamily: FontFamily.regular, fontSize: 12 },
   chatBtn:      { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  itemRow:      { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  itemName:     { fontFamily: FontFamily.semibold, fontSize: 14 },
-  itemMeta:     { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  receivedInner:{ padding: 14, gap: 10 },
-  receivedTop:  { flexDirection: "row", alignItems: "center", gap: 12 },
+  itemRow:      { flexDirection: "row", alignItems: "center", gap: 12, padding: CARD_PAD },
+  // Shared with summaryName below: this section renders the same title as a
+  // card and as a list row, and the two must land in the same place.
+  itemName:     { ...CARD_TITLE },
+  itemMeta:     { ...CARD_META },
+  receivedInner:{ ...CARD_INNER, gap: 10 },
+  receivedTop:  { ...CARD_TOP },
   acceptBox:    { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   cycleChip:    { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
@@ -734,14 +855,16 @@ const styles = StyleSheet.create({
   // Neutral chrome, matching the circular buttons on the trainer hub — a soft
   // drop shadow rather than the ACCT glow reserved for primary green actions.
   addBtn:       { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  sentInner:    { padding: 14, gap: 10 },
-  sentTopRow:   { flexDirection: "row", alignItems: "center", gap: 12 },
+  sentInner:    { ...CARD_INNER, gap: 10 },
+  sentTopRow:   { ...CARD_TOP },
   commentBox:   { paddingTop: 10, borderTopWidth: 1, gap: 6 },
   commentLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.8 },
   commentBody:  { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
-  statusPill:   { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  statusText:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3 },
-  summaryRow:   { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 10 },
-  summaryName:  { flex: 1, fontFamily: FontFamily.semibold, fontSize: 14 },
+  statusPill:   { ...CARD_PILL },
+  statusText:   { ...CARD_PILL_TEXT },
+  summaryRow:   { ...SUMMARY_ROW },
+  summaryName:  { flex: 1, ...CARD_TITLE },
+  groupIcon:    { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  groupMeta:    { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 1 },
   smallEmpty:   { fontFamily: FontFamily.regular, fontSize: 13, padding: 18, textAlign: "center" },
 });

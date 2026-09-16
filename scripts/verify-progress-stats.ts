@@ -23,6 +23,9 @@ import {
   previousComparableWindow,
   filterByDateWindow,
   bucketMetricByDay,
+  bucketVolumeByDay,
+  bucketVolumeByMonth,
+  yearBarCount,
   bucketMetricByRollingWeeks,
   bucketMetricByMonth,
   collectExerciseHistory,
@@ -161,13 +164,81 @@ eq(getRangeOption("nonsense" as any).key, "thisWeek", "getRangeOption: unknown -
 
 // ── rangeWindow (today = Fri 15 May 2026) ─────────────────────────────────────
 const today = new Date(2026, 4, 15); // local midnight Friday
-eq(rangeWindow("thisWeek", today),    { startYMD: "2026-05-11", endYMD: "2026-05-15" }, "rangeWindow thisWeek: Mon..today");
-eq(rangeWindow("lastWeek", today),    { startYMD: "2026-05-04", endYMD: "2026-05-10" }, "rangeWindow lastWeek: prev Mon..Sun");
-eq(rangeWindow("thisMonth", today),   { startYMD: "2026-04-20", endYMD: "2026-05-15" }, "rangeWindow thisMonth: 3 weeks back..today");
-eq(rangeWindow("last3Months", today), { startYMD: "2026-03-01", endYMD: "2026-05-15" }, "rangeWindow 3M: 1st of month-2..today");
-eq(rangeWindow("year", today),        { startYMD: "2025-06-01", endYMD: "2026-05-15" }, "rangeWindow year: 1st of month-11..today");
+eq(rangeWindow("thisWeek", today),    { startYMD: "2026-05-11", endYMD: "2026-05-15", chartEndYMD: "2026-05-17" }, "rangeWindow thisWeek: Mon..today");
+eq(rangeWindow("lastWeek", today),    { startYMD: "2026-05-04", endYMD: "2026-05-10", chartEndYMD: "2026-05-10" }, "rangeWindow lastWeek: prev Mon..Sun");
+eq(rangeWindow("thisMonth", today),   { startYMD: "2026-04-20", endYMD: "2026-05-15", chartEndYMD: "2026-05-15" }, "rangeWindow thisMonth: 3 weeks back..today");
+eq(rangeWindow("last3Months", today), { startYMD: "2026-03-01", endYMD: "2026-05-15", chartEndYMD: "2026-05-15" }, "rangeWindow 3M: 1st of month-2..today");
+eq(rangeWindow("year", today, "2024-01-01"), { startYMD: "2025-06-01", endYMD: "2026-05-15", chartEndYMD: "2026-05-15" }, "rangeWindow year: 1st of month-11..today");
 // Sunday is treated as the END of the week (mondayOf maps Sun -> previous Mon).
-eq(rangeWindow("thisWeek", new Date(2026, 4, 17)), { startYMD: "2026-05-11", endYMD: "2026-05-17" }, "rangeWindow thisWeek: Sunday -> full Mon..Sun");
+eq(rangeWindow("thisWeek", new Date(2026, 4, 17)), { startYMD: "2026-05-11", endYMD: "2026-05-17", chartEndYMD: "2026-05-17" }, "rangeWindow thisWeek: Sunday -> full Mon..Sun");
+
+// The chart end runs to Sunday on EVERY day of the week, so the volume graph
+// always has seven labelled bars; only the aggregation end moves.
+for (let dom = 11; dom <= 17; dom++) {
+  const d = new Date(2026, 4, dom);
+  const w = rangeWindow("thisWeek", d);
+  eq(w.startYMD, "2026-05-11", `rangeWindow thisWeek (May ${dom}): starts Monday`);
+  eq(w.chartEndYMD, "2026-05-17", `rangeWindow thisWeek (May ${dom}): chart ends Sunday`);
+  check(w.endYMD <= w.chartEndYMD, `rangeWindow thisWeek (May ${dom}): stats end never past the chart end`);
+}
+// Every other range charts exactly what it aggregates.
+for (const r of ["lastWeek", "thisMonth", "last3Months", "year"] as const) {
+  const w = rangeWindow(r, today);
+  eq(w.chartEndYMD, w.endYMD, `rangeWindow ${r}: chart end === stats end`);
+}
+
+// ── "Last Year" grows with the history ────────────────────────────────────────
+// Twelve is the cap, not the shape: a new account must not open this view to
+// eleven empty bars. Three months minimum, then one bar per month spanned.
+{
+  eq(yearBarCount(today, null), 3, "yearBars: no history at all -> the 3-month floor");
+  eq(yearBarCount(today, undefined), 3, "yearBars: caller passed nothing -> floor, not cap");
+  eq(yearBarCount(today, "2026-05-01"), 3, "yearBars: history inside this month -> floor");
+  eq(yearBarCount(today, "2026-03-31"), 3, "yearBars: exactly 3 months spanned -> 3");
+  eq(yearBarCount(today, "2026-02-14"), 4, "yearBars: 4 months spanned -> 4");
+  eq(yearBarCount(today, "2025-12-31"), 6, "yearBars: spans a year boundary -> 6");
+  eq(yearBarCount(today, "2025-06-01"), 12, "yearBars: exactly a year -> 12");
+  eq(yearBarCount(today, "2019-01-01"), 12, "yearBars: years of history -> capped at 12");
+  // The day of the month never matters, only the month it lands in.
+  eq(yearBarCount(today, "2026-02-01"), yearBarCount(today, "2026-02-28"),
+     "yearBars: counts months spanned, not days");
+
+  // A gap in the middle still counts: months spanned, not months with data.
+  // Counting only months that HAVE sessions would drop the older one entirely.
+  eq(yearBarCount(today, "2025-11-20"), 7, "yearBars: a quiet stretch still spans its months");
+
+  // The window follows the bar count, and the buckets follow the window.
+  const w3 = rangeWindow("year", today, "2026-04-02");
+  eq(w3.startYMD, "2026-03-01", "year window: floor starts 2 months back");
+  eq(bucketVolumeByMonth([], w3.startYMD, w3.endYMD).map(b => b.label).join(","),
+     "Mar,Apr,May", "year chart: 3 labelled month bars on a young account");
+
+  const w5 = rangeWindow("year", today, "2026-01-09");
+  eq(w5.startYMD, "2026-01-01", "year window: 5 months of history starts that month");
+  eq(bucketVolumeByMonth([], w5.startYMD, w5.endYMD).length, 5, "year chart: 5 bars at 5 months");
+
+  const wFull = rangeWindow("year", today, "2020-01-01");
+  eq(bucketVolumeByMonth([], wFull.startYMD, wFull.endYMD).length, 12, "year chart: 12 bars once capped");
+
+  // Every history length between the floor and the cap produces exactly the
+  // bars its window spans — no off-by-one at either end.
+  for (let back = 0; back <= 18; back++) {
+    const first = new Date(2026, 4 - back, 15);
+    const ymd = `${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, "0")}-15`;
+    const w = rangeWindow("year", today, ymd);
+    const expected = Math.min(12, Math.max(3, back + 1));
+    eq(bucketVolumeByMonth([], w.startYMD, w.endYMD).length, expected,
+       `year chart: ${back} months back -> ${expected} bars`);
+  }
+}
+// Seven labelled day buckets mid-week, with the days still to come at zero.
+{
+  const w = rangeWindow("thisWeek", today);
+  const bars = bucketVolumeByDay([], w.startYMD, w.chartEndYMD);
+  eq(bars.length, 7, "thisWeek chart: seven day buckets mid-week");
+  eq(bars.map(b => b.label).join(","), "Mon,Tue,Wed,Thu,Fri,Sat,Sun", "thisWeek chart: Mon..Sun labels");
+  check(bars.every(b => b.label !== ""), "thisWeek chart: no unlabelled padding slots");
+}
 
 // ── previousComparableWindow ──────────────────────────────────────────────────
 // Same length, shifted back a whole number of weeks (weekday-aligned), never

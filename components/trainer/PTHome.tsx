@@ -28,6 +28,7 @@ import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, SUMMARY_ROW } from "../../constants/cards";
 import FavouriteStar from "../FavouriteStar";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
@@ -50,10 +51,11 @@ import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { getJSON } from "../../utils/storage";
 import { loadFavouriteGroupIds, sortByFavourite } from "../../utils/groupStore";
-import { fetchAllGroupMemberships, fetchMyGroups } from "../../lib/groups";
+import { acceptGroupInvite, declineGroupInvite, fetchAllGroupMemberships, fetchMyGroupInvites, fetchMyGroups } from "../../lib/groups";
+import GroupInviteCard from "./GroupInviteCard";
 import { getMyUid } from "../../lib/chat";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
-import type { Group } from "../../constants/groups";
+import type { Group, GroupInvite } from "../../constants/groups";
 
 // Same SVG used by workout.tsx / new-program.tsx / review screen.
 function KeyboardDismissIcon({ color }: { color: string }) {
@@ -87,6 +89,8 @@ export default function PTHome() {
   const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
   const [sharedOut, setSharedOut] = useState<SharedProgram[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  // Groups another trainer has added me to and I haven't answered yet.
+  const [groupInvites, setGroupInvites] = useState<GroupInvite[]>([]);
   const [groupMemberships, setGroupMemberships] = useState<Record<string, string[]>>({});
   const [favourites, setFavourites] = useState<Set<string>>(new Set());
   const [kbHeight, setKbHeight] = useState(0);
@@ -171,17 +175,22 @@ export default function PTHome() {
       let groupList: Group[] = [];
       let memberships: Record<string, string[]> = {};
       let favIds = new Set<string>();
+      let invites: GroupInvite[] = [];
       try {
         favIds = await loadFavouriteGroupIds();
         const uid = await getMyUid();
         if (uid) {
-          const [gs, ms] = await Promise.all([
+          // A trainer gets invited to other trainers' groups the same way a gym
+          // user does, so the invite list belongs on both hubs.
+          const [gs, ms, inv] = await Promise.all([
             fetchMyGroups(uid),
             fetchAllGroupMemberships(uid),
+            fetchMyGroupInvites(),
           ]);
           // Starred groups pinned above the rest, newest-first within each half.
           groupList = sortByFavourite(gs, favIds);
           memberships = ms;
+          invites = inv;
         }
       } catch (e) {
         if (__DEV__) console.warn("[avenas] load groups", e);
@@ -205,6 +214,7 @@ export default function PTHome() {
         setGroups(groupList);
         setGroupMemberships(memberships);
         setFavourites(favIds);
+        setGroupInvites(invites);
       }
     })();
     return () => { cancelled = true; };
@@ -243,6 +253,48 @@ export default function PTHome() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate({ pathname: "/trainer/group/[id]", params: { id: g.id, name: g.name } });
   }, [router]);
+
+  /** Re-read rather than move the invite across: the group only becomes
+   *  readable once the RPC returns, so an optimistic card could open to
+   *  nothing. Same reasoning as the gym-user hub. */
+  const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {
+    try {
+      await acceptGroupInvite(invite.groupId);
+    } catch (e) {
+      Alert.alert("Couldn't join group", e instanceof Error ? e.message : "Check your connection and try again.");
+      return;
+    }
+    const uid = await getMyUid();
+    const [gs, inv] = await Promise.all([
+      uid ? fetchMyGroups(uid) : Promise.resolve([]),
+      fetchMyGroupInvites(),
+    ]);
+    setGroups(sortByFavourite(gs, favourites));
+    setGroupInvites(inv);
+  }, [favourites]);
+
+  const handleDeclineInvite = useCallback((invite: GroupInvite) => {
+    Alert.alert(
+      `Decline ${invite.name}?`,
+      `${invite.ownerName} can invite you again later.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Decline",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await declineGroupInvite(invite.groupId);
+            } catch (e) {
+              Alert.alert("Couldn't decline", e instanceof Error ? e.message : "Check your connection and try again.");
+              return;
+            }
+            setGroupInvites(prev => prev.filter(i => i.groupId !== invite.groupId));
+          },
+        },
+      ],
+    );
+  }, []);
 
   // Group shortcuts for the recipient picker: ticking one ticks its members, and
   // the send still goes out per-person through the existing share path.
@@ -513,12 +565,24 @@ export default function PTHome() {
             </View>
           </BounceButton>
         </View>
+        {/* Invites another trainer sent me, above my own groups: an unanswered
+            invite is the only thing in this section that needs a decision. */}
+        {groupInvites.map(inv => (
+          <GroupInviteCard
+            key={inv.groupId}
+            invite={inv}
+            onAccept={handleAcceptInvite}
+            onDecline={handleDeclineInvite}
+          />
+        ))}
         {groups.length === 0 ? (
-          <NeuCard dark={isDark} radius={16}>
-            <Text style={[styles.groupEmpty, { color: t.ts }]}>
-              Put clients in a group to message them together and send one program to all of them.
-            </Text>
-          </NeuCard>
+          groupInvites.length === 0 ? (
+            <NeuCard dark={isDark} radius={16}>
+              <Text style={[styles.groupEmpty, { color: t.ts }]}>
+                Put clients in a group to message them together and send one program to all of them.
+              </Text>
+            </NeuCard>
+          ) : null
         ) : (
           <NeuCard dark={isDark} radius={16}>
             {groups.map((g, i) => (
@@ -878,18 +942,21 @@ const styles = StyleSheet.create({
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 18 },
   sectionHeading:{ fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
   sectionHeaderRow:{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 12 },
-  summaryRow:    { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 10 },
-  summaryName:   { flex: 1, fontFamily: FontFamily.semibold, fontSize: 14 },
+  summaryRow:    { ...SUMMARY_ROW },
+  // Shared with reviewName below: a collapsed section renders the same title as
+  // a list row that a card renders as a heading, and the two must land in the
+  // same place or the title jumps when the section is toggled.
+  summaryName:   { flex: 1, ...CARD_TITLE },
   groupAddBtn:   { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   groupIcon:     { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   groupMeta:     { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 1 },
   groupEmpty:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, padding: 16, textAlign: "center" },
-  reviewInner:  { padding: 14, gap: 12 },
-  reviewTop:    { flexDirection: "row", alignItems: "center", gap: 12 },
-  reviewName:   { fontFamily: FontFamily.semibold, fontSize: 15 },
-  reviewMeta:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  statusPill:   { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
-  statusText:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3 },
+  reviewInner:  { ...CARD_INNER, gap: 12 },
+  reviewTop:    { ...CARD_TOP },
+  reviewName:   { ...CARD_TITLE },
+  reviewMeta:   { ...CARD_META },
+  statusPill:   { ...CARD_PILL },
+  statusText:   { ...CARD_PILL_TEXT },
   reviewBtnText:{ fontFamily: FontFamily.bold, fontSize: 14 },
   cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   cycleChip:    { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },

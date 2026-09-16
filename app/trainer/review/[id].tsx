@@ -18,7 +18,7 @@ import BounceButton from "../../../components/BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
 import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
-import { loadSentPrograms, updateSentProgram, type SentProgram } from "../../../utils/trainerStore";
+import { loadGroupReviewPrograms, loadSentPrograms, updateSentProgram, type SentProgram } from "../../../utils/trainerStore";
 
 // Matches the floating dismiss button used in workout.tsx / log-workout.tsx /
 // new-program.tsx — single canonical SVG kept local to each screen.
@@ -33,7 +33,7 @@ function KeyboardDismissIcon({ color }: { color: string }) {
 }
 
 export default function ReviewScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, groupId } = useLocalSearchParams<{ id: string; groupId?: string }>();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -52,14 +52,18 @@ export default function ReviewScreen() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     (async () => {
-      const list = await loadSentPrograms();
+      // A GROUP review is a single row addressed to the group's owner, so a
+      // trainer who isn't that owner would never find it in their own inbox.
+      // The group page passes groupId, which routes the lookup through the
+      // group's queue instead — where every coach of the group can see it.
+      const list = groupId ? await loadGroupReviewPrograms(groupId) : await loadSentPrograms();
       if (cancelled) return;
       const found = list.find(s => s.id === id) ?? null;
       setEntry(found);
       setLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, [id]));
+  }, [id, groupId]));
 
   const handleSendBack = useCallback(() => {
     if (!entry) return;
