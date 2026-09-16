@@ -165,6 +165,37 @@ export type SavedProgram = {
    * this array alongside cyclePattern; renaming a day never touches it.
    */
   dayIds?: string[];
+  /**
+   * Dates ("YYYY-MM-DD") the user has explicitly marked as rest, overriding
+   * whatever the cycle schedules there. A skipped date resolves to "no workout"
+   * everywhere, because `resolveDayIndex` (utils/workout.ts) checks this at the
+   * one chokepoint every scheduling path funnels through — Home's week strip and
+   * today card, the Workout tab, the notification scheduler, the Progress
+   * planned-count and the streak all follow from that single check.
+   *
+   * Notably a skipped day is NOT a missed workout day for the streak: you chose
+   * to rest, so it can't cost you anything (see utils/streak.ts).
+   *
+   * Stored on the program rather than in its own key so it rides the cloud
+   * snapshot and so no resolver needs a new parameter. Skipping a date does not
+   * move the cycle — see `pushedDates` for that.
+   */
+  skippedDates?: string[];
+  /**
+   * The subset of `skippedDates` that also DELAYS the cycle: every date after a
+   * pushed date resolves one cycle-day earlier, so the workout that would have
+   * fallen on the pushed date lands the next day and everything after it
+   * follows. Always kept as a subset — a pushed date is always skipped.
+   *
+   * Anchored to a date, deliberately. The obvious implementation is to nudge
+   * `cycleOffset`, but that is a phase shift over the WHOLE timeline with no
+   * anchor: pushing Tuesday also re-labels Monday, which silently swallows a
+   * workout you already did. Counting pushes that fall strictly before the date
+   * being resolved (see cycleIndexForDate) leaves everything earlier alone.
+   *
+   * Undoing a push is removing the date, which restores the original alignment.
+   */
+  pushedDates?: string[];
   workouts: WorkoutMap;
   extraWorkouts?: string[];
 };

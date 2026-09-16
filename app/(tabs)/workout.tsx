@@ -38,6 +38,7 @@ import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
 import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, prevDayScopeFor, normalizeExerciseName, type DayOverride } from "../../utils/workout";
 import { resumeWithPrompt } from "../../utils/programPause";
+import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { useDayRollover } from "../../hooks/useDayRollover";
@@ -1279,16 +1280,13 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
               <TouchableOpacity
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(exercise.id); }}
                 activeOpacity={0.8}
-                style={{
-                  borderRadius: 10, backgroundColor: ACCT,
-                  shadowColor: ACCT, shadowOffset: { width: 2, height: 2 },
-                  shadowOpacity: 0.35, shadowRadius: 4,
-                  paddingVertical: 7, paddingHorizontal: 14,
-                  flexDirection: "row", alignItems: "center", gap: 5,
-                }}
+                // White with GREEN text rather than a green fill, matching the
+                // builder: the round + for Add Exercise is already solid green,
+                // and two greens in one view leave neither reading as primary.
+                style={[styles.editChip, { backgroundColor: t.ctrl, flex: 0, paddingHorizontal: 14 }]}
               >
-                <Ionicons name="add" size={13} color="#fff" />
-                <Text style={[styles.editChipText, { color: "#fff" }]}>Add Set</Text>
+                <Ionicons name="add" size={13} color={ACCT} />
+                <Text style={[styles.editChipText, { color: ACCT }]}>Add Set</Text>
               </TouchableOpacity>
             </View>
 
@@ -1317,37 +1315,18 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   label: "Remove",
                   color: "#FF4D4F",
                 },
-              ].map(({ onPress, icon, label, color }) => {
-                const bg = isDark ? NEU_BG_DARK : NEU_BG;
-                return (
-                  <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
-                    <View style={{
-                      borderRadius: 12, backgroundColor: bg,
-                      shadowColor: isDark ? "#000" : "#a3afc0",
-                      shadowOffset: { width: isDark ? 0 : 4, height: isDark ? 2 : 4 },
-                      shadowOpacity: isDark ? 0.35 : 0.5,
-                      shadowRadius: 8,
-                    }}>
-                      <View style={{
-                        borderRadius: 12, backgroundColor: bg,
-                        shadowColor: isDark ? "transparent" : "#FFFFFF",
-                        shadowOffset: { width: -3, height: -3 },
-                        shadowOpacity: isDark ? 0 : 1,
-                        shadowRadius: 3,
-                      }}>
-                        <View style={{
-                          borderRadius: 12, backgroundColor: bg, overflow: "hidden",
-                          paddingVertical: 10, flexDirection: "row",
-                          alignItems: "center", justifyContent: "center", gap: 5,
-                        }}>
-                          {icon}
-                          <Text style={[styles.editChipText, { color }]}>{label}</Text>
-                        </View>
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
+              ].map(({ onPress, icon, label, color }) => (
+                // One flat pill on the white control surface. This was three
+                // nested Views faking a raised neumorphic card — inside a card
+                // that is already raised, which read as stacked surfaces and
+                // cost three extra views per chip per exercise.
+                <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
+                  <View style={[styles.editChip, { backgroundColor: t.ctrl }]}>
+                    {icon}
+                    <Text style={[styles.editChipText, { color }]}>{label}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
             </View>
           </>
         </ExpandablePanel>
@@ -2028,11 +2007,32 @@ export default function WorkoutScreen() {
     setIsFreeWorkout(false);
     setFreeWorkoutAddToProgram(false);
     if (day === "Rest") {
-      setWorkoutInfo(null);
-      setLog({});
-      AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: effectiveTodayRef.current, workoutName: "Rest" }))
-        .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
       setChangeDayOpen(false);
+      const ymd = effectiveTodayRef.current;
+      // Clearing the screen and storing the "Rest" override is what makes today
+      // read as a rest day HERE; marking the date off is what makes it one
+      // everywhere else (week strip, reminders, streak).
+      const commitRest = () => {
+        setWorkoutInfo(null);
+        setLog({});
+        AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: ymd, workoutName: "Rest" }))
+          .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
+      };
+      // Nothing to ask about — no program to move, or the day is already off.
+      if (!activeProgram || isDateSkipped(activeProgram, ymd)) {
+        commitRest();
+        return;
+      }
+      // Ask FIRST and commit nothing until an answer comes back. Writing the
+      // override up front meant cancelling left this screen on Rest while the
+      // schedule everywhere else still had the workout — the two disagreed and
+      // nothing put them back. Reload after, since a push moved the cycle and
+      // this screen's copy of the program is a version behind.
+      void applyRestDay(activeProgram.id, ymd, "ask").then(outcome => {
+        if (!outcome) return;
+        commitRest();
+        loadData(true);
+      });
       return;
     }
     const src = fromProgram ?? activeProgram;
@@ -2053,7 +2053,14 @@ export default function WorkoutScreen() {
     AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify(override))
       .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     setChangeDayOpen(false);
-  }, [activeProgram]);
+    // Changing your mind after marking today off has to undo the rest day too,
+    // or the week strip and the reminders keep saying rest while this screen
+    // shows a workout. A push, if one happened, deliberately stands: the cycle
+    // moved, and that isn't what picking a day today is asking to reverse.
+    if (activeProgram && isDateSkipped(activeProgram, effectiveTodayRef.current)) {
+      void clearRestDay(activeProgram.id, effectiveTodayRef.current);
+    }
+  }, [activeProgram, loadData]);
 
   const addExercise = (name: string, idOffset = 0) => {
     const id = `session_${Date.now() + idOffset}`;
@@ -3270,6 +3277,9 @@ const styles = StyleSheet.create({
   editMoveRow:   { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
   editMoveLabel: { fontFamily: FontFamily.regular, fontSize: 12, marginLeft: 2 },
   editChipsRow:  { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
+  // Shared by the Reps / Change / Remove row and the Add Set button, so the
+  // four read as one set of controls.
+  editChip:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, paddingHorizontal: 8, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   editChipText:  { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   // Session Notes — floating card + tick button

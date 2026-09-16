@@ -24,7 +24,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert } from "react-native";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { formatStoredDate, parseStoredDate, todayYMD, toYMD } from "./dates";
 import { resolveDayIndex } from "./workout";
@@ -166,6 +166,12 @@ export async function resumeWithPrompt(programId: string): Promise<SavedProgram[
   const commit = async (mode: ResumeMode): Promise<SavedProgram[]> => {
     const updated = resumeProgram(programs, programId, mode);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    // A resume re-decides what today is, so any same-day override left from
+    // before the hold is stale by definition. Leaving it meant the Workout tab
+    // kept honouring it while Home read the resumed cycle — the two showed
+    // different workouts for the same day with nothing to reconcile them.
+    // Going inactive and going on hold already clear it for the same reason.
+    await AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
     scheduleCloudPush();
     return updated;
   };

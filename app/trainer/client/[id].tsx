@@ -20,6 +20,7 @@ import ChatIcon from "../../../components/icons/ChatIcon";
 import SendIcon from "../../../components/icons/SendIcon";
 import TrashIcon from "../../../components/TrashIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constants/theme";
+import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
 import type { ReportReason } from "../../../constants/chat";
@@ -568,7 +569,7 @@ const styles = StyleSheet.create({
   itemMeta:      { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
   statusPill:    { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   statusText:    { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3 },
-  shareBtn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 14, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  shareBtn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: PILL_RADIUS, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   shareBtnText:  { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   // Options sheet — mirrors the chat screen's menu styles.
   menuName:      { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },

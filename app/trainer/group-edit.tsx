@@ -26,6 +26,7 @@ import KeyboardDismissButton from "../../components/KeyboardDismissButton";
 import ReportReasonSheet from "../../components/trainer/ReportReasonSheet";
 import PeopleIcon from "../../components/icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { createGroup, fetchGroup, fetchGroupMembers, renameGroup, setGroupMembers } from "../../lib/groups";
 import { getMyUid, isCloudContactId } from "../../lib/chat";
@@ -321,7 +322,7 @@ const styles = StyleSheet.create({
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 16, textAlign: "center" },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },
 
-  cta:          { borderRadius: 14, paddingVertical: 15, alignItems: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  cta:          { borderRadius: PILL_RADIUS, paddingVertical: 15, alignItems: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
 
   readonlyName: { fontFamily: FontFamily.bold, fontSize: 22, marginBottom: 6 },

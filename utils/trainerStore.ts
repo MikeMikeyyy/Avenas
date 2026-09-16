@@ -20,6 +20,7 @@ import { ACCOUNT_TYPE_KEY } from "../contexts/AccountTypeContext";
 import { isCloudContactId } from "../lib/chat";
 import {
   deleteShareRow,
+  fetchGroupShareRows,
   fetchMyShareRows,
   fetchShareRow,
   getMyUid,
@@ -107,6 +108,29 @@ export type SharedProgram = {
   lastEditedAtISO?: string;
   /** Set when the gym user deletes their accepted copy from /programs. Hides the share from the trainer's per-client view; the entry survives so the gym user can re-accept. */
   deletedByRecipientAtISO?: string;
+  /**
+   * The group this share was sent to, when it came from a group's Send Program
+   * rather than a direct send. A group send still writes ONE entry per member —
+   * that's what drives the per-recipient pending list — so this is the only
+   * thing tying them back to the group they came from.
+   *
+   * Absent on direct sends and on anything sent before this existed, which both
+   * read as "sent individually". Only the id is stored: the group's name is
+   * looked up live, so renaming a group updates its past sends instead of
+   * leaving them showing a stale name.
+   */
+  groupId?: string;
+  /**
+   * Who sent this share. Read straight off the cloud row's `sender_id`, so it
+   * is authoritative rather than inferred.
+   *
+   * Direction used to be worked out by asking "is the recipient in my client
+   * roster?", which breaks for a group send: a group member need not be one of
+   * your own clients, so your own send read as incoming and offered you an
+   * Accept button for a program you had just sent. Absent on local/mock
+   * entries, where the roster heuristic is still the only option.
+   */
+  senderId?: string;
 };
 
 export type AssignedPT = {
@@ -177,6 +201,8 @@ function rowToShared(row: SharedProgramRow, uid: string, isPT: boolean, meta: Cl
     acceptedProgramId: incoming ? meta[row.id]?.acceptedProgramId : undefined,
     lastEditedAtISO: row.last_edited_at ?? undefined,
     deletedByRecipientAtISO: row.deleted_by_recipient_at ?? undefined,
+    groupId: row.group_id ?? undefined,
+    senderId: row.sender_id,
   };
 }
 
@@ -309,6 +335,36 @@ export async function loadSharedPrograms(): Promise<SharedProgram[]> {
   );
 }
 
+/** Everything sent to one group, from the group's point of view rather than
+ *  mine.
+ *
+ *  `loadSharedPrograms` can only ever return my own row out of a group send,
+ *  because the query behind it narrows to rows I'm a party to. A coach of the
+ *  group needs the whole batch — that's what makes "3 of 5 opened" true and
+ *  what a delete has to remove. RLS returns just my own row to a plain member,
+ *  so the same call serves both and the UI doesn't have to ask which I am.
+ *
+ *  Local mock entries are merged in the same way, matched on `groupId`. */
+export async function loadGroupSharedPrograms(groupId: string): Promise<SharedProgram[]> {
+  const local = (await loadLocalSharedPrograms()).filter(s => s.groupId === groupId);
+  const uid = await getMyUid().catch(() => null);
+  if (!uid) return local;
+  let rows: SharedProgramRow[];
+  try {
+    rows = await fetchGroupShareRows(groupId);
+  } catch (e) {
+    warnShares("loadGroupShares", e);
+    return local;
+  }
+  const [isPT, meta] = await Promise.all([viewerIsPT(), loadShareMeta()]);
+  const mapped = rows
+    .filter(r => r.kind === "share")
+    .map(r => rowToShared(r, uid, isPT, meta));
+  return [...mapped, ...local].sort(
+    (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
+  );
+}
+
 /** Send program shares. Entries addressed to REAL accounts (uuid clientId) go
  *  through the cloud table — and THROW when that fails (offline / not
  *  connected), so callers can tell the user instead of faking success. Mock
@@ -330,6 +386,7 @@ export async function appendSharedPrograms(entries: SharedProgram[]): Promise<vo
         programName: e.programName,
         snapshot,
         sentKey: e.sentAtISO,
+        groupId: e.groupId,
       };
     });
     await insertShareRows(uid, rows);
@@ -424,6 +481,39 @@ export async function removeSharedProgramBatch(batchKey: string): Promise<void> 
       await deleteShareRow(r.id);
     } catch (e) {
       warnShares("unsendBatch", e);
+    }
+  }
+}
+
+/** Remove a group send in full, for any coach of that group — not only the one
+ *  who sent it.
+ *
+ *  `removeSharedProgramBatch` scopes its cloud deletes to rows I sent, which is
+ *  correct for "unsend mine" but would leave a co-trainer deleting only their
+ *  own copy while the program stayed in the group for everyone else. Here the
+ *  batch is resolved from the GROUP's rows and the database decides what may
+ *  actually go (migration 0026), so a member who taps nothing they're allowed
+ *  to delete simply deletes nothing. */
+export async function removeGroupSharedProgramBatch(groupId: string, batchKey: string): Promise<void> {
+  const existing = await loadLocalSharedPrograms();
+  await setJSON(
+    SHARED_PROGRAMS_KEY,
+    existing.filter(s => !(s.groupId === groupId && batchKeyOf(s) === batchKey)),
+  );
+  let rows: SharedProgramRow[];
+  try {
+    rows = await fetchGroupShareRows(groupId);
+  } catch (e) {
+    warnShares("unsendGroupBatch", e);
+    return;
+  }
+  for (const r of rows.filter(
+    r => r.kind === "share" && `${r.sender_program_id}|${r.sent_key}` === batchKey,
+  )) {
+    try {
+      await deleteShareRow(r.id);
+    } catch (e) {
+      warnShares("unsendGroupBatch", e);
     }
   }
 }

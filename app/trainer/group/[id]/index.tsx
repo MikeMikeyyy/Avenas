@@ -8,12 +8,13 @@
 // filtered view of the roster rather than a separate concept, and tapping one
 // opens that client exactly as it would from the hub.
 
-import { useCallback, useState } from "react";
-import { ActivityIndicator, Alert, Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useCallback, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 
 import FadeScreen from "../../../../components/FadeScreen";
 import NeuCard from "../../../../components/NeuCard";
@@ -23,18 +24,21 @@ import ClientCard from "../../../../components/trainer/ClientCard";
 import SimpleSheet from "../../../../components/trainer/SimpleSheet";
 import ProgramPickerSheet from "../../../../components/trainer/ProgramPickerSheet";
 import UnreadBadge from "../../../../components/UnreadBadge";
+import ChevronToggle from "../../../../components/ChevronToggle";
+import TrashIcon from "../../../../components/TrashIcon";
 import ChatIcon from "../../../../components/icons/ChatIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
-import { pill, PILL_H_SM } from "../../../../constants/buttons";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
+import { pill, pillGlow, haloGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../../../constants/buttons";
 import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { deleteGroup, fetchGroup, fetchGroupMembers, leaveGroup, setGroupMemberRole } from "../../../../lib/groups";
 import { getMyUid } from "../../../../lib/chat";
+import { scheduleCloudPush } from "../../../../lib/syncManager";
 import { loadFavouriteGroupIds, loadGroupRows, toggleFavouriteGroup } from "../../../../utils/groupStore";
 import { resolveTrainerRoster } from "../../../../utils/roster";
-import { appendSharedPrograms, loadClientData, type Client, type SharedProgram } from "../../../../utils/trainerStore";
+import { acceptSharedProgramBatch, appendSharedPrograms, batchKeyOf, loadClientData, loadGroupSharedPrograms, removeGroupSharedProgramBatch, type Client, type SharedProgram } from "../../../../utils/trainerStore";
 import { getJSON } from "../../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../../constants/programs";
 import { canCoachGroup, type Group, type GroupMember, type GroupRole } from "../../../../constants/groups";
@@ -81,6 +85,85 @@ export default function GroupPageScreen() {
   const [query, setQuery] = useState("");
   const [isFavourite, setIsFavourite] = useState(false);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
+  const [groupShares, setGroupShares] = useState<SharedProgram[]>([]);
+  const [expandedSent, setExpandedSent] = useState<Set<string>>(new Set());
+
+  /** Owner or trainer here — the same test the database enforces for sending to
+   *  this group, and what separates "can remove this" from "can take a copy". */
+  const iCoachGroup = useMemo(() => {
+    const role = members.find(m => m.id === myUid)?.role;
+    return !!role && canCoachGroup(role);
+  }, [members, myUid]);
+
+  const toggleSent = useCallback((key: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setExpandedSent(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  /** Re-read this group's sends. Shared by the initial load, the send flow and
+   *  both actions below, so the list never shows a stale state. */
+  const refreshGroupShares = useCallback(async () => {
+    try {
+      setGroupShares(await loadGroupSharedPrograms(groupId));
+    } catch (err) {
+      if (__DEV__) console.warn("[avenas] refresh group shares", err);
+    }
+  }, [groupId]);
+
+  const handleDeleteBatch = useCallback((batchKey: string, programName: string) => {
+    Alert.alert(
+      "Delete Program",
+      `Remove "${programName}" from this group? Members who already accepted it keep their copy.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            await removeGroupSharedProgramBatch(groupId, batchKey);
+            await refreshGroupShares();
+          },
+        },
+      ],
+    );
+  }, [refreshGroupShares, groupId]);
+
+  const handleAcceptBatch = useCallback(async (batchKey: string, programName: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await acceptSharedProgramBatch(batchKey);
+    scheduleCloudPush(); // the accept materialised a local program
+    await refreshGroupShares();
+    Alert.alert("Program Added", `"${programName}" is now in your programs.`);
+  }, [refreshGroupShares]);
+
+  /**
+   * This group's sends, one card per send rather than per member.
+   *
+   * A send writes an entry per recipient — that's what the hub's pending list
+   * is built from — so they're collapsed on `batchKeyOf`, the same key the hub
+   * uses. Both surfaces therefore agree on what counts as one send.
+   */
+  const sentBatches = useMemo(() => {
+    const byKey = new Map<string, SharedProgram[]>();
+    for (const s of groupShares) {
+      const k = batchKeyOf(s);
+      const list = byKey.get(k);
+      if (list) list.push(s); else byKey.set(k, [s]);
+    }
+    return Array.from(byKey.entries())
+      .map(([key, entries]) => ({
+        key,
+        programName: entries[0].programName,
+        sentAtISO: entries[0].sentAtISO,
+        entries,
+        acceptedCount: entries.filter(e => e.acceptedAtISO).length,
+      }))
+      .sort((a, b) => (a.sentAtISO < b.sentAtISO ? 1 : -1));
+  }, [groupShares]);
 
   const displayName = group?.name || name || "Group";
 
@@ -90,13 +173,14 @@ export default function GroupPageScreen() {
       try {
         const uid = await getMyUid();
         if (!uid || !groupId) return;
-        const [g, roster, { clients: allClients }, rows, progs, favIds] = await Promise.all([
+        const [g, roster, { clients: allClients }, rows, progs, favIds, shares] = await Promise.all([
           fetchGroup(uid, groupId),
           fetchGroupMembers(groupId),
           resolveTrainerRoster(),
           loadGroupRows(),
           getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
           loadFavouriteGroupIds(),
+          loadGroupSharedPrograms(groupId),
         ]);
         if (cancelled) return;
         setIsFavourite(favIds.has(groupId));
@@ -111,6 +195,9 @@ export default function GroupPageScreen() {
         setClients(allClients);
         setUnread(rows.find(r => r.group.id === groupId)?.unreadCount ?? 0);
         setMyPrograms(Array.isArray(progs) ? progs : []);
+        // Already scoped to this group, in both directions — what arrived here
+        // is a group's noticeboard, not my own inbox.
+        setGroupShares(shares);
 
         // Active program per member, same as the hub's client list.
         const byClient: Record<string, string> = {};
@@ -217,6 +304,10 @@ export default function GroupPageScreen() {
       programName: program.name,
       sentAtISO: now,
       programSnapshot: program,
+      // The only thing tying these per-member rows back to the group. Without
+      // it the send is indistinguishable from individual sends, which is why
+      // it used to vanish from this page entirely.
+      groupId,
     }));
     try {
       await appendSharedPrograms(entries);
@@ -224,8 +315,12 @@ export default function GroupPageScreen() {
       Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
       return;
     }
+    // Re-read so the Programs Sent section updates on this tick. The page loads
+    // on focus, and sending never leaves it — so without this the send only
+    // appeared after navigating away and back.
+    await refreshGroupShares();
     Alert.alert("Program Sent", `"${program.name}" was sent to ${recipientIds.length} member${recipientIds.length === 1 ? "" : "s"} of ${displayName}.`);
-  }, [recipientIds, displayName]);
+  }, [recipientIds, displayName, groupId, refreshGroupShares]);
 
   const onLeave = () => {
     setMenuOpen(false);
@@ -353,6 +448,83 @@ export default function GroupPageScreen() {
               </View>
             </View>
           </NeuCard>
+
+          {/* Programs sent to this group. A send writes one row per member, so
+              they're collapsed by batch key into one card each — the same key
+              the trainer hub groups by, so both surfaces agree on what "one
+              send" is. */}
+          {sentBatches.length > 0 && (
+            <>
+              <View style={styles.sectionRow}>
+                <Text style={[styles.sectionHeading, { color: t.tp }]}>Programs Sent</Text>
+                <View style={[styles.countBadge, { backgroundColor: ACCT }]}>
+                  <Text style={styles.countBadgeText}>{sentBatches.length}</Text>
+                </View>
+              </View>
+              {sentBatches.map(b => {
+                const open = expandedSent.has(b.key);
+                // My own entry in this batch — what Accept acts on. A coach who
+                // sent it has no entry of their own, which is one more reason
+                // they never see Accept.
+                const mine = b.entries.find(e => e.clientId === myUid);
+                // The open count is only the truth when I can see the whole
+                // batch, which the database grants to this group's coaches and
+                // no one else. A member sees one row and would read "0 of 1".
+                const meta = mine?.acceptedAtISO
+                  ? "Accepted"
+                  : iCoachGroup
+                    ? (b.acceptedCount === b.entries.length
+                        ? "Opened by everyone"
+                        : `${b.acceptedCount} of ${b.entries.length} opened`)
+                    : "Shared with this group";
+                return (
+                  <NeuCard key={b.key} dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+                    <Pressable onPress={() => toggleSent(b.key)} accessibilityRole="button" accessibilityLabel={`${b.programName}, ${open ? "collapse" : "expand"}`}>
+                      <View style={styles.sentRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.sentName, { color: t.tp }]} numberOfLines={1}>{b.programName}</Text>
+                          <Text style={[styles.sentMeta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
+                        </View>
+                        <ChevronToggle expanded={open} color={t.ts} upDown />
+                      </View>
+                    </Pressable>
+                    {open && (
+                      <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(140)} style={styles.sentActions}>
+                        <BounceButton
+                          style={styles.sentActionSlot}
+                          onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: (mine ?? b.entries[0]).id } })}
+                          accessibilityLabel={`View ${b.programName}`}
+                        >
+                          <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
+                            <Text style={[styles.sentActionText, { color: t.tp }]}>View Program</Text>
+                          </View>
+                        </BounceButton>
+                        {/* Not mutually exclusive: a trainer who is a member of
+                            the group both received a copy and may remove the
+                            send, so they get all three. The sender has no entry
+                            of their own, so no Accept. */}
+                        {mine && !mine.acceptedAtISO && (
+                          <BounceButton style={styles.sentActionSlot} onPress={() => handleAcceptBatch(b.key, b.programName)} accessibilityLabel={`Accept ${b.programName}`}>
+                            <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                              <Text style={[styles.sentActionText, { color: "#fff" }]}>Accept</Text>
+                            </View>
+                          </BounceButton>
+                        )}
+                        {iCoachGroup && (
+                          <BounceButton style={styles.sentActionSlot} onPress={() => handleDeleteBatch(b.key, b.programName)} accessibilityLabel={`Delete ${b.programName}`}>
+                            <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                              <TrashIcon size={15} color="#fff" />
+                              <Text style={[styles.sentActionText, { color: "#fff" }]}>Delete</Text>
+                            </View>
+                          </BounceButton>
+                        )}
+                      </Animated.View>
+                    )}
+                  </NeuCard>
+                );
+              })}
+            </>
+          )}
 
           <View style={styles.sectionRow}>
             <Text style={[styles.sectionHeading, { color: t.tp }]}>Members</Text>
@@ -548,6 +720,16 @@ const styles = StyleSheet.create({
 
   sectionRow:   { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 12 },
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18 },
+  sentRow:  { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 14 },
+  sentName: { fontFamily: FontFamily.bold, fontSize: 15 },
+  sentMeta: { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
+  // Wraps because a trainer who is also a member gets three buttons. Two share
+  // a row; the third takes a full row of its own rather than being squeezed to
+  // a third of a phone's width.
+  sentActions:   { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: 16, paddingBottom: 14 },
+  sentActionSlot: { flexGrow: 1, flexBasis: "45%" },
+  sentActionBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
+  sentActionText: { fontFamily: FontFamily.bold, fontSize: 14 },
   countBadge:   { minWidth: 24, height: 22, borderRadius: 11, paddingHorizontal: 7, alignItems: "center", justifyContent: "center" },
   countBadgeText: { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff" },
   searchBtn:    { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },

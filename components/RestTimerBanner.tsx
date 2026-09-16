@@ -7,6 +7,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
 import { FontFamily, ACCT, APP_LIGHT, APP_DARK } from "../constants/theme";
+import { PILL_RADIUS } from "../constants/buttons";
 
 function fmtTime(secs: number): string {
   return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
@@ -87,8 +88,8 @@ const styles = StyleSheet.create({
   row:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, gap: 10 },
   label:       { fontFamily: FontFamily.bold, fontSize: 12, letterSpacing: 1.2, opacity: 0.5 },
   time:        { fontFamily: FontFamily.bold, fontSize: 28, letterSpacing: 1, flex: 1, textAlign: "center" },
-  adjBtn:      { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
+  adjBtn:      { borderRadius: PILL_RADIUS, paddingHorizontal: 10, paddingVertical: 8 },
   adjText:     { fontFamily: FontFamily.semibold, fontSize: 13 },
-  skipBtn:     { borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
+  skipBtn:     { borderRadius: PILL_RADIUS, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
   skipText:    { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
 });

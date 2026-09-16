@@ -25,7 +25,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT } from "../constants/theme";
-import { pill, pillGlow, PILL_RADIUS } from "../constants/buttons";
+import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -661,12 +661,10 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           onPress={startRemoveSet}
           style={{ opacity: sets.length <= 1 ? 0.35 : 1, flex: 1, marginRight: 6 }}
         >
-          <NeuCard dark={isDark} radius={10} shadowSize="sm" style={{ borderRadius: 10 }}>
-            <View style={styles.exAddRemoveBtn}>
-              <Ionicons name="remove" size={14} color={t.ts} />
-              <Text style={[styles.exAddRemoveText, { color: t.ts }]}>Remove Set</Text>
-            </View>
-          </NeuCard>
+          <View style={[styles.exAddRemoveBtn, { backgroundColor: t.ctrl }]}>
+            <Ionicons name="remove" size={14} color={t.ts} />
+            <Text style={[styles.exAddRemoveText, { color: t.ts }]}>Remove Set</Text>
+          </View>
         </BounceButton>
         <BounceButton
           onPress={() => {
@@ -678,12 +676,13 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           }}
           style={{ flex: 1, marginLeft: 6 }}
         >
-          <NeuCard dark={isDark} radius={10} shadowSize="sm" style={{ borderRadius: 10 }}>
-            <View style={styles.exAddRemoveBtn}>
-              <Ionicons name="add" size={14} color={ACCT} />
-              <Text style={[styles.exAddRemoveText, { color: ACCT }]}>Add Set</Text>
-            </View>
-          </NeuCard>
+          {/* White with GREEN text, not a green fill: the summary FAB and the
+              add-exercise button on this screen are both solid green, and a
+              third would leave nothing reading as the primary action. */}
+          <View style={[styles.exAddRemoveBtn, { backgroundColor: t.ctrl }]}>
+            <Ionicons name="add" size={14} color={ACCT} />
+            <Text style={[styles.exAddRemoveText, { color: ACCT }]}>Add Set</Text>
+          </View>
         </BounceButton>
       </View>
 
@@ -3406,7 +3405,7 @@ const styles = StyleSheet.create({
   exSetInputText:   { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", width: "100%" },
   exSetUnit:        { fontFamily: FontFamily.semibold, fontSize: 13, marginLeft: 4 },
   exAddRemoveRow:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8, paddingHorizontal: 9, borderTopWidth: 1 },
-  exAddRemoveBtn:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10 },
+  exAddRemoveBtn:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   exAddRemoveText:  { fontFamily: FontFamily.semibold, fontSize: 13 },
   exNotesRow:       { borderTopWidth: 1, paddingVertical: 10, paddingLeft: 9 },
   exNotesInput:     { fontFamily: FontFamily.semibold, fontSize: 13, minHeight: 36, lineHeight: 20, paddingLeft: 0 },

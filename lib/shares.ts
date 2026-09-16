@@ -29,6 +29,22 @@ export async function fetchMyShareRows(uid: string): Promise<SharedProgramRow[]>
   return (data as SharedProgramRow[] | null) ?? [];
 }
 
+/** Every share row sent to one group, newest first.
+ *
+ *  Separate from `fetchMyShareRows` because that one narrows to rows I'm a
+ *  party to, which for a group send means only my own. A group's coaches are
+ *  entitled to the whole batch (migration 0026) — RLS still decides, so a plain
+ *  member gets back just their own row here. */
+export async function fetchGroupShareRows(groupId: string): Promise<SharedProgramRow[]> {
+  const { data, error } = await supabase
+    .from("shared_programs")
+    .select("*")
+    .eq("group_id", groupId)
+    .order("sent_at", { ascending: false });
+  if (error) throw new Error(`load group shares: ${error.message}`);
+  return (data as SharedProgramRow[] | null) ?? [];
+}
+
 export async function fetchShareRow(id: string): Promise<SharedProgramRow | null> {
   const { data, error } = await supabase
     .from("shared_programs")
@@ -46,6 +62,8 @@ export type NewShareRow = {
   programName: string;
   snapshot: SavedProgram;
   sentKey: string;
+  /** Set when the send came from a group. See SharedProgram.groupId. */
+  groupId?: string;
 };
 
 /** Insert one row per recipient. Throws when offline / signed out / not
@@ -62,6 +80,7 @@ export async function insertShareRows(uid: string, entries: NewShareRow[]): Prom
       program_name: e.programName,
       snapshot: e.snapshot,
       sent_key: e.sentKey,
+      group_id: e.groupId ?? null,
     })),
   );
   if (error) throw new Error(`send program: ${error.message}`);

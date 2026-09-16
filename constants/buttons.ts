@@ -48,6 +48,21 @@ export const PILL_SHADOW: ViewStyle = {
   shadowRadius: 4,
 };
 
+/**
+ * A CENTRED halo rather than a drop shadow — the colour bleeding evenly on all
+ * sides instead of downward. This is the treatment destructive buttons use (the
+ * round remove-set button in a workout card), and it reads as "this is hot"
+ * where pillGlow's downward bleed just reads as raised.
+ */
+export function haloGlow(color: string, opacity = 0.5, radius = 6): ViewStyle {
+  return {
+    shadowColor: color,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: opacity,
+    shadowRadius: radius,
+  };
+}
+
 /** A coloured glow under a filled pill — the accent bleeding downward, which
  *  is what makes a primary button read as raised without a hard offset. */
 export function pillGlow(color: string, opacity = 0.35): ViewStyle {

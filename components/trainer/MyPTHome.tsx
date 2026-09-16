@@ -22,7 +22,8 @@ import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import ProgramPickerSheet from "./ProgramPickerSheet";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
+import { haloGlow, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgramBatch,
@@ -391,16 +392,16 @@ export default function MyPTHome() {
                     onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: r.id } })}
                     accessibilityLabel={`View ${r.programName}`}
                   >
-                    <NeuCard dark={isDark} radius={14} innerStyle={styles.viewBtnInner}>
+                    <View style={[styles.viewBtnInner, { backgroundColor: t.ctrl }]}>
                       <Text style={[styles.viewBtnText, { color: t.tp }]}>View</Text>
-                    </NeuCard>
+                    </View>
                   </BounceButton>
                   <BounceButton
                     style={{ flex: 1 }}
                     onPress={() => handleAccept(r)}
                     accessibilityLabel={`Accept ${r.programName}`}
                   >
-                    <View style={[styles.acceptCta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                    <View style={[styles.acceptCta, { backgroundColor: ACCT }]}>
                       <Text style={styles.acceptCtaText}>Accept program</Text>
                     </View>
                   </BounceButton>
@@ -599,7 +600,7 @@ export default function MyPTHome() {
                             onPress={() => handleApplyReturned(s)}
                             accessibilityLabel="Accept trainer's changes"
                           >
-                            <View style={[styles.acceptCta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                            <View style={[styles.acceptCta, { backgroundColor: ACCT }]}>
                               <Text style={styles.acceptCtaText}>Accept changes</Text>
                             </View>
                           </BounceButton>
@@ -609,17 +610,17 @@ export default function MyPTHome() {
                           onPress={() => router.navigate({ pathname: "/program-view", params: { sentId: s.id } })}
                           accessibilityLabel={`View ${s.programName}`}
                         >
-                          <NeuCard dark={isDark} radius={14} innerStyle={styles.viewBtnInner}>
+                          <View style={[styles.viewBtnInner, { backgroundColor: t.ctrl }]}>
                             <Text style={[styles.viewBtnText, { color: t.tp }]}>View</Text>
-                          </NeuCard>
+                          </View>
                         </BounceButton>
                         <BounceButton
                           onPress={() => handleUnsendProgram(s)}
                           accessibilityLabel="Delete program"
                         >
-                          <NeuCard dark={isDark} radius={14} innerStyle={[styles.viewBtnInner, styles.deleteSentBtn]}>
-                            <TrashIcon size={16} color="#E53935" />
-                          </NeuCard>
+                          <View style={[styles.viewBtnInner, styles.deleteSentBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                            <TrashIcon size={16} color="#fff" />
+                          </View>
                         </BounceButton>
                       </Animated.View>
                     )}
@@ -694,7 +695,7 @@ const styles = StyleSheet.create({
   emptyIcon:    { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 17, textAlign: "center" },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },
-  cta:          { borderRadius: 14, paddingVertical: 13, paddingHorizontal: 24, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  cta:          { borderRadius: PILL_RADIUS, paddingVertical: 13, paddingHorizontal: 24, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
   ptCard:       { flexDirection: "row", alignItems: "center", gap: 14, padding: 16 },
   avatar:       { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center" },
@@ -716,9 +717,14 @@ const styles = StyleSheet.create({
   cycleChipText:{ fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
   acceptedLine: { fontFamily: FontFamily.semibold, fontSize: 12 },
   actionRow:    { flexDirection: "row", gap: 10 },
-  viewBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12, minHeight: 44 },
+  // Pills rather than NeuCards: these sit INSIDE an expanded card, and a raised
+  // neumorphic button on a raised card reads as two stacked surfaces. White
+  // control surface for View, DANGER for Delete, same shape either way.
+  viewBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   viewBtnText:  { fontFamily: FontFamily.bold, fontSize: 14 },
-  acceptCta:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, minHeight: 44, borderRadius: 14, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  // Same geometry as viewBtnInner — the two always sit side by side, and any
+  // difference in height reads as a mistake rather than as emphasis.
+  acceptCta:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...pillGlow(ACCT, 0.4) },
   acceptCtaText:{ fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
   deleteSentBtn:{ width: 56 },
   chevronRow:   { alignItems: "center", paddingTop: 2 },

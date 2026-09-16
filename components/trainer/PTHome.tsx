@@ -26,8 +26,8 @@ import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
+import { pill, pillGlow, haloGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import FavouriteStar from "../FavouriteStar";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
@@ -271,6 +271,9 @@ export default function PTHome() {
         programName: head.programName,
         sentAtISO: head.sentAtISO,
         programSnapshot: head.programSnapshot,
+        // Every entry in a batch came from the same send, so the head's group
+        // is the batch's group. Undefined for a direct send.
+        groupId: head.groupId,
         entries,
         acceptedCount,
         total: entries.length,
@@ -591,8 +594,17 @@ export default function PTHome() {
                       <View style={styles.reviewTop}>
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{b.programName}</Text>
+                          {/* The group belongs on the COLLAPSED card: where a
+                              program went is the first thing you want to know,
+                              and putting it behind a tap meant opening every
+                              card to find out. Name is looked up live, so a
+                              renamed group updates its past sends; a deleted one
+                              falls back to a neutral label rather than dropping
+                              the card. */}
                           <Text style={[styles.reviewMeta, { color: t.ts }]} numberOfLines={1}>
-                            Sent {fmtAgo(b.sentAtISO)} · {b.total} client{b.total === 1 ? "" : "s"}
+                            Sent {fmtAgo(b.sentAtISO)} · {b.groupId
+                              ? `${groups.find(g => g.id === b.groupId)?.name ?? "a group"} · ${b.total} member${b.total === 1 ? "" : "s"}`
+                              : `${b.total} client${b.total === 1 ? "" : "s"}`}
                           </Text>
                         </View>
                         <View style={[styles.statusPill, b.allAccepted
@@ -666,19 +678,19 @@ export default function PTHome() {
                               onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
                               accessibilityLabel={`View ${b.programName}`}
                             >
-                              <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
+                              <View style={[styles.sharedActionBtnInner, { backgroundColor: t.ctrl }]}>
                                 <Text style={[styles.reviewBtnText, { color: t.tp }]}>View Program</Text>
-                              </NeuCard>
+                              </View>
                             </BounceButton>
                             <BounceButton
                               style={{ flex: 1 }}
                               onPress={() => handleUnshareBatch(b)}
                               accessibilityLabel={`Delete ${b.programName}`}
                             >
-                              <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
-                                <TrashIcon size={16} color="#E53935" />
-                                <Text style={styles.deleteBtnText}>Delete</Text>
-                              </NeuCard>
+                              <View style={[styles.sharedActionBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                                <TrashIcon size={16} color="#fff" />
+                                <Text style={[styles.deleteBtnText, { color: "#fff" }]}>Delete</Text>
+                              </View>
                             </BounceButton>
                           </View>
                         </Animated.View>
@@ -885,7 +897,11 @@ const styles = StyleSheet.create({
   kbFloatBtn:   { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
   chevronRow:    { alignItems: "center", paddingTop: 2 },
   sharedActionRow:{ flexDirection: "row", gap: 10, marginTop: 4 },
-  sharedActionBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12, minHeight: 44 },
+  // Pills rather than NeuCards: these sit INSIDE an expanded card, and a raised
+  // neumorphic button on a raised card reads as two stacked surfaces. The white
+  // control surface + soft shadow is the same treatment the rest of the app's
+  // secondary actions use, and the delete variant just swaps the fill for DANGER.
+  sharedActionBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   deleteBtnText:  { fontFamily: FontFamily.bold, fontSize: 14, color: "#E53935", letterSpacing: 0.2 },
   recipientList:  { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, marginTop: 2 },
   recipientRow:   { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 8 },

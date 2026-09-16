@@ -11,6 +11,7 @@
 
 import { parseStoredDate, toYMD, todayYMD } from "./dates";
 import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
+import { pushesBefore } from "./skippedDates";
 import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
@@ -67,6 +68,11 @@ export function resolveDayIndex(program: SavedProgram, dateYMD: string): number 
   // when a program is paused. Both sides are "YYYY-MM-DD", so a string compare
   // is a date compare.
   if (program.pausedAt && dateYMD >= program.pausedAt) return null;
+  // A date the user explicitly marked as rest. Checked HERE and not in
+  // cycleIndexForDate for the same reason the hold is: the dayId backfill asks
+  // "which slot was this already-logged session performed on", and marking a
+  // date off afterwards must not erase that answer.
+  if (program.skippedDates?.includes(dateYMD)) return null;
   return cycleIndexForDate(program, dateYMD);
 }
 
@@ -86,7 +92,12 @@ export function cycleIndexForDate(program: SavedProgram, dateYMD: string): numbe
   target.setHours(0, 0, 0, 0);
   const daysPassed = Math.floor((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
   if (daysPassed < 0) return null;
-  return (((daysPassed + (program.cycleOffset ?? 0)) % program.cycleDays) + program.cycleDays) % program.cycleDays;
+  // Every pushed day BEFORE this date held the cycle still for a day, so this
+  // date is that many cycle-days earlier than the calendar suggests. Counting
+  // only earlier pushes is what keeps a push local: nudging cycleOffset instead
+  // would re-label days before it too, which swallowed a completed workout.
+  const effective = daysPassed - pushesBefore(program, dateYMD);
+  return ((effective + (program.cycleOffset ?? 0)) % program.cycleDays + program.cycleDays) % program.cycleDays;
 }
 
 /** The program's scheduled workout for `dateYMD`, or null for Rest/empty days,

@@ -59,6 +59,8 @@ export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
     cycle_days: p.cycleDays,
     cycle_pattern: p.cyclePattern,
     day_ids: p.dayIds ?? [],
+    skipped_dates: p.skippedDates ?? [],
+    pushed_dates: p.pushedDates ?? [],
     workouts: p.workouts as Record<string, unknown>,
     extra_workouts: p.extraWorkouts ?? [],
   };
@@ -81,6 +83,11 @@ export function programFromRow(r: ProgramRow): SavedProgram {
     // Empty array = a row written before the column existed; leave it undefined
     // so the client's positional fallback applies rather than a bogus [].
     dayIds: r.day_ids && r.day_ids.length > 0 ? r.day_ids : undefined,
+    // Same empty-means-absent treatment: a pre-0025 row and a program with
+    // nothing skipped are the same thing, and undefined keeps the stored
+    // program free of an empty array nobody needs.
+    skippedDates: r.skipped_dates && r.skipped_dates.length > 0 ? r.skipped_dates : undefined,
+    pushedDates: r.pushed_dates && r.pushed_dates.length > 0 ? r.pushed_dates : undefined,
     workouts: r.workouts as unknown as WorkoutMap,
     extraWorkouts: r.extra_workouts,
   };

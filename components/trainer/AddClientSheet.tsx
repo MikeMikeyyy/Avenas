@@ -5,6 +5,7 @@ import { View, Text, StyleSheet, TextInput } from "react-native";
 import SimpleSheet from "./SimpleSheet";
 import BounceButton from "../BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 
 interface Props {
@@ -71,6 +72,6 @@ const styles = StyleSheet.create({
   label:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.8, marginBottom: 6, textTransform: "uppercase" },
   input:      { fontFamily: FontFamily.regular, fontSize: 15, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
   actions:    { paddingHorizontal: 20, paddingTop: 18 },
-  submit:     { borderRadius: 14, paddingVertical: 14, alignItems: "center", backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  submit:     { borderRadius: PILL_RADIUS, paddingVertical: 14, alignItems: "center", backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   submitText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
 });

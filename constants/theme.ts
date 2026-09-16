@@ -60,6 +60,16 @@ export const ACCT_DEEP = "#0c9f6e";
 // Destructive actions (block, delete). Import this, never hardcode a red literal.
 export const DANGER = "#E5484D";
 
+// The brighter red the app uses for destructive BUTTONS — removing a set from
+// an exercise, deleting a sent program. Distinct from DANGER above, which is
+// the flatter red for block/report actions and destructive text. Pair it with
+// haloGlow() (constants/buttons.ts) rather than a drop shadow; the centred glow
+// is what makes these read as one family.
+//
+// Still hardcoded as "#FF4D4F" in a dozen places across the workout screens —
+// new code should use this token so those can be migrated in one pass.
+export const DANGER_BRIGHT = "#FF4D4F";
+
 // ─── Favourites ───────────────────────────────────────────────────────────────
 // The star on a pinned group. A true yellow gold — the old #FFC24B carried
 // enough blue to read dull and muddy next to the brand green. Still distinct

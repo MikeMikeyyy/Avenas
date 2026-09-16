@@ -11,6 +11,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { PILL_RADIUS } from "../constants/buttons";
 
 const TP = APP_LIGHT.tp;
 
@@ -162,7 +163,7 @@ const styles = StyleSheet.create({
   fieldCard:            { borderRadius: 18, marginBottom: 20 },
   multilineInput:       { fontFamily: FontFamily.regular, fontSize: 15, paddingHorizontal: 16, paddingVertical: 14, minHeight: 140, lineHeight: 21 },
   multilineInputShort:  { fontFamily: FontFamily.regular, fontSize: 15, paddingHorizontal: 16, paddingVertical: 14, minHeight: 80, lineHeight: 21 },
-  primaryBtn:           { borderRadius: 18, paddingVertical: 16, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, marginTop: 8 },
+  primaryBtn:           { borderRadius: PILL_RADIUS, paddingVertical: 16, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, marginTop: 8 },
   primaryBtnText:       { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff" },
   successWrap:          { alignItems: "center", paddingTop: 24, paddingHorizontal: 8 },
   successIconCard:      { width: 80, height: 80, borderRadius: 40, marginBottom: 16 },

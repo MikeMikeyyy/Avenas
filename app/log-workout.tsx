@@ -23,7 +23,7 @@ import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
-import { pill, pillGlow } from "../constants/buttons";
+import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
   normaliseSets, type SavedProgram, type CompletedWorkout, type ProgramSet,
@@ -551,7 +551,6 @@ function ExerciseCard({
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.1)" : t.div;
   const [editing, setEditing] = useState(false);
-  const bg = isDark ? NEU_BG_DARK : NEU_BG;
   const weightRefs = useRef<(TextInput | null)[]>([]);
   const repsRefs = useRef<(TextInput | null)[]>([]);
 
@@ -750,16 +749,10 @@ function ExerciseCard({
               <TouchableOpacity
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(); }}
                 activeOpacity={0.8}
-                style={{
-                  borderRadius: 10, backgroundColor: ACCT,
-                  shadowColor: ACCT, shadowOffset: { width: 2, height: 2 },
-                  shadowOpacity: 0.35, shadowRadius: 4,
-                  paddingVertical: 7, paddingHorizontal: 14,
-                  flexDirection: "row", alignItems: "center", gap: 5,
-                }}
+                style={[s.editChip, { backgroundColor: t.ctrl, flex: 0, paddingHorizontal: 14 }]}
               >
-                <Ionicons name="add" size={13} color="#fff" />
-                <Text style={[s.editChipText, { color: "#fff" }]}>Add Set</Text>
+                <Ionicons name="add" size={13} color={ACCT} />
+                <Text style={[s.editChipText, { color: ACCT }]}>Add Set</Text>
               </TouchableOpacity>
             </View>
 
@@ -796,29 +789,9 @@ function ExerciseCard({
                 },
               ].map(({ onPress, icon, label, color }) => (
                 <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
-                  <View style={{
-                    borderRadius: 12, backgroundColor: bg,
-                    shadowColor: isDark ? "#000" : "#a3afc0",
-                    shadowOffset: { width: isDark ? 0 : 4, height: isDark ? 2 : 4 },
-                    shadowOpacity: isDark ? 0.35 : 0.5,
-                    shadowRadius: 8,
-                  }}>
-                    <View style={{
-                      borderRadius: 12, backgroundColor: bg,
-                      shadowColor: isDark ? "transparent" : "#FFFFFF",
-                      shadowOffset: { width: -3, height: -3 },
-                      shadowOpacity: isDark ? 0 : 1,
-                      shadowRadius: 4,
-                    }}>
-                      <View style={{
-                        borderRadius: 12, backgroundColor: bg, overflow: "hidden",
-                        paddingVertical: 10, flexDirection: "row",
-                        alignItems: "center", justifyContent: "center", gap: 5,
-                      }}>
-                        {icon}
-                        <Text style={[s.editChipText, { color }]}>{label}</Text>
-                      </View>
-                    </View>
+                  <View style={[s.editChip, { backgroundColor: t.ctrl }]}>
+                    {icon}
+                    <Text style={[s.editChipText, { color }]}>{label}</Text>
                   </View>
                 </TouchableOpacity>
               ))}
@@ -1595,6 +1568,7 @@ const s = StyleSheet.create({
   editMoveLabel:{ fontFamily: FontFamily.regular, fontSize: 12, marginLeft: 2 },
   exReorderBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   editChipsRow: { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
+  editChip:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, paddingHorizontal: 8, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   editChipText: { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   // Exercise notes

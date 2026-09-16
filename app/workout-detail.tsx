@@ -26,7 +26,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import NeuCard, { NEU_BG, NEU_BG_DARK } from "../components/NeuCard";
+import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import CollapsibleCard from "../components/CollapsibleCard";
 import ExercisePicker from "../components/ExercisePicker";
@@ -36,6 +36,7 @@ import TrashIcon from "../components/TrashIcon";
 import TimeEditSheet from "../components/TimeEditSheet";
 import { computeDurationMins, completedAtISO } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
   WORKOUT_HISTORY_KEY,
   WORKOUT_DATES_KEY,
@@ -478,7 +479,6 @@ export default function WorkoutDetailScreen() {
   }, []);
 
   const divider = isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)";
-  const bg      = isDark ? NEU_BG_DARK : NEU_BG;
 
   useEffect(() => {
     AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
@@ -1018,16 +1018,10 @@ export default function WorkoutDetailScreen() {
                           <TouchableOpacity
                             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); addSet(ei); }}
                             activeOpacity={0.8}
-                            style={{
-                              borderRadius: 10, backgroundColor: ACCT,
-                              shadowColor: ACCT, shadowOffset: { width: 2, height: 2 },
-                              shadowOpacity: 0.35, shadowRadius: 4,
-                              paddingVertical: 7, paddingHorizontal: 14,
-                              flexDirection: "row", alignItems: "center", gap: 5,
-                            }}
+                            style={[styles.editChip, { backgroundColor: t.ctrl, flex: 0, paddingHorizontal: 14 }]}
                           >
-                            <Ionicons name="add" size={13} color="#fff" />
-                            <Text style={[styles.editChipText, { color: "#fff" }]}>Add Set</Text>
+                            <Ionicons name="add" size={13} color={ACCT} />
+                            <Text style={[styles.editChipText, { color: ACCT }]}>Add Set</Text>
                           </TouchableOpacity>
                         </View>
 
@@ -1064,13 +1058,9 @@ export default function WorkoutDetailScreen() {
                             },
                           ].map(({ onPress, icon, label, color }) => (
                             <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
-                              <View style={{ borderRadius: 12, backgroundColor: bg, shadowColor: isDark ? "#000" : "#a3afc0", shadowOffset: { width: isDark ? 0 : 4, height: isDark ? 2 : 4 }, shadowOpacity: isDark ? 0.35 : 0.5, shadowRadius: 8 }}>
-                                <View style={{ borderRadius: 12, backgroundColor: bg, shadowColor: isDark ? "transparent" : "#FFFFFF", shadowOffset: { width: -3, height: -3 }, shadowOpacity: isDark ? 0 : 1, shadowRadius: 4 }}>
-                                  <View style={{ borderRadius: 12, backgroundColor: bg, overflow: "hidden", paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 }}>
-                                    {icon}
-                                    <Text style={[styles.editChipText, { color }]}>{label}</Text>
-                                  </View>
-                                </View>
+                              <View style={[styles.editChip, { backgroundColor: t.ctrl }]}>
+                                {icon}
+                                <Text style={[styles.editChipText, { color }]}>{label}</Text>
                               </View>
                             </TouchableOpacity>
                           ))}
@@ -1216,6 +1206,7 @@ const styles = StyleSheet.create({
   editMoveLabel: { fontFamily: FontFamily.regular, fontSize: 12, marginLeft: 2 },
   exReorderBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   editChipsRow: { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
+  editChip:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, paddingHorizontal: 8, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   editChipText: { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   scrollTitleRow: { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 16 },

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo, Fragment } from "react";
-import { View, Text, StyleSheet, Image, Animated } from "react-native";
+import { View, Text, StyleSheet, Image, Animated, TouchableOpacity } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
@@ -32,6 +32,7 @@ import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERR
 import { toYMD, fmtDuration } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
+import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../../utils/restDay";
 import { dayIdAt } from "../../utils/programDays";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
@@ -106,6 +107,21 @@ function formatTodayDate(): string {
 const TP   = APP_LIGHT.tp;
 const TS   = APP_LIGHT.ts;
 const ICON = APP_LIGHT.icon;
+
+/** One row of "This Week's Schedule". `isSkipped` distinguishes a day the user
+ *  marked off from one the program always rested; `editable` is today onwards. */
+type WeekDay = {
+  date: Date;
+  label: string;
+  workoutName: string;
+  completed: boolean;
+  isToday: boolean;
+  isRest: boolean;
+  isSkipped: boolean;
+  /** Marked off AND delaying everything after it, as opposed to a plain skip. */
+  isPushed: boolean;
+  editable: boolean;
+};
 
 type QuickAction = {
   id: string;
@@ -419,12 +435,13 @@ export default function HomeScreen() {
         es + ex.sets.reduce((ss, s) =>
           ss + (s.type === "working" && s.done ? (parseFloat(s.weight) || 0) * (parseFloat(s.reps) || 0) : 0), 0), 0), 0);
 
-    type WeekDay = { date: Date; label: string; workoutName: string; completed: boolean; isToday: boolean; isRest: boolean };
     const weekDays: WeekDay[] = [];
     if (activeProgram) {
       for (let i = 0; i < 7; i++) {
         const d = new Date(weekStart);
         d.setDate(weekStart.getDate() + i);
+        // getWorkoutForDate is skip-aware, so a date the user marked off already
+        // reads as Rest here without this loop knowing anything about it.
         const name = getWorkoutForDate(activeProgram, toYMD(d))?.name ?? null;
         const dateStr = toYMD(d);
         weekDays.push({
@@ -434,12 +451,34 @@ export default function HomeScreen() {
           completed: name !== null && completedDates.has(dateStr),
           isToday: dateStr === todayStr,
           isRest: name === null,
+          isSkipped: isDateSkipped(activeProgram, dateStr),
+          isPushed: isDatePushed(activeProgram, dateStr),
+          // Tappable only when there is something to do. A day the program
+          // already rests has no workout to move, so marking it off changed
+          // nothing and just left a ✕ sitting there. A day you DID mark off
+          // stays tappable so it can be restored.
+          editable: dateStr >= todayStr
+            && (name !== null || isDateSkipped(activeProgram, dateStr)),
         });
       }
     }
 
     return { completedCount, plannedCount, totalMinutes, totalVolumeKg, weekDays };
   }, [workoutHistory, activeProgram]);
+
+  // Tapping a day in the week strip marks it as rest, or restores it. Marking
+  // prompts (skip vs push the cycle) only when there's a workout there to move;
+  // restoring never prompts, because undoing a rest day isn't asking to undo a
+  // push. Reloads after either, so the strip redraws from the written program.
+  const onWeekDayPress = useCallback((day: WeekDay) => {
+    if (!activeProgram) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const ymd = toYMD(day.date);
+    const action = day.isSkipped
+      ? clearRestDay(activeProgram.id, ymd)
+      : applyRestDay(activeProgram.id, ymd, "ask");
+    void action.then(() => loadData());
+  }, [activeProgram, loadData]);
 
   const activeColor = (isMax && flameName
     ? STREAK_TIERS.find(t2 => t2.name === flameName)?.color
@@ -618,7 +657,24 @@ export default function HomeScreen() {
             {/* Left: day list */}
             <View style={styles.weekDaysCol}>
               {weeklyStats.weekDays.map((day, i) => (
-                <View key={toYMD(day.date)} style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}>
+                // Tappable from today onwards only. Marking a past date off
+                // would rewrite whether the streak should have survived it,
+                // which isn't something a tap on a schedule ought to do.
+                <TouchableOpacity
+                  key={toYMD(day.date)}
+                  activeOpacity={day.editable ? 0.6 : 1}
+                  onPress={day.editable ? () => onWeekDayPress(day) : undefined}
+                  disabled={!day.editable}
+                  accessibilityRole={day.editable ? "button" : undefined}
+                  accessibilityLabel={day.editable
+                    ? `${day.label}, ${day.workoutName}. ${day.isSkipped
+                        ? day.isPushed
+                          ? "Rest day, everything after is pushed back. Tap to undo"
+                          : "Marked as rest. Tap to restore"
+                        : "Tap to mark as rest"}`
+                    : undefined}
+                  style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}
+                >
                   <View style={styles.weekDayLabelCol}>
                     <View>
                       <Text style={[styles.weekDayLabel, { color: day.isToday ? t.tp : t.ts, fontFamily: day.isToday ? FontFamily.bold : FontFamily.semibold }]}>
@@ -630,7 +686,19 @@ export default function HomeScreen() {
                   <Text style={[styles.weekDayName, { color: day.isRest ? t.ts : day.completed ? t.ts : t.tp, opacity: day.isRest ? 0.4 : day.completed ? 0.4 : 1 }]}>
                     {day.workoutName}
                   </Text>
-                </View>
+                  {/* Marks the days YOU turned off, which the program's own rest
+                      days never carry — otherwise there's no way to tell which
+                      ones can be restored. An arrow when the push moved
+                      everything after it, so undoing is clearly available. */}
+                  {day.isSkipped && (
+                    <Ionicons
+                      name={day.isPushed ? "arrow-down-circle-outline" : "close-circle-outline"}
+                      size={13}
+                      color={t.ts}
+                      style={{ marginLeft: 5, opacity: 0.6 }}
+                    />
+                  )}
+                </TouchableOpacity>
               ))}
             </View>
 

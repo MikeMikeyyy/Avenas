@@ -134,6 +134,13 @@ export type ProgramRow = {
    *  a program written before the column existed; the client's positional
    *  fallback covers those. See SavedProgram.dayIds. */
   day_ids: string[];
+  /** Dates ("YYYY-MM-DD") marked as rest, overriding the cycle (migration
+   *  0025). Empty for a program written before the column existed, which is
+   *  also what "nothing skipped" looks like. See SavedProgram.skippedDates. */
+  skipped_dates: string[];
+  /** The subset of skipped_dates that also delays the cycle by a day from that
+   *  date onward (migration 0025). See SavedProgram.pushedDates. */
+  pushed_dates: string[];
   workouts: Record<string, unknown>;  // WorkoutMap — Exercise[] per "idx:Name" key
   extra_workouts: string[];
   created_at: string;
@@ -193,6 +200,11 @@ export type SharedProgramRow = {
   program_name: string;
   snapshot: Record<string, unknown>;          // SavedProgram (canonical kg)
   sent_key: string;                           // sender's client-side sentAtISO
+  /** Group this share was sent to, or null for a direct send (migration 0026).
+   *  A group send writes one row per member; this is what ties them together.
+   *  Nulled rather than cascaded when a group is deleted — the shares stay
+   *  valid, they just stop being attributed. See SharedProgram.groupId. */
+  group_id: string | null;
   sent_at: string;
   last_edited_at: string | null;
   accepted_at: string | null;

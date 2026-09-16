@@ -5,7 +5,7 @@
 // to clients) are surfaced contextually based on whether the share is the
 // trainer's own outgoing share or one received from a coach.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Animated, { LinearTransition } from "react-native-reanimated";
 import { BlurView } from "expo-blur";
@@ -28,6 +28,9 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { formatWeightForDisplay } from "../utils/units";
 import { useAccountType } from "../contexts/AccountTypeContext";
+import { getMyUid } from "../lib/chat";
+import { fetchGroupMembers } from "../lib/groups";
+import { canCoachGroup, type GroupRole } from "../constants/groups";
 import {
   acceptSharedProgram,
   appendSharedPrograms,
@@ -85,6 +88,7 @@ export default function ProgramViewScreen() {
   const [share, setShare] = useState<SharedProgram | null>(null);
   const [sent, setSent] = useState<SentProgram | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
+  const [myUid, setMyUid] = useState<string | null>(null);
   const [passDownTarget, setPassDownTarget] = useState<SavedProgram | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set());
@@ -103,11 +107,14 @@ export default function ProgramViewScreen() {
       setLoaded(true);
       return;
     }
-    const [shares, sents, cs] = await Promise.all([
+    const [shares, sents, cs, uid] = await Promise.all([
       loadSharedPrograms(),
       loadSentPrograms(),
       loadClients(),
+      // Who I am, so "did I send this" is a comparison rather than a guess.
+      getMyUid().catch(() => null),
     ]);
+    setMyUid(uid);
     setShare(sharedId ? shares.find(s => s.id === sharedId) ?? null : null);
     setSent(sentId ? sents.find(s => s.id === sentId) ?? null : null);
     setClients(cs);
@@ -129,13 +136,55 @@ export default function ProgramViewScreen() {
   // BY a trainer, even if that trainer broadcast it with clientId === "all".
   const isOutgoing = useMemo(() => {
     if (!share) return false;
+    // Authoritative when the row carries it: I sent this. Checked before
+    // anything else, and before the account-type gate, because the roster
+    // heuristic below is wrong for a group send — a group member need not be
+    // one of my clients, so my own send read as incoming and offered me an
+    // Accept button for a program I had just sent.
+    if (share.senderId && myUid) return share.senderId === myUid;
     if (accountType !== "pt") return false;
     // A program a coach sent ME is incoming, even though that coach now also
     // lives in my client roster (so clientId could match a Client).
     if (share.receivedFromCoachId) return false;
     if (share.clientId === "all") return true;
     return clients.some(c => c.id === share.clientId);
-  }, [share, clients, accountType]);
+  }, [share, clients, accountType, myUid]);
+
+  /**
+   * Whether I coach the group this program was shared into — owner or trainer,
+   * the same test the database enforces for sending to it.
+   *
+   * Decides who may DELETE a group share. A coach can pull a program out of a
+   * group they run even if someone else sent it; a plain member can only view
+   * and accept. Null for a non-group share, or while the role is still loading.
+   */
+  const [groupRole, setGroupRole] = useState<GroupRole | null>(null);
+  const shareGroupId = share?.groupId;
+  useEffect(() => {
+    if (!shareGroupId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const uid = await getMyUid();
+        if (!uid) return;
+        const members = await fetchGroupMembers(shareGroupId);
+        if (!cancelled) setGroupRole(members.find(m => m.id === uid)?.role ?? null);
+      } catch (e) {
+        if (__DEV__) console.warn("[avenas] group role", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [shareGroupId]);
+
+  /**
+   * Sender always; otherwise only a coach of the group it went to.
+   *
+   * Gated on `shareGroupId` as well as the role, so a role left over from a
+   * previously-viewed group share can't grant delete on a direct one — the
+   * effect deliberately doesn't clear it, since clearing state synchronously in
+   * an effect body is what triggers cascading renders.
+   */
+  const canDelete = isOutgoing || (!!shareGroupId && !!groupRole && canCoachGroup(groupRole));
 
   // Snapshot + title come from whichever record was loaded.
   const snapshot = share?.programSnapshot ?? sent?.programSnapshot ?? null;
@@ -152,6 +201,9 @@ export default function ProgramViewScreen() {
   // Two states surface a floating bottom Accept button instead of inline
   // header/footer ones: (1) trainer-shared program the user hasn't accepted
   // yet, (2) a returned SentProgram with unapplied trainer edits.
+  // Never offered to the sender — accepting your own send is meaningless, and
+  // it was the thing appearing on group sends. Everyone else in the group, coach
+  // or member, can accept a copy for themselves.
   const showFloatingAcceptProgram = !isOutgoing && !isSent && !!share && !accepted;
   const showFloatingAcceptChanges = sentReturned && !sentApplied;
   const showFloatingAccept = showFloatingAcceptProgram || showFloatingAcceptChanges;
@@ -269,11 +321,14 @@ export default function ProgramViewScreen() {
         </View>
       </TouchableOpacity>
 
-      {/* Trainer-only Edit + Delete pair pinned to the top-right so they stay
-          visible while the user scrolls through a long program. Mirrors the
-          glass-or-white pill styling of the back button. */}
-      {isOutgoing && (
+      {/* Edit + Delete pinned top-right so they stay visible through a long
+          program. EDIT is the sender's alone — editing a shared snapshot
+          re-sends it, which isn't a group coach's call. DELETE is wider: the
+          sender, plus anyone who coaches the group it went to, so a program can
+          be pulled out of a group by whoever runs it. Members get neither. */}
+      {canDelete && (
         <View style={[styles.topActions, { top: insets.top + 14 }]}>
+          {isOutgoing && (
           <TouchableOpacity
             onPress={handleEdit}
             activeOpacity={0.8}
@@ -284,6 +339,7 @@ export default function ProgramViewScreen() {
               <Ionicons name="create-outline" size={20} color={t.tp} />
             </View>
           </TouchableOpacity>
+          )}
           <TouchableOpacity
             onPress={handleDelete}
             activeOpacity={0.8}

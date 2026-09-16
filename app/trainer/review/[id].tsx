@@ -16,6 +16,7 @@ import Svg, { Path } from "react-native-svg";
 import NeuCard from "../../../components/NeuCard";
 import BounceButton from "../../../components/BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
+import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { loadSentPrograms, updateSentProgram, type SentProgram } from "../../../utils/trainerStore";
 
@@ -304,7 +305,7 @@ const styles = StyleSheet.create({
   noSnap:         { fontFamily: FontFamily.regular, fontSize: 13, padding: 8 },
   editBtnInner:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12, minHeight: 44 },
   editBtnText:    { fontFamily: FontFamily.bold, fontSize: 14 },
-  sendBtn:        { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 14, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  sendBtn:        { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: PILL_RADIUS, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   sendBtnText:    { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   returnedBanner: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 16, padding: 14, borderRadius: 14 },
   returnedText:   { fontFamily: FontFamily.semibold, fontSize: 13 },

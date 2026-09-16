@@ -19,7 +19,8 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
-import { formatStoredDate, parseStoredDate } from "../utils/dates";
+import { formatStoredDate, todayYMD } from "../utils/dates";
+import { cycleIndexForDate } from "../utils/workout";
 import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
@@ -678,19 +679,24 @@ export default function ProgramsScreen() {
 
   const handleSetWorkoutDay = async (targetDayIndex: number) => {
     if (!activeProgram) return;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const start = parseStoredDate(activeProgram.startDate);
-    if (!start) return;
-    start.setHours(0, 0, 0, 0);
-    const daysPassed = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    const naturalDayIndex = ((daysPassed % activeProgram.cycleDays) + activeProgram.cycleDays) % activeProgram.cycleDays;
-    const cycleOffset = ((targetDayIndex - naturalDayIndex) % activeProgram.cycleDays + activeProgram.cycleDays) % activeProgram.cycleDays;
+    // Ask the shared resolver where today lands with NO offset, rather than
+    // recomputing daysPassed here. The inline version missed `pushedDates`, so
+    // on a program with a pushed rest day it solved for the wrong index and set
+    // an offset a day out — and CLAUDE.md says not to re-implement this anyway.
+    const naturalDayIndex = cycleIndexForDate({ ...activeProgram, cycleOffset: 0 }, todayYMD());
+    if (naturalDayIndex === null) return;
+    const n = activeProgram.cycleDays;
+    const cycleOffset = ((targetDayIndex - naturalDayIndex) % n + n) % n;
     const updated = programs.map(p =>
       p.id === activeProgram.id ? { ...p, cycleOffset } : p
     );
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    // Picking today's workout by hand is the most explicit statement there is
+    // about what today should be, so a leftover same-day override has to go —
+    // otherwise the Workout tab keeps honouring it (a stale "Rest", say) while
+    // Home's week strip reads the re-aligned cycle, and the two disagree.
+    AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
     scheduleCloudPush();
   };
 
@@ -1057,6 +1063,6 @@ const styles = StyleSheet.create({
   swRestLabel:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
   swFooter:           { paddingHorizontal: 20, paddingTop: 16, borderTopWidth: StyleSheet.hairlineWidth },
   swConfirmWrap:      { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  swConfirmBtn:       { borderRadius: 16, backgroundColor: ACCT, paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  swConfirmBtn:       { borderRadius: PILL_RADIUS, backgroundColor: ACCT, paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   swConfirmText:      { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.2 },
 });
