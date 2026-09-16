@@ -253,7 +253,7 @@ export type SavedProgram = {
    * Everything from a pulled date onward resolves one cycle-day later than the
    * calendar suggests, cancelling the push before it.
    *
-   * Never managed directly by the user. "Do it tomorrow" writes a push on the
+   * Never managed directly by the user. "Move to Tomorrow" writes a push on the
    * missed date AND a pull on the next rest day as one action
    * (`planDoItTomorrow`, utils/skippedDates.ts), so the shift ends there and the
    * following week is back on the planned days. Undoing the push removes its

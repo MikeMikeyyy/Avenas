@@ -167,7 +167,7 @@ type WeekDay = {
   isToday: boolean;
   isRest: boolean;
   isSkipped: boolean;
-  /** The workout here was moved to the next day ("Do it tomorrow"), rather than
+  /** The workout here was moved to the next day ("Move to Tomorrow"), rather than
    *  dropped. Tapping it undoes the move, rest day and all. */
   isPushed: boolean;
   editable: boolean;
@@ -520,7 +520,7 @@ export default function HomeScreen() {
   // Tapping a day in the week strip either restores it or asks what to do:
   //   marked off (skipped or moved) -> put it back as planned, no prompt. For a
   //     move, the rest day it used comes back too.
-  //   a planned workout -> "Skip it" or "Do it tomorrow".
+  //   a planned workout -> "Make Rest Day" or "Move to Tomorrow".
   // Reloads after either, so the strip redraws from the written program.
   const onWeekDayPress = useCallback((day: WeekDay) => {
     if (!activeProgram) return;
@@ -733,8 +733,8 @@ export default function HomeScreen() {
                     ? `${day.label}, ${day.workoutName}.${day.completed ? " Completed." : ""} ${day.isSkipped
                         ? day.isPushed
                           ? "Moved to the next day. Tap to put it back"
-                          : "Skipped. Tap to put it back"
-                        : "Tap to skip it or do it the next day"}`
+                          : "Made a rest day. Tap to put it back"
+                        : "Tap to make it a rest day or move it"}`
                     : `${day.label}, ${day.workoutName}.${day.completed ? " Completed." : ""}`}
                   style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}
                 >

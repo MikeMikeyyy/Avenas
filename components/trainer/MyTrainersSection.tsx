@@ -41,11 +41,21 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
 
   const [trainers, setTrainers] = useState<AssignedPT[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
+  // An empty list means "none" only once we've looked. Without this the page
+  // said "No trainers yet" to people with trainers, for as long as the
+  // connections lookup took.
+  const [loaded, setLoaded] = useState(false);
 
   const reload = useCallback(async () => {
-    const { all, primary } = await resolveMyTrainers();
-    setTrainers(all);
-    setPrimaryId(primary?.id ?? null);
+    try {
+      const { all, primary } = await resolveMyTrainers();
+      setTrainers(all);
+      setPrimaryId(primary?.id ?? null);
+    } catch (err) {
+      if (__DEV__) console.warn("[avenas] resolve trainers", err);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   // useFocusEffect (not useEffect) — the route may stay mounted when the user
@@ -150,7 +160,7 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
         {"Trainers you're connected with. Programs they send appear on your My Trainer page."}
       </Text>
 
-      {all.length === 0 ? (
+      {!loaded ? null : all.length === 0 ? (
         <NeuCard dark={isDark} radius={20} style={{ marginTop: 12 }}>
           <View style={styles.emptyInner}>
             <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>

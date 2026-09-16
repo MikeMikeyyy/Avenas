@@ -8,16 +8,19 @@
 // The prompt offers exactly two things, because those are the two things people
 // mean when they miss a session:
 //
-//   SKIP IT         — miss this one, the rest of the week is untouched.
-//   DO IT TOMORROW  — it moves a day, the next rest day absorbs the shift, and
-//                     you're back on your usual days after that.
+//   MAKE REST DAY     — miss this one, the rest of the week is untouched.
+//   MOVE TO TOMORROW  — it moves a day, the next rest day absorbs the shift,
+//                       and you're back on your usual days after that.
 //
-// Both explanations are in the message and both name REAL days the user will
-// see ("Thursday's rest day becomes Legs"). An earlier version offered three
-// choices with abstract labels, and its "use Friday's rest day" button named an
-// internal bookkeeping date while THURSDAY was the day that visibly changed.
-// Nobody could tell the choices apart. If the copy has to explain the model,
-// the model is wrong; if it can describe the result, it's right.
+// The message is one short line per button, named exactly as the button is,
+// saying only what differs and naming a REAL day ("Thursday's rest becomes
+// Legs"). A native alert grows with its message, so it's kept to that.
+//
+// An earlier version offered three choices with abstract labels, and its "use
+// Friday's rest day" button named an internal bookkeeping date while THURSDAY
+// was the day that visibly changed. Nobody could tell the choices apart. If the
+// copy has to explain the model, the model is wrong; if it can describe the
+// result in a line, it's right.
 
 import { Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -84,14 +87,15 @@ function dayName(ymd: string, from: string): string {
   return days > 6 ? `${weekday} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]}` : weekday;
 }
 
-/** "tomorrow" for today, otherwise "on Saturday" — the prompt can be opened for
- *  any upcoming day from the week strip, not just today. */
+/** "Tomorrow" for today, otherwise the next day's name ("Saturday"). The prompt
+ *  can be opened for any upcoming day from the week strip, and "Move to
+ *  tomorrow" on a Friday tapped from Tuesday would name the wrong day. */
 function nextDayPhrase(ymd: string): string {
-  if (ymd === todayYMD()) return "tomorrow";
+  if (ymd === todayYMD()) return "Tomorrow";
   const d = parse(ymd);
   if (!d) return "the next day";
   d.setDate(d.getDate() + 1);
-  return `on ${WEEKDAYS[d.getDay()]}`;
+  return WEEKDAYS[d.getDay()];
 }
 
 /**
@@ -140,33 +144,35 @@ export async function applyRestDay(
   const next = nextDayPhrase(ymd);
   const plan = planDoItTomorrow(program, ymd);
 
-  // Describe the RESULT in days the user will see, never the mechanism.
+  // One short line per button, naming it exactly as the button does, and saying
+  // only the one thing that differs: what happens to the rest of the week. A
+  // native alert grows with its message, so every word here makes it taller.
+  const moveLabel = `Move to ${next}`;
   let moveCopy: string;
   if (plan.kind === "extended") {
-    moveCopy = `Do it ${next}: your next workouts shift a day. There's no rest day to make up for it, so your program will finish a day later.`;
+    moveCopy = `${moveLabel}: your program ends a day later.`;
+  } else if (plan.lostRestDay && plan.lostRestBecomes) {
+    moveCopy = `${moveLabel}: ${dayName(plan.lostRestDay, ymd)}'s rest becomes ${plan.lostRestBecomes}.`;
   } else {
-    const back = plan.backOnPlan ? ` You're back on your usual days from ${dayName(plan.backOnPlan, ymd)}.` : " Then you're back on your usual days.";
-    moveCopy = plan.lostRestDay && plan.lostRestBecomes
-      ? `Do it ${next}: your next workouts shift a day, so ${dayName(plan.lostRestDay, ymd)}'s rest day becomes ${plan.lostRestBecomes}.${back}`
-      : `Do it ${next}: your next workouts shift a day.${back}`;
+    moveCopy = `${moveLabel}: the rest of your week shifts a day.`;
   }
 
   return new Promise<RestDayOutcome>(resolve => {
     Alert.alert(
-      `Not doing ${name}?`,
-      `Skip it: you'll miss ${name}. The rest of your week stays the same.\n\n${moveCopy}`,
+      `Not doing '${name}'?`,
+      `Make Rest Day: nothing else changes.\n${moveCopy}`,
       [
-        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
         {
-          text: `Skip ${name}`,
+          text: "Make Rest Day",
           onPress: () => { void commit(programId, p => skipDate(p, ymd)).then(() => resolve("skip")); },
         },
         {
-          text: `Do ${name} ${next}`,
+          text: moveLabel,
           onPress: () => {
             void applyRestDay(programId, ymd, "moveToTomorrow").then(resolve);
           },
         },
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
       ],
       { cancelable: true, onDismiss: () => resolve(null) },
     );

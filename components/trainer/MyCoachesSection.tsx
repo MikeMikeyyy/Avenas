@@ -89,19 +89,42 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   // presence row.
   const { presenceById } = useConnectionPresence();
 
+  // "None" is only true once we've looked. Both lists drew their empty states
+  // ("No trainers yet") during the load, to people who have trainers.
+  const [trainersLoaded, setTrainersLoaded] = useState(false);
+  const [receivedLoaded, setReceivedLoaded] = useState(false);
+
   const reload = useCallback(async () => {
-    // Backfill the direction flag on any legacy incoming shares before reading.
-    await migrateCoachReceivedShares();
-    const [roster, shares, progs] = await Promise.all([
-      resolveTrainerRoster(),
-      loadSharedPrograms(),
-      getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-    ]);
-    setTrainers(roster.trainers);
-    setTrainerClientIds(roster.trainerClientIds);
-    setMyPrograms(Array.isArray(progs) ? progs : []);
-    // Incoming = a program another trainer sent ME (receivedFromCoachId).
-    setReceived(shares.filter(s => !!s.receivedFromCoachId));
+    // The trainer list resolves on its own. It used to wait for the incoming
+    // shares too (another network call) and for a share migration before that,
+    // neither of which it needs.
+    const trainersTask = resolveTrainerRoster()
+      .then(roster => {
+        setTrainers(roster.trainers);
+        setTrainerClientIds(roster.trainerClientIds);
+      })
+      .catch(err => { if (__DEV__) console.warn("[avenas] resolve trainer roster", err); })
+      .finally(() => setTrainersLoaded(true));
+
+    const sharesTask = (async () => {
+      try {
+        // Backfill the direction flag on any legacy incoming shares before reading.
+        await migrateCoachReceivedShares();
+        const [shares, progs] = await Promise.all([
+          loadSharedPrograms(),
+          getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+        ]);
+        setMyPrograms(Array.isArray(progs) ? progs : []);
+        // Incoming = a program another trainer sent ME (receivedFromCoachId).
+        setReceived(shares.filter(s => !!s.receivedFromCoachId));
+      } catch (err) {
+        if (__DEV__) console.warn("[avenas] load coach shares", err);
+      } finally {
+        setReceivedLoaded(true);
+      }
+    })();
+
+    await Promise.all([trainersTask, sharesTask]);
   }, []);
 
   // useFocusEffect (not useEffect) — this route stays mounted while the user
@@ -320,7 +343,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         Trainers you receive programs from. Accept one and pass it on to your clients.
       </Text>
 
-      {trainers.length === 0 ? (
+      {!trainersLoaded ? null : trainers.length === 0 ? (
         <NeuCard dark={isDark} radius={20} style={{ marginTop: 12 }}>
           <View style={styles.emptyInner}>
             <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
@@ -394,7 +417,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
           <View style={styles.sectionHeadingRow}>
             <Text style={[styles.sectionHeading, { color: t.tp }]}>From Your Trainers</Text>
           </View>
-          {received.length === 0 ? (
+          {!receivedLoaded ? null : received.length === 0 ? (
             <NeuCard dark={isDark} radius={16}>
               <Text style={[styles.smallEmpty, { color: t.ts }]}>No programs received from your trainers yet.</Text>
             </NeuCard>

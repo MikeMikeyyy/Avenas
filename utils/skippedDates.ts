@@ -4,10 +4,10 @@
 //
 // ── What the user sees: two choices ──────────────────────────────────────────
 //
-//   SKIP IT          — you miss this workout. The rest of your week is
+//   MAKE REST DAY    — you miss this workout. The rest of your week is
 //                      untouched, and the program finishes when it always would.
 //
-//   DO IT TOMORROW   — the workout moves to the next day and the ones after it
+//   MOVE TO TOMORROW — the workout moves to the next day and the ones after it
 //                      follow, until your next rest day absorbs the shift. From
 //                      there you're back on your usual days, and the program
 //                      still finishes on time. The cost is that one rest day.
@@ -25,7 +25,7 @@
 //   pushedDates  — subset of skipped: the cycle also waits a day here (+1 drift).
 //   pulledDates  — a rest day spent to catch back up (−1 drift).
 //
-// "Do it tomorrow" is a PUSH on the missed date paired with a PULL on the next
+// "Move to Tomorrow" is a PUSH on the missed date paired with a PULL on the next
 // rest day, so the net drift returns to zero there. Undoing the push removes its
 // pull too — see `unskipDate`. Only when the cycle has no rest day to spend is
 // it a bare push, and then (and only then) the program finishes a day later.
@@ -189,7 +189,7 @@ export function nextRestDate(program: SavedProgram, fromYMD: string): string | n
   return null;
 }
 
-/** What "Do it tomorrow" would do to a program, worked out before committing so
+/** What "Move to Tomorrow" would do to a program, worked out before committing so
  *  the prompt can describe it in terms of days the user will actually see. */
 export type MovePlan =
   | {
@@ -213,7 +213,7 @@ export type MovePlan =
     };
 
 /**
- * Plan "Do it tomorrow" for the workout on `ymd`: push it, then spend the next
+ * Plan "Move to Tomorrow" for the workout on `ymd`: push it, then spend the next
  * rest day so the shift ends there.
  *
  * The rest day to spend is found against the schedule AS IT WILL BE once the

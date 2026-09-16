@@ -84,6 +84,10 @@ export default function PTHome() {
   const unreadMessages = useUnreadMessages();
 
   const [clients, setClients] = useState<Client[]>([]);
+  // "None" is only true once we've looked. Both empty states ("No clients yet",
+  // the groups explainer) drew during the load, to trainers who have clients.
+  const [clientsLoaded, setClientsLoaded] = useState(false);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   const [reviews, setReviews] = useState<SentProgram[]>([]);
   const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
@@ -158,63 +162,81 @@ export default function PTHome() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     (async () => {
-      const seeded = await seedMockClientsIfNeeded();
-      const fresh = seeded.length > 0 ? seeded : await loadClients();
-      const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-      const sent = await loadSentPrograms();
-
-      // Live connections joined with the local roster, bucketed by the
-      // counterpart's account type — a connected TRAINER belongs on the My
-      // Trainers page, not in here. Blocked ids and stale local snapshots of
-      // severed connections are filtered inside the resolver; offline it
-      // degrades to the local roster.
-      const merged = (await resolveTrainerRoster()).clients;
-
-      // Groups + their rosters (two queries total, not one per group), so the
-      // send flow can offer "everyone in this group" without a second load.
-      let groupList: Group[] = [];
-      let memberships: Record<string, string[]> = {};
-      let favIds = new Set<string>();
-      let invites: GroupInvite[] = [];
       try {
-        favIds = await loadFavouriteGroupIds();
-        const uid = await getMyUid();
-        if (uid) {
-          // A trainer gets invited to other trainers' groups the same way a gym
-          // user does, so the invite list belongs on both hubs.
-          const [gs, ms, inv] = await Promise.all([
-            fetchMyGroups(uid),
-            fetchAllGroupMemberships(uid),
-            fetchMyGroupInvites(),
-          ]);
-          // Starred groups pinned above the rest, newest-first within each half.
-          groupList = sortByFavourite(gs, favIds);
-          memberships = ms;
-          invites = inv;
-        }
-      } catch (e) {
-        if (__DEV__) console.warn("[avenas] load groups", e);
-      }
+        const seeded = await seedMockClientsIfNeeded();
+        const fresh = seeded.length > 0 ? seeded : await loadClients();
 
-      await migrateBroadcastShares(fresh);
-      await migrateCoachReceivedShares();
-      const shared = await loadSharedPrograms();
-      const activeMap: Record<string, string> = {};
-      await Promise.all(merged.map(async c => {
-        const data = await loadClientData(c.id);
-        const active = data.programs.find(p => p.status === "active");
-        if (active) activeMap[c.id] = active.name;
-      }));
-      if (!cancelled) {
-        setClients(merged);
-        setMyPrograms(Array.isArray(progs) ? progs : []);
-        setReviews(sent);
-        setSharedOut(shared);
-        setActiveProgramByClient(activeMap);
-        setGroups(groupList);
-        setGroupMemberships(memberships);
-        setFavourites(favIds);
-        setGroupInvites(invites);
+        // Live connections joined with the local roster, bucketed by the
+        // counterpart's account type — a connected TRAINER belongs on the My
+        // Trainers page, not in here. Blocked ids and stale local snapshots of
+        // severed connections are filtered inside the resolver; offline it
+        // degrades to the local roster.
+        //
+        // Resolved FIRST and shown as soon as it lands. The client list used to
+        // wait for every load below — sent programs, three group queries, shares,
+        // each client's data — run one after another, and drew "No clients yet"
+        // for the whole of that.
+        const merged = (await resolveTrainerRoster()).clients;
+        if (!cancelled) { setClients(merged); setClientsLoaded(true); }
+
+        const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+        const sent = await loadSentPrograms();
+
+        // Groups + their rosters (two queries total, not one per group), so the
+        // send flow can offer "everyone in this group" without a second load.
+        let groupList: Group[] = [];
+        let memberships: Record<string, string[]> = {};
+        let favIds = new Set<string>();
+        let invites: GroupInvite[] = [];
+        try {
+          favIds = await loadFavouriteGroupIds();
+          const uid = await getMyUid();
+          if (uid) {
+            // A trainer gets invited to other trainers' groups the same way a gym
+            // user does, so the invite list belongs on both hubs.
+            const [gs, ms, inv] = await Promise.all([
+              fetchMyGroups(uid),
+              fetchAllGroupMemberships(uid),
+              fetchMyGroupInvites(),
+            ]);
+            // Starred groups pinned above the rest, newest-first within each half.
+            groupList = sortByFavourite(gs, favIds);
+            memberships = ms;
+            invites = inv;
+          }
+        } catch (e) {
+          if (__DEV__) console.warn("[avenas] load groups", e);
+        }
+        // Groups show as soon as they're known too, rather than after shares.
+        if (!cancelled) {
+          setGroups(groupList);
+          setGroupMemberships(memberships);
+          setFavourites(favIds);
+          setGroupInvites(invites);
+          setGroupsLoaded(true);
+        }
+
+        await migrateBroadcastShares(fresh);
+        await migrateCoachReceivedShares();
+        const shared = await loadSharedPrograms();
+        const activeMap: Record<string, string> = {};
+        await Promise.all(merged.map(async c => {
+          const data = await loadClientData(c.id);
+          const active = data.programs.find(p => p.status === "active");
+          if (active) activeMap[c.id] = active.name;
+        }));
+        if (!cancelled) {
+          setMyPrograms(Array.isArray(progs) ? progs : []);
+          setReviews(sent);
+          setSharedOut(shared);
+          setActiveProgramByClient(activeMap);
+        }
+      } catch (err) {
+        if (__DEV__) console.warn("[avenas] load trainer hub", err);
+      } finally {
+        // Settle both even on failure, so a thrown load leaves an honest empty
+        // state rather than a blank page. Harmless when already true.
+        if (!cancelled) { setClientsLoaded(true); setGroupsLoaded(true); }
       }
     })();
     return () => { cancelled = true; };
@@ -501,7 +523,7 @@ export default function PTHome() {
           </View>
         </BounceButton>
 
-        {filtered.length === 0 ? (
+        {!clientsLoaded ? null : filtered.length === 0 ? (
           search ? (
             <NeuCard dark={isDark} radius={12}>
               <View style={styles.noMatchRow}>
@@ -576,7 +598,7 @@ export default function PTHome() {
           />
         ))}
         {groups.length === 0 ? (
-          groupInvites.length === 0 ? (
+          groupsLoaded && groupInvites.length === 0 ? (
             <NeuCard dark={isDark} radius={16}>
               <Text style={[styles.groupEmpty, { color: t.ts }]}>
                 Put clients in a group to message them together and send one program to all of them.

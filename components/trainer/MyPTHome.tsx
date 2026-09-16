@@ -62,11 +62,21 @@ function fmtAgo(iso: string): string {
 export default function MyPTHome() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  // The divider tone on each theme — t.div matches the dark card exactly, so dark
+  // needs translucent white to show at all.
+  const skeletonFill = isDark ? "rgba(255,255,255,0.08)" : t.div;
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const unreadMessages = useUnreadMessages();
 
-  const [pt, setPT] = useState<AssignedPT | null>(null);
+  // `undefined` = still resolving, `null` = resolved and there isn't one. The
+  // difference is the whole point: with only null, the page drew "No trainer
+  // linked yet" for the half-second before the connections came back, to people
+  // who have a trainer.
+  const [pt, setPT] = useState<AssignedPT | null | undefined>(undefined);
+  // Same distinction for the program lists, whose empty states ("No programs
+  // received yet") flashed the same way.
+  const [programsLoaded, setProgramsLoaded] = useState(false);
   // Live "last active" for the connected trainer + the manage-button badge
   // count. Disconnecting a real connection lives on the Connect screen
   // (app/connect.tsx). A local/mock trainer isn't in the map → no presence row.
@@ -119,46 +129,65 @@ export default function MyPTHome() {
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
+
+    // The trainer card resolves ON ITS OWN. It used to wait inside one
+    // Promise.all for the slowest of six loads — five of them network calls
+    // about groups, invites and shares — after three share migrations ran first.
+    // One connections lookup is all this card needs. The featured trainer is
+    // whichever one is primary on /my-trainers; the resolver honours that
+    // choice, falls back to the first connected trainer, and only fills this
+    // slot with a PT-typed account. Blocked ids and severed-but-still-local
+    // entries are filtered there too.
+    resolveMyTrainers()
+      .then(t => { if (!cancelled) setPT(t.primary); })
+      .catch(err => {
+        if (__DEV__) console.warn("[avenas] resolve trainers", err);
+        // Settle a first load so the page isn't stuck on a placeholder; keep a
+        // trainer already on screen rather than blanking it on a refresh error.
+        if (!cancelled) setPT(prev => (prev === undefined ? null : prev));
+      });
+
     (async () => {
-      // Backfill acceptedProgramId on any pre-existing accepted shares so the
-      // "tap to view in /programs" navigation can find the local program by id.
-      await backfillAcceptedProgramIds();
-      const clientsForMigration = await loadClients();
-      await migrateBroadcastShares(clientsForMigration);
-      const [myTrainers, r, s, progs, groupRows, invites] = await Promise.all([
-        resolveMyTrainers(),
-        loadSharedPrograms(),
-        loadSentPrograms(),
-        getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-        loadGroupRows(),
-        fetchMyGroupInvites(),
-      ]);
-      if (cancelled) return;
-      // Dedupe per batch — broadcasts expand into N per-client entries, but
-      // the gym user represents all recipients on this device and should see
-      // one card per batch.
-      const seen = new Set<string>();
-      const dedupedReceived: SharedProgram[] = [];
-      for (const entry of r) {
-        // Skip trainer-to-trainer programs: they belong on the trainer-side
-        // My Trainers page, not a gym user's My Trainer feed.
-        if (entry.receivedFromCoachId) continue;
-        const k = batchKeyOf(entry);
-        if (seen.has(k)) continue;
-        seen.add(k);
-        dedupedReceived.push(entry);
+      try {
+        // Backfill acceptedProgramId on any pre-existing accepted shares so the
+        // "tap to view in /programs" navigation can find the local program by id.
+        await backfillAcceptedProgramIds();
+        const clientsForMigration = await loadClients();
+        await migrateBroadcastShares(clientsForMigration);
+        const [r, s, progs, groupRows, invites] = await Promise.all([
+          loadSharedPrograms(),
+          loadSentPrograms(),
+          getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+          loadGroupRows(),
+          fetchMyGroupInvites(),
+        ]);
+        if (cancelled) return;
+        // Dedupe per batch — broadcasts expand into N per-client entries, but
+        // the gym user represents all recipients on this device and should see
+        // one card per batch.
+        const seen = new Set<string>();
+        const dedupedReceived: SharedProgram[] = [];
+        for (const entry of r) {
+          // Skip trainer-to-trainer programs: they belong on the trainer-side
+          // My Trainers page, not a gym user's My Trainer feed.
+          if (entry.receivedFromCoachId) continue;
+          const k = batchKeyOf(entry);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          dedupedReceived.push(entry);
+        }
+        setReceived(dedupedReceived);
+        setSent(s);
+        setMyPrograms(Array.isArray(progs) ? progs : []);
+        setGroups(groupRows);
+        setGroupInvites(invites);
+      } catch (err) {
+        if (__DEV__) console.warn("[avenas] load trainer hub", err);
+      } finally {
+        // Even on failure: an empty state is honest once we've tried, and a list
+        // that never settles would hide the "send a program" affordances.
+        if (!cancelled) setProgramsLoaded(true);
       }
-      // The featured trainer is whichever one is primary on /my-trainers. The
-      // resolver honours that choice, falls back to the first connected trainer,
-      // and only ever fills this slot with a PT-typed account so a gym-user
-      // friend can't end up mislabelled under "YOUR TRAINER". Blocked ids and
-      // severed-but-still-local entries are filtered there too.
-      setPT(myTrainers.primary);
-      setReceived(dedupedReceived);
-      setSent(s);
-      setMyPrograms(Array.isArray(progs) ? progs : []);
-      setGroups(groupRows);
-      setGroupInvites(invites);
     })();
     return () => { cancelled = true; };
   }, []));
@@ -325,7 +354,20 @@ export default function MyPTHome() {
 
         <Text style={[styles.title, { color: t.tp }]}>My Trainer</Text>
 
-        {!pt ? (
+        {pt === undefined ? (
+          // Still resolving. Same card, same row, same height as the real one,
+          // so the trainer fills in place rather than the page jumping — and so
+          // nobody who HAS a trainer is told they don't.
+          <NeuCard dark={isDark} radius={20} style={{ marginTop: 16 }}>
+            <View style={styles.ptCard} accessibilityLabel="Loading your trainer">
+              <View style={[styles.skeletonAvatar, { backgroundColor: skeletonFill }]} />
+              <View style={styles.skeletonText}>
+                <View style={[styles.skeletonLine, { width: 76, backgroundColor: skeletonFill }]} />
+                <View style={[styles.skeletonLine, styles.skeletonLineLarge, { backgroundColor: skeletonFill }]} />
+              </View>
+            </View>
+          </NeuCard>
+        ) : pt === null ? (
           <NeuCard dark={isDark} radius={20} style={{ marginTop: 16 }}>
             <View style={styles.emptyInner}>
               <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
@@ -381,7 +423,8 @@ export default function MyPTHome() {
           <ChevronToggle expanded={!collapsedFromTrainer} color={t.ts} />
         </Pressable>
         {!collapsedFromTrainer ? (received.length === 0 ? (
-          <NeuCard dark={isDark} radius={16}>
+          // Only say "none" once we've actually looked; before that it's a lie.
+          !programsLoaded ? null : <NeuCard dark={isDark} radius={16}>
             <Text style={[styles.smallEmpty, { color: t.ts }]}>No programs received yet.</Text>
           </NeuCard>
         ) : (
@@ -575,7 +618,7 @@ export default function MyPTHome() {
           </BounceButton>
         </View>
         {!collapsedSentToTrainer ? (sent.length === 0 ? (
-          <NeuCard dark={isDark} radius={16}>
+          !programsLoaded ? null : <NeuCard dark={isDark} radius={16}>
             <Text style={[styles.smallEmpty, { color: t.ts }]}>{`You haven't sent any programs to your trainer yet.`}</Text>
           </NeuCard>
         ) : (
@@ -817,6 +860,13 @@ const styles = StyleSheet.create({
   cta:          { borderRadius: PILL_RADIUS, paddingVertical: 13, paddingHorizontal: 24, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
   ptCard:       { flexDirection: "row", alignItems: "center", gap: 14, padding: 16 },
+  // Placeholder while the trainer resolves. Sized to the real row — 56pt avatar,
+  // a label line and a name line — so the card doesn't change height when the
+  // trainer fills in.
+  skeletonAvatar:    { width: 56, height: 56, borderRadius: 28 },
+  skeletonText:      { flex: 1, gap: 9 },
+  skeletonLine:      { height: 10, borderRadius: 5 },
+  skeletonLineLarge: { width: 140, height: 16, borderRadius: 8 },
   avatar:       { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center" },
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 18 },
   ptLabel:      { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 1 },
