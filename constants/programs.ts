@@ -249,14 +249,16 @@ export type SavedProgram = {
    */
   pushedDates?: string[];
   /**
-   * Rest days the user SPENT to bring the schedule forward — the mirror of
-   * `pushedDates`. Everything from a pulled date onward resolves one cycle-day
-   * later than the calendar suggests, so the program finishes a day sooner.
+   * Rest days that absorbed a moved workout — the mirror of `pushedDates`.
+   * Everything from a pulled date onward resolves one cycle-day later than the
+   * calendar suggests, cancelling the push before it.
    *
-   * This is what makes a disruption containable: push Tuesday because you're
-   * ill, pull a rest day later that week, and the following week starts on the
-   * day you originally planned. Net drift (pushes minus pulls) is `cycleDrift`
-   * in utils/cycleDrift.ts.
+   * Never managed directly by the user. "Do it tomorrow" writes a push on the
+   * missed date AND a pull on the next rest day as one action
+   * (`planDoItTomorrow`, utils/skippedDates.ts), so the shift ends there and the
+   * following week is back on the planned days. Undoing the push removes its
+   * pull (`unskipDate`); "Set Workout Date" clears them all (`clearShifts`).
+   * Net drift (pushes minus pulls) is `cycleDrift` in utils/cycleDrift.ts.
    *
    * NOT a subset of `skippedDates` — a pulled date still schedules something,
    * namely whatever the next day was going to hold.

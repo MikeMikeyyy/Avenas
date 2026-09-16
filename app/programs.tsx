@@ -21,6 +21,7 @@ import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import { formatStoredDate, todayYMD } from "../utils/dates";
 import { cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
+import { clearShifts } from "../utils/skippedDates";
 import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
@@ -712,20 +713,21 @@ export default function ProgramsScreen() {
 
   const handleSetWorkoutDay = async (targetDayIndex: number) => {
     if (!activeProgram) return;
-    // Ask the shared resolver where today lands with NO offset, rather than
-    // recomputing daysPassed here. The inline version missed `pushedDates`, so
-    // on a program with a pushed rest day it solved for the wrong index and set
-    // an offset a day out — and CLAUDE.md says not to re-implement this anyway.
-    const naturalDayIndex = cycleIndexForDate({ ...activeProgram, cycleOffset: 0 }, todayYMD());
+    const today = todayYMD();
+    // A clean reset. "Today is Push" is the user saying where they are, so every
+    // move that got them here is dropped FIRST — left in, they kept counting,
+    // and the week looked back on plan while the finish date stayed however
+    // many days late. See clearShifts for what survives (past moves become plain
+    // skips so the calendar still says rest).
+    const reset = clearShifts(activeProgram, today);
+    // Then solve against the reset program, asking the shared resolver where
+    // today lands with NO offset rather than recomputing daysPassed here.
+    const naturalDayIndex = cycleIndexForDate({ ...reset, cycleOffset: 0 }, today);
     if (naturalDayIndex === null) return;
-    const n = activeProgram.cycleDays;
+    const n = reset.cycleDays;
     const cycleOffset = ((targetDayIndex - naturalDayIndex) % n + n) % n;
-    // Re-phasing the cycle can move a workout onto a date the user had spent as
-    // a rest day, which would turn that pull into a deleted session. The reader
-    // is a dumb count by design (see utils/cycleDrift.ts), so the write side
-    // has to re-target those marks.
     const updated = programs.map(p =>
-      p.id === activeProgram.id ? normalizeDriftDates({ ...p, cycleOffset }) : p
+      p.id === activeProgram.id ? normalizeDriftDates({ ...reset, cycleOffset }) : p
     );
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));

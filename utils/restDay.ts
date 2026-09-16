@@ -1,39 +1,40 @@
 // utils/restDay.ts
 //
-// Marking a date as rest, from any screen. The pure rules live in
-// utils/skippedDates.ts; this is the storage + prompt layer around them, the
-// same split utils/programPause.ts uses for resuming.
+// Not doing a planned workout, from any screen. The pure rules and the move
+// planning live in utils/skippedDates.ts (testable, RN-free); this is the
+// storage + prompt layer around them, the same split utils/programPause.ts uses
+// for resuming.
 //
-// The prompt exists because "I'm not training today" is genuinely ambiguous and
-// only the user knows which they mean:
+// The prompt offers exactly two things, because those are the two things people
+// mean when they miss a session:
 //
-//   SKIP  — today empties, the cycle holds its place. Tomorrow is whatever it
-//           was already going to be, and this round's workout is just missed.
-//           The button names the day, because that day is what gets dropped.
-//   PUSH  — today empties AND the cycle slides a day later, so today's workout
-//           lands tomorrow and everything after it follows. Phrased as moving
-//           the workouts FORWARD: nothing is lost, it all just happens later.
+//   SKIP IT         — miss this one, the rest of the week is untouched.
+//   DO IT TOMORROW  — it moves a day, the next rest day absorbs the shift, and
+//                     you're back on your usual days after that.
 //
-// PUSH is permanent — there is no "week" for the cycle to snap back to — so the
-// copy says so rather than letting someone discover it next Monday.
+// Both explanations are in the message and both name REAL days the user will
+// see ("Thursday's rest day becomes Legs"). An earlier version offered three
+// choices with abstract labels, and its "use Friday's rest day" button named an
+// internal bookkeeping date while THURSDAY was the day that visibly changed.
+// Nobody could tell the choices apart. If the copy has to explain the model,
+// the model is wrong; if it can describe the result, it's right.
 
 import { Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
-import { toYMD } from "./dates";
-import { cycleDrift } from "./cycleDrift";
-import { getWorkoutForDate, normalizeDriftDates, resolveDayIndex } from "./workout";
-import { isDateSkipped, isDatePushed, isDatePulled, pullDate, pushDate, skipDate, unskipDate } from "./skippedDates";
+import { MONTH_NAMES, todayYMD } from "./dates";
+import { getWorkoutForDate, normalizeDriftDates } from "./workout";
+import { isDatePulled, isDatePushed, isDateSkipped, planDoItTomorrow, skipDate, unskipDate } from "./skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { resyncScheduledNotifications } from "./notificationScheduler";
 
 export type RestDayMode =
-  /** Empty the date, leave the cycle alone. */
+  /** Miss the workout, leave the rest of the week alone. */
   | "skip"
-  /** Empty the date and slide the whole cycle a day later. */
-  | "push"
-  /** Decide by asking — falls back to "skip" when there's nothing to push. */
+  /** Move it to the next day and absorb the shift into the next rest day. */
+  | "moveToTomorrow"
+  /** Decide by asking. Days with nothing scheduled are just marked off. */
   | "ask";
 
 function warn(op: string, err: unknown) {
@@ -45,74 +46,70 @@ async function commit(programId: string, apply: (p: SavedProgram) => SavedProgra
     const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
     const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
     // normalizeDriftDates on every write, the same discipline canonicalizeWorkouts
-    // gets: a mark stored earlier can be invalidated by the one being added now
-    // (a push in front of a pull slides a workout onto it), and the reader is a
-    // dumb count by design so it will not catch that itself.
+    // gets: a mark stored earlier can be invalidated by the one being added now,
+    // and the reader is a dumb count by design so it will not catch that itself.
     const updated = programs.map(p => (p.id === programId ? normalizeDriftDates(apply(p)) : p));
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     scheduleCloudPush();
     // The queued reminders were built against the OLD schedule, so without this
-    // you get "Upper is on the schedule today" on a day you just marked off —
-    // and after a pull, no reminder at all on the day the workout moved to.
+    // you get a reminder for a workout you just moved, and none on the day it
+    // moved to.
     resyncScheduledNotifications();
   } catch (e) {
     warn("applyRestDay", e);
   }
 }
 
-/** The next date from `fromYMD` (inclusive) that the cycle rests on and that
- *  isn't already marked, or null within one cycle. What a push offers to spend
- *  so the program doesn't end up a day longer. */
-export function nextRestDate(program: SavedProgram, fromYMD: string): string | null {
-  for (let i = 0; i <= program.cycleDays; i++) {
-    const ymd = addDays(fromYMD, i);
-    if (!ymd) return null;
-    if (isDateSkipped(program, ymd) || isDatePulled(program, ymd)) continue;
-    if (program.pausedAt && ymd >= program.pausedAt) return null;
-    const idx = resolveDayIndex(program, ymd);
-    if (idx === null) continue;
-    const name = program.cyclePattern[idx];
-    if (!name || name === "Rest") return ymd;
-  }
-  return null;
-}
-
-function addDays(ymd: string, days: number): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
-  if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days);
-  return toYMD(d);
-}
-
 /** What the user settled on. `null` means they backed out and NOTHING was
  *  written — callers must not commit any of their own side effects either.
- *  "pushPull" moved the schedule AND spent a rest day to pay for it, so the
- *  program's length is unchanged. */
-export type RestDayOutcome = "skip" | "push" | "pushPull" | null;
+ *  "moved" kept the workout; "extended" is a move that had no rest day to absorb
+ *  it, so the program now finishes a day later. */
+export type RestDayOutcome = "skip" | "moved" | "extended" | null;
 
-/** Short weekday label for a date, e.g. "Thu". Used in the repayment button,
- *  where the day name is more use than the date. */
-function labelFor(ymd: string): string {
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function parse(ymd: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
-  if (!m) return "the next";
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()] + "'s";
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+}
+
+/** "Thursday", or "Thursday 1 Oct" once it's far enough away that the weekday
+ *  alone would be ambiguous. */
+function dayName(ymd: string, from: string): string {
+  const d = parse(ymd);
+  const f = parse(from);
+  if (!d) return "that day";
+  const weekday = WEEKDAYS[d.getDay()];
+  const days = f ? Math.round((d.getTime() - f.getTime()) / 86400000) : 0;
+  return days > 6 ? `${weekday} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]}` : weekday;
+}
+
+/** "tomorrow" for today, otherwise "on Saturday" — the prompt can be opened for
+ *  any upcoming day from the week strip, not just today. */
+function nextDayPhrase(ymd: string): string {
+  if (ymd === todayYMD()) return "tomorrow";
+  const d = parse(ymd);
+  if (!d) return "the next day";
+  d.setDate(d.getDate() + 1);
+  return `on ${WEEKDAYS[d.getDay()]}`;
 }
 
 /**
- * Mark `ymd` as a rest day on `programId`, returning what was actually applied.
+ * Stop `ymd` from being a training day on `programId`, returning what was
+ * actually applied.
  *
- * With mode "ask", prompts only when there is actually a workout to move — a
- * date the cycle already rests on, or one whose slot is empty, has nothing to
- * push, so it is marked off silently.
+ * With mode "ask", prompts only when there's a workout scheduled. A date that
+ * already schedules nothing is marked off silently — there's no choice to make.
  *
- * The return value matters: cancelling has to leave the day completely
- * untouched, and the caller usually has its own state and a stored override to
- * roll back with it. So callers should do nothing until this resolves non-null,
- * rather than applying optimistically and undoing on cancel.
+ * The return value matters: cancelling must leave the day completely untouched,
+ * and the caller usually has its own state and a stored override to roll back
+ * with it. So callers should do nothing until this resolves non-null, rather
+ * than applying optimistically and undoing on cancel.
  *
  * Re-reads programs at commit time rather than trusting a snapshot the caller
- * is holding, since the Workout tab and Home both write this key.
+ * is holding, since the Workout tab and Home both write this key — and re-plans
+ * against that fresh copy too, so the move committed is the one for the program
+ * as it actually is.
  */
 export async function applyRestDay(
   programId: string,
@@ -120,7 +117,15 @@ export async function applyRestDay(
   mode: RestDayMode = "ask",
 ): Promise<RestDayOutcome> {
   if (mode === "skip") { await commit(programId, p => skipDate(p, ymd)); return "skip"; }
-  if (mode === "push") { await commit(programId, p => pushDate(p, ymd)); return "push"; }
+  if (mode === "moveToTomorrow") {
+    let kind: "moved" | "extended" = "moved";
+    await commit(programId, p => {
+      const plan = planDoItTomorrow(p, ymd);
+      kind = plan.kind === "absorbed" ? "moved" : "extended";
+      return plan.program;
+    });
+    return kind;
+  }
 
   const raw = await AsyncStorage.getItem(PROGRAMS_KEY).catch(() => null);
   const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
@@ -128,41 +133,40 @@ export async function applyRestDay(
   if (!program) return null;
 
   const scheduled = getWorkoutForDate(program, ymd);
-  // Nothing scheduled to move: just mark it off without an interruption.
+  // Nothing scheduled: just mark it off without an interruption.
   if (!scheduled) { await commit(programId, p => skipDate(p, ymd)); return "skip"; }
 
-  // Where the day could be paid back from, worked out against the schedule AS
-  // IT WILL BE once the push lands — so the offer names a date that is really a
-  // rest day, not one the push is about to move a workout onto.
-  const afterPush = pushDate(program, ymd);
-  const repay = nextRestDate(afterPush, addDays(ymd, 1) ?? ymd);
+  const name = scheduled.name;
+  const next = nextDayPhrase(ymd);
+  const plan = planDoItTomorrow(program, ymd);
+
+  // Describe the RESULT in days the user will see, never the mechanism.
+  let moveCopy: string;
+  if (plan.kind === "extended") {
+    moveCopy = `Do it ${next}: your next workouts shift a day. There's no rest day to make up for it, so your program will finish a day later.`;
+  } else {
+    const back = plan.backOnPlan ? ` You're back on your usual days from ${dayName(plan.backOnPlan, ymd)}.` : " Then you're back on your usual days.";
+    moveCopy = plan.lostRestDay && plan.lostRestBecomes
+      ? `Do it ${next}: your next workouts shift a day, so ${dayName(plan.lostRestDay, ymd)}'s rest day becomes ${plan.lostRestBecomes}.${back}`
+      : `Do it ${next}: your next workouts shift a day.${back}`;
+  }
 
   return new Promise<RestDayOutcome>(resolve => {
     Alert.alert(
-      "Rest day",
-      `${scheduled.name} was scheduled. Skip it this round, or move it and everything after it forward a day?`,
+      `Not doing ${name}?`,
+      `Skip it: you'll miss ${name}. The rest of your week stays the same.\n\n${moveCopy}`,
       [
         { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
-        // Naming the day in the button is what makes the choices concrete: the
-        // first drops THIS workout, the others keep it and differ only in who
-        // pays for the extra day — the program's end, or a rest day.
         {
-          text: `Skip "${scheduled.name}" this week`,
+          text: `Skip ${name}`,
           onPress: () => { void commit(programId, p => skipDate(p, ymd)).then(() => resolve("skip")); },
         },
         {
-          text: "Move workouts forward",
-          onPress: () => { void commit(programId, p => pushDate(p, ymd)).then(() => resolve("push")); },
-        },
-        // Only offered when there IS a rest day to spend. On a cycle with no
-        // rest in it, this would silently delete a session.
-        ...(repay ? [{
-          text: `Move forward, use ${labelFor(repay)} rest day`,
+          text: `Do ${name} ${next}`,
           onPress: () => {
-            void commit(programId, p => pullDate(pushDate(p, ymd), repay))
-              .then(() => resolve("pushPull"));
+            void applyRestDay(programId, ymd, "moveToTomorrow").then(resolve);
           },
-        }] : []),
+        },
       ],
       { cancelable: true, onDismiss: () => resolve(null) },
     );
@@ -170,51 +174,12 @@ export async function applyRestDay(
 }
 
 /**
- * Un-mark `ymd`: no longer rest, and no longer delaying anything after it.
- *
- * This IS the undo for "move workouts forward" — because a push is recorded
- * against the date rather than baked into `cycleOffset`, removing it restores
- * the original alignment exactly, however many other pushes exist elsewhere.
- * That reversibility is what the week strip's up arrow is advertising.
+ * Put `ymd` back to its planned workout. Undoes a skip or a move — and for a
+ * move, the rest day it was absorbed into comes back too (see
+ * `unskipDate`), so undoing leaves the week exactly as it was planned.
  */
 export async function clearRestDay(programId: string, ymd: string): Promise<void> {
   return commit(programId, p => unskipDate(p, ymd));
-}
-
-/**
- * Spend the rest day on `ymd`: it schedules the next day's workout instead, and
- * everything after moves up with it, so the program finishes a day sooner.
- *
- * Confirms first, because unlike marking a day off this ADDS a session to a day
- * the user was expecting to be free. `clearRestDay` undoes it.
- */
-export async function applyPullDay(programId: string, ymd: string): Promise<boolean> {
-  const raw = await AsyncStorage.getItem(PROGRAMS_KEY).catch(() => null);
-  const programs: SavedProgram[] = raw ? JSON.parse(raw) : [];
-  const program = programs.find(p => p.id === programId);
-  if (!program) return false;
-
-  // What lands here once the rest is spent — named in the prompt so it's clear
-  // this isn't just deleting a day off.
-  const moved = getWorkoutForDate(pullDate(program, ymd), ymd);
-  const drift = cycleDrift(program, ymd);
-
-  return new Promise<boolean>(resolve => {
-    Alert.alert(
-      "Use this rest day?",
-      moved
-        ? `${moved.name} moves here, and everything after it comes forward a day.${drift > 0 ? " Your program goes back to finishing on its original date." : " Your program will finish a day earlier."}`
-        : "Everything after this day comes forward a day.",
-      [
-        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-        {
-          text: "Use it",
-          onPress: () => { void commit(programId, p => pullDate(p, ymd)).then(() => resolve(true)); },
-        },
-      ],
-      { cancelable: true, onDismiss: () => resolve(false) },
-    );
-  });
 }
 
 /** Convenience for screens that need to render the current state. */

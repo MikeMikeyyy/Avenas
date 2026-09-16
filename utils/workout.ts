@@ -137,8 +137,9 @@ function ymdToLocalDate(ymd: string): Date | null {
  * user's intent — "I want that day back" — which going inert would silently
  * discard.
  *
- * Also enforces that the three lists are disjoint: a date cannot both be spent
- * and be skipped, and push/pull at the same date is undefined by construction.
+ * Also keeps a pull off any date that is also a push, where the two are
+ * meaningless together. A skip and a pull on one date are fine: the skip
+ * empties the day, the pull still shifts the days after it.
  *
  * Pure. Returns the SAME object when nothing needed fixing, so callers can use
  * identity to skip a write.
@@ -153,9 +154,13 @@ export function normalizeDriftDates(program: SavedProgram): SavedProgram {
   let changed = false;
 
   for (const ymd of [...pulled].sort()) {
-    // A pull can never share a date with a skip or a push — those empty the day,
-    // and a pull needs the day to hold something.
-    if (skipped.has(ymd) || pushed.has(ymd)) { changed = true; continue; }
+    // A pull can't share a date with a PUSH — the push says "nothing happens
+    // here, wait a day", the pull says "a rest was spent here, catch up a day",
+    // and together they're meaningless. A SKIP is different and may stay: it
+    // just empties that one day, while the pull still shifts the days after.
+    // Dropping the pull there would silently un-absorb the move it belongs to
+    // and push the rest of the program a day late.
+    if (pushed.has(ymd)) { changed = true; continue; }
     // Evaluate candidates WITHOUT this pull applied. The question is "what does
     // this day hold today?" — a rest we may spend, or a session we must not —
     // and `cycleDrift` counts pulls inclusively, so including the candidate
@@ -167,7 +172,10 @@ export function normalizeDriftDates(program: SavedProgram): SavedProgram {
     for (let i = 0; i <= program.cycleDays; i++) {
       const candidate = addDaysYMD(ymd, i);
       if (candidate === null) break;
-      if (skipped.has(candidate) || pushed.has(candidate) || next.includes(candidate)) continue;
+      if (pushed.has(candidate) || next.includes(candidate)) continue;
+      // Re-targeting must not LAND a pull on a skipped day; a pull that was
+      // already there when the day got skipped (i === 0) stays put.
+      if (i > 0 && skipped.has(candidate)) continue;
       const slot = cycleIndexForDate(asIs, candidate);
       if (slot === null) continue;
       const name = program.cyclePattern[slot];

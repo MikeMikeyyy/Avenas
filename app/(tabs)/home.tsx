@@ -32,7 +32,7 @@ import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERR
 import { toYMD, fmtDuration, MONTH_NAMES } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
-import { applyPullDay, applyRestDay, clearRestDay, isDatePulled, isDatePushed, isDateSkipped } from "../../utils/restDay";
+import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../../utils/restDay";
 import { dayIdAt } from "../../utils/programDays";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
@@ -108,6 +108,55 @@ const TP   = APP_LIGHT.tp;
 const TS   = APP_LIGHT.ts;
 const ICON = APP_LIGHT.icon;
 
+/**
+ * Let a long unbroken word break with a hyphen instead of running into the
+ * card's divider.
+ *
+ * Inserts SOFT hyphens (U+00AD), which are invisible until the layout engine
+ * actually breaks there and then render as "-", so "Mesocycle A" wraps as
+ * "Meso-" / "cycle A". Nothing here forces a break; it only offers places one
+ * may happen, and a platform that ignores soft hyphens renders the original
+ * string unchanged.
+ *
+ * No dictionary, so the break points are positional rather than syllabic —
+ * good enough for program names, and it never fires on short words.
+ */
+function softHyphenate(text: string): string {
+  const SOFT = "­";
+  return text
+    .split(" ")
+    .map(word => {
+      // Short enough to fit, or already breakable at a real boundary.
+      if (word.length <= 8) return word;
+      let out = "";
+      for (let i = 0; i < word.length; i++) {
+        out += word[i];
+        // Never orphan fewer than 3 characters on either side of a break.
+        const from = i + 1;
+        if (from >= 4 && word.length - from >= 3 && from % 4 === 0) out += SOFT;
+      }
+      return out;
+    })
+    .join(" ");
+}
+
+/** The "you trained" tick in the week strip. Drawn rather than taken from
+ *  Ionicons because the icon font's checkmark is too fine next to 13pt text and
+ *  its weight can't be adjusted — here the stroke is a number. */
+function CompletedTick({ size = 14 }: { size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ marginLeft: 6 }}>
+      <Path
+        d="M4 12.5 L9.5 18 L20 6.5"
+        stroke={ACCT}
+        strokeWidth={3.4}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 /** One row of "This Week's Schedule". `isSkipped` distinguishes a day the user
  *  marked off from one the program always rested; `editable` is today onwards. */
 type WeekDay = {
@@ -118,13 +167,9 @@ type WeekDay = {
   isToday: boolean;
   isRest: boolean;
   isSkipped: boolean;
-  /** Marked off AND delaying everything after it, as opposed to a plain skip. */
+  /** The workout here was moved to the next day ("Do it tomorrow"), rather than
+   *  dropped. Tapping it undoes the move, rest day and all. */
   isPushed: boolean;
-  /** A rest day the user SPENT to bring the schedule forward. Not a rest any
-   *  more — it holds the workout that moved up onto it. */
-  isPulled: boolean;
-  /** This day rests and could be spent to pull the schedule forward. */
-  canPull: boolean;
   editable: boolean;
 };
 
@@ -458,19 +503,13 @@ export default function HomeScreen() {
           isRest: name === null,
           isSkipped: isDateSkipped(activeProgram, dateStr),
           isPushed: isDatePushed(activeProgram, dateStr),
-          isPulled: isDatePulled(activeProgram, dateStr),
-          // A rest the user could spend to pull the schedule forward. Future
-          // only, for the same reason marking off is: changing the past would
-          // rewrite what you should have trained on a day you already lived
+          // Tappable only when there is something to do: a planned workout to
+          // skip or move, or a day you marked off that can be restored. A rest
+          // day has neither. Future only, because changing the past would
+          // rewrite what you should have trained on a day already lived
           // through, and whether a streak gap was forgiven.
-          canPull: dateStr >= todayStr
-            && name === null
-            && !isDateSkipped(activeProgram, dateStr),
-          // Tappable only when there is something to do. A day the program
-          // already rests can now be SPENT, so it's tappable too — before, a
-          // rest day did nothing on tap and just left a ✕ sitting there. A day
-          // you DID mark off stays tappable so it can be restored.
-          editable: dateStr >= todayStr,
+          editable: dateStr >= todayStr
+            && (name !== null || isDateSkipped(activeProgram, dateStr)),
         });
       }
     }
@@ -478,23 +517,18 @@ export default function HomeScreen() {
     return { completedCount, plannedCount, totalMinutes, totalVolumeKg, weekDays };
   }, [workoutHistory, activeProgram]);
 
-  // Tapping a day in the week strip does one of three things, by what that day
-  // currently is:
-  //   marked off (skipped OR spent) -> restore it, no prompt. Undoing a rest day
-  //     isn't asking to undo a push, and undoing a spend isn't either.
-  //   a rest day -> offer to SPEND it, bringing everything after forward. This
-  //     is how a push gets paid back so the program doesn't run a day longer.
-  //   a workout  -> the skip/push prompt, as before.
-  // Reloads after any of them, so the strip redraws from the written program.
+  // Tapping a day in the week strip either restores it or asks what to do:
+  //   marked off (skipped or moved) -> put it back as planned, no prompt. For a
+  //     move, the rest day it used comes back too.
+  //   a planned workout -> "Skip it" or "Do it tomorrow".
+  // Reloads after either, so the strip redraws from the written program.
   const onWeekDayPress = useCallback((day: WeekDay) => {
     if (!activeProgram) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const ymd = toYMD(day.date);
-    const action = day.isSkipped || day.isPulled
+    const action = day.isSkipped
       ? clearRestDay(activeProgram.id, ymd)
-      : day.canPull
-        ? applyPullDay(activeProgram.id, ymd)
-        : applyRestDay(activeProgram.id, ymd, "ask");
+      : applyRestDay(activeProgram.id, ymd, "ask");
     void action.then(() => loadData());
   }, [activeProgram, loadData]);
 
@@ -696,16 +730,12 @@ export default function HomeScreen() {
                   disabled={!day.editable}
                   accessibilityRole={day.editable ? "button" : undefined}
                   accessibilityLabel={day.editable
-                    ? `${day.label}, ${day.workoutName}. ${day.isSkipped
+                    ? `${day.label}, ${day.workoutName}.${day.completed ? " Completed." : ""} ${day.isSkipped
                         ? day.isPushed
-                          ? "Rest day, everything after moved forward a day. Tap to undo"
-                          : "Marked as rest. Tap to restore"
-                        : day.isPulled
-                          ? "Rest day used to bring the schedule forward. Tap to restore it"
-                          : day.canPull
-                            ? "Rest day. Tap to use it and bring everything forward a day"
-                            : "Tap to mark as rest"}`
-                    : undefined}
+                          ? "Moved to the next day. Tap to put it back"
+                          : "Skipped. Tap to put it back"
+                        : "Tap to skip it or do it the next day"}`
+                    : `${day.label}, ${day.workoutName}.${day.completed ? " Completed." : ""}`}
                   style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}
                 >
                   <View style={styles.weekDayLabelCol}>
@@ -716,20 +746,35 @@ export default function HomeScreen() {
                       {day.isToday && <View pointerEvents="none" style={styles.weekTodayOutline} />}
                     </View>
                   </View>
-                  <Text style={[styles.weekDayName, { color: day.isRest ? t.ts : day.completed ? t.ts : t.tp, opacity: day.isRest ? 0.4 : day.completed ? 0.4 : 1 }]}>
-                    {day.workoutName}
-                  </Text>
+                  {/* Name and tick share one bounded box, so the pair can never
+                      grow into the card's vertical divider: the name wraps to a
+                      second line first, and the tick moves down with it. */}
+                  <View style={styles.weekDayNameWrap}>
+                    <Text
+                      numberOfLines={2}
+                      // Only REST days recede. A day you trained stays at full
+                      // strength — it used to fade to the same grey as a rest day,
+                      // which read as "nothing here" for the one thing on the
+                      // strip you actually did. The tick is the signal now.
+                      style={[styles.weekDayName, { color: day.isRest ? t.ts : t.tp, opacity: day.isRest ? 0.4 : 1 }]}
+                    >
+                      {softHyphenate(day.workoutName)}
+                    </Text>
+                    {/* Trained. Derived from workout history, so deleting the
+                        session takes the tick with it on the next focus —
+                        there's nothing separate to keep in step. */}
+                    {day.completed && <CompletedTick />}
+                  </View>
                   {/* Marks the days YOU changed, which the program's own rest
                       days never carry — otherwise there's no way to tell which
-                      ones can be restored. An X dropped the workout; an arrow
-                      kept it and moved the schedule, and points UP because
-                      tapping it pulls everything back where it was; a minus is
-                      a rest day you spent to catch the schedule up. */}
-                  {(day.isSkipped || day.isPulled) && (
+                      ones can be put back. An X skipped the workout; an arrow
+                      moved it to the next day, and points UP because tapping it
+                      brings everything back where it was. The rest day a move
+                      used carries no mark: it's part of the move, and undone
+                      with it from here. */}
+                  {day.isSkipped && (
                     <Ionicons
-                      name={day.isPulled
-                        ? "remove-circle-outline"
-                        : day.isPushed ? "arrow-up-circle-outline" : "close-circle-outline"}
+                      name={day.isPushed ? "arrow-up-circle-outline" : "close-circle-outline"}
                       size={13}
                       color={t.ts}
                       style={{ marginLeft: 5, opacity: 0.6 }}
@@ -988,7 +1033,13 @@ const styles = StyleSheet.create({
   weekDayLabel:        { fontFamily: FontFamily.semibold, fontSize: 12 },
   // today outline: absolute + negative insets so it hugs the label without shifting the 34px column
   weekTodayOutline:    { position: "absolute", top: -3, bottom: -3, left: -6, right: -6, borderWidth: 1, borderColor: ACCT, borderRadius: 9, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 3 },
-  weekDayName:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 13, color: TP },
+  // Takes the row's slack so the state markers stay pinned right, and bounds
+  // the name+tick pair away from the card's vertical divider.
+  weekDayNameWrap:     { flex: 1, flexDirection: "row", alignItems: "center" },
+  // Shrinks rather than fills, so the completion tick sits beside the words
+  // instead of being pushed to the far edge. Wrapping to a second line is
+  // preferred over truncating — a day name is the whole point of the row.
+  weekDayName:         { flexShrink: 1, fontFamily: FontFamily.regular, fontSize: 13, color: TP },
   weekTodayDot:        { width: 6, height: 6, borderRadius: 3 },
   weekCircleCard:      { borderRadius: 20 },
   weekCircleCardInner: { alignItems: "center", paddingVertical: 12, gap: 0 },

@@ -8,9 +8,11 @@
 // Exits non-zero (throws) if any assertion fails.
 
 import {
+  clearShifts,
   isDatePulled,
   isDatePushed,
   isDateSkipped,
+  planDoItTomorrow,
   pullDate,
   pushDate,
   skipDate,
@@ -400,12 +402,15 @@ eq(toggleSkippedDate(toggleSkippedDate(base, TUE), TUE).skippedDates, undefined,
   }
 }
 
-// ─── normalisation keeps the three lists disjoint ────────────────────────────
+// ─── what may share a date ───────────────────────────────────────────────────
 {
-  const clash = normalizeDriftDates({ ...base, skippedDates: [WED], pulledDates: [WED] });
-  eq((clash.pulledDates ?? []).includes(WED), false, "normalise: a date can't be both skipped and spent");
-  const clash2 = normalizeDriftDates(pullDate(pushDate(base, WED), WED));
-  eq((clash2.pulledDates ?? []).includes(WED), false, "normalise: ...nor both pushed and spent");
+  // A push and a pull on one date are meaningless together.
+  const clash = normalizeDriftDates(pullDate(pushDate(base, WED), WED));
+  eq((clash.pulledDates ?? []).includes(WED), false, "normalise: a date can't be both moved and spent");
+  // A skip and a pull are independent: skipping the day a move was absorbed
+  // into must NOT un-absorb it, or the rest of the program silently runs late.
+  const both = normalizeDriftDates({ ...base, skippedDates: [WED], pulledDates: [WED] });
+  eq((both.pulledDates ?? []).includes(WED), true, "normalise: skipping a day keeps the pull on it");
 }
 
 // ─── the week counter follows the program's timeline, not the calendar ───────
@@ -507,6 +512,131 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
   // convention around it.
   eq((resumed.pushedDates ?? []).length, 0, "resume: a push inside the hold window is dropped");
   eq(cycleDrift(resumed, plus(TUE, 10)), 0, "resume: ...so it can't extend the program for days nothing was scheduled on");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE USER-FACING MODEL: "Skip it" or "Do it tomorrow"
+// ═════════════════════════════════════════════════════════════════════════════
+// A real schedule: train Mon/Tue/Wed, rest Thu+Fri, train Sat+Sun. The case that
+// exposed the old prompt, where "use Friday's rest day" was offered but it was
+// THURSDAY that visibly became a training day.
+{
+  const mine: SavedProgram = {
+    id: "M", name: "Mine", totalWeeks: 8, currentWeek: 1, status: "active",
+    startDate: "14 Sep 2026", trainingDays: 5, cycleDays: 7,
+    cyclePattern: ["Push", "Pull", "Legs", "Rest", "Rest", "Upper", "Lower"],
+    dayIds: ["d0", "d1", "d2", "d3", "d4", "d5", "d6"], workouts: {},
+  };
+  const SAT = "2026-09-19", SUN = "2026-09-20";
+  const NEXT_THU = "2026-09-24", NEXT_SAT = "2026-09-26";
+  const planned = programFinishDate(mine)!.getTime();
+
+  for (const [label, day] of [["Saturday", SAT], ["Sunday", SUN]] as const) {
+    const plan = planDoItTomorrow(mine, day);
+    eq(plan.kind, "absorbed", `tomorrow (${label}): a rest day is available, so it's absorbed`);
+    if (plan.kind !== "absorbed") continue;
+
+    // The label regression. Name the day that VISIBLY changes, not the internal
+    // pull date (Friday, which stays a rest day).
+    eq(plan.lostRestDay, NEXT_THU, `tomorrow (${label}): the rest day named is next THURSDAY, the one that changes`);
+    eq(plan.lostRestBecomes, "Legs", `tomorrow (${label}): ...and it becomes Legs`);
+    eq(getWorkoutForDate(plan.program, "2026-09-25"), null, `tomorrow (${label}): Friday really does stay a rest day`);
+    eq(plan.backOnPlan, NEXT_SAT, `tomorrow (${label}): back on usual days from next Saturday`);
+
+    eq(programFinishDate(plan.program)!.getTime(), planned, `tomorrow (${label}): the program still finishes on time`);
+    eq(
+      schedule(plan.program, NEXT_SAT, 21),
+      schedule(mine, NEXT_SAT, 21),
+      `tomorrow (${label}): from next Saturday, the next three weeks match the plan exactly`,
+    );
+    // Nothing lost: the missed workout moved rather than vanished.
+    eq(sessionCount(plan.program, 42), sessionCount(mine, 42),
+       `tomorrow (${label}): no session lost, only a rest day`);
+  }
+
+  // Skip really is "miss it, week unchanged".
+  const skipped = skipDate(mine, SAT);
+  eq(getWorkoutForDate(skipped, SUN)?.name, "Lower", "skip: Sunday is still Lower");
+  eq(programFinishDate(skipped)!.getTime(), planned, "skip: finishes on time");
+  eq(sessionCount(skipped, 42), sessionCount(mine, 42) - 1, "skip: exactly the one session is gone");
+
+  // ─── undo puts the week back EXACTLY, rest day included ───
+  // The push and its pull were one action; they come off as one. Removing only
+  // the push would orphan the pull and drag everything a day EARLY.
+  {
+    const moved = planDoItTomorrow(mine, SAT).program;
+    const undone = normalizeDriftDates(unskipDate(moved, SAT));
+    eq(undone.pushedDates, undefined, "undo move: the push is gone");
+    eq(undone.pulledDates, undefined, "undo move: ...and so is the rest day it used");
+    eq(schedule(undone, SAT, 28), schedule(mine, SAT, 28), "undo move: four weeks identical to the plan");
+    eq(programFinishDate(undone)!.getTime(), planned, "undo move: finish date unchanged");
+  }
+
+  // ─── two moves, undo the first: the second is still absorbed ───
+  {
+    const two = planDoItTomorrow(planDoItTomorrow(mine, SAT).program, "2026-09-21").program;
+    eq((two.pushedDates ?? []).length, 2, "two moves: two pushes");
+    eq((two.pulledDates ?? []).length, 2, "two moves: two rest days used");
+    const firstUndone = normalizeDriftDates(unskipDate(two, SAT));
+    eq((firstUndone.pushedDates ?? []).length, 1, "two moves, undo first: one push left");
+    eq((firstUndone.pulledDates ?? []).length, 1, "two moves, undo first: ...paired with one rest day");
+    eq(programFinishDate(firstUndone)!.getTime(), planned, "two moves, undo first: still finishes on time");
+  }
+
+  // ─── skipping the day a move was absorbed into keeps the absorb ───
+  // Otherwise skipping one workout would quietly make the program a day late.
+  {
+    const moved = planDoItTomorrow(mine, SAT).program;
+    const pullDay = moved.pulledDates![0];
+    const skippedPull = normalizeDriftDates(skipDate(moved, pullDay));
+    eq(skippedPull.pulledDates, [pullDay], "skip the absorbing day: the rest day stays used");
+    eq(programFinishDate(skippedPull)!.getTime(), planned, "skip the absorbing day: still finishes on time");
+  }
+
+  // ─── Set Workout Date is a clean reset ───
+  // Move Saturday, then on Monday say "today is Push". The old behaviour: the
+  // week looked back on plan but the finish date stayed a day late, because the
+  // move still counted. Now the moves go first.
+  {
+    const MON2 = "2026-09-21";
+    const moved = pushDate(mine, SAT); // a bare push, the worst case for leftover drift
+    const reset = clearShifts(moved, MON2);
+    const natural = cycleIndexForDate({ ...reset, cycleOffset: 0 }, MON2)!;
+    const offset = ((0 - natural) % 7 + 7) % 7;
+    const after = normalizeDriftDates({ ...reset, cycleOffset: offset });
+
+    eq(getWorkoutForDate(after, MON2)?.name, "Push", "set date: today is the day that was chosen");
+    eq(after.pushedDates, undefined, "set date: no moves left counting");
+    eq(after.pulledDates, undefined, "set date: no used rest days left counting");
+    eq(programFinishDate(after)!.getTime(), planned, "set date: the finish date is honest — no hidden extra day");
+    eq(isDateSkipped(after, SAT), true, "set date: a PAST move stays as a skip, so the calendar still says rest");
+    eq(cycleDrift(after, "2026-10-31"), 0, "set date: zero drift from here on");
+  }
+  {
+    // A move dated in the FUTURE is removed outright: a reset mustn't leave a
+    // planned day empty.
+    const FUTURE_SAT = "2026-09-26";
+    const reset = clearShifts(pushDate(mine, FUTURE_SAT), "2026-09-21");
+    eq(isDateSkipped(reset, FUTURE_SAT), false, "set date: a future move is cleared, not turned into a skip");
+    const plainSkip = clearShifts(skipDate(mine, FUTURE_SAT), "2026-09-21");
+    eq(isDateSkipped(plainSkip, FUTURE_SAT), true, "set date: a plain skip is left alone — it never shifted anything");
+  }
+}
+
+// ─── a cycle with no rest day: the move genuinely costs a day ───────────────
+{
+  const noRest: SavedProgram = {
+    ...base, id: "N", cycleDays: 3, trainingDays: 3,
+    cyclePattern: ["Push", "Pull", "Legs"], dayIds: ["d0", "d1", "d2"],
+  };
+  const plan = planDoItTomorrow(noRest, TUE);
+  eq(plan.kind, "extended", "no rest day: nothing to absorb it, so it's reported as extending");
+  eq(
+    programFinishDate(plan.program)!.getTime(),
+    programFinishDate(noRest)!.getTime() + 86400000,
+    "no rest day: ...and the program really does finish one day later",
+  );
+  eq(plan.program.pulledDates, undefined, "no rest day: no rest day is invented");
 }
 
 // ─── it survives a round trip to the cloud ───────────────────────────────────
