@@ -27,7 +27,7 @@ import { Alert } from "react-native";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { formatStoredDate, parseStoredDate, todayYMD, toYMD } from "./dates";
-import { resolveDayIndex } from "./workout";
+import { normalizeDriftDates, resolveDayIndex } from "./workout";
 
 /** Days a program has been held, as of `asOfYMD`. 0 when not paused. */
 export function pausedDayCount(program: SavedProgram, asOfYMD: string = todayYMD()): number {
@@ -103,7 +103,27 @@ export function resumeProgram(
         ? (((p.cycleOffset ?? 0) + held) % p.cycleDays + p.cycleDays) % p.cycleDays
         : p.cycleOffset;
 
-    return { ...p, pausedAt: undefined, startDate: formatStoredDate(shifted), cycleOffset: offset };
+    // Marks dated inside the hold are meaningless — nothing was scheduled on
+    // those days — and a push among them would extend the program for a day it
+    // never programmed. Drop them, then re-target what's left: shifting
+    // startDate (and, in "today" mode, the offset) moves every date onto a
+    // different cycle slot, which can land a workout on a rest day the user had
+    // spent. See normalizeDriftDates.
+    const inHold = (d: string) => d >= p.pausedAt! && d < onYMD;
+    const keep = (list?: string[]) => {
+      const next = (list ?? []).filter(d => !inHold(d));
+      return next.length > 0 ? next : undefined;
+    };
+
+    return normalizeDriftDates({
+      ...p,
+      pausedAt: undefined,
+      startDate: formatStoredDate(shifted),
+      cycleOffset: offset,
+      skippedDates: keep(p.skippedDates),
+      pushedDates: keep(p.pushedDates),
+      pulledDates: keep(p.pulledDates),
+    });
   });
 }
 

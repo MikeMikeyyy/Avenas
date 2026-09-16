@@ -5,7 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
-import { parseStoredDate } from "../utils/dates";
+import { getWorkoutForDate } from "../utils/workout";
 
 const MONTH_LABELS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_ABBRS    = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
@@ -33,18 +33,6 @@ interface Props {
 // the shared helper.
 function toYMD(year: number, month: number, day: number): string {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-function isRestDayForDate(d: Date, prog: SavedProgram): boolean {
-  const start = parseStoredDate(prog.startDate);
-  if (!start) return false;
-  start.setHours(0, 0, 0, 0);
-  const target = new Date(d);
-  target.setHours(0, 0, 0, 0);
-  const days = Math.floor((target.getTime() - start.getTime()) / 86400000);
-  if (days < 0) return false;
-  const idx = (((days + (prog.cycleOffset ?? 0)) % prog.cycleDays) + prog.cycleDays) % prog.cycleDays;
-  return prog.cyclePattern[idx] === "Rest";
 }
 
 export default function JournalCalendar({ isDark, workoutDates, workoutHistory, activeProgram, onDayPress }: Props) {
@@ -111,7 +99,6 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
 
     for (let day = 1; day <= totalDays; day++) {
       const ds   = toYMD(viewYear, viewMonth, day);
-      const date = new Date(viewYear, viewMonth, day);
       let state: CellState;
 
       if (ds === todayStr) {
@@ -120,7 +107,11 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
         state = "future";
       } else if (workoutSet.has(ds)) {
         state = "workout";
-      } else if (activeProgram && isRestDayForDate(date, activeProgram)) {
+      } else if (activeProgram && getWorkoutForDate(activeProgram, ds) === null) {
+        // Shared resolver, so this month view agrees with the week strip and
+        // the Home calendar. The hand-rolled formula it replaced knew nothing
+        // about marked-off days, pushes or holds, and painted "missed" on all
+        // of them.
         state = "rest";
       } else {
         state = "missed";

@@ -163,6 +163,12 @@ export type ProgramRow = {
   /** The subset of skipped_dates that also delays the cycle by a day from that
    *  date onward (migration 0025). See SavedProgram.pushedDates. */
   pushed_dates: string[];
+  /** Rest days spent to bring the schedule forward a day — the mirror of
+   *  pushed_dates, and how a push is paid back (migration 0029). Not a subset
+   *  of skipped_dates: a pulled date still schedules something. Empty for a
+   *  program written before the column existed, which is also what "nothing
+   *  spent" looks like. See SavedProgram.pulledDates. */
+  pulled_dates: string[];
   workouts: Record<string, unknown>;  // WorkoutMap — Exercise[] per "idx:Name" key
   extra_workouts: string[];
   created_at: string;

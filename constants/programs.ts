@@ -1,3 +1,5 @@
+import { cycleDrift } from "../utils/cycleDrift";
+
 export const PROGRAMS_KEY = "@avenas/programs";
 export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
 export const WORKOUT_HISTORY_KEY = "@avenas/workout_history";
@@ -110,10 +112,24 @@ export type WorkoutMap = Record<string, Exercise[]>;
 // Date helpers live in utils/dates.ts. Re-exported here to preserve the
 // existing import paths used by older callers; new code should import from
 // utils/dates.ts directly.
-import { parseStoredDate } from "../utils/dates";
+import { parseStoredDate, toYMD } from "../utils/dates";
 export { parseStoredDate };
 
-export function getCurrentWeek(program: SavedProgram): number {
+/**
+ * Which week of the program `today` falls in, 1-based and clamped to
+ * `totalWeeks`.
+ *
+ * `today` is a parameter so this can be tested and so callers that already know
+ * the effective date don't disagree with it; it defaults to now.
+ *
+ * Counted against the program's own timeline, not the calendar: every day the
+ * user pushed held the cycle still, so it has to hold the WEEK still too, or the
+ * two drift apart and the program quietly loses a day of programming off the
+ * end for each push. Spending a rest day (a pull) pays that back. This is the
+ * same `cycleDrift` the scheduler uses, so "week 6" and "the workout the cycle
+ * says is due" can never disagree.
+ */
+export function getCurrentWeek(program: SavedProgram, today: Date = new Date()): number {
   if (program.status === "completed") return program.totalWeeks;
   if (program.status === "paused" || program.status === "created") return program.currentWeek;
   // A held program keeps status "active", so the freeze above doesn't catch it.
@@ -125,11 +141,45 @@ export function getCurrentWeek(program: SavedProgram): number {
   // than silently treating the program as having started in January year-0.
   if (!start) return Math.min(Math.max(program.currentWeek || 1, 1), program.totalWeeks);
   start.setHours(0, 0, 0, 0);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const daysSince = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  const week = Math.floor(daysSince / 7) + 1;
+  const day = new Date(today);
+  day.setHours(0, 0, 0, 0);
+  // Round, not floor: a span crossing a daylight-saving transition is 23 or 25
+  // hours on that day, and flooring the millisecond quotient drops a whole day.
+  const daysSince = Math.round((day.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  const week = Math.floor((daysSince - cycleDrift(program, toYMD(day))) / 7) + 1;
   return Math.min(Math.max(week, 1), program.totalWeeks);
+}
+
+/**
+ * The date the program is now due to finish, or null when `startDate` is
+ * unparseable.
+ *
+ * Derived, never stored, so it always reflects the timeline as it stands:
+ * pushing a day moves it out, spending a rest day brings it back, and a hold
+ * moves it by however long the hold lasts (because resuming shifts `startDate`
+ * — see utils/programPause.ts).
+ */
+export function programFinishDate(program: SavedProgram): Date | null {
+  const start = parseStoredDate(program.startDate);
+  if (!start) return null;
+  start.setHours(0, 0, 0, 0);
+  const span = program.totalWeeks * 7 - 1;
+
+  // A FIXED POINT, not a formula. The end date is pushed out by the marks that
+  // fall before it — but pushing it out can bring further marks inside the
+  // window, which push it out again. Iterate until it stops moving. Bounded by
+  // the number of marks, so it always terminates; do not "simplify" this into a
+  // single expression.
+  let end = new Date(start);
+  end.setDate(end.getDate() + span);
+  const bound = (program.pushedDates?.length ?? 0) + (program.pulledDates?.length ?? 0) + 1;
+  for (let i = 0; i < bound; i++) {
+    const next = new Date(start);
+    next.setDate(next.getDate() + span + cycleDrift(program, toYMD(end)));
+    if (next.getTime() === end.getTime()) break;
+    end = next;
+  }
+  return end;
 }
 
 export type SavedProgram = {
@@ -194,8 +244,29 @@ export type SavedProgram = {
    * being resolved (see cycleIndexForDate) leaves everything earlier alone.
    *
    * Undoing a push is removing the date, which restores the original alignment.
+   * A push makes the program a day LONGER; `pulledDates` is how that is paid
+   * back.
    */
   pushedDates?: string[];
+  /**
+   * Rest days the user SPENT to bring the schedule forward — the mirror of
+   * `pushedDates`. Everything from a pulled date onward resolves one cycle-day
+   * later than the calendar suggests, so the program finishes a day sooner.
+   *
+   * This is what makes a disruption containable: push Tuesday because you're
+   * ill, pull a rest day later that week, and the following week starts on the
+   * day you originally planned. Net drift (pushes minus pulls) is `cycleDrift`
+   * in utils/cycleDrift.ts.
+   *
+   * NOT a subset of `skippedDates` — a pulled date still schedules something,
+   * namely whatever the next day was going to hold.
+   *
+   * Only ever recorded against a date the cycle rests on, and only from today
+   * onward. `cycleDrift` re-checks that at resolve time, because a push added
+   * afterwards can slide a workout onto a date that was a rest when this was
+   * written; such a pull goes inert rather than deleting the session.
+   */
+  pulledDates?: string[];
   workouts: WorkoutMap;
   extraWorkouts?: string[];
 };

@@ -23,6 +23,7 @@ import {
   PROGRAMS_KEY,
   WORKOUT_HISTORY_KEY,
   getCurrentWeek,
+  programFinishDate,
   type SavedProgram,
   type CompletedWorkout,
 } from "../constants/programs";
@@ -55,9 +56,13 @@ function workoutsForProgram(prog: SavedProgram, history: CompletedWorkout[]): Co
   const start = parseStoredDate(prog.startDate);
   if (!start) return [];
   start.setHours(0, 0, 0, 0);
+  // Not start + totalWeeks*7: a program that had days pushed runs LONGER than
+  // its nominal length, and bounding on the nominal end drops the final
+  // sessions out of its own history. programFinishDate carries the drift.
+  const finish = programFinishDate(prog);
   const endMs = prog.status === "active"
     ? Date.now()
-    : start.getTime() + prog.totalWeeks * 7 * 86400 * 1000;
+    : (finish ? finish.getTime() : start.getTime() + prog.totalWeeks * 7 * 86400 * 1000);
 
   return history.filter(w => {
     if (!dayNames.has(w.workoutName)) return false;

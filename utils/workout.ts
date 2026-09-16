@@ -10,8 +10,8 @@
 // log-workout.tsx; keeping one copy stops the screens from drifting.
 
 import { parseStoredDate, toYMD, todayYMD } from "./dates";
+import { cycleDrift } from "./cycleDrift";
 import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
-import { pushesBefore } from "./skippedDates";
 import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
@@ -43,13 +43,6 @@ export type DayOverride = {
    *  and legacy records, which fall back to matching by name. */
   dayId?: string;
 };
-
-/** Parse a "YYYY-MM-DD" string to a local Date at midnight, or null. */
-function ymdToLocalDate(ymd: string): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
-  if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-}
 
 /**
  * The negative-safe cycle-day index for `dateYMD`, matching the documented
@@ -85,19 +78,116 @@ export function resolveDayIndex(program: SavedProgram, dateYMD: string): number 
  * must not erase the answer, so the backfill reads the cycle math directly.
  */
 export function cycleIndexForDate(program: SavedProgram, dateYMD: string): number | null {
+  const daysPassed = daysSinceStart(program, dateYMD);
+  if (daysPassed === null || daysPassed < 0) return null;
+  // Shift the calendar by the net drift: pushed days held the cycle still,
+  // pulled days spent a rest to catch it back up. Counting against DATES rather
+  // than nudging cycleOffset is what keeps this local — an offset is a phase
+  // shift over the whole timeline, which re-labelled days BEFORE the change and
+  // swallowed a completed workout. See utils/cycleDrift.ts.
+  return slotFor(program, daysPassed - cycleDrift(program, dateYMD));
+}
+
+/**
+ * Whole days from the program's start to `dateYMD`, or null when either end is
+ * unparseable. Negative before the program started.
+ *
+ * Rounds rather than floors. Both ends are LOCAL midnights, and a span that
+ * crosses a daylight-saving transition is 23 or 25 hours on that day — flooring
+ * the millisecond quotient silently drops a day, which shifted the whole cycle
+ * one slot early for every date between the spring and autumn transitions.
+ * `utils/dates.ts:daysBetweenYMD` has always done it this way; this is the same
+ * arithmetic against a display-format start date.
+ */
+function daysSinceStart(program: SavedProgram, dateYMD: string): number | null {
   const start = parseStoredDate(program.startDate);
   const target = ymdToLocalDate(dateYMD);
   if (!start || !target) return null;
   start.setHours(0, 0, 0, 0);
   target.setHours(0, 0, 0, 0);
-  const daysPassed = Math.floor((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  if (daysPassed < 0) return null;
-  // Every pushed day BEFORE this date held the cycle still for a day, so this
-  // date is that many cycle-days earlier than the calendar suggests. Counting
-  // only earlier pushes is what keeps a push local: nudging cycleOffset instead
-  // would re-label days before it too, which swallowed a completed workout.
-  const effective = daysPassed - pushesBefore(program, dateYMD);
-  return ((effective + (program.cycleOffset ?? 0)) % program.cycleDays + program.cycleDays) % program.cycleDays;
+  return Math.round((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+/** The cycle slot `effectiveDays` lands on. Negative-safe, per CLAUDE.md. */
+function slotFor(program: SavedProgram, effectiveDays: number): number {
+  return ((effectiveDays + (program.cycleOffset ?? 0)) % program.cycleDays + program.cycleDays) % program.cycleDays;
+}
+
+/** Parse a "YYYY-MM-DD" string to a local Date at midnight, or null. */
+function ymdToLocalDate(ymd: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+/**
+ * Bring a program's skip/push/pull marks back into a legal state.
+ *
+ * Every path that PERSISTS a program must run this, exactly as every path that
+ * rebuilds a `WorkoutMap` must run `canonicalizeWorkouts` — same failure mode
+ * (a stored date silently invalidated by a neighbouring edit) and same remedy.
+ *
+ * The invariant it restores: **every pulled date sits on a Rest**. A pull is
+ * recorded against a rest day, but adding a push in front of it, editing the
+ * cycle, changing the offset or resuming from a hold can all slide a workout
+ * onto that date — and a pull there would delete a session. Rather than letting
+ * the reader second-guess (which breaks the cycleOffset solve, see
+ * utils/cycleDrift.ts), a stale pull is RE-TARGETED to the next rest day within
+ * one cycle, and only dropped if the cycle has none. Re-targeting keeps the
+ * user's intent — "I want that day back" — which going inert would silently
+ * discard.
+ *
+ * Also enforces that the three lists are disjoint: a date cannot both be spent
+ * and be skipped, and push/pull at the same date is undefined by construction.
+ *
+ * Pure. Returns the SAME object when nothing needed fixing, so callers can use
+ * identity to skip a write.
+ */
+export function normalizeDriftDates(program: SavedProgram): SavedProgram {
+  const pulled = program.pulledDates ?? [];
+  if (pulled.length === 0) return program;
+
+  const skipped = new Set(program.skippedDates ?? []);
+  const pushed = new Set(program.pushedDates ?? []);
+  const next: string[] = [];
+  let changed = false;
+
+  for (const ymd of [...pulled].sort()) {
+    // A pull can never share a date with a skip or a push — those empty the day,
+    // and a pull needs the day to hold something.
+    if (skipped.has(ymd) || pushed.has(ymd)) { changed = true; continue; }
+    // Evaluate candidates WITHOUT this pull applied. The question is "what does
+    // this day hold today?" — a rest we may spend, or a session we must not —
+    // and `cycleDrift` counts pulls inclusively, so including the candidate
+    // would answer the day's content AFTER spending it, which is circular.
+    const asIs = { ...program, pulledDates: next };
+    let target: string | null = null;
+    // Search from the date itself out to one full cycle: if the cycle has a rest
+    // at all there is one within `cycleDays`, and if it has none there is none.
+    for (let i = 0; i <= program.cycleDays; i++) {
+      const candidate = addDaysYMD(ymd, i);
+      if (candidate === null) break;
+      if (skipped.has(candidate) || pushed.has(candidate) || next.includes(candidate)) continue;
+      const slot = cycleIndexForDate(asIs, candidate);
+      if (slot === null) continue;
+      const name = program.cyclePattern[slot];
+      if (!name || name === "Rest") { target = candidate; break; }
+    }
+    if (target === null) { changed = true; continue; }
+    if (target !== ymd) changed = true;
+    next.push(target);
+  }
+
+  if (!changed) return program;
+  return { ...program, pulledDates: next.length > 0 ? next.sort() : undefined };
+}
+
+/** `ymd` plus `days`, as "YYYY-MM-DD". Null when `ymd` is unparseable. */
+function addDaysYMD(ymd: string, days: number): string | null {
+  const d = ymdToLocalDate(ymd);
+  if (!d) return null;
+  d.setDate(d.getDate() + days);
+  return toYMD(d);
 }
 
 /** The program's scheduled workout for `dateYMD`, or null for Rest/empty days,

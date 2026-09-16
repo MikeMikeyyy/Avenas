@@ -61,6 +61,7 @@ export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
     day_ids: p.dayIds ?? [],
     skipped_dates: p.skippedDates ?? [],
     pushed_dates: p.pushedDates ?? [],
+    pulled_dates: p.pulledDates ?? [],
     workouts: p.workouts as Record<string, unknown>,
     extra_workouts: p.extraWorkouts ?? [],
   };
@@ -88,6 +89,7 @@ export function programFromRow(r: ProgramRow): SavedProgram {
     // program free of an empty array nobody needs.
     skippedDates: r.skipped_dates && r.skipped_dates.length > 0 ? r.skipped_dates : undefined,
     pushedDates: r.pushed_dates && r.pushed_dates.length > 0 ? r.pushed_dates : undefined,
+    pulledDates: r.pulled_dates && r.pulled_dates.length > 0 ? r.pulled_dates : undefined,
     workouts: r.workouts as unknown as WorkoutMap,
     extraWorkouts: r.extra_workouts,
   };

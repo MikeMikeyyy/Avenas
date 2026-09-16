@@ -1,34 +1,42 @@
 // utils/skippedDates.ts
 //
-// Days the user has marked as rest, and the two things they might mean by it.
+// Days the user has bent the program's timeline on, and the three things they
+// might mean by it.
 //
 //   SKIP  — this date schedules nothing. The cycle keeps its alignment, so
 //           tomorrow is still whatever it was going to be and this round's
-//           workout is simply missed.
+//           workout is simply missed. Costs a session, costs no time.
 //
 //   PUSH  — this date schedules nothing AND the cycle waits a day here, so the
 //           workout that would have fallen on it lands the next day and
-//           everything after follows. Days BEFORE it are untouched.
+//           everything after follows. Days BEFORE it are untouched. Keeps the
+//           session, costs a day: the program now finishes a day later.
 //
-// That last clause is the whole design. The obvious way to push is to nudge
-// `cycleOffset`, but that is a phase shift across the entire timeline with no
-// anchor — pushing Tuesday also re-labels Monday, so on a Push/Pull/Legs/Rest
-// cycle Monday's Push silently became Rest and a workout vanished from the
-// week. Recording WHICH DATES were pushed and counting only the ones strictly
-// before the date being resolved keeps the past fixed.
+//   PULL  — the rest day on this date is SPENT, so everything from here moves a
+//           day earlier. The mirror of a push, and how you pay one back: push
+//           on Tuesday because you're ill, pull a rest day later that week, and
+//           next week starts on the day you originally planned.
 //
-// Undo is therefore just removing the date: the alignment restores itself.
+// Anchoring to DATES is the whole design. The obvious way to shift a cycle is
+// to nudge `cycleOffset`, but that is a phase shift across the entire timeline
+// with no anchor — pushing Tuesday also re-labels Monday, so on a
+// Push/Pull/Legs/Rest cycle Monday's Push silently became Rest and a workout
+// vanished from the week. Counting marks against dates keeps the past fixed,
+// makes the actions commutative, and makes undo exact: remove the date and the
+// alignment restores itself, however many other marks exist around it.
 //
-// Neither action extends the program. If someone is out for more than a day or
-// two, pausing is the right tool — it shifts `startDate`, so the finish date
-// moves with it (see utils/programPause.ts).
+// The net shift at any date is `cycleDrift` in utils/workout.ts, which also
+// explains why a push counts strictly-before and a pull counts inclusive.
+//
+// For an absence longer than a day or two, pausing is still the right tool — it
+// shifts `startDate` wholesale rather than accruing marks (utils/programPause.ts).
 //
 // RN-free and pure so it can be unit-tested under plain node/tsx
 // (see scripts/verify-skipped-dates.ts).
 
 import type { SavedProgram } from "../constants/programs";
 
-type SkipFields = Pick<SavedProgram, "skippedDates" | "pushedDates">;
+type SkipFields = Pick<SavedProgram, "skippedDates" | "pushedDates" | "pulledDates">;
 
 /** Is `ymd` marked as rest (either kind)? */
 export function isDateSkipped(program: SkipFields, ymd: string): boolean {
@@ -40,19 +48,9 @@ export function isDatePushed(program: SkipFields, ymd: string): boolean {
   return !!program.pushedDates?.includes(ymd);
 }
 
-/**
- * How many pushed dates fall strictly BEFORE `ymd`. Each one delays the cycle
- * by a day, so this is subtracted from `daysPassed` when resolving that date.
- * Strictly before, so a pushed date doesn't delay itself — it resolves to
- * nothing anyway, being skipped.
- */
-export function pushesBefore(program: SkipFields, ymd: string): number {
-  const pushed = program.pushedDates;
-  if (!pushed || pushed.length === 0) return 0;
-  let n = 0;
-  // Both sides are "YYYY-MM-DD", so a string compare is a date compare.
-  for (const d of pushed) if (d < ymd) n += 1;
-  return n;
+/** Is `ymd` a rest day the user spent to bring the schedule forward? */
+export function isDatePulled(program: SkipFields, ymd: string): boolean {
+  return !!program.pulledDates?.includes(ymd);
 }
 
 const withSorted = (list: string[]): string[] => [...list].sort();
@@ -75,19 +73,39 @@ export function pushDate(program: SavedProgram, ymd: string): SavedProgram {
 }
 
 /**
- * `program` with `ymd` restored: no longer rest, and no longer delaying
- * anything. Undoes a push as well as a skip, which is what "move them back a
- * day" means. Returns the SAME object when there was nothing to undo, so
- * callers can use identity to skip a write.
+ * `program` with the rest day on `ymd` SPENT: it no longer rests, and
+ * everything from that date onward moves a day earlier. The mirror of
+ * `pushDate`, and the way a user pays back a push so the program doesn't end
+ * up a day longer.
+ *
+ * Only meaningful on a date the cycle currently rests on — callers check that
+ * before offering it, and `cycleDrift` (utils/workout.ts) checks it again at
+ * resolve time so a push added afterwards can't turn this into a deleted
+ * workout.
+ */
+export function pullDate(program: SavedProgram, ymd: string): SavedProgram {
+  if (isDatePulled(program, ymd)) return program;
+  return { ...program, pulledDates: withSorted([...(program.pulledDates ?? []), ymd]) };
+}
+
+/**
+ * `program` with `ymd` restored: no longer rest, no longer delaying anything,
+ * and no longer spent. Undoes a push, a skip or a pull, which is what "put that
+ * day back" means in each case. Returns the SAME object when there was nothing
+ * to undo, so callers can use identity to skip a write.
  */
 export function unskipDate(program: SavedProgram, ymd: string): SavedProgram {
-  if (!isDateSkipped(program, ymd) && !isDatePushed(program, ymd)) return program;
+  if (!isDateSkipped(program, ymd) && !isDatePushed(program, ymd) && !isDatePulled(program, ymd)) {
+    return program;
+  }
   const skipped = (program.skippedDates ?? []).filter(d => d !== ymd);
   const pushed = (program.pushedDates ?? []).filter(d => d !== ymd);
+  const pulled = (program.pulledDates ?? []).filter(d => d !== ymd);
   return {
     ...program,
     skippedDates: skipped.length > 0 ? skipped : undefined,
     pushedDates: pushed.length > 0 ? pushed : undefined,
+    pulledDates: pulled.length > 0 ? pulled : undefined,
   };
 }
 

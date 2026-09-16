@@ -308,6 +308,16 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
     startDate: formatStoredDate(new Date()),
     cycleOffset: undefined,
     completedDate: undefined,
+    // The sender's run-state never comes with the programming. Their hold
+    // would start this copy already paused, and their rest/push/pull days are
+    // all dated before this copy's startDate — so every one of them would count
+    // as drift against day 1, landing the recipient several cycle slots in and
+    // moving their finish date out by the same amount. Same reasoning as
+    // re-activating a program in app/programs.tsx.
+    pausedAt: undefined,
+    skippedDates: undefined,
+    pushedDates: undefined,
+    pulledDates: undefined,
   };
   await setJSON(PROGRAMS_KEY, [...programs, imported]);
   return importedId;

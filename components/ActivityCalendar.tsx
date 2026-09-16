@@ -3,7 +3,8 @@ import { View, Text, StyleSheet } from "react-native";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
 import type { SavedProgram } from "../constants/programs";
-import { parseStoredDate, toYMD } from "../utils/dates";
+import { toYMD } from "../utils/dates";
+import { getWorkoutForDate } from "../utils/workout";
 
 const MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_ABBRS    = ["M","T","W","T","F","S","S"];
@@ -14,18 +15,6 @@ interface Props {
   isDark: boolean;
   workoutDates: string[];   // YYYY-MM-DD strings
   activeProgram: SavedProgram | null;
-}
-
-function isRestDayForDate(d: Date, prog: SavedProgram): boolean {
-  const start = parseStoredDate(prog.startDate);
-  if (!start) return false;
-  start.setHours(0, 0, 0, 0);
-  const target = new Date(d);
-  target.setHours(0, 0, 0, 0);
-  const days = Math.floor((target.getTime() - start.getTime()) / 86400000);
-  if (days < 0) return false;
-  const idx = (((days + (prog.cycleOffset ?? 0)) % prog.cycleDays) + prog.cycleDays) % prog.cycleDays;
-  return prog.cyclePattern[idx] === "Rest";
 }
 
 function buildMonthCells(
@@ -43,7 +32,6 @@ function buildMonthCells(
 
   for (let day = 1; day <= totalDays; day++) {
     const ds   = `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-    const date = new Date(year, month, day);
 
     if (ds === todayStr) {
       cells.push(workoutSet.has(ds) ? "todayWorkout" : "today");
@@ -52,7 +40,13 @@ function buildMonthCells(
     } else {
       if (workoutSet.has(ds)) {
         cells.push("workout");
-      } else if (prog && isRestDayForDate(date, prog)) {
+      } else if (prog && getWorkoutForDate(prog, ds) === null) {
+        // Through the shared resolver, so this agrees with the week strip above
+        // it. It used to hand-roll the cycle formula, which meant it knew
+        // nothing about days you marked off, pushed, or held the program on —
+        // and painted "missed" on all of them. Days before the program started
+        // and days inside a hold now read as rest too, which is the honest
+        // answer: you can't miss a workout that was never scheduled.
         cells.push("rest");
       } else {
         cells.push("missed");

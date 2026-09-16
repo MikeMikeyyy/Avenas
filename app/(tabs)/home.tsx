@@ -28,11 +28,11 @@ import {
   MAX_TIER_DAYS,
   getTier,
 } from "../../constants/streakTiers";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
-import { toYMD, fmtDuration } from "../../utils/dates";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek, programFinishDate } from "../../constants/programs";
+import { toYMD, fmtDuration, MONTH_NAMES } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
-import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../../utils/restDay";
+import { applyPullDay, applyRestDay, clearRestDay, isDatePulled, isDatePushed, isDateSkipped } from "../../utils/restDay";
 import { dayIdAt } from "../../utils/programDays";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
@@ -120,6 +120,11 @@ type WeekDay = {
   isSkipped: boolean;
   /** Marked off AND delaying everything after it, as opposed to a plain skip. */
   isPushed: boolean;
+  /** A rest day the user SPENT to bring the schedule forward. Not a rest any
+   *  more — it holds the workout that moved up onto it. */
+  isPulled: boolean;
+  /** This day rests and could be spent to pull the schedule forward. */
+  canPull: boolean;
   editable: boolean;
 };
 
@@ -453,12 +458,19 @@ export default function HomeScreen() {
           isRest: name === null,
           isSkipped: isDateSkipped(activeProgram, dateStr),
           isPushed: isDatePushed(activeProgram, dateStr),
+          isPulled: isDatePulled(activeProgram, dateStr),
+          // A rest the user could spend to pull the schedule forward. Future
+          // only, for the same reason marking off is: changing the past would
+          // rewrite what you should have trained on a day you already lived
+          // through, and whether a streak gap was forgiven.
+          canPull: dateStr >= todayStr
+            && name === null
+            && !isDateSkipped(activeProgram, dateStr),
           // Tappable only when there is something to do. A day the program
-          // already rests has no workout to move, so marking it off changed
-          // nothing and just left a ✕ sitting there. A day you DID mark off
-          // stays tappable so it can be restored.
-          editable: dateStr >= todayStr
-            && (name !== null || isDateSkipped(activeProgram, dateStr)),
+          // already rests can now be SPENT, so it's tappable too — before, a
+          // rest day did nothing on tap and just left a ✕ sitting there. A day
+          // you DID mark off stays tappable so it can be restored.
+          editable: dateStr >= todayStr,
         });
       }
     }
@@ -466,17 +478,23 @@ export default function HomeScreen() {
     return { completedCount, plannedCount, totalMinutes, totalVolumeKg, weekDays };
   }, [workoutHistory, activeProgram]);
 
-  // Tapping a day in the week strip marks it as rest, or restores it. Marking
-  // prompts (skip vs push the cycle) only when there's a workout there to move;
-  // restoring never prompts, because undoing a rest day isn't asking to undo a
-  // push. Reloads after either, so the strip redraws from the written program.
+  // Tapping a day in the week strip does one of three things, by what that day
+  // currently is:
+  //   marked off (skipped OR spent) -> restore it, no prompt. Undoing a rest day
+  //     isn't asking to undo a push, and undoing a spend isn't either.
+  //   a rest day -> offer to SPEND it, bringing everything after forward. This
+  //     is how a push gets paid back so the program doesn't run a day longer.
+  //   a workout  -> the skip/push prompt, as before.
+  // Reloads after any of them, so the strip redraws from the written program.
   const onWeekDayPress = useCallback((day: WeekDay) => {
     if (!activeProgram) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const ymd = toYMD(day.date);
-    const action = day.isSkipped
+    const action = day.isSkipped || day.isPulled
       ? clearRestDay(activeProgram.id, ymd)
-      : applyRestDay(activeProgram.id, ymd, "ask");
+      : day.canPull
+        ? applyPullDay(activeProgram.id, ymd)
+        : applyRestDay(activeProgram.id, ymd, "ask");
     void action.then(() => loadData());
   }, [activeProgram, loadData]);
 
@@ -584,6 +602,10 @@ export default function HomeScreen() {
           const paused = !!activeProgram.pausedAt;
           const accent = paused ? PAUSED_ORANGE : ACCT;
           const week = getCurrentWeek(activeProgram);
+          const finish = programFinishDate(activeProgram);
+          const finishLabel = finish
+            ? `${finish.getDate()} ${MONTH_NAMES[finish.getMonth()]}`
+            : null;
           return (
           <NeuCard dark={isDark} style={styles.programCard}>
             <View style={styles.programCardInner}>
@@ -608,6 +630,13 @@ export default function HomeScreen() {
                   />
                 ))}
               </View>
+              {/* The end of the timeline, so moving a day around has somewhere
+                  visible to land: pushing a day moves this out, spending a rest
+                  day brings it back. Hidden while held, because a hold has no
+                  end date until it's resumed. */}
+              {!paused && finishLabel && (
+                <Text style={[styles.programFinish, { color: t.ts }]}>Finishes {finishLabel}</Text>
+              )}
             </View>
           </NeuCard>
           );
@@ -669,9 +698,13 @@ export default function HomeScreen() {
                   accessibilityLabel={day.editable
                     ? `${day.label}, ${day.workoutName}. ${day.isSkipped
                         ? day.isPushed
-                          ? "Rest day, everything after is pushed back. Tap to undo"
+                          ? "Rest day, everything after moved forward a day. Tap to undo"
                           : "Marked as rest. Tap to restore"
-                        : "Tap to mark as rest"}`
+                        : day.isPulled
+                          ? "Rest day used to bring the schedule forward. Tap to restore it"
+                          : day.canPull
+                            ? "Rest day. Tap to use it and bring everything forward a day"
+                            : "Tap to mark as rest"}`
                     : undefined}
                   style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}
                 >
@@ -686,13 +719,17 @@ export default function HomeScreen() {
                   <Text style={[styles.weekDayName, { color: day.isRest ? t.ts : day.completed ? t.ts : t.tp, opacity: day.isRest ? 0.4 : day.completed ? 0.4 : 1 }]}>
                     {day.workoutName}
                   </Text>
-                  {/* Marks the days YOU turned off, which the program's own rest
+                  {/* Marks the days YOU changed, which the program's own rest
                       days never carry — otherwise there's no way to tell which
-                      ones can be restored. An arrow when the push moved
-                      everything after it, so undoing is clearly available. */}
-                  {day.isSkipped && (
+                      ones can be restored. An X dropped the workout; an arrow
+                      kept it and moved the schedule, and points UP because
+                      tapping it pulls everything back where it was; a minus is
+                      a rest day you spent to catch the schedule up. */}
+                  {(day.isSkipped || day.isPulled) && (
                     <Ionicons
-                      name={day.isPushed ? "arrow-down-circle-outline" : "close-circle-outline"}
+                      name={day.isPulled
+                        ? "remove-circle-outline"
+                        : day.isPushed ? "arrow-up-circle-outline" : "close-circle-outline"}
                       size={13}
                       color={t.ts}
                       style={{ marginLeft: 5, opacity: 0.6 }}
@@ -976,4 +1013,5 @@ const styles = StyleSheet.create({
   programWeek: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
   progressRow: { flexDirection: "row", gap: 5 },
   progressSegment: { flex: 1, height: 6, borderRadius: 3 },
+  programFinish: { fontFamily: FontFamily.regular, fontSize: 12, color: TS, marginTop: 8 },
 });

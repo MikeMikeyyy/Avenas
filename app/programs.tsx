@@ -11,7 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Reanimated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek } from "../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
@@ -20,7 +20,7 @@ import BounceButton from "../components/BounceButton";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import { formatStoredDate, todayYMD } from "../utils/dates";
-import { cycleIndexForDate } from "../utils/workout";
+import { cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
 import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
@@ -222,6 +222,8 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
   const paused = !!program.pausedAt;
   const accent = paused ? PAUSED_ORANGE : ACCT;
   const week = getCurrentWeek(program);
+  const finish = programFinishDate(program);
+  const finishLabel = finish ? formatStoredDate(finish) : null;
 
   return (
     <NeuCard dark={isDark} style={styles.activeProgramCard}>
@@ -256,6 +258,17 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
             <Ionicons name="calendar-outline" size={14} color={t.ts} />
             <Text style={[styles.metaText, { color: t.ts }]}>Started {program.startDate}</Text>
           </View>
+
+          {/* The other end of the timeline. Moves out when a day is pushed and
+              back when a rest day is spent, which is the only place that trade
+              is visible. Not shown while held — a hold has no finish date until
+              it's resumed. */}
+          {!paused && finishLabel && (
+            <View style={styles.metaRow}>
+              <Ionicons name="flag-outline" size={14} color={t.ts} />
+              <Text style={[styles.metaText, { color: t.ts }]}>Finishes {finishLabel}</Text>
+            </View>
+          )}
 
           <View style={styles.cycleGrid}>
             {program.cyclePattern.map((day, i) => {
@@ -542,7 +555,22 @@ export default function ProgramsScreen() {
         // from a previous run's "set workout day" would shift day 1 arbitrarily.
         // pausedAt goes for the same reason — a hold belongs to the run it was
         // taken during, and carrying it over would make the new run start paused.
-        return { ...p, status: "active" as const, startDate: todayStr, currentWeek: 1, cycleOffset: undefined, pausedAt: undefined };
+        //
+        // The rest/push/pull marks go too, and they matter most: every one of
+        // them is dated BEFORE the new startDate, so all of them would count as
+        // drift against day 1 — landing the fresh run's first day several slots
+        // into the cycle and moving its finish date out by the same amount.
+        return {
+          ...p,
+          status: "active" as const,
+          startDate: todayStr,
+          currentWeek: 1,
+          cycleOffset: undefined,
+          pausedAt: undefined,
+          skippedDates: undefined,
+          pushedDates: undefined,
+          pulledDates: undefined,
+        };
       }
       if (p.status === "active") {
         const week = getCurrentWeek(p);
@@ -644,8 +672,13 @@ export default function ProgramsScreen() {
       startDate: todayStr,
       cycleOffset: undefined,
       completedDate: undefined,
-      // A copy is a brand-new program; the original's hold doesn't come with it.
+      // A copy is a brand-new program; the original's hold doesn't come with it,
+      // and neither do the days the user rested, pushed or spent during it —
+      // those are dated before this copy exists and would all count as drift.
       pausedAt: undefined,
+      skippedDates: undefined,
+      pushedDates: undefined,
+      pulledDates: undefined,
     };
     const updated = [...programs, copy];
     setPrograms(updated);
@@ -687,8 +720,12 @@ export default function ProgramsScreen() {
     if (naturalDayIndex === null) return;
     const n = activeProgram.cycleDays;
     const cycleOffset = ((targetDayIndex - naturalDayIndex) % n + n) % n;
+    // Re-phasing the cycle can move a workout onto a date the user had spent as
+    // a rest day, which would turn that pull into a deleted session. The reader
+    // is a dumb count by design (see utils/cycleDrift.ts), so the write side
+    // has to re-target those marks.
     const updated = programs.map(p =>
-      p.id === activeProgram.id ? { ...p, cycleOffset } : p
+      p.id === activeProgram.id ? normalizeDriftDates({ ...p, cycleOffset }) : p
     );
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
