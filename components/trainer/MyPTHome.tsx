@@ -23,6 +23,7 @@ import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import GroupInviteCard from "./GroupInviteCard";
+import GroupAvatar from "./GroupAvatar";
 import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites } from "../../lib/groups";
 import { loadGroupRows, type GroupChatRow } from "../../utils/groupStore";
 import type { GroupInvite } from "../../constants/groups";
@@ -62,8 +63,7 @@ function fmtAgo(iso: string): string {
 export default function MyPTHome() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  // The divider tone on each theme — t.div matches the dark card exactly, so dark
-  // needs translucent white to show at all.
+  // Loading placeholders sit a shade below a divider in both themes.
   const skeletonFill = isDark ? "rgba(255,255,255,0.08)" : t.div;
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -469,7 +469,7 @@ export default function MyPTHome() {
                               styles.cycleChip,
                               isTraining
                                 ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                : { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div },
+                                : { backgroundColor: t.div },
                             ]}
                           >
                             <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
@@ -676,7 +676,7 @@ export default function MyPTHome() {
                                 styles.cycleChip,
                                 isTraining
                                   ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                  : { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div },
+                                  : { backgroundColor: t.div },
                               ]}
                             >
                               <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
@@ -796,23 +796,19 @@ export default function MyPTHome() {
                     onDecline={handleDeclineInvite}
                   />
                 ))}
-                {groups.length > 0 && (
-                  <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                    {groups.map((g, i) => (
-                      <TouchableOpacity
-                        key={g.group.id}
-                        onPress={() => router.navigate({ pathname: "/trainer/group/[id]", params: { id: g.group.id, name: g.group.name } })}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Open group ${g.group.name}`}
-                        style={[
-                          styles.summaryRow,
-                          { borderBottomColor: t.div, borderBottomWidth: i === groups.length - 1 ? 0 : 1 },
-                        ]}
-                      >
-                        <View style={[styles.groupIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                          <PeopleIcon size={16} color={ACCT} />
-                        </View>
+                {/* One card per group, matching the invite cards directly
+                    above them and the trainer side's list. */}
+                {groups.map(g => (
+                  <BounceButton
+                    key={g.group.id}
+                    style={{ marginBottom: 10 }}
+                    onPress={() => router.navigate({ pathname: "/trainer/group/[id]", params: { id: g.group.id, name: g.group.name } })}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open group ${g.group.name}`}
+                  >
+                    <NeuCard dark={isDark} radius={16}>
+                      <View style={styles.summaryRow}>
+                        <GroupAvatar uri={g.group.photoUri} size={30} isDark={isDark} />
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.group.name}</Text>
                           <Text style={[styles.groupMeta, { color: t.ts }]}>
@@ -821,10 +817,10 @@ export default function MyPTHome() {
                         </View>
                         <UnreadBadge count={g.unreadCount} />
                         <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                      </TouchableOpacity>
-                    ))}
-                  </NeuCard>
-                )}
+                      </View>
+                    </NeuCard>
+                  </BounceButton>
+                ))}
               </>
             )}
           </>

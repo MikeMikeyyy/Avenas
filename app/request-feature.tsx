@@ -9,6 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
@@ -147,6 +148,11 @@ export default function RequestFeatureScreen() {
           </ScrollView>
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
+
+      {/* Both fields are multiline, so Return adds a line instead of closing the
+          keyboard. This is the same floating down-button the other text-entry
+          screens use; it renders nothing while the keyboard is hidden. */}
+      <KeyboardDismissButton />
     </View>
   );
 }

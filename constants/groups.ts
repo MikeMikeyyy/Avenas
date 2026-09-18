@@ -17,6 +17,9 @@ export type Group = {
   name: string;
   /** True when the current account owns this group (drives the manage affordances). */
   isOwner: boolean;
+  /** The group photo, set by the owner (migration 0030). Absent = no photo, and
+   *  every surface falls back to the people icon rather than a blank circle. */
+  photoUri?: string;
   /** Member count including the owner. */
   memberCount: number;
   createdAtISO: string;
@@ -53,6 +56,9 @@ export type GroupMember = {
 export type GroupInvite = {
   groupId: string;
   name: string;
+  /** The group's own photo, so the invite shows what you're being invited to
+   *  and not just who invited you. */
+  photoUri?: string;
   ownerId: string;
   ownerName: string;
   ownerInitials: string;

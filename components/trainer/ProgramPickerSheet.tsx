@@ -5,6 +5,7 @@ import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { SavedProgram } from "../../constants/programs";
 
@@ -51,7 +52,7 @@ export default function ProgramPickerSheet({ visible, title, subtitle, programs,
                             styles.cycleChip,
                             isTraining
                               ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                              : { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div },
+                              : { backgroundColor: t.div },
                           ]}
                         >
                           <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
@@ -91,6 +92,6 @@ const styles = StyleSheet.create({
   cycleGrid:  { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   cycleChip:  { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
   cycleChipText: { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
-  cancel:     { borderRadius: 14, paddingVertical: 14, alignItems: "center" },
+  cancel:     { ...pill(PILL_H_SM) },
   cancelText: { fontFamily: FontFamily.bold, fontSize: 15 },
 });

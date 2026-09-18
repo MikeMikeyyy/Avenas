@@ -25,7 +25,6 @@ import { RADAR_GROUPS } from "../utils/muscleGroups";
 import { computeSessionRecords, ordinal, type SessionRecord } from "../utils/workoutSummary";
 import { fmtDuration } from "../utils/dates";
 import { toDisplayWeight, trimNumber } from "../utils/units";
-import { notifyAchievement } from "../utils/notificationScheduler";
 
 // ─── WorkoutSummarySheet ─────────────────────────────────────────────────────
 // Full-screen celebratory summary shown right after a workout is finished on
@@ -64,8 +63,6 @@ export default function WorkoutSummarySheet({
   const { width } = useWindowDimensions();
 
   const [data, setData] = useState<SummaryData | null>(null);
-  // Which workout id the PR notification already fired for (see below).
-  const prFiredFor = useRef<string | null>(null);
 
   // Records / muscle split need history + custom exercises from storage. The
   // just-finished workout may or may not have been persisted yet (the write
@@ -83,27 +80,13 @@ export default function WorkoutSummarySheet({
         records,
         muscleStats: computeMuscleGroupStats([workout], customs),
       });
-      // PR achievement notification (gated by the achievements toggle inside
-      // notifyAchievement). One consolidated banner per session, headlining
-      // the heaviest-weight record; it also lands in the notification center
-      // as a keepsake. Guarded per workout id — the effect re-runs on a unit
-      // flip (isKg/unit deps) and must not fire twice.
-      if (records.length > 0 && prFiredFor.current !== workout.id) {
-        prFiredFor.current = workout.id;
-        const top = records.find(r => r.kind === "heaviest") ?? records[0];
-        const disp = toDisplayWeight(top.valueKg, isKg);
-        const val = top.kind === "heaviest" ? `${trimNumber(disp, 1)} ${unit}` : `${Math.round(disp)} ${unit}`;
-        const what = top.kind === "oneRepMax" ? "estimated 1RM" : top.kind === "bestSetVolume" ? "set volume" : "top set";
-        notifyAchievement(
-          records.length === 1 ? "New personal record!" : `${records.length} new personal records!`,
-          records.length === 1
-            ? `${top.exerciseName}: ${what} of ${val}.`
-            : `${top.exerciseName} hit ${val}, plus more. Strong session.`,
-        );
-      }
+      // The PR NOTIFICATION no longer comes from here: it fired for every record
+      // on this sheet, first-time logs included. Achievements (the notification
+      // and the Home card) are decided in utils/achievements.ts when the workout
+      // is saved. This sheet still lists every record the session set.
     })();
     return () => { alive = false; };
-  }, [workout, isKg, unit]);
+  }, [workout]);
 
   useEffect(() => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

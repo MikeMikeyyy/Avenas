@@ -15,6 +15,9 @@ import Svg, { Path } from "react-native-svg";
 
 import NeuCard from "../../../components/NeuCard";
 import BounceButton from "../../../components/BounceButton";
+import ProgramSnapshotView from "../../../components/ProgramSnapshotView";
+import ProgramActionFabs from "../../../components/ProgramActionFabs";
+import ProgramSummarySheet from "../../../components/ProgramSummarySheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
 import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -42,6 +45,7 @@ export default function ReviewScreen() {
   const [entry, setEntry] = useState<SentProgram | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [kbHeight, setKbHeight] = useState(0);
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
@@ -180,63 +184,27 @@ export default function ReviewScreen() {
                 </Text>
               </View>
               {snap ? (
-                <>
-                  <View style={styles.metaRow}>
-                    <Ionicons name="calendar-outline" size={13} color={t.ts} />
-                    <Text style={[styles.metaText, { color: t.ts }]}>{snap.totalWeeks} weeks</Text>
-                  </View>
-                  <View style={styles.cycleGrid}>
-                    {snap.cyclePattern.map((day, i) => {
-                      const isTraining = day !== "Rest" && day !== "";
-                      return (
-                        <View
-                          key={i}
-                          style={[
-                            styles.cycleChip,
-                            isTraining
-                              ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                              : { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div },
-                          ]}
-                        >
-                          <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                            {day || "Rest"}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                  <View style={[styles.daysList, { borderTopColor: t.div }]}>
-                    <Text style={[styles.label, { color: t.ts, marginBottom: 8 }]}>EXERCISES</Text>
-                    {Object.entries(snap.workouts).map(([key, exercises], i) => {
-                      const dayName = key.split(":").slice(1).join(":") || key;
-                      return (
-                        <View key={key} style={[styles.daySection, i > 0 && { marginTop: 14 }]}>
-                          <Text style={[styles.dayName, { color: t.tp }]}>{dayName}</Text>
-                          {exercises.length === 0 ? (
-                            <Text style={[styles.exerciseRow, { color: t.ts, fontStyle: "italic" }]}>No exercises</Text>
-                          ) : (
-                            exercises.map(ex => (
-                              <Text key={ex.id} style={[styles.exerciseRow, { color: t.ts }]} numberOfLines={1}>
-                                · {ex.name}
-                              </Text>
-                            ))
-                          )}
-                        </View>
-                      );
-                    })}
-                  </View>
-                  <BounceButton style={{ marginTop: 12 }} onPress={() => router.navigate({ pathname: "/new-program", params: { reviewId: entry.id } })}>
-                    <NeuCard dark={isDark} radius={14} innerStyle={styles.editBtnInner}>
-                      <Ionicons name="create-outline" size={16} color={t.tp} />
-                      <Text style={[styles.editBtnText, { color: t.tp }]}>Open in Program Builder</Text>
-                    </NeuCard>
-                  </BounceButton>
-                </>
+                <View style={styles.metaRow}>
+                  <Ionicons name="calendar-outline" size={13} color={t.ts} />
+                  <Text style={[styles.metaText, { color: t.ts }]}>
+                    {snap.totalWeeks} week{snap.totalWeeks === 1 ? "" : "s"} · {snap.trainingDays} training day{snap.trainingDays === 1 ? "" : "s"} · {snap.cycleDays}-day cycle
+                  </Text>
+                </View>
               ) : (
                 <Text style={[styles.noSnap, { color: t.ts }]}>This entry has no program snapshot.</Text>
               )}
             </View>
           </NeuCard>
+
+          {/* The program itself, in the same detail as viewing a program that
+              was sent: a trainer deciding whether this needs changing is being
+              asked about the sets, reps, weights and rest, so those have to be
+              on the screen where the decision is made. */}
+          {snap && (
+            <View style={{ marginTop: 18 }}>
+              <ProgramSnapshotView snapshot={snap} isDark={isDark} />
+            </View>
+          )}
 
           {!isReturned ? (
             <BounceButton style={{ marginTop: 16 }} onPress={handleSendBack}>
@@ -271,6 +239,32 @@ export default function ReviewScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
+      {/* Builder + Summary. The builder carries the groupId: a group review is
+          addressed to the group's owner and can't be found in a coach's own
+          inbox, so without it the builder opens blank and saves into nothing.
+          Both hide while the keyboard is up, like every other floating control
+          in the app. */}
+      {snap && kbHeight === 0 && (
+        <ProgramActionFabs
+          bottom={insets.bottom + 24}
+          isDark={isDark}
+          onOpenBuilder={() => router.navigate({
+            pathname: "/new-program",
+            params: groupId ? { reviewId: entry.id, groupId } : { reviewId: entry.id },
+          })}
+          onOpenSummary={() => setSummaryOpen(true)}
+        />
+      )}
+
+      {summaryOpen && snap && (
+        <ProgramSummarySheet
+          visible
+          snapshot={snap}
+          isDark={isDark}
+          onClose={() => setSummaryOpen(false)}
+        />
+      )}
+
       {kbHeight > 0 && Platform.OS === "ios" && (
         <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, zIndex: 999 }}>
           <TouchableOpacity
@@ -299,16 +293,11 @@ const styles = StyleSheet.create({
   nameDisplay:    { fontFamily: FontFamily.bold, fontSize: 18 },
   metaRow:        { flexDirection: "row", alignItems: "center", gap: 6 },
   metaText:       { fontFamily: FontFamily.regular, fontSize: 13 },
-  cycleGrid:      { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 2 },
-  cycleChip:      { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
-  cycleChipText:  { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
-  daysList:       { marginTop: 12, paddingTop: 12, borderTopWidth: 1 },
-  daySection:     { gap: 2 },
-  dayName:        { fontFamily: FontFamily.bold, fontSize: 14, marginBottom: 4 },
-  exerciseRow:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, paddingLeft: 4 },
+  // The cycle strip and the day-by-day breakdown are drawn by
+  // components/ProgramSnapshotView.tsx, which owns their styles.
   noSnap:         { fontFamily: FontFamily.regular, fontSize: 13, padding: 8 },
-  editBtnInner:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12, minHeight: 44 },
-  editBtnText:    { fontFamily: FontFamily.bold, fontSize: 14 },
+  // Opening the builder moved out of this card and onto the floating pair at
+  // the bottom (components/ProgramActionFabs.tsx), beside Summary.
   sendBtn:        { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: PILL_RADIUS, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   sendBtnText:    { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   returnedBanner: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 16, padding: 14, borderRadius: 14 },

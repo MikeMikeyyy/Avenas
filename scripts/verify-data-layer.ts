@@ -14,6 +14,7 @@ import {
   resolveWorkoutForDate,
   getEffectiveToday,
   buildPrevByName,
+  buildPrevNotesByName,
   prevDayScopeFor,
   normalizeExerciseName,
 } from "../utils/workout";
@@ -224,6 +225,34 @@ const tzHist: CompletedWorkout[] = [{
 }];
 eq(buildPrevByName(tzHist, "2026-05-10"), {}, "prev beforeDate: same-local-day session (completedAt rolled to prev UTC day) is excluded");
 eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate: that session is included for the next day");
+
+// ── buildPrevNotesByName: the LAST session's note, and only that one ───────────
+// Week 1's note shows in week 2. Write a new one and week 3 shows that. Write
+// none and week 3 shows nothing, with week 1's note still in the journal.
+{
+  const noted = (id: string, completedAt: string, note: string): CompletedWorkout => ({
+    ...makeWorkout(id, completedAt, "Bench Press", "100", "5"),
+    exercises: [{ name: "Bench Press", notes: note, sets: [{ type: "working", weight: "100", reps: "5", done: true }] }],
+  });
+  const week1 = noted("n1", "2026-03-02T10:00:00.000Z", "Felt heavy, 3s down");
+  const week2 = noted("n2", "2026-03-09T10:00:00.000Z", "Better, elbows tucked");
+  const week2Blank = noted("n2b", "2026-03-09T10:00:00.000Z", "   ");
+
+  eq(buildPrevNotesByName([week1])["bench press"], "Felt heavy, 3s down", "notes: last week's note carries to this week");
+  eq(buildPrevNotesByName([week2, week1])["bench press"], "Better, elbows tucked", "notes: the newer note replaces the older one");
+  eq(buildPrevNotesByName([week2Blank, week1]), {}, "notes: a session with no note BLOCKS the older one (journal keeps it)");
+  eq(buildPrevNotesByName([]), {}, "notes: nothing logged yet -> no hint");
+  eq(buildPrevNotesByName([week2, week1], "2026-03-09")["bench press"], "Felt heavy, 3s down",
+    "notes: logging a past date only sees sessions before it");
+
+  // Scoped to the day, exactly like the set hints: two days that both include
+  // Bench Press keep their own notes.
+  const pushDay = { ...week1, id: "p", workoutName: "Push", dayId: "d0", programId: "P" };
+  const armsDay = { ...noted("a", "2026-03-10T10:00:00.000Z", "Arms day note"), workoutName: "Arms", dayId: "d3", programId: "P" };
+  const scope = { name: "Push", dayId: "d0", programId: "P", absorbsUnidentified: true };
+  eq(buildPrevNotesByName([armsDay, pushDay], undefined, scope)["bench press"], "Felt heavy, 3s down",
+    "notes: another day's note is never borrowed");
+}
 
 const fmtHist: CompletedWorkout[] = [{
   id: "w", date: "2026-03-01", completedAt: "2026-03-01T10:00:00.000Z", workoutName: "X", durationSeconds: 0,

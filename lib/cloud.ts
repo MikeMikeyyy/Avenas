@@ -7,6 +7,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
 import { getJSON, removeKey, setJSON } from "../utils/storage";
+import { ACHIEVEMENTS_KEY } from "../constants/achievements";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DRAFT_KEY, WORKOUT_DAY_OVERRIDE_KEY,
   type CompletedWorkout, type SavedProgram,
@@ -232,6 +233,20 @@ export async function setCacheOwner(userId: string): Promise<void> {
  * cache and sign out.
  */
 export async function deleteAccount(): Promise<void> {
+  // The profile photo lives in the public "avatars" Storage bucket, which the
+  // auth.users cascade never reaches, so it stayed reachable by its link after
+  // the account was gone (and the Privacy Policy promises it's deleted). Removed
+  // FIRST, while this session still owns the folder the storage policy checks.
+  // Best effort: a failure here must never block the deletion the user asked for.
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { error: photoError } = await supabase.storage.from("avatars").remove([`${user.id}/avatar`]);
+      if (photoError && __DEV__) console.warn("[avenas] delete avatar", photoError.message);
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] delete avatar", e);
+  }
   const { error } = await supabase.rpc("delete_own_account");
   if (error) throw new Error(error.message);
   // Server-side push_tokens rows are already gone (FK cascade from the deleted
@@ -256,6 +271,9 @@ export async function clearLocalUserData(): Promise<void> {
     removeKey(CUSTOM_KEY),
     removeKey(WORKOUT_DRAFT_KEY),
     removeKey(WORKOUT_DAY_OVERRIDE_KEY),
+    // Local-only, but it describes THIS account's training: the next account on
+    // the device mustn't inherit its PR cards or its already-earned milestones.
+    removeKey(ACHIEVEMENTS_KEY),
     clearTrainerData(),
     clearChatData(),
     clearModerationData(),

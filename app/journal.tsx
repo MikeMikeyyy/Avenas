@@ -496,7 +496,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
               <TouchableOpacity
                 activeOpacity={0.75}
                 onPress={() => setAssocProgramId(addToActive ? null : activeProgram.id)}
-                style={[styles.cnToggleRow, { borderTopColor: isDark ? "rgba(255,255,255,0.1)" : t.div, borderBottomColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}
+                style={[styles.cnToggleRow, { borderTopColor: t.div, borderBottomColor: t.div }]}
               >
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.cnToggleTitle, { color: t.tp }]}>Add to {activeProgram.name}</Text>
@@ -793,7 +793,7 @@ export default function JournalScreen() {
                           key={i}
                           style={[
                             styles.apProgressSeg,
-                            { backgroundColor: filled ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                            { backgroundColor: filled ? ACCT : t.div },
                             filled && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
                           ]}
                         />
@@ -867,7 +867,7 @@ export default function JournalScreen() {
                             current={sessionNum}
                             total={progInfo.totalSessions}
                             accent={ACCT}
-                            track={isDark ? "rgba(255,255,255,0.1)" : t.div}
+                            track={t.div}
                           />
                         )}
                       </View>

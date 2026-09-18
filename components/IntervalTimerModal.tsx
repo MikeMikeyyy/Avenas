@@ -14,6 +14,7 @@ import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import BounceButton from "./BounceButton";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
+import { PILL_RADIUS } from "../constants/buttons";
 
 function fmtTime(secs: number): string {
   if (secs >= 3600) {
@@ -195,7 +196,7 @@ export default function IntervalTimerModal({ visible, onClose, isDark, t }: Inte
                     return (
                       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 16 }}>
                         <BounceButton
-                          style={[styles.timerAdjust, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div, opacity: showAdj ? 1 : 0 }]}
+                          style={[styles.timerAdjust, { backgroundColor: t.div, opacity: showAdj ? 1 : 0 }]}
                           onPress={showAdj ? () => {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                             const v = Math.max(5, countdownDuration - 15);
@@ -223,7 +224,7 @@ export default function IntervalTimerModal({ visible, onClose, isDark, t }: Inte
                         </BounceButton>
 
                         <BounceButton
-                          style={[styles.timerAdjust, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div, opacity: showAdj ? 1 : 0 }]}
+                          style={[styles.timerAdjust, { backgroundColor: t.div, opacity: showAdj ? 1 : 0 }]}
                           onPress={showAdj ? () => {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                             const v = countdownDuration + 15;
@@ -344,16 +345,22 @@ export default function IntervalTimerModal({ visible, onClose, isDark, t }: Inte
   );
 }
 
+// Every button and the Timer/Stopwatch bar use PILL_RADIUS (constants/buttons.ts),
+// the fully rounded ends the rest of the app's buttons have. The action buttons
+// keep paddingVertical rather than pill()'s minHeight: BounceButton moves
+// minHeight onto its outer touchable but paints the background on the inner
+// view, so a minHeight pill would draw its fill shorter than the button. 14pt of
+// padding around the 20pt icon row is already pill()'s 48pt.
 const styles = StyleSheet.create({
   timerBackdrop:    { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", paddingHorizontal: 20, paddingVertical: 24 },
   timerCard:        { borderRadius: 24, width: "100%" },
   timerCardHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 18, paddingBottom: 12 },
-  timerTabs:        { flexDirection: "row", borderRadius: 12, marginHorizontal: 20, marginBottom: 20, padding: 3, alignSelf: "stretch" },
-  timerPill:        { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 10, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
-  timerTab:         { flex: 1, borderRadius: 10, paddingVertical: 8, alignItems: "center" },
+  timerTabs:        { flexDirection: "row", borderRadius: PILL_RADIUS, marginHorizontal: 20, marginBottom: 20, padding: 3, alignSelf: "stretch" },
+  timerPill:        { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: PILL_RADIUS, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  timerTab:         { flex: 1, borderRadius: PILL_RADIUS, paddingVertical: 8, alignItems: "center" },
   timerTabText:     { fontFamily: FontFamily.semibold, fontSize: 14 },
   timerDisplay:     { alignItems: "center", justifyContent: "center", minHeight: 120 },
-  timerAdjust:      { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  timerAdjust:      { paddingHorizontal: 12, paddingVertical: 8, borderRadius: PILL_RADIUS },
   timerAdjustText:  { fontFamily: FontFamily.semibold, fontSize: 14 },
   timerTime:        { fontFamily: FontFamily.bold, fontSize: 56, letterSpacing: 2 },
   timerEditRow:     { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -361,9 +368,9 @@ const styles = StyleSheet.create({
   timerEditConfirm: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
   timerEditHint:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 },
   timerEditHintText:{ fontFamily: FontFamily.regular, fontSize: 11 },
-  timerAction:      { borderRadius: 14, paddingVertical: 14 },
+  timerAction:      { borderRadius: PILL_RADIUS, paddingVertical: 14 },
   timerActionInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  timerActionGlow:  { borderRadius: 14, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 },
+  timerActionGlow:  { borderRadius: PILL_RADIUS, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.45, shadowRadius: 8 },
   timerActionText:  { fontFamily: FontFamily.semibold, fontSize: 16 },
   timerButtonRow:   { flexDirection: "row", gap: 10, marginHorizontal: 20, marginBottom: 20 },
 });

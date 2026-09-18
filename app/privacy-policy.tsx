@@ -11,38 +11,77 @@ import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 
 const TP = APP_LIGHT.tp;
 
+// Every statement here was checked against what the app and its database
+// actually do (supabase/migrations, lib/cloud.ts, lib/push.ts, app.json). When a
+// feature starts collecting, sharing or keeping something new, this has to
+// change with it. No em dashes in the copy.
 const SECTIONS: { heading: string; body: string }[] = [
   {
-    heading: "1. Data We Collect",
-    body: "Avenas collects only the data you enter yourself: workouts, exercises, programs, journal entries, body-weight measurements, and unit/theme preferences. We do not collect analytics, advertising identifiers, or location data.",
+    heading: "1. About This Policy",
+    body: "This policy explains what information Avenas collects, how it's used, who can see it and the choices you have. It applies to the Avenas app and the account you create in it.",
   },
   {
-    heading: "2. How We Use Your Data",
-    body: "Your data is used solely to power the features of the app — showing your history, suggesting previous sets, tracking your streak, and so on. It is never sold or shared with advertisers.",
+    heading: "2. Information You Give Us",
+    body:
+      "Account details: your name, email address and password, or the name and email Apple or Google share with us when you sign in with them. If you use Hide My Email with Apple, you can also add a contact email.\n\n" +
+      "Profile: your profile photo if you add one, whether you use Avenas as a Gym User or a Trainer, and your preferred weight unit.\n\n" +
+      "Training data: your programs, workout history, journal entries and custom exercises, including the weights, reps, dates and notes you record.\n\n" +
+      "Messages and sharing: messages you send to your connections and groups, programs you share or send for review, and the groups you create or join.\n\n" +
+      "Reports: if you report a person or a message, the reason you give and a copy of the reported message.",
   },
   {
-    heading: "3. Where Your Data Is Stored",
-    body: "All of your fitness data is stored locally on your device. We do not run a cloud backend that holds your workouts. If you delete the app, your data is removed with it — there is no copy on our servers.",
+    heading: "3. Information Collected Automatically",
+    body:
+      "Activity status: while you use the app, we record when you were last active. People you're connected with can only see it if Show Activity Status is on in Privacy & Security.\n\n" +
+      "Notifications: if you allow push notifications, we store your device's push token and which kinds of notifications you want, so we can deliver them.\n\n" +
+      "Technical information: like most online services, our service providers may process technical details such as your IP address when the app connects to them.\n\n" +
+      "We don't use analytics or advertising tools, we don't track you across other apps or websites, and we don't collect your location.",
   },
   {
-    heading: "4. Third-Party Services",
-    body: "Avenas uses standard platform services from Apple (App Store rating prompts) and Expo (the framework the app is built on). These services have their own privacy policies and may collect basic device information when invoked.",
+    heading: "4. Information That Stays on Your Device",
+    body: "Some things never leave your phone: photos and videos you add to custom exercises, your favourite exercises, your display and notification settings, workouts you haven't finished yet, and your streak. The camera is only used to scan connect codes and to take photos for custom exercises.",
   },
   {
-    heading: "5. Your Rights",
-    body: "Because your data lives on your device, you can delete any workout, program, or journal entry at any time directly from the app. Uninstalling Avenas removes everything.",
+    heading: "5. How We Use Your Information",
+    body:
+      "We use your information to run your account and back up your training data, so it's there when you sign in on another device. It powers features like your history, previous set values, progress charts and reminders. It lets you connect with trainers, clients and groups, and delivers your messages, shared programs and notifications. We also use it to keep the community safe, including reviewing reports and preventing abuse such as spam connection requests.\n\n" +
+      "We never sell your information or use it for advertising.",
   },
   {
-    heading: "6. Children",
-    body: "Avenas is not directed at children under 13 and we do not knowingly collect data from them.",
+    heading: "6. What Other People Can See",
+    body:
+      "Your training data is private to your account. People you connect with, and members of groups you join, can see your name, profile photo and account type, the messages you send them and any programs you share with them. They can see when you were last active only if Show Activity Status is on. Nobody else can see your workout history or journal.\n\n" +
+      "Your profile photo is stored so it can be shown in the app, which means anyone who has its web link can view it.",
   },
   {
-    heading: "7. Changes to This Policy",
-    body: "We may update this policy from time to time. The “Last updated” date at the top of this screen will always reflect the most recent revision.",
+    heading: "7. Service Providers",
+    body:
+      "We rely on a small number of providers to run Avenas. Supabase hosts our database, sign in and file storage. Expo delivers push notifications, which pass through Apple to reach your phone. Apple and Google provide sign in if you choose to use them.\n\n" +
+      "Push notifications for messages include the sender's name and the start of the message. Each provider handles information under its own privacy policy.",
   },
   {
-    heading: "8. Contact",
-    body: "Questions about your privacy? Reach us at privacy@avenas.com.",
+    heading: "8. How Long We Keep It",
+    body: "We keep your information for as long as you have an account. When you delete your account, your profile, profile photo, training data, messages, connections, shared programs and the groups you own are permanently deleted, along with any reports you've made. A report someone else made about you, including any message it quotes, is kept so we can act on it.",
+  },
+  {
+    heading: "9. Your Choices",
+    body: "You can view and change your training data, name, email, photo and account type in the app at any time. You can turn off Show Activity Status in Privacy & Security, choose which notifications you get in Notifications, block people and remove connections. You can delete your account and all of its data with Delete Account in Settings. For a copy of your data or any other privacy request, contact us.",
+  },
+  {
+    heading: "10. Security",
+    body: "Your data travels over encrypted connections, and our database only lets each account reach its own training data. No system is completely secure, so please use a strong password and keep your phone locked.",
+  },
+  {
+    heading: "11. Children",
+    body: "Avenas isn't intended for children under 13, and we don't knowingly collect information from them. If you think a child has given us information, contact us and we'll delete it.",
+  },
+  {
+    heading: "12. Changes to This Policy",
+    body: "We may update this policy as Avenas changes. The date at the top of this page shows when it was last updated, and if a change is significant we'll let you know in the app.",
+  },
+  {
+    heading: "13. Contact",
+    body: "Questions or requests about your privacy? Email privacy@avenas.com.",
   },
 ];
 
@@ -88,7 +127,7 @@ export default function PrivacyPolicyScreen() {
           <View style={{ width: 40 }} />
         </View>
 
-        <Text style={[styles.updated, { color: t.ts }]}>Last updated: May 2026</Text>
+        <Text style={[styles.updated, { color: t.ts }]}>Last updated: September 2026</Text>
 
         <NeuCard dark={isDark} style={styles.card}>
           {SECTIONS.map((s, i) => (

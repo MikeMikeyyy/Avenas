@@ -21,6 +21,7 @@ import { isCloudContactId } from "../lib/chat";
 import {
   deleteShareRow,
   fetchGroupShareRows,
+  fetchMyGroupReviewRows,
   fetchMyShareRows,
   fetchShareRow,
   getMyUid,
@@ -163,6 +164,11 @@ export type SentProgram = {
    *  appears in that group's queue — a direct send to a trainer has no groupId
    *  and must never show up there. */
   groupId?: string;
+  /** Who asked for the review. A group queue is a list of other people's
+   *  requests, so it needs a name against each one; a 1:1 review doesn't,
+   *  because there's only ever one person it can be from. Absent on local
+   *  (mock-roster) entries, which have no accounts behind them. */
+  senderId?: string;
   /** A group coach marked it dealt with, so it leaves the group's queue. The
    *  sender keeps it on their own page regardless: it's their record of having
    *  asked, not the coaches' to-do item. */
@@ -232,6 +238,7 @@ function rowToSent(row: SharedProgramRow): SentProgram {
     appliedAtISO: row.accepted_at ?? undefined,
     lastEditedAtISO: row.last_edited_at ?? undefined,
     groupId: row.group_id ?? undefined,
+    senderId: row.sender_id,
     completedAtISO: row.completed_at ?? undefined,
   };
 }
@@ -688,12 +695,13 @@ async function loadLocalSentPrograms(): Promise<SentProgram[]> {
  *  Direction is viewer-dependent — a trainer sees their reviews INBOX
  *  (recipient side, minus ones they dismissed), a gym user their SENT list.
  *
- *  A trainer's inbox deliberately excludes GROUP reviews: those belong to the
- *  group's queue, where every coach sees the same list and any of them can
- *  close it. Leaving them here too would put the group's backlog on the hub of
- *  whichever trainer happens to own the group, which is the pile-up this was
- *  meant to avoid. The SENDER's side is unfiltered — a program they posted to a
- *  group is still a program they sent, and belongs on their own page. */
+ *  Group reviews are excluded HERE because this query only reaches rows I'm a
+ *  party to, and a group review is addressed to the group's owner — surfacing
+ *  them from this call would put every group's backlog on the owner's hub and
+ *  nobody else's. `loadMyGroupReviews` is the one that gathers them for a
+ *  coach, through the group policy rather than through the address. The
+ *  SENDER's side is unfiltered — a program they posted to a group is still a
+ *  program they sent, and belongs on their own page. */
 export async function loadSentPrograms(): Promise<SentProgram[]> {
   const local = await loadLocalSentPrograms();
   const cloud = await fetchCloudRowsSafe();
@@ -733,6 +741,31 @@ export async function loadGroupReviewPrograms(groupId: string): Promise<SentProg
   return rows
     .filter(r => r.kind === "review" && !r.completed_at)
     .map(rowToSent);
+}
+
+/**
+ * Every open group review waiting on ME as a coach, across all my groups.
+ *
+ * `loadGroupReviewPrograms` is one group's queue, read on that group's page.
+ * This is the same items gathered for the trainer hub, so a coach sees a
+ * member's request beside the 1:1 ones instead of having to open each group to
+ * find out there's work in it.
+ *
+ * Reviews I SENT are dropped: RLS hands me my own rows as the sender, but a
+ * program I asked someone else to look at is not one of my review jobs. It
+ * stays visible to me in its group's queue, which is where I posted it.
+ */
+export async function loadMyGroupReviews(): Promise<SentProgram[]> {
+  const uid = await getMyUid().catch(() => null);
+  if (!uid) return [];
+  let rows: SharedProgramRow[];
+  try {
+    rows = await fetchMyGroupReviewRows();
+  } catch (e) {
+    warnShares("loadMyGroupReviews", e);
+    return [];
+  }
+  return rows.filter(r => r.sender_id !== uid).map(rowToSent);
 }
 
 /** Mark a group review dealt with (or reopen it). Coach-only — the RPC raises

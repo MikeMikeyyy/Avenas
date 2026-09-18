@@ -26,14 +26,23 @@ export const APP_DARK = {
   tp:   "#E4E6F0",  // slightly blue-tinted white
   ts:   "#6B7396",  // muted blue-gray
   icon: "#8B93AE",  // navy-tinted icon
-  div:  "#252840",  // dark navy divider
+  // Dividers, hairlines, chart gridlines and the quiet control fills.
+  //
+  // A TRANSLUCENT WHITE, not a solid navy. It used to be #252840, which is
+  // exactly the card colour (NEU_BG_DARK) and a hair off the page bg, so
+  // anything drawn with it vanished in dark mode: every card divider, the
+  // Progress charts' axis and dashed gridlines, the timer's tab track. Four
+  // components had already worked around it with a local translucent white
+  // (SegmentedControl's TRACK_DARK still names the problem). An overlay lifts
+  // off whatever dark surface it sits on, so one token now works everywhere.
+  //
+  // 0.14 rather than the 0.10 those workarounds used: over the dark card that
+  // lands about as far from its background as light mode's #D8DCE0 does from
+  // white, so a hairline carries the same weight in both themes.
+  div:  "rgba(255,255,255,0.14)",
   // Background for floating chrome (back / plus / chat / jump buttons, timer
   // pills) — anything round that sits ON the page rather than in a card.
-  //
-  // NOT div: in dark mode div is #252840, which is both the card colour
-  // (NEU_BG_DARK) and a hair off the page bg, so a button painted with it
-  // disappears. A translucent white lifts off whatever is behind it instead,
-  // which is what makes these read on every surface in both themes.
+  // Slightly stronger than div: these are things you press.
   ctrl: "rgba(255,255,255,0.12)",
   // The floating tab bar. A rung ABOVE the cards rather than level with them:
   // it used NEU_BG_DARK (#252840), which is the card colour and only ~6% off

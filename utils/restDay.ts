@@ -141,6 +141,29 @@ export async function applyRestDay(
   if (!scheduled) { await commit(programId, p => skipDate(p, ymd)); return "skip"; }
 
   const name = scheduled.name;
+
+  // A day already gone by: you were ill or couldn't make it, and all that's left
+  // to say is so. Moving it isn't offered, because "the next day" is in the past
+  // too and a move there would re-label days you've already lived through. A
+  // plain skip is safe after the fact: it empties this one date and never
+  // shifts the cycle, so nothing else on the strip or in history moves.
+  if (ymd < todayYMD()) {
+    return new Promise<RestDayOutcome>(resolve => {
+      Alert.alert(
+        `Missed '${name}'?`,
+        "Make Rest Day: nothing else changes.",
+        [
+          {
+            text: "Make Rest Day",
+            onPress: () => { void commit(programId, p => skipDate(p, ymd)).then(() => resolve("skip")); },
+          },
+          { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(null) },
+      );
+    });
+  }
+
   const next = nextDayPhrase(ymd);
   const plan = planDoItTomorrow(program, ymd);
 

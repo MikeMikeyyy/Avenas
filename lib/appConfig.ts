@@ -24,6 +24,19 @@ export function appStoreWebUrl(): string {
   return `https://apps.apple.com/app/id${APP_STORE_ID}`;
 }
 
+/** The listing with its "Write a Review" sheet already open. `action=write-review`
+ *  is Apple's documented way to rate from a button: the SKStoreReviewController
+ *  prompt is rate-limited and may show nothing, which is fine unprompted and
+ *  broken when the user asked for it. */
+export function appStoreReviewUrl(): string {
+  return `${appStoreUrl()}?action=write-review`;
+}
+
+/** Web fallback for `appStoreReviewUrl`. */
+export function appStoreReviewWebUrl(): string {
+  return `${appStoreWebUrl()}?action=write-review`;
+}
+
 /**
  * The lowest version allowed to run, or null when it can't be determined.
  *

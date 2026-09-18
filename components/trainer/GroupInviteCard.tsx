@@ -14,7 +14,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import Avatar from "../Avatar";
-import PeopleIcon from "../icons/PeopleIcon";
+import GroupAvatar from "./GroupAvatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_TITLE, CARD_TOP } from "../../constants/cards";
@@ -38,9 +38,7 @@ export default function GroupInviteCard({ invite, onAccept, onDecline }: {
     <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
       <View style={styles.inner}>
         <View style={styles.top}>
-          <View style={[styles.icon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-            <PeopleIcon size={18} color={ACCT} />
-          </View>
+          <GroupAvatar uri={invite.photoUri} size={34} isDark={isDark} />
           <View style={{ flex: 1 }}>
             <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{invite.name}</Text>
             <Text style={[styles.meta, { color: t.ts }]} numberOfLines={1}>
@@ -83,7 +81,7 @@ export default function GroupInviteCard({ invite, onAccept, onDecline }: {
 const styles = StyleSheet.create({
   inner:    { ...CARD_INNER, gap: 10 },
   top:      { ...CARD_TOP },
-  icon:     { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  // The group's circle is GroupAvatar's own, at the 34pt this card used.
   name:     { ...CARD_TITLE },
   meta:     { ...CARD_META },
   fromRow:  { flexDirection: "row", alignItems: "center", gap: 8 },

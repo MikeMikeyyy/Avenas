@@ -36,11 +36,12 @@ import { buildLiveActivityPayload } from "../../utils/liveActivity";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
-import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, prevDayScopeFor, normalizeExerciseName, type DayOverride } from "../../utils/workout";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, buildPrevNotesByName, prevDayScopeFor, normalizeExerciseName, type DayOverride } from "../../utils/workout";
 import { resumeWithPrompt } from "../../utils/programPause";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
+import { awardWorkoutAchievements } from "../../utils/achievementStore";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import IntervalTimerModal from "../../components/IntervalTimerModal";
 import { useWorkoutTimer } from "../../contexts/WorkoutTimerContext";
@@ -978,6 +979,9 @@ interface ExerciseCardProps {
   onToggleDone: (exId: string, type: "warmup" | "working", idx: number) => void;
   onAutoTick: (exId: string, type: "warmup" | "working", idx: number) => void;
   onUpdateNotes: (exId: string, notes: string) => void;
+  /** Copy last time's note into this session's box (appending if it has text).
+   *  Omitted by the locked completed-workout card, which shows no hint. */
+  onReuseNote?: (exId: string, note: string) => void;
   exNotes: string;
   onAddSet: (exId: string) => void;
   onRemoveSet: (exId: string) => void;
@@ -991,11 +995,14 @@ interface ExerciseCardProps {
   activeSetFlatIdx: number | null;
   isLocked?: boolean;
   prevSets?: string[];
+  /** The note written on this exercise last time (utils/workout.ts
+   *  buildPrevNotesByName). Shown as a hint, never typed into. */
+  prevNote?: string;
   hideIndexLabel?: boolean;
   numberBadge?: number;
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, hideIndexLabel = false, numberBadge }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, onReuseNote, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -1351,6 +1358,29 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
             multiline
             textAlignVertical="top"
           />
+          {/* Last time's note, for reference only: typing over it is a choice,
+              so an untouched hint carries nothing into next week. Reuse drops it
+              into the box to edit or add to, rather than retyping it. */}
+          {!isLocked && !!prevNote && !!onReuseNote && (
+            <View style={styles.prevNoteRow}>
+              <Text style={[styles.prevNoteText, { color: t.ts }]}>
+                <Text style={styles.prevNoteLabel}>Last time  </Text>
+                {prevNote}
+              </Text>
+              <TouchableOpacity
+                onPress={() => onReuseNote(exercise.id, prevNote)}
+                activeOpacity={0.7}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Reuse last time's note"
+              >
+                <View style={[styles.prevNoteBtn, { borderColor: t.div }]}>
+                  <Ionicons name="return-down-forward" size={11} color={t.ts} />
+                  <Text style={[styles.prevNoteBtnText, { color: t.ts }]}>Reuse</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
       </View>
@@ -1938,6 +1968,19 @@ export default function WorkoutScreen() {
     });
   }, []);
 
+  // Reuse last time's note: into an empty box as-is, otherwise appended on its
+  // own line so whatever you've already typed this session survives.
+  const reuseExNote = useCallback((exId: string, note: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLog(prev => {
+      const exLog = prev[exId];
+      if (!exLog) return prev;
+      const current = exLog.notes.trim();
+      if (current.includes(note)) return prev;   // already carried over
+      return { ...prev, [exId]: { ...exLog, notes: current ? `${current}\n${note}` : note } };
+    });
+  }, []);
+
   const updateExNotes = useCallback((exId: string, notes: string) => {
     setLog(prev => {
       const exLog = prev[exId];
@@ -2141,6 +2184,9 @@ export default function WorkoutScreen() {
       // Keep prev-set suggestions correct for any same-session discard → restart.
       setPrevHistory(newHistory);
       scheduleCloudPush();
+      // PRs and workout milestones, checked against the history BEFORE this
+      // session. Fire and forget: it never throws, and a failure mustn't block.
+      void awardWorkoutAchievements(completed, history, isKg);
     } catch (e) {
       warnStorage("persistCompletedWorkout", WORKOUT_HISTORY_KEY, e);
     }
@@ -2315,6 +2361,12 @@ export default function WorkoutScreen() {
   // Pre-formatted "prev" hint strings per normalized exercise name. Memoized so
   // each card's `prevSets` prop keeps its identity across keystrokes (a fresh
   // .map() per render would re-render every MemoExerciseCard every character).
+  // Last time's note per exercise, same day scoping as the set hints. Only the
+  // most recent session counts: see buildPrevNotesByName.
+  const prevNotesByName = useMemo(
+    () => buildPrevNotesByName(prevHistory, undefined, prevDayScope),
+    [prevHistory, prevDayScope],
+  );
   const prevHintsByName = useMemo(() => {
     const out: Record<string, string[]> = {};
     for (const [name, sets] of Object.entries(prevByName)) {
@@ -2562,16 +2614,21 @@ export default function WorkoutScreen() {
           <Text style={[styles.emptySub, { color: t.ts }]}>
             {`"${activeProgram.name}" is on hold, so nothing is scheduled and the weeks aren't counting. Resume it whenever you're ready.`}
           </Text>
-          {/* Actually resumes, then shows the result on My Programs. Goes
-              through the same resumeWithPrompt as the actions sheet there, so
-              the day choice is offered identically from both entry points. */}
+          {/* Resumes and stays here, re-resolving today from the resumed
+              program so the day picked at the prompt is what this screen shows
+              next (a workout, or the Rest Day screen if that day rests). It used
+              to jump to My Programs, which took you away from the workout you'd
+              just chosen. Goes through the same resumeWithPrompt as the actions
+              sheet there, so the day choice is offered identically from both
+              entry points. */}
           <BounceButton
             onPress={async () => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               const updated = await resumeWithPrompt(activeProgram.id);
-              // Cancelled at the prompt: stay put rather than navigating away
-              // from a program that is still paused.
-              if (updated) router.navigate("/programs");
+              // Cancelled at the prompt: nothing was written, so nothing to
+              // reload. Otherwise force it: this screen only renders with no
+              // workout loaded, so there's no live session to protect.
+              if (updated) loadData(true);
             }}
             style={{ marginTop: 8 }}
             accessibilityLabel="Resume program"
@@ -2846,6 +2903,8 @@ export default function WorkoutScreen() {
                   onAutoTick={autoTickIfComplete}
                   exNotes={log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={updateExNotes}
+                  onReuseNote={reuseExNote}
+                  prevNote={prevNotesByName[normalizeExerciseName(exercise.name)]}
                   onAddSet={addSet}
                   onRemoveSet={removeSet}
                   onOpenReorder={openReorder}
@@ -3253,6 +3312,13 @@ const styles = StyleSheet.create({
   exName:       { fontFamily: FontFamily.bold, fontSize: 22, flex: 1 },
   exNotesRow:    { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
   exNotesInput:  { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
+  // Last time's note: quieter than the box above it, with the Reuse chip pinned
+  // right so a long note wraps under the label instead of squeezing the button.
+  prevNoteRow:     { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingTop: 6, paddingBottom: 2 },
+  prevNoteText:    { flex: 1, fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17 },
+  prevNoteLabel:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3, textTransform: "uppercase" },
+  prevNoteBtn:     { flexDirection: "row", alignItems: "center", gap: 3, borderWidth: 1, borderRadius: PILL_RADIUS, paddingHorizontal: 8, paddingVertical: 3 },
+  prevNoteBtnText: { fontFamily: FontFamily.semibold, fontSize: 11 },
 
   // Column headers
   colHeaderRow:   { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 4, paddingBottom: 4 },

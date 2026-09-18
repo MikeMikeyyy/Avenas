@@ -74,6 +74,9 @@ export type GroupRow = {
   id: string;
   owner_id: string;
   name: string;
+  /** Public URL of the group photo (migration 0030). Null = no photo; screens
+   *  fall back to the people icon. Owner-writable, like the name. */
+  avatar_url: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -127,6 +130,9 @@ export type GroupMemberWithProfile = {
 export type GroupInviteRow = {
   group_id: string;
   name: string;
+  /** The group's photo (migration 0030) — the invite card shows the group, so
+   *  it travels with the rest of what an invitee may know about it. */
+  avatar_url: string | null;
   owner_id: string;
   owner_name: string | null;
   owner_avatar: string | null;

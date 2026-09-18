@@ -14,7 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS, PAUSED_ORANGE } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS, PAUSED_ORANGE } from "../../constants/theme";
 import { pill, pillGlow, PILL_RADIUS } from "../../constants/buttons";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -29,13 +29,18 @@ import {
   getTier,
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek, programFinishDate } from "../../constants/programs";
-import { toYMD, fmtDuration, MONTH_NAMES } from "../../utils/dates";
+import { fmtDuration, MONTH_NAMES } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
-import { getWorkoutForDate, resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
-import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../../utils/restDay";
+import { resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
+import { buildWeekSchedule, weekStartFor, type WeekDayPlan } from "../../utils/weekSchedule";
+import { applyRestDay, clearRestDay } from "../../utils/restDay";
 import { dayIdAt } from "../../utils/programDays";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
+import AchievementCard from "../../components/AchievementCard";
+import { EMPTY_ACHIEVEMENTS, type Achievement, type AchievementsState } from "../../constants/achievements";
+import { visibleAchievements } from "../../utils/achievements";
+import { loadAchievements } from "../../utils/achievementStore";
 import InsightsCard from "../../components/InsightsCard";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
@@ -157,21 +162,15 @@ function CompletedTick({ size = 14 }: { size?: number }) {
   );
 }
 
-/** One row of "This Week's Schedule". `isSkipped` distinguishes a day the user
- *  marked off from one the program always rested; `editable` is today onwards. */
-type WeekDay = {
-  date: Date;
-  label: string;
-  workoutName: string;
-  completed: boolean;
-  isToday: boolean;
-  isRest: boolean;
-  isSkipped: boolean;
-  /** The workout here was moved to the next day ("Move to Tomorrow"), rather than
-   *  dropped. Tapping it undoes the move, rest day and all. */
-  isPushed: boolean;
-  editable: boolean;
-};
+/** One row of "This Week's Schedule": a day from utils/weekSchedule.ts plus the
+ *  short weekday label this strip shows. */
+type WeekDay = WeekDayPlan & { label: string };
+
+/** Weekday index (0 = Sunday) of a "YYYY-MM-DD", for the row's short label. */
+function weekdayIndex(ymd: string): number {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1).getDay();
+}
 
 type QuickAction = {
   id: string;
@@ -347,6 +346,7 @@ export default function HomeScreen() {
   const [workoutHistory, setWorkoutHistory] = useState<CompletedWorkout[]>([]);
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [todayOverride, setTodayOverride] = useState<DayOverride | null>(null);
+  const [achievementState, setAchievementState] = useState<AchievementsState>(EMPTY_ACHIEVEMENTS);
   const scrollY = useRef(new Animated.Value(0)).current;
 
   // Re-read the preference and active program. Stale-override filtering is left
@@ -375,6 +375,8 @@ export default function HomeScreen() {
     AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY)
       .then((raw) => { setTodayOverride(raw ? JSON.parse(raw) : null); })
       .catch((e) => warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e));
+    // getJSON swallows its own errors and falls back to empty.
+    void loadAchievements().then(setAchievementState);
   }, [isMax]);
 
   // Re-read every time this screen comes into focus, and re-resolve when the
@@ -440,6 +442,24 @@ export default function HomeScreen() {
     return result;
   }, [workoutHistory]);
 
+  // Achievement cards: a week long, one per category, and a card a workout
+  // earned disappears if that workout is deleted (utils/achievements.ts).
+  const achievementCards = useMemo(
+    () => visibleAchievements(achievementState, new Set(workoutHistory.map(w => w.id)), new Date()),
+    [achievementState, workoutHistory],
+  );
+
+  // Each card opens where the achievement happened.
+  const onAchievementPress = useCallback((a: Achievement) => {
+    if (a.category === "pr" || a.category === "workouts") {
+      router.navigate({ pathname: "/workout-detail", params: { id: a.workoutId } });
+    } else if (a.category === "program") {
+      router.navigate("/programs");
+    } else {
+      router.navigate("/streak");
+    }
+  }, [router]);
+
   const recentWorkouts = useMemo(() => {
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     return [...workoutHistory]
@@ -454,78 +474,58 @@ export default function HomeScreen() {
     [workoutHistory, effectiveToday],
   );
 
+  // What the Workout tab will actually put in front of you for the effective
+  // day: the scheduled day, or the one a change-day override picked (possibly
+  // from another program). Home's today card AND its week strip both read this,
+  // so the two pages can't disagree about today.
+  const resolvedToday = useMemo(
+    () => resolveWorkoutForDate(activeProgram, todayOverride, effectiveToday, programs),
+    [activeProgram, todayOverride, effectiveToday, programs],
+  );
+
+  // The rows, the ring's counts and the week's totals all come from
+  // utils/weekSchedule.ts, which resolves each day the same way the Workout tab
+  // does (see that module's header for the three rules that keeps them agreeing).
   const weeklyStats = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const dow = today.getDay();
-    const mondayOffset = dow === 0 ? -6 : 1 - dow;
-    const weekStart = new Date(today);
-    weekStart.setDate(today.getDate() + mondayOffset);
-
-    const mondayStr = toYMD(weekStart);
-    const todayStr  = toYMD(today);
-    const completedThisWeek = workoutHistory.filter(w => w.date >= mondayStr && w.date <= todayStr);
-    const completedCount    = completedThisWeek.length;
-    const completedDates    = new Set(completedThisWeek.map(w => w.date));
-
-    let plannedCount = 0;
-    if (activeProgram) {
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(weekStart);
-        d.setDate(weekStart.getDate() + i);
-        if (getWorkoutForDate(activeProgram, toYMD(d)) !== null) plannedCount++;
-      }
-    }
+    const schedule = buildWeekSchedule({
+      program: activeProgram,
+      history: workoutHistory,
+      weekStartYMD: weekStartFor(effectiveToday),
+      effectiveToday,
+      resolvedTodayName: resolvedToday?.name ?? null,
+    });
 
     const totalMinutes = Math.round(
-      completedThisWeek.reduce((sum, w) => sum + w.durationSeconds, 0) / 60
+      schedule.sessions.reduce((sum, w) => sum + w.durationSeconds, 0) / 60
     );
-    const totalVolumeKg = completedThisWeek.reduce((sum, w) =>
+    const totalVolumeKg = schedule.sessions.reduce((sum, w) =>
       sum + w.exercises.reduce((es, ex) =>
         es + ex.sets.reduce((ss, s) =>
           ss + (s.type === "working" && s.done ? (parseFloat(s.weight) || 0) * (parseFloat(s.reps) || 0) : 0), 0), 0), 0);
 
-    const weekDays: WeekDay[] = [];
-    if (activeProgram) {
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(weekStart);
-        d.setDate(weekStart.getDate() + i);
-        // getWorkoutForDate is skip-aware, so a date the user marked off already
-        // reads as Rest here without this loop knowing anything about it.
-        const name = getWorkoutForDate(activeProgram, toYMD(d))?.name ?? null;
-        const dateStr = toYMD(d);
-        weekDays.push({
-          date: d,
-          label: SHORT_DAY_NAMES[d.getDay()],
-          workoutName: name ?? "Rest",
-          completed: name !== null && completedDates.has(dateStr),
-          isToday: dateStr === todayStr,
-          isRest: name === null,
-          isSkipped: isDateSkipped(activeProgram, dateStr),
-          isPushed: isDatePushed(activeProgram, dateStr),
-          // Tappable only when there is something to do: a planned workout to
-          // skip or move, or a day you marked off that can be restored. A rest
-          // day has neither. Future only, because changing the past would
-          // rewrite what you should have trained on a day already lived
-          // through, and whether a streak gap was forgiven.
-          editable: dateStr >= todayStr
-            && (name !== null || isDateSkipped(activeProgram, dateStr)),
-        });
-      }
-    }
+    const weekDays: WeekDay[] = activeProgram
+      ? schedule.days.map(day => ({ ...day, label: SHORT_DAY_NAMES[weekdayIndex(day.dateYMD)] }))
+      : [];
 
-    return { completedCount, plannedCount, totalMinutes, totalVolumeKg, weekDays };
-  }, [workoutHistory, activeProgram]);
+    return {
+      completedCount: schedule.completedCount,
+      plannedCount: schedule.plannedCount,
+      totalMinutes,
+      totalVolumeKg,
+      weekDays,
+    };
+  }, [workoutHistory, activeProgram, effectiveToday, resolvedToday]);
 
   // Tapping a day in the week strip either restores it or asks what to do:
   //   marked off (skipped or moved) -> put it back as planned, no prompt. For a
   //     move, the rest day it used comes back too.
-  //   a planned workout -> "Make Rest Day" or "Move to Tomorrow".
+  //   a planned workout -> "Make Rest Day" or "Move to Tomorrow", or only
+  //     "Make Rest Day" for a day already past (applyRestDay decides).
   // Reloads after either, so the strip redraws from the written program.
   const onWeekDayPress = useCallback((day: WeekDay) => {
     if (!activeProgram) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const ymd = toYMD(day.date);
+    const ymd = day.dateYMD;
     const action = day.isSkipped
       ? clearRestDay(activeProgram.id, ymd)
       : applyRestDay(activeProgram.id, ymd, "ask");
@@ -537,7 +537,7 @@ export default function HomeScreen() {
     : null) ?? getTier(streakDays).color;
 
   return (
-    <FadeScreen once style={{ backgroundColor: t.bg }}>
+    <FadeScreen style={{ backgroundColor: t.bg }}>
       {/* Gradient blur — sits behind all header elements. Blur is strongest at the top (opaque mask) and fades to nothing at the bottom (transparent mask). Content scrolling into this zone blurs out naturally. */}
       <Animated.View
         pointerEvents="none"
@@ -571,9 +571,8 @@ export default function HomeScreen() {
         </View>
 
         {(() => {
-          const resolved = resolveWorkoutForDate(activeProgram, todayOverride, effectiveToday, programs);
-          const todaysWorkout = resolved
-            ? { name: resolved.name, exerciseCount: resolved.exercises.length }
+          const todaysWorkout = resolvedToday
+            ? { name: resolvedToday.name, exerciseCount: resolvedToday.exercises.length }
             : null;
           return (
             <NeuCard dark={isDark} style={styles.workoutCard}>
@@ -637,9 +636,16 @@ export default function HomeScreen() {
           const accent = paused ? PAUSED_ORANGE : ACCT;
           const week = getCurrentWeek(activeProgram);
           const finish = programFinishDate(activeProgram);
+          // The year only when it isn't this one, so "12 Nov" doesn't quietly
+          // mean next November on a long program.
           const finishLabel = finish
-            ? `${finish.getDate()} ${MONTH_NAMES[finish.getMonth()]}`
+            ? `${finish.getDate()} ${MONTH_NAMES[finish.getMonth()]}${
+                finish.getFullYear() !== new Date().getFullYear() ? ` ${finish.getFullYear()}` : ""
+              }`
             : null;
+          // Accent green washes out as small text on the light card, so the
+          // chip's text and icon take the deeper green there (see theme.ts).
+          const finishInk = isDark ? accent : ACCT_DEEP;
           return (
           <NeuCard dark={isDark} style={styles.programCard}>
             <View style={styles.programCardInner}>
@@ -658,7 +664,7 @@ export default function HomeScreen() {
                     key={i}
                     style={[
                       styles.progressSegment,
-                      { backgroundColor: i < week ? accent : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                      { backgroundColor: i < week ? accent : t.div },
                       i < week && { shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
                     ]}
                   />
@@ -667,9 +673,13 @@ export default function HomeScreen() {
               {/* The end of the timeline, so moving a day around has somewhere
                   visible to land: pushing a day moves this out, spending a rest
                   day brings it back. Hidden while held, because a hold has no
-                  end date until it's resumed. */}
+                  end date until it's resumed.
+                  Sits at the END of the progress bar, as the finish line it is. */}
               {!paused && finishLabel && (
-                <Text style={[styles.programFinish, { color: t.ts }]}>Finishes {finishLabel}</Text>
+                <View style={[styles.programFinish, { backgroundColor: `${accent}26` }]}>
+                  <Ionicons name="flag" size={11} color={finishInk} />
+                  <Text style={[styles.programFinishText, { color: finishInk }]}>Finishes {finishLabel}</Text>
+                </View>
               )}
             </View>
           </NeuCard>
@@ -720,11 +730,10 @@ export default function HomeScreen() {
             {/* Left: day list */}
             <View style={styles.weekDaysCol}>
               {weeklyStats.weekDays.map((day, i) => (
-                // Tappable from today onwards only. Marking a past date off
-                // would rewrite whether the streak should have survived it,
-                // which isn't something a tap on a schedule ought to do.
+                // Tappable per `editable`: today onwards, plus missed workouts
+                // earlier in the week (see the weekDays loop for the rules).
                 <TouchableOpacity
-                  key={toYMD(day.date)}
+                  key={day.dateYMD}
                   activeOpacity={day.editable ? 0.6 : 1}
                   onPress={day.editable ? () => onWeekDayPress(day) : undefined}
                   disabled={!day.editable}
@@ -734,7 +743,9 @@ export default function HomeScreen() {
                         ? day.isPushed
                           ? "Moved to the next day. Tap to put it back"
                           : "Made a rest day. Tap to put it back"
-                        : "Tap to make it a rest day or move it"}`
+                        : day.isPast
+                          ? "Missed. Tap to make it a rest day"
+                          : "Tap to make it a rest day or move it"}`
                     : `${day.label}, ${day.workoutName}.${day.completed ? " Completed." : ""}`}
                   style={[styles.weekDayRow, i === 0 && { paddingTop: 4 }, i === 6 && { paddingBottom: 4 }]}
                 >
@@ -784,8 +795,7 @@ export default function HomeScreen() {
               ))}
             </View>
 
-            {/* Divider — t.div matches the dark card bg exactly, so dark mode needs translucent white */}
-            <View style={[styles.weekVDivider, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]} />
+            <View style={[styles.weekVDivider, { backgroundColor: t.div }]} />
 
             {/* Right: circular progress + stats */}
             <View style={styles.weekCircleCol}>
@@ -863,7 +873,7 @@ export default function HomeScreen() {
                   <Text style={[styles.weekStatValue, { color: t.tp }]}>{weeklyStats.totalMinutes}</Text>
                   <Text style={[styles.weekStatLabel, { color: t.ts }]}>Total Mins</Text>
                 </View>
-                <View style={[styles.weekStatVDivider, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]} />
+                <View style={[styles.weekStatVDivider, { backgroundColor: t.div }]} />
                 <View style={styles.weekStatItem}>
                   <Text style={[styles.weekStatValue, { color: t.tp }]}>{formatVolume(toDisplayWeight(weeklyStats.totalVolumeKg, isKg))}</Text>
                   <Text style={[styles.weekStatLabel, { color: t.ts }]}>{isKg ? "kg Lifted" : "Lbs Lifted"}</Text>
@@ -875,8 +885,22 @@ export default function HomeScreen() {
         </>
         )}
 
-        {recentWorkouts.length > 0 && (
+        {(recentWorkouts.length > 0 || achievementCards.length > 0) && (
           <Text style={[styles.sectionTitle, { color: t.tp }]}>Recent Activity</Text>
+        )}
+
+        {achievementCards.length > 0 && (
+          <View style={styles.achievementList}>
+            {achievementCards.map(a => (
+              <AchievementCard
+                key={a.id}
+                achievement={a}
+                isDark={isDark}
+                isKg={isKg}
+                onOpenWorkout={() => onAchievementPress(a)}
+              />
+            ))}
+          </View>
         )}
 
         {recentWorkouts.map((w) => {
@@ -905,7 +929,7 @@ export default function HomeScreen() {
                           current={sessionNum}
                           total={progInfo.totalSessions}
                           accent={ACCT}
-                          track={isDark ? "rgba(255,255,255,0.1)" : t.div}
+                          track={t.div}
                         />
                       )}
                     </View>
@@ -1051,6 +1075,9 @@ const styles = StyleSheet.create({
   seeAllRow: { flexDirection: "row", alignItems: "center", gap: 3 },
   seeAll: { fontFamily: FontFamily.semibold, fontSize: 14, color: ICON },
   activityCard: { marginBottom: 12, borderRadius: 18 },
+  // Cards carry their own 8pt gap; this tops the last one up to the 12pt the
+  // workout cards below are spaced by.
+  achievementList: { marginBottom: 4 },
   activityName: { fontFamily: FontFamily.bold, fontSize: 16, color: TP, marginBottom: 2 },
   activitySub:  { fontFamily: FontFamily.regular, fontSize: 12, color: TS },
   workoutTopRow:     { flexDirection: "row", alignItems: "center", gap: 12 },
@@ -1060,9 +1087,10 @@ const styles = StyleSheet.create({
   programCard: { marginBottom: 20, borderRadius: 20 },
   programCardInner: { padding: 20, gap: 14 },
   programHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },
-  programName: { fontFamily: FontFamily.bold, fontSize: 16, color: TP, marginTop: 4 },
+  programName: { fontFamily: FontFamily.bold, fontSize: 16, color: TP, marginTop: 7 },
   programWeek: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
   progressRow: { flexDirection: "row", gap: 5 },
   progressSegment: { flex: 1, height: 6, borderRadius: 3 },
-  programFinish: { fontFamily: FontFamily.regular, fontSize: 12, color: TS, marginTop: 8 },
+  programFinish:     { alignSelf: "flex-end", flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: PILL_RADIUS, marginTop: 2 },
+  programFinishText: { fontFamily: FontFamily.semibold, fontSize: 12 },
 });

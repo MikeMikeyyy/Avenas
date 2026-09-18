@@ -36,6 +36,7 @@ import {
   batchKeyOf,
   loadClientData,
   loadClients,
+  loadMyGroupReviews,
   loadSentPrograms,
   loadSharedPrograms,
   makeInitials,
@@ -43,6 +44,7 @@ import {
   migrateCoachReceivedShares,
   removeSharedProgramBatch,
   saveClients,
+  setGroupReviewDone,
   type Client,
   type SentProgram,
   type SharedProgram,
@@ -53,6 +55,7 @@ import { getJSON } from "../../utils/storage";
 import { loadFavouriteGroupIds, sortByFavourite } from "../../utils/groupStore";
 import { acceptGroupInvite, declineGroupInvite, fetchAllGroupMemberships, fetchMyGroupInvites, fetchMyGroups } from "../../lib/groups";
 import GroupInviteCard from "./GroupInviteCard";
+import GroupAvatar from "./GroupAvatar";
 import { getMyUid } from "../../lib/chat";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import type { Group, GroupInvite } from "../../constants/groups";
@@ -90,6 +93,10 @@ export default function PTHome() {
   const [groupsLoaded, setGroupsLoaded] = useState(false);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   const [reviews, setReviews] = useState<SentProgram[]>([]);
+  // Open reviews posted to a group I coach. Same shape, different route in:
+  // they're addressed to the group's owner, so they reach me through the group
+  // policy rather than through my own inbox.
+  const [groupReviews, setGroupReviews] = useState<SentProgram[]>([]);
   const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
   const [sharedOut, setSharedOut] = useState<SharedProgram[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -181,6 +188,7 @@ export default function PTHome() {
 
         const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
         const sent = await loadSentPrograms();
+        const fromGroups = await loadMyGroupReviews();
 
         // Groups + their rosters (two queries total, not one per group), so the
         // send flow can offer "everyone in this group" without a second load.
@@ -228,6 +236,7 @@ export default function PTHome() {
         if (!cancelled) {
           setMyPrograms(Array.isArray(progs) ? progs : []);
           setReviews(sent);
+          setGroupReviews(fromGroups);
           setSharedOut(shared);
           setActiveProgramByClient(activeMap);
         }
@@ -321,9 +330,64 @@ export default function PTHome() {
   // Group shortcuts for the recipient picker: ticking one ticks its members, and
   // the send still goes out per-person through the existing share path.
   const recipientGroups = useMemo(
-    () => groups.map(g => ({ id: g.id, name: g.name, memberIds: groupMemberships[g.id] ?? [] })),
+    () => groups.map(g => ({ id: g.id, name: g.name, memberIds: groupMemberships[g.id] ?? [], photoUri: g.photoUri })),
     [groups, groupMemberships],
   );
+
+  /** "Programs Received": the 1:1 reviews addressed to me and the open ones
+   *  from groups I coach, as one newest-first list. Which route a review
+   *  arrived by is a fact about the database, not about the job it represents —
+   *  either way someone is waiting on me to look at their program. */
+  const received = useMemo(
+    () => [...reviews, ...groupReviews].sort(
+      (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
+    ),
+    [reviews, groupReviews],
+  );
+
+  /** The line under a received program's name: which group it came from, or
+   *  that it's a direct request. The group name is looked up live, so a rename
+   *  carries; a group I've since left falls back rather than dropping the card,
+   *  because the work is still mine until it's marked done. */
+  const receivedFrom = useCallback(
+    (r: SentProgram) => (r.groupId ? groups.find(g => g.id === r.groupId)?.name ?? "A group" : "From a client"),
+    [groups],
+  );
+
+  /** Clear a group review out of its group's queue, from here rather than by
+   *  opening the group. Coach-only at the database (`set_group_review_completed`
+   *  raises for anyone else), and it leaves the member's own copy untouched. */
+  const handleCompleteGroupReview = useCallback((entry: SentProgram) => {
+    Alert.alert(
+      "Mark Done",
+      `Clear "${entry.programName}" from the group's review list? ${entry.returnedAtISO ? "The member keeps the feedback on their own page." : "It hasn't been sent back yet."}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Mark Done",
+          onPress: async () => {
+            try {
+              await setGroupReviewDone(entry.id, true);
+            } catch (e) {
+              Alert.alert("Couldn't update", e instanceof Error ? e.message : "Check your internet and try again.");
+              return;
+            }
+            setGroupReviews(prev => prev.filter(r => r.id !== entry.id));
+          },
+        },
+      ],
+    );
+  }, []);
+
+  /** Open a review. A group one has to carry its groupId: the review screen
+   *  looks a direct review up in my own inbox, where a group's row — addressed
+   *  to the group's owner — isn't. */
+  const openReview = useCallback((r: SentProgram) => {
+    router.navigate({
+      pathname: "/trainer/review/[id]",
+      params: r.groupId ? { id: r.id, groupId: r.groupId } : { id: r.id },
+    });
+  }, [router]);
 
   const batches = useMemo(() => {
     const byKey = new Map<string, SharedProgram[]>();
@@ -606,32 +670,36 @@ export default function PTHome() {
             </NeuCard>
           ) : null
         ) : (
-          <NeuCard dark={isDark} radius={16}>
-            {groups.map((g, i) => (
-              <TouchableOpacity
-                key={g.id}
-                onPress={() => openGroup(g)}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel={`Open group ${g.name}`}
-                style={[styles.summaryRow, { borderBottomColor: t.div, borderBottomWidth: i === groups.length - 1 ? 0 : 1 }]}
-              >
-                <View style={[styles.groupIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                  <PeopleIcon size={16} color={ACCT} />
+          /* One card per group, not one card of rows: a group is a place you
+             go, the same as a client, and the client list above it is already
+             a stack of separate cards. The row content is unchanged —
+             SUMMARY_ROW's padding is CARD_PAD on every side, so a row that
+             becomes a whole card's body still sits where a card title does. */
+          groups.map(g => (
+            <BounceButton
+              key={g.id}
+              style={{ marginBottom: 10 }}
+              onPress={() => openGroup(g)}
+              accessibilityRole="button"
+              accessibilityLabel={`Open group ${g.name}`}
+            >
+              <NeuCard dark={isDark} radius={16}>
+                <View style={styles.summaryRow}>
+                  <GroupAvatar uri={g.photoUri} size={30} isDark={isDark} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
+                    <Text style={[styles.groupMeta, { color: t.ts }]}>
+                      {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
+                    </Text>
+                  </View>
+                  {/* Display only — favouriting happens in the group's own
+                      options menu, so this card has a single tap target. */}
+                  {favourites.has(g.id) && <FavouriteStar size={16} />}
+                  <Ionicons name="chevron-forward" size={16} color={t.ts} />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
-                  <Text style={[styles.groupMeta, { color: t.ts }]}>
-                    {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
-                  </Text>
-                </View>
-                {/* Display only — favouriting happens in the group's own
-                    options menu, so this row has a single tap target. */}
-                {favourites.has(g.id) && <FavouriteStar size={16} />}
-                <Ionicons name="chevron-forward" size={16} color={t.ts} />
-              </TouchableOpacity>
-            ))}
-          </NeuCard>
+              </NeuCard>
+            </BounceButton>
+          ))
         )}
 
         {batches.length > 0 && (
@@ -713,7 +781,7 @@ export default function PTHome() {
                                   styles.cycleChip,
                                   isTraining
                                     ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                    : { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div },
+                                    : { backgroundColor: t.div },
                                 ]}
                               >
                                 <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
@@ -792,7 +860,7 @@ export default function PTHome() {
           </>
         )}
 
-        {reviews.length > 0 && (
+        {received.length > 0 && (
           <>
             <Pressable onPress={toggleReviewsSection} style={styles.sectionHeaderRow} accessibilityRole="button">
               <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Programs Received</Text>
@@ -800,18 +868,18 @@ export default function PTHome() {
             </Pressable>
             {collapsedReviewsSection ? (
               <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                {reviews.map((r, i) => {
+                {received.map((r, i) => {
                   const returned = r.status === "returned";
                   return (
                     <TouchableOpacity
                       key={r.id}
-                      onPress={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id } })}
+                      onPress={() => openReview(r)}
                       activeOpacity={0.7}
                       accessibilityRole="button"
                       accessibilityLabel={`Open review for ${r.programName}`}
                       style={[
                         styles.summaryRow,
-                        { borderBottomColor: t.div, borderBottomWidth: i === reviews.length - 1 ? 0 : 1 },
+                        { borderBottomColor: t.div, borderBottomWidth: i === received.length - 1 ? 0 : 1 },
                       ]}
                     >
                       <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
@@ -827,7 +895,7 @@ export default function PTHome() {
                   );
                 })}
               </NeuCard>
-            ) : reviews.map(r => {
+            ) : received.map(r => {
               const returned = r.status === "returned";
               const cycle = r.programSnapshot?.cyclePattern ?? [];
               const isExpanded = expandedReviews.has(r.id);
@@ -838,8 +906,8 @@ export default function PTHome() {
                       <View style={styles.reviewTop}>
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                          <Text style={[styles.reviewMeta, { color: t.ts }]}>
-                            From a client · Sent {fmtAgo(r.sentAtISO)}
+                          <Text style={[styles.reviewMeta, { color: t.ts }]} numberOfLines={1}>
+                            {receivedFrom(r)} · Sent {fmtAgo(r.sentAtISO)}
                           </Text>
                         </View>
                         <View style={[styles.statusPill, returned
@@ -862,7 +930,7 @@ export default function PTHome() {
                                   styles.cycleChip,
                                   isTraining
                                     ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                    : { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div },
+                                    : { backgroundColor: t.div },
                                 ]}
                               >
                                 <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
@@ -877,14 +945,31 @@ export default function PTHome() {
                         <Animated.View
                           entering={FadeIn.duration(180)}
                           exiting={FadeOut.duration(140)}
+                          style={styles.sharedActionRow}
                         >
-                          <BounceButton onPress={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id } })}>
+                          <BounceButton style={{ flex: 2 }} onPress={() => openReview(r)}>
                             <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
                               <Text style={[styles.reviewBtnText, { color: t.tp }]}>
                                 {returned ? "View Review" : "Edit & Send Back"}
                               </Text>
                             </NeuCard>
                           </BounceButton>
+                          {/* Closing the item belongs wherever you did the work,
+                              or this is a queue you can only clear by opening
+                              the group. It clears the GROUP's copy — the member
+                              keeps the feedback on their own page. */}
+                          {r.groupId && (
+                            <BounceButton
+                              style={{ flex: 1 }}
+                              onPress={() => handleCompleteGroupReview(r)}
+                              accessibilityLabel={`Mark ${r.programName} as done`}
+                            >
+                              <View style={[styles.sharedActionBtnInner, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                                <Ionicons name="checkmark" size={15} color="#fff" />
+                                <Text style={[styles.reviewBtnText, { color: "#fff" }]}>Mark Done</Text>
+                              </View>
+                            </BounceButton>
+                          )}
                         </Animated.View>
                       )}
                       <View style={styles.chevronRow}>

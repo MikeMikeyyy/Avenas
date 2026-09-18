@@ -174,6 +174,32 @@ eq(toggleSkippedDate(toggleSkippedDate(base, TUE), TUE).skippedDates, undefined,
   eq(streakSurvives(sick, MON, FRI), true, "streak: marking Tuesday as rest leaves only one real miss");
 }
 
+// ─── a MISSED past day made rest touches that date and nothing else ─────────
+// Home's week strip allows this for workouts earlier in the week, so it has to
+// hold even with a move already on the schedule: no other date's workout
+// changes, no push or pull is re-targeted by the write-side normalisation, and
+// putting the day back restores the week exactly. Goes through the same
+// normalizeDriftDates the commit in utils/restDay.ts runs.
+{
+  const moved = planDoItTomorrow(base, MON).program;
+  const WINDOW = 42;
+  let checked = 0;
+  for (let i = 0; i < 14; i++) {
+    const day = plus(MON, i);
+    if (getWorkoutForDate(moved, day) === null) continue;
+    checked += 1;
+    const missed = normalizeDriftDates(skipDate(moved, day));
+    eq(getWorkoutForDate(missed, day), null, `past skip ${day}: that date is now rest`);
+    const others = (p: SavedProgram) =>
+      schedule(p, MON, WINDOW).filter((_, k) => plus(MON, k) !== day);
+    eq(others(missed), others(moved), `past skip ${day}: every other date is unchanged`);
+    eq([missed.pushedDates, missed.pulledDates], [moved.pushedDates, moved.pulledDates], `past skip ${day}: no move is re-targeted`);
+    const restored = normalizeDriftDates(unskipDate(missed, day));
+    eq(schedule(restored, MON, WINDOW), schedule(moved, MON, WINDOW), `past skip ${day}: putting it back restores the week`);
+  }
+  eq(checked > 4, true, "past skip: the loop actually exercised several workout days");
+}
+
 // ─── "Set Workout Date" must solve against the SAME maths ───────────────────
 // It picks a cycleOffset so today resolves to a chosen day. It used to compute
 // daysPassed inline, which didn't know about pushes — so on a program with a

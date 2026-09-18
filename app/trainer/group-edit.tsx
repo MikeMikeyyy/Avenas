@@ -5,9 +5,13 @@
 // read-only form — they can see who else is in the group but not change it,
 // which matches what the RLS actually allows (owner-only membership writes).
 //
-// Only REAL connected clients can be members: migration 0016's insert policy
-// requires an accepted connection between the owner and each member, so the
-// picker is built from the resolved roster with local/mock entries filtered out.
+// Anyone you're CONNECTED to can be a member — a client or a fellow trainer.
+// Migration 0016's insert policy asks for an accepted connection and nothing
+// else (it's role-blind, and 0027 kept it that way), so the picker is both
+// buckets of the resolved roster merged, with local/mock entries filtered out.
+// It was built from `clients` alone, which meant a trainer had to be taken on
+// as a client before they could be put in a group, and a gym that ran on
+// trainer-to-trainer groups couldn't make one at all.
 
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -16,6 +20,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../components/FadeScreen";
@@ -28,7 +34,7 @@ import PeopleIcon from "../../components/icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
-import { createGroup, fetchGroup, fetchGroupMembers, renameGroup, setGroupMembers } from "../../lib/groups";
+import { createGroup, fetchGroup, fetchGroupMembers, renameGroup, setGroupAvatar, setGroupMembers, uploadGroupAvatar } from "../../lib/groups";
 import { getMyUid, isCloudContactId } from "../../lib/chat";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { loadBlockedIds, reportPerson } from "../../utils/moderation";
@@ -56,6 +62,18 @@ export default function GroupEditScreen() {
   const [myUid, setMyUid] = useState<string | null>(null);
   /** The member whose report sheet is open (null = closed). */
   const [reportTarget, setReportTarget] = useState<GroupMember | null>(null);
+  /** The group's saved photo, as loaded. `photoChange` is what the owner has
+   *  staged on top of it — the upload only happens on Save, so backing out of
+   *  this screen leaves the group exactly as it was. */
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoChange, setPhotoChange] = useState<
+    { type: "set"; uri: string; mimeType?: string } | { type: "remove" } | null
+  >(null);
+
+  const shownPhoto =
+    photoChange?.type === "set" ? photoChange.uri
+    : photoChange?.type === "remove" ? null
+    : photoUrl;
 
   const submitReport = useCallback(async (reason: ReportReason) => {
     const target = reportTarget;
@@ -73,9 +91,25 @@ export default function GroupEditScreen() {
     (async () => {
       try {
         const uid = await getMyUid();
-        // Only real connected clients are eligible — the DB rejects anyone else.
-        const [{ clients }, blocked] = await Promise.all([resolveTrainerRoster(), loadBlockedIds()]);
-        const eligible = clients.filter(c => isCloudContactId(c.id) && !blocked.has(c.id));
+        // Every real connection is eligible: the DB only asks that we're
+        // connected, so both roster buckets go in the picker. Someone in both
+        // (a trainer you also coach) appears once, badged TRAINER either way.
+        const [{ clients, trainers }, blocked] = await Promise.all([resolveTrainerRoster(), loadBlockedIds()]);
+        const byId = new Map<string, Client>();
+        for (const c of clients) {
+          if (isCloudContactId(c.id) && !blocked.has(c.id)) byId.set(c.id, c);
+        }
+        for (const tr of trainers) {
+          if (!isCloudContactId(tr.id) || blocked.has(tr.id)) continue;
+          const already = byId.get(tr.id);
+          byId.set(tr.id, already
+            ? { ...already, isTrainer: true }
+            : { id: tr.id, name: tr.name, initials: tr.initials, photoUri: tr.photoUri, isTrainer: true });
+        }
+        // Alphabetical: the two buckets arrive in their own orders, and a list
+        // that changes order depending on which one someone came from reads as
+        // random to the person scrolling it.
+        const eligible = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
         if (cancelled) return;
         setCandidates(eligible);
         setMyUid(uid);
@@ -90,6 +124,7 @@ export default function GroupEditScreen() {
           }
           setName(g.name);
           setIsOwner(g.isOwner);
+          setPhotoUrl(g.photoUri ?? null);
           setMembers(roster);
           // The owner is always a member; the picker only covers the others.
           setSelected(new Set(roster.filter(m => m.id !== uid).map(m => m.id)));
@@ -114,12 +149,65 @@ export default function GroupEditScreen() {
     });
   }, []);
 
+  // Pick from the library and STAGE it. The upload happens in onSave, which on a
+  // NEW group is the only time it can: there's no group id to file the photo
+  // under until create_group has returned one.
+  const pickPhoto = useCallback(async () => {
+    if (busy) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Photo access needed", "Allow photo library access in Settings to choose a group photo.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.6,
+    });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPhotoChange({ type: "set", uri: asset.uri, mimeType: asset.mimeType });
+  }, [busy]);
+
+  const onPhotoPress = useCallback(() => {
+    if (busy) return;
+    if (shownPhoto) {
+      Alert.alert("Group photo", undefined, [
+        { text: "Change Photo", onPress: () => void pickPhoto() },
+        {
+          text: "Remove Photo",
+          style: "destructive",
+          onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setPhotoChange({ type: "remove" }); },
+        },
+        { text: "Cancel", style: "cancel" },
+      ]);
+    } else {
+      void pickPhoto();
+    }
+  }, [busy, shownPhoto, pickPhoto]);
+
+  /** Commit a staged photo change against a group that now definitely exists.
+   *  Failures here surface on their own: the group itself saved, and telling the
+   *  owner "couldn't save group" for a photo that didn't upload would be a lie
+   *  about what happened to the rest of it. */
+  const commitPhoto = useCallback(async (id: string) => {
+    if (!photoChange) return;
+    if (photoChange.type === "set") {
+      const url = await uploadGroupAvatar(id, photoChange.uri, photoChange.mimeType);
+      await setGroupAvatar(id, url);
+    } else {
+      await setGroupAvatar(id, null);
+    }
+  }, [photoChange]);
+
   const trimmed = name.trim();
   const canSave = trimmed.length > 0 && !busy;
 
   const ctaLabel = useMemo(() => {
     if (busy) return "Saving…";
-    if (isNew) return selected.size > 0 ? `Create with ${selected.size} client${selected.size === 1 ? "" : "s"}` : "Create group";
+    if (isNew) return selected.size > 0 ? `Create with ${selected.size} member${selected.size === 1 ? "" : "s"}` : "Create group";
     return "Save changes";
   }, [busy, isNew, selected.size]);
 
@@ -130,11 +218,19 @@ export default function GroupEditScreen() {
     try {
       if (isNew) {
         const newId = await createGroup(trimmed, Array.from(selected));
+        // The group exists either way from here: a photo that fails to upload is
+        // reported on its own rather than taking the create down with it.
+        try {
+          await commitPhoto(newId);
+        } catch (e) {
+          Alert.alert("Group created", `The photo didn't upload: ${e instanceof Error ? e.message : "try again from the group's settings."}`);
+        }
         router.replace({ pathname: "/trainer/group/[id]", params: { id: newId, name: trimmed } });
         return;
       }
       await renameGroup(groupId, trimmed);
       await setGroupMembers(groupId, Array.from(selected));
+      await commitPhoto(groupId);
       router.back();
     } catch (e) {
       Alert.alert("Couldn't save group", e instanceof Error ? e.message : "Check your connection and try again.");
@@ -169,6 +265,35 @@ export default function GroupEditScreen() {
         >
           {isOwner ? (
             <>
+              {/* The photo sits above the name for the same reason it does on
+                  the profile screen: it's the thing you recognise the group by
+                  in a list, so it's the first thing you set. */}
+              <View style={styles.photoBlock}>
+                <TouchableOpacity
+                  onPress={onPhotoPress}
+                  activeOpacity={0.85}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel={shownPhoto ? "Change group photo" : "Add group photo"}
+                >
+                  <NeuCard dark={isDark} radius={48} style={styles.photo}>
+                    <View style={styles.photoInner}>
+                      {shownPhoto
+                        ? <Image source={{ uri: shownPhoto }} style={styles.photoImage} contentFit="cover" transition={150} />
+                        : <PeopleIcon size={38} color={ACCT} />}
+                    </View>
+                  </NeuCard>
+                  <View style={[styles.cameraBadge, { backgroundColor: ACCT, borderColor: t.bg }]}>
+                    <Ionicons name="camera" size={16} color="#fff" />
+                  </View>
+                </TouchableOpacity>
+                <Text style={[styles.photoNote, { color: t.ts }]}>
+                  {photoChange
+                    ? `Tap ${isNew ? "Create" : "Save changes"} to apply the photo`
+                    : shownPhoto ? "Tap to change the group photo" : "Tap to add a group photo"}
+                </Text>
+              </View>
+
               <Text style={[styles.label, { color: t.ts }]}>GROUP NAME</Text>
               <NeuCard dark={isDark} radius={14}>
                 <TextInput
@@ -191,9 +316,9 @@ export default function GroupEditScreen() {
                     <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
                       <PeopleIcon size={26} color={ACCT} />
                     </View>
-                    <Text style={[styles.emptyTitle, { color: t.tp }]}>No connected clients</Text>
+                    <Text style={[styles.emptyTitle, { color: t.tp }]}>No connections yet</Text>
                     <Text style={[styles.emptyBody, { color: t.ts }]}>
-                      {"Groups can only include clients you're connected with. Connect someone by code or QR first."}
+                      {"A group can include anyone you're connected with, clients and trainers alike. Connect someone by code or QR first."}
                     </Text>
                   </View>
                 </NeuCard>
@@ -309,6 +434,15 @@ const styles = StyleSheet.create({
 
   label:        { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4 },
   input:        { fontFamily: FontFamily.regular, fontSize: 16, paddingVertical: 14, paddingHorizontal: 16 },
+
+  // Same geometry as the profile screen's photo picker, so setting a group's
+  // photo and setting your own look and behave identically.
+  photoBlock:   { alignItems: "center", gap: 10, marginBottom: 24 },
+  photo:        { width: 96, height: 96, borderRadius: 48 },
+  photoInner:   { width: 96, height: 96, alignItems: "center", justifyContent: "center", borderRadius: 48, overflow: "hidden" },
+  photoImage:   { width: 96, height: 96, borderRadius: 48 },
+  cameraBadge:  { position: "absolute", bottom: 0, right: 0, width: 32, height: 32, borderRadius: 16, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  photoNote:    { fontFamily: FontFamily.regular, fontSize: 12 },
 
   row:          { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   rowTitle:     { flex: 1, fontFamily: FontFamily.semibold, fontSize: 15 },

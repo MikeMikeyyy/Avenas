@@ -216,10 +216,16 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
 // ─── Root Layout ──────────────────────────────────────────────────────────────
 
 export default function TabLayout() {
+  const { isDark } = useTheme();
+  // The tab scenes sit on this. Without a colour here the tab area is
+  // transparent, so a scene being re-created (or fading in) shows the window
+  // behind it rather than the app's own background.
+  const bg = isDark ? APP_DARK.bg : APP_LIGHT.bg;
+
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: bg }}>
       <Tabs
-        screenOptions={{ headerShown: false, animation: "none", lazy: false }}
+        screenOptions={{ headerShown: false, animation: "none", lazy: false, sceneStyle: { backgroundColor: bg } }}
         tabBar={(props) => (
           <AnimatedTabBar state={props.state} navigation={props.navigation} />
         )}

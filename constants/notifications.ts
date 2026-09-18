@@ -134,7 +134,7 @@ export const NOTIFICATION_SECTIONS: {
       {
         key: "achievements",
         label: "Achievements & milestones",
-        description: "Personal records and streak milestones.",
+        description: "New personal records, workout milestones, finished programs and streaks.",
         icon: "trophy-outline",
       },
       {

@@ -1,5 +1,5 @@
 // Full-screen agreement gate shown the first time a user enters the Trainer hub
-// (Apple Guideline 1.2 — Safety / UGC). It has two faces:
+// (Apple Guideline 1.2, Safety / UGC). It has two faces:
 //   - the agreement prompt (Accept / Decline + link to the full guidelines)
 //   - a locked screen shown after Decline, with a "Review guidelines" path back
 // Accepting calls onAccept (the parent persists it and renders the hub). Decline
@@ -16,7 +16,8 @@ import BounceButton from "../BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
-import { COMMUNITY_GUIDELINES, COMMUNITY_PLEDGE } from "../../constants/community";
+import { COMMUNITY_GUIDELINES } from "../../constants/community";
+import CommunityPledge from "./CommunityPledge";
 
 export default function CommunityGuidelinesGate({ onAccept }: { onAccept: () => void }) {
   const insets = useSafeAreaInsets();
@@ -63,7 +64,7 @@ export default function CommunityGuidelinesGate({ onAccept }: { onAccept: () => 
           <Ionicons name="people-outline" size={30} color={ACCT} />
         </View>
         <Text style={[styles.title, { color: t.tp }]}>Welcome to the community</Text>
-        <Text style={[styles.pledge, { color: ACCT }]}>{COMMUNITY_PLEDGE}</Text>
+        <CommunityPledge style={styles.pledge} />
         <Text style={[styles.intro, { color: t.ts }]}>
           The Trainer hub lets you message and share programs with real people. Before you start, please agree to keep it safe:
         </Text>
@@ -111,7 +112,7 @@ const styles = StyleSheet.create({
   lockedInner:   { flex: 1, justifyContent: "center", alignItems: "center" },
   iconWrap:      { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center", marginBottom: 18 },
   title:         { fontFamily: FontFamily.bold, fontSize: 22, textAlign: "center", marginBottom: 8 },
-  pledge:        { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", marginBottom: 14, lineHeight: 20 },
+  pledge:        { marginTop: 6, marginBottom: 16 },
   intro:         { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", lineHeight: 20, marginBottom: 22, paddingHorizontal: 4 },
   body:          { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", lineHeight: 21, paddingHorizontal: 8 },
   list:          { alignSelf: "stretch", gap: 16, marginBottom: 20 },

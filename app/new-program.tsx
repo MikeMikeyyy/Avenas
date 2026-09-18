@@ -29,7 +29,8 @@ import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { batchKeyOf, loadSentPrograms, loadSharedPrograms, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
+import { awardProgramAchievement } from "../utils/achievementStore";
+import { batchKeyOf, loadGroupReviewPrograms, loadSentPrograms, loadSharedPrograms, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
@@ -1904,10 +1905,26 @@ export default function NewProgramScreen() {
   const navigation = useNavigation();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { id: editId, reviewId, sharedId } = useLocalSearchParams<{ id?: string; reviewId?: string; sharedId?: string }>();
+  const { id: editId, reviewId, sharedId, groupId } = useLocalSearchParams<{ id?: string; reviewId?: string; sharedId?: string; groupId?: string }>();
   const isEditMode = !!editId;
   const isReviewMode = !!reviewId && !editId;
   const isSharedEditMode = !!sharedId && !editId && !reviewId;
+
+  /**
+   * The review being edited, found the way the screen that opened us found it.
+   *
+   * A GROUP review is a single row addressed to the group's OWNER, so
+   * `loadSentPrograms` — which is scoped by address — can't see it when another
+   * coach of that group is the one reviewing. The review screen passes its
+   * groupId through for exactly this, and all three places below (seed the
+   * builder, save on leave, save on finish) have to use it: without it the
+   * builder opened blank and then wrote that blank program back over nothing.
+   */
+  const loadReviewEntry = useCallback(async (): Promise<SentProgram | undefined> => {
+    if (!reviewId) return undefined;
+    const list = groupId ? await loadGroupReviewPrograms(groupId) : await loadSentPrograms();
+    return list.find(s => s.id === reviewId);
+  }, [reviewId, groupId]);
 
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState("");
@@ -2121,9 +2138,7 @@ export default function NewProgramScreen() {
           // Review mode — load the SentProgram snapshot the gym user sent.
           // We treat its snapshot as the seed for the builder; saving will
           // write the edited program back into that same SentProgram entry.
-          // Loaded via the store so cloud review rows are included.
-          const list = await loadSentPrograms();
-          const target = list.find(s => s.id === reviewId);
+          const target = await loadReviewEntry();
           const snap = target?.programSnapshot;
           if (snap) {
             const isTraining = snap.cyclePattern.map(d => d !== "Rest");
@@ -2334,8 +2349,7 @@ export default function NewProgramScreen() {
                 const savedWorkouts = canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay);
                 const trainingDays = isTrainingDay.filter(Boolean).length;
                 try {
-                  const list = await loadSentPrograms();
-                  const target = list.find(s => s.id === reviewId);
+                  const target = await loadReviewEntry();
                   const prev = target?.programSnapshot;
                   const startDate = formatStoredDate(new Date());
                   const updatedSnap: SavedProgram = {
@@ -2365,7 +2379,7 @@ export default function NewProgramScreen() {
       );
     });
     return unsubscribe;
-  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern, dayIds]);
+  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern, dayIds, loadReviewEntry]);
 
   const handleCycleDaysChange = useCallback((next: number) => {
     const clamped = clamp(next, 2, 14);
@@ -2648,8 +2662,7 @@ export default function NewProgramScreen() {
       const doReview = async () => {
         try {
           // Store load (not raw AsyncStorage) — cloud review rows only exist there.
-          const list = await loadSentPrograms();
-          const target = list.find(s => s.id === reviewId);
+          const target = await loadReviewEntry();
           const prev = target?.programSnapshot;
           const updatedSnap: SavedProgram = {
             id: prev?.id ?? `snap_${Date.now()}`,
@@ -2730,6 +2743,8 @@ export default function NewProgramScreen() {
         const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
         const existing: SavedProgram[] = raw ? JSON.parse(raw) : [];
         let updated = [...existing, newProgram];
+        // The outgoing program, when activating this one finishes it.
+        let finished: { program: SavedProgram; week: number } | null = null;
         if (makeActive) {
           // Demote the old active the same way programs.tsx handleMakeActive
           // does: week-aware (completed / paused / created), snapshotting its
@@ -2741,6 +2756,7 @@ export default function NewProgramScreen() {
               // pausedAt is cleared on both branches, same as programs.tsx: the
               // demoted program is inactive or finished now, not on hold.
               if (week >= p.totalWeeks) {
+                finished = { program: p, week };
                 return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: startDate, pausedAt: undefined };
               }
               return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week, pausedAt: undefined };
@@ -2756,6 +2772,10 @@ export default function NewProgramScreen() {
             .catch((err) => warnStorage("removeItem", WORKOUT_DAY_OVERRIDE_KEY, err));
         }
         scheduleCloudPush();
+        // Same as programs.tsx handleMakeActive: replacing a program that ran
+        // to its end finishes it, which earns the achievement.
+        const done = finished as { program: SavedProgram; week: number } | null;
+        if (done) void awardProgramAchievement(done.program, done.week);
       } catch (e) {
         Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
         return;
@@ -2775,7 +2795,7 @@ export default function NewProgramScreen() {
         { text: "Cancel", style: "cancel" },
       ]
     );
-  }, [name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId]);
+  }, [name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId, loadReviewEntry]);
 
   const handleBack = () => { if (step === 2) setStep(1); else router.back(); };
 

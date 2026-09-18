@@ -11,34 +11,67 @@ import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 
 const TP = APP_LIGHT.tp;
 
+// Written to match the app as it ships: accounts with cloud backup, trainer and
+// group features, and the zero-tolerance community rules users also accept in
+// constants/community.ts (Apple Guideline 1.2), which section 6 must agree with.
+// Bump TERMS_VERSION (constants/onboarding.ts) to have everyone re-accept after
+// a material change. No em dashes in the copy.
 const SECTIONS: { heading: string; body: string }[] = [
   {
-    heading: "1. Acceptance of Terms",
-    body: "By downloading, installing, or using Avenas you agree to be bound by these Terms of Service. If you do not agree, please do not use the app.",
+    heading: "1. Agreement",
+    body: "These Terms are an agreement between you and Avenas. By creating an account or using the app, you agree to them and to our Privacy Policy. If you don't agree, please don't use Avenas.",
   },
   {
-    heading: "2. Use of the App",
-    body: "Avenas is provided for personal, non-commercial fitness tracking. You agree to use the app in compliance with all applicable laws and not to misuse it in any way that could harm Avenas, its users, or third parties.",
+    heading: "2. Who Can Use Avenas",
+    body: "You must be at least 13 years old to use Avenas. If you're under the age of adulthood where you live, you need permission from a parent or guardian.",
   },
   {
-    heading: "3. User Content",
-    body: "You retain ownership of the workouts, programs, journal entries, and other content you create in the app. You are responsible for the accuracy of that content and for keeping a backup if you wish.",
+    heading: "3. Your Account",
+    body: "You're responsible for your account and for keeping your sign in details secure. Keep your details accurate, and contact us if you think someone else has used your account. You can delete your account at any time with Delete Account in Settings.",
   },
   {
-    heading: "4. Health Disclaimer",
-    body: "Avenas does not provide medical advice. Consult a qualified healthcare professional before starting any new exercise program. You use the app and any programs at your own risk.",
+    heading: "4. Using the App",
+    body: "Avenas is for tracking your own training and, if you choose, working with trainers, clients and groups. Please don't misuse it. That includes breaking the law, trying to access other people's accounts or data, interfering with how the app works, sending spam or unwanted connection requests, or copying or reselling the app.",
   },
   {
-    heading: "5. Limitation of Liability",
-    body: "To the maximum extent permitted by law, Avenas is provided “as is” without warranties of any kind. We are not liable for any loss of data, injury, or other damages arising from your use of the app.",
+    heading: "5. Your Content",
+    body: "You own the programs, workouts, journal entries, custom exercises, messages and photos you create. You give Avenas permission to store, back up and display that content only as needed to run the app for you, including showing it to the people you choose to share it with. You're responsible for what you share and for having the right to share it.",
   },
   {
-    heading: "6. Changes to These Terms",
-    body: "We may update these Terms from time to time. Continued use of the app after changes are posted means you accept the revised Terms.",
+    heading: "6. Community Rules",
+    body: "Messaging, groups and program sharing connect you with other people, so our Community Guidelines apply whenever you use them. There is zero tolerance for objectionable content or abusive behaviour. You can report or block anyone, and we review every report and act within 24 hours. We may remove content and suspend or permanently remove accounts that break these rules.",
   },
   {
-    heading: "7. Contact",
-    body: "Questions about these Terms? Reach us at support@avenas.com.",
+    heading: "7. Trainers and Clients",
+    body: "Avenas connects people but doesn't employ, vet or endorse trainers. Any coaching relationship is between you and the other person, and trainers are responsible for the programs and advice they give. Use your own judgement before following a program from anyone.",
+  },
+  {
+    heading: "8. Health and Safety",
+    body: "Avenas doesn't give medical advice and isn't a substitute for a doctor or qualified professional. Check with one before starting a new exercise program, especially if you have an injury or health condition. Stop and get help if you feel pain, dizziness or discomfort while training. You train at your own risk.",
+  },
+  {
+    heading: "9. Changes to the App",
+    body: "We're always improving Avenas, so features may be added, changed or removed, and sometimes you'll need to update the app to keep using it. We aim to keep things running smoothly but can't promise the app will always be available or free of errors. We back up your training data while you're signed in, but please don't rely on Avenas as your only record.",
+  },
+  {
+    heading: "10. Ending Your Use",
+    body: "You can stop using Avenas and delete your account at any time. We may suspend or close accounts that break these Terms or the Community Guidelines, or when the law requires us to.",
+  },
+  {
+    heading: "11. Disclaimers and Liability",
+    body: "Avenas is provided “as is” and “as available”, without warranties of any kind. To the fullest extent the law allows, Avenas isn't liable for any injury, loss of data or indirect loss arising from your use of the app, or for anything another user says, shares or does. Nothing in these Terms limits rights you have under consumer law that can't be excluded.",
+  },
+  {
+    heading: "12. Apple",
+    body: "These Terms are between you and Avenas, not Apple. Apple isn't responsible for the app or its content, and your use of Avenas must also follow the App Store's usage rules.",
+  },
+  {
+    heading: "13. Changes to These Terms",
+    body: "We may update these Terms from time to time. The date at the top of this page shows the latest version, and if a change is significant we'll ask you to review it in the app. Continuing to use Avenas after an update means you accept the new Terms.",
+  },
+  {
+    heading: "14. Contact",
+    body: "Questions about these Terms? Email support@avenas.com.",
   },
 ];
 
@@ -84,7 +117,7 @@ export default function TermsOfServiceScreen() {
           <View style={{ width: 40 }} />
         </View>
 
-        <Text style={[styles.updated, { color: t.ts }]}>Last updated: May 2026</Text>
+        <Text style={[styles.updated, { color: t.ts }]}>Last updated: September 2026</Text>
 
         <NeuCard dark={isDark} style={styles.card}>
           {SECTIONS.map((s, i) => (

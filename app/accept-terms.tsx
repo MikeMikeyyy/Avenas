@@ -13,9 +13,12 @@ import { setJSON } from "../utils/storage";
 import { TERMS_ACCEPTED_KEY, TERMS_VERSION } from "../constants/onboarding";
 import { APP_DARK, APP_LIGHT, ACCT, FontFamily } from "../constants/theme";
 
+// A summary of the Terms of Service and Privacy Policy, so it must never promise
+// something they don't. It used to say workout data stays on the device (it backs
+// up to the account) and mention an optional Pro plan that doesn't exist.
 const POINTS = [
-  "Avenas is free to use. Pro is optional and only unlocks extra features.",
-  "Your workout data stays on your device.",
+  "Avenas is free to use.",
+  "Your training data is private to your account and backed up while you're signed in.",
   "Be respectful when using community and trainer features.",
   "You can edit or delete your details anytime in Settings.",
 ];

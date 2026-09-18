@@ -13,6 +13,7 @@ import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
+import { awardProgramAchievement } from "../utils/achievementStore";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
 import NeuCard from "../components/NeuCard";
@@ -248,7 +249,7 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
 
           <View style={styles.progressRow}>
             {Array.from({ length: program.totalWeeks }).map((_, i) => (
-              <View key={i} style={[styles.progressSeg, { backgroundColor: i < week ? accent : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < week && { shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
+              <View key={i} style={[styles.progressSeg, { backgroundColor: i < week ? accent : t.div }, i < week && { shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
             ))}
           </View>
           <Text style={[styles.weekLabel, { color: t.ts }]}>
@@ -279,7 +280,7 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
                   key={i}
                   style={[
                     styles.cycleChip,
-                    { backgroundColor: isTraining ? accent + "22" : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                    { backgroundColor: isTraining ? accent + "22" : t.div },
                     isTraining && { borderColor: accent, borderWidth: 1 },
                   ]}
                 >
@@ -360,7 +361,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
           >
           <View style={styles.progressRow}>
             {Array.from({ length: program.totalWeeks }).map((_, i) => (
-              <View key={i} style={[styles.progressSeg, { backgroundColor: i < filledWeeks ? statusColor : isDark ? "rgba(255,255,255,0.1)" : t.div }, i < filledWeeks && { shadowColor: statusColor, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
+              <View key={i} style={[styles.progressSeg, { backgroundColor: i < filledWeeks ? statusColor : t.div }, i < filledWeeks && { shadowColor: statusColor, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 }]} />
             ))}
           </View>
           <Text style={[styles.weekLabel, { color: t.ts }]}>{weekText}</Text>
@@ -384,7 +385,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
                   key={i}
                   style={[
                     styles.cycleChip,
-                    { backgroundColor: isTraining ? statusColor + "22" : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                    { backgroundColor: isTraining ? statusColor + "22" : t.div },
                     isTraining && { borderColor: statusColor, borderWidth: 1 },
                   ]}
                 >
@@ -550,6 +551,8 @@ export default function ProgramsScreen() {
 
   const handleMakeActive = async (program: SavedProgram) => {
     const todayStr = todayFormatted();
+    // The outgoing program, if switching away finishes it (see below).
+    let finished: { program: SavedProgram; week: number } | null = null;
     const updated = programs.map(p => {
       if (p.id === program.id) {
         // A (re-)activation is a fresh run from today: any cycleOffset left over
@@ -576,6 +579,7 @@ export default function ProgramsScreen() {
       if (p.status === "active") {
         const week = getCurrentWeek(p);
         if (week >= p.totalWeeks) {
+          finished = { program: p, week };
           return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: todayStr, pausedAt: undefined };
         }
         // Demoting a HELD program: it's inactive now, not on hold. Leaving
@@ -592,6 +596,10 @@ export default function ProgramsScreen() {
     // date rolls over.
     AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
     scheduleCloudPush();
+    // Starting a new program after running the old one to its end finishes the
+    // old one just as Mark Complete would, so it earns the same achievement.
+    const done = finished as { program: SavedProgram; week: number } | null;
+    if (done) void awardProgramAchievement(done.program, done.week);
   };
 
   // Deactivate the active program without completing it — drops it back to paused
@@ -648,16 +656,19 @@ export default function ProgramsScreen() {
         style: "destructive",
         onPress: async () => {
           const todayStr = todayFormatted();
+          const weekReached = getCurrentWeek(activeProgram);
           const updated = programs.map(p =>
             p.id === activeProgram.id
               // Completing ends the run, hold and all — a finished program is
               // never "on hold".
-              ? { ...p, status: "completed" as const, currentWeek: getCurrentWeek(activeProgram), completedDate: todayStr, pausedAt: undefined }
+              ? { ...p, status: "completed" as const, currentWeek: weekReached, completedDate: todayStr, pausedAt: undefined }
               : p
           );
           setPrograms(updated);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
           scheduleCloudPush();
+          // Only an achievement if it ran its full length (checked inside).
+          void awardProgramAchievement(activeProgram, weekReached);
         },
       },
     ]);

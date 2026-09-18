@@ -37,6 +37,7 @@ export async function fetchMyGroups(uid: string): Promise<Group[]> {
     ownerId: r.owner_id,
     name: r.name,
     isOwner: r.owner_id === uid,
+    photoUri: r.avatar_url ?? undefined,
     memberCount: r.group_members?.length ?? 0,
     createdAtISO: r.created_at,
   }));
@@ -57,6 +58,7 @@ export async function fetchGroup(uid: string, groupId: string): Promise<Group | 
     ownerId: r.owner_id,
     name: r.name,
     isOwner: r.owner_id === uid,
+    photoUri: r.avatar_url ?? undefined,
     memberCount: r.group_members?.length ?? 0,
     createdAtISO: r.created_at,
   };
@@ -93,6 +95,7 @@ export async function fetchMyGroupInvites(): Promise<GroupInvite[]> {
   return ((data as GroupInviteRow[] | null) ?? []).map(r => ({
     groupId: r.group_id,
     name: r.name,
+    photoUri: r.avatar_url ?? undefined,
     ownerId: r.owner_id,
     ownerName: r.owner_name || "Your trainer",
     ownerInitials: makeInitials(r.owner_name || "Your trainer"),
@@ -159,6 +162,34 @@ export async function createGroup(name: string, memberIds: string[]): Promise<st
 export async function renameGroup(groupId: string, name: string): Promise<void> {
   const { error } = await supabase.from("groups").update({ name: name.trim() }).eq("id", groupId);
   if (error) throw new Error(`rename group: ${error.message}`);
+}
+
+/**
+ * Upload (or replace) a group's photo and return its public URL (migration
+ * 0030). Owner-only at the database.
+ *
+ * Same shape as lib/cloud.ts:uploadAvatar, one bucket over: the object lives at
+ * "<groupId>/avatar" so a replacement overwrites the last one instead of
+ * orphaning it, and the returned URL carries a cache-buster so expo-image
+ * refetches rather than showing the copy it already has under that name.
+ */
+export async function uploadGroupAvatar(groupId: string, localUri: string, mimeType?: string): Promise<string> {
+  const bytes = await fetch(localUri).then(r => r.arrayBuffer());
+  const path = `${groupId}/avatar`;
+  const { error } = await supabase.storage
+    .from("group-avatars")
+    .upload(path, bytes, { contentType: mimeType ?? "image/jpeg", upsert: true });
+  if (error) throw new Error(`upload group photo: ${error.message}`);
+  const { data } = supabase.storage.from("group-avatars").getPublicUrl(path);
+  return `${data.publicUrl}?t=${Date.now()}`;
+}
+
+/** Point the group row at a photo, or clear it. The stored object is left in
+ *  place on a clear: the row is what every screen reads, and a delete that
+ *  failed would leave the group pointing at nothing. */
+export async function setGroupAvatar(groupId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("groups").update({ avatar_url: url }).eq("id", groupId);
+  if (error) throw new Error(`save group photo: ${error.message}`);
 }
 
 /** Replace the roster wholesale (owner only). The owner's own membership is

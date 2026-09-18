@@ -59,9 +59,10 @@ const METRIC_EMPTY_NOUNS: Record<MetricKey, string> = {
   duration: "sessions",
 };
 
-// Match against transparency hex so the unfocused bars are slightly faded
-// (consistent with iOS segmented selection style).
-const UNFOCUSED_ALPHA_HEX = "A6"; // ~65%
+// Bars are full ACCT (the button green) at rest. Only once a bar is tapped do
+// the OTHER bars fade to this alpha, so the selection still reads without the
+// whole chart sitting washed out the rest of the time.
+const DIMMED_ALPHA_HEX = "A6"; // ~65%
 
 // "2026-05-11" → "May 11"
 function fmtMonDay(ymd: string): string {
@@ -235,18 +236,24 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
     // up to date so the next hasData flip animates from accurate from/to.
   };
 
-  // Stable key that changes ONLY when the bucket window (range / scope) changes.
-  // Used to force-remount BarChart so gifted-charts replays the grow-from-zero
-  // entry animation on every bar — not just the bars whose values shifted.
-  // Notably this excludes `focusedIndex`, so tapping a bar doesn't remount.
-  // Includes `slotsCount` so a Month → 3M switch with the same bar count still
-  // triggers a remount.
+  // Stable key that changes ONLY when the bucket window (range / scope) or the
+  // metric changes. Used to force-remount BarChart so gifted-charts replays the
+  // grow-from-zero entry animation on every bar — not just the bars whose values
+  // shifted. Notably this excludes `focusedIndex`, so tapping a bar doesn't
+  // remount. Includes `slotsCount` so a Month → 3M switch with the same bar
+  // count still triggers a remount.
+  //
+  // `metric` is in it explicitly. Without it a metric switch only replayed the
+  // animation when `axis.max` happened to change too: Volume sits in the
+  // thousands so it always did, but Reps and Duration (minutes) often round to
+  // the same nice axis max, so the key held, GlowBars kept its finished progress
+  // value and the bars snapped straight to their new heights.
   const chartKey = useMemo(() => {
     if (buckets.length === 0) return "empty";
     const first = buckets[0];
     const last = buckets[buckets.length - 1];
-    return `${buckets.length}|${slotsCount ?? buckets.length}|${first.startYMD}|${last.endYMD}|${axis.max}`;
-  }, [buckets, axis.max, slotsCount]);
+    return `${metric}|${buckets.length}|${slotsCount ?? buckets.length}|${first.startYMD}|${last.endYMD}|${axis.max}`;
+  }, [buckets, axis.max, slotsCount, metric]);
 
   // Available horizontal space inside the NeuCard. Chart sets its own internal
   // padding so we just provide a width hint and let it lay out.
@@ -285,9 +292,10 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
     ? INITIAL_SPACING + renderedN * barWidth + (renderedN - 1) * spacing + END_SPACING
     : plotWidth;
 
-  // Build the data with the focused bar painted in ACCT and the rest in
-  // ACCT @ ~65% alpha. We re-render whenever focusedIndex changes — `key` on
-  // the BarChart ensures animation runs cleanly per transition.
+  // Build the press-surface data. The visible colour lives on GlowBar: every
+  // bar is ACCT, and once one is focused the others dim to ~65% alpha. We
+  // re-render whenever focusedIndex changes — `key` on the BarChart ensures
+  // animation runs cleanly per transition.
   //
   // Padding: when buckets.length < slotsCount we append transparent zero-value
   // bars so the chart reserves the full slot grid. These placeholders are
@@ -555,7 +563,7 @@ function GlowBars({
       style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
     >
       {buckets.map((b, i) => {
-        const isFocused = i === focusedIndex;
+        const isDimmed = focusedIndex != null && i !== focusedIndex;
         const finalH = axisMax > 0 ? (b.total / axisMax) * PLOT_HEIGHT : 0;
         const x = yAxisLabelWidth + initialSpacing + i * (barWidth + spacing);
         return (
@@ -565,7 +573,7 @@ function GlowBars({
             finalH={finalH}
             x={x}
             width={barWidth}
-            isFocused={isFocused}
+            isDimmed={isDimmed}
           />
         );
       })}
@@ -578,13 +586,13 @@ function GlowBar({
   finalH,
   x,
   width,
-  isFocused,
+  isDimmed,
 }: {
   progress: SharedValue<number>;
   finalH: number;
   x: number;
   width: number;
-  isFocused: boolean;
+  isDimmed: boolean;
 }) {
   const animatedStyle = useAnimatedStyle(() => ({
     height: progress.value * finalH,
@@ -597,12 +605,12 @@ function GlowBar({
           left: x,
           bottom: PLOT_BOTTOM,
           width,
-          backgroundColor: isFocused ? ACCT : `${ACCT}${UNFOCUSED_ALPHA_HEX}`,
+          backgroundColor: isDimmed ? `${ACCT}${DIMMED_ALPHA_HEX}` : ACCT,
           borderTopLeftRadius: 4,
           borderTopRightRadius: 4,
           shadowColor: ACCT,
           shadowOffset: { width: 0, height: 0 },
-          shadowOpacity: isFocused ? 0.7 : 0.55,
+          shadowOpacity: isDimmed ? 0.55 : 0.7,
           shadowRadius: 5,
           elevation: 10,
         },

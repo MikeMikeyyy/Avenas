@@ -117,6 +117,24 @@ export function relativeDayLabel(d: Date): string {
  *   3600  -> "1h"        (no trailing " 0m")
  * Negative / NaN inputs are clamped to 0.
  */
+/**
+ * How long ago an ISO timestamp was, in the trainer pages' wording:
+ * "today" / "yesterday" / "3d ago" / "2w ago".
+ *
+ * The trainer screens each grew their own copy of this (four of them, differing
+ * only in whether "today" is capitalised). New call sites use this one; the
+ * existing copies are left where they are rather than retrofitted, in keeping
+ * with how the other shared helpers were introduced.
+ */
+export function fmtAgo(iso: string): string {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (!Number.isFinite(days)) return "";
+  if (days < 1) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}
+
 export function fmtDuration(secs: number): string {
   const s = Math.max(0, Math.floor(Number.isFinite(secs) ? secs : 0));
   if (s < 60) return `${s}s`;

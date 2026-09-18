@@ -1,4 +1,4 @@
-// Standalone Community Guidelines page — the full text behind the agreement the
+// Standalone Community Guidelines page: the full text behind the agreement the
 // user accepts before using the Trainer hub (Apple Guideline 1.2). Reachable from
 // the agreement prompt ("Read the full guidelines") and from Settings.
 
@@ -10,9 +10,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import NeuCard from "../components/NeuCard";
+import CommunityPledge from "../components/trainer/CommunityPledge";
 import { useTheme } from "../contexts/ThemeContext";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
-import { COMMUNITY_GUIDELINES, COMMUNITY_PLEDGE } from "../constants/community";
+import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
+import { COMMUNITY_GUIDELINES } from "../constants/community";
 
 const TP = APP_LIGHT.tp;
 
@@ -58,7 +59,7 @@ export default function CommunityGuidelinesScreen() {
           <View style={{ width: 40 }} />
         </View>
 
-        <Text style={[styles.pledge, { color: ACCT }]}>{COMMUNITY_PLEDGE}</Text>
+        <CommunityPledge style={styles.pledge} />
 
         <NeuCard dark={isDark} style={styles.card}>
           {COMMUNITY_GUIDELINES.map((s, i) => (
@@ -83,7 +84,7 @@ const styles = StyleSheet.create({
   header:       { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12, height: 40 },
   backBtn:      { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   title:        { fontFamily: FontFamily.bold, fontSize: 18, color: TP, textAlign: "center", flex: 1 },
-  pledge:       { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", marginBottom: 20, lineHeight: 20, paddingHorizontal: 12 },
+  pledge:       { marginBottom: 20 },
   card:         { borderRadius: 18, marginBottom: 24 },
   section:      { paddingHorizontal: 18, paddingVertical: 18 },
   heading:      { fontFamily: FontFamily.bold, fontSize: 15, marginBottom: 8 },

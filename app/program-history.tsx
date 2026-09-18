@@ -252,7 +252,7 @@ export default function ProgramHistoryScreen() {
                         key={i}
                         style={[
                           styles.progressSeg,
-                          { backgroundColor: i < week ? ACCT : isDark ? "rgba(255,255,255,0.1)" : t.div },
+                          { backgroundColor: i < week ? ACCT : t.div },
                           i < week && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
                         ]}
                       />

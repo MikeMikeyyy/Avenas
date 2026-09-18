@@ -30,11 +30,12 @@ import {
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
-import { buildPrevByName, prevDayScopeFor, normalizeExerciseName } from "../utils/workout";
+import { buildPrevByName, buildPrevNotesByName, prevDayScopeFor, normalizeExerciseName } from "../utils/workout";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
 import { scheduleCloudPush } from "../lib/syncManager";
+import { awardWorkoutAchievements } from "../utils/achievementStore";
 import { useTheme } from "../contexts/ThemeContext";
 
 const WARMUP_ORANGE = "#ffbf0f";
@@ -539,17 +540,22 @@ interface ExerciseCardProps {
   onUpdateNotes: (notes: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   prevSets?: string[];
+  /** The note written on this exercise the time before this date
+   *  (utils/workout.ts buildPrevNotesByName). A hint, never typed into. */
+  prevNote?: string;
+  /** Copy that note into this session's box, appending if it has text. */
+  onReuseNote?: (note: string) => void;
 }
 
 function ExerciseCard({
   ex, exIndex, totalExercises, isDark,
   onUpdateSet, onToggleDone, onToggleType, onAddSet, onRemoveLastSet,
   onRemoveExercise, onOpenReorder, onChangeExercise, onToggleIsometric, onUpdateNotes,
-  onInputFocus, prevSets,
+  onInputFocus, prevSets, prevNote, onReuseNote,
 }: ExerciseCardProps) {
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const divider = isDark ? "rgba(255,255,255,0.1)" : t.div;
+  const divider = t.div;
   const [editing, setEditing] = useState(false);
   const weightRefs = useRef<(TextInput | null)[]>([]);
   const repsRefs = useRef<(TextInput | null)[]>([]);
@@ -817,6 +823,28 @@ function ExerciseCard({
             multiline
             textAlignVertical="top"
           />
+          {/* The note from the session before this date, same as the Workout
+              tab. Reference only: Reuse is what carries it into this one. */}
+          {!!prevNote && !!onReuseNote && (
+            <View style={s.prevNoteRow}>
+              <Text style={[s.prevNoteText, { color: t.ts }]}>
+                <Text style={s.prevNoteLabel}>Last time  </Text>
+                {prevNote}
+              </Text>
+              <TouchableOpacity
+                onPress={() => onReuseNote(prevNote)}
+                activeOpacity={0.7}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Reuse last time's note"
+              >
+                <View style={[s.prevNoteBtn, { borderColor: t.div }]}>
+                  <Ionicons name="return-down-forward" size={11} color={t.ts} />
+                  <Text style={[s.prevNoteBtnText, { color: t.ts }]}>Reuse</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
       </View>
@@ -896,6 +924,7 @@ export default function LogWorkoutScreen() {
   const [workoutTime, setWorkoutTime] = useState<WorkoutTime | null>(null);
   const [timePickerVisible, setTimePickerVisible] = useState(false);
   const [prevByName, setPrevByName] = useState<Record<string, string[]>>({});
+  const [prevNotesByName, setPrevNotesByName] = useState<Record<string, string>>({});
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -1039,7 +1068,11 @@ export default function LogWorkoutScreen() {
         { name: workoutName, programId: pid, dayId: dayId || undefined },
         pid ? progs.find(p => p.id === pid) ?? null : null,
       );
-      setPrevByName(buildPrevByName(JSON.parse(histRaw), date, scope));
+      const history = JSON.parse(histRaw);
+      setPrevByName(buildPrevByName(history, date, scope));
+      // Same walk for the "Last time" note hint: only sessions of this day,
+      // and only ones before the date being logged.
+      setPrevNotesByName(buildPrevNotesByName(history, date, scope));
     }).catch(() => {});
   }, []);
 
@@ -1143,6 +1176,18 @@ export default function LogWorkoutScreen() {
     setExercises(prev => prev.map(ex => ex.id === exId ? { ...ex, notes: exNotes } : ex));
   }, []);
 
+  // Reuse last time's note: into an empty box as-is, otherwise appended on its
+  // own line so anything already typed survives.
+  const reuseExNote = useCallback((exId: string, note: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setExercises(prev => prev.map(ex => {
+      if (ex.id !== exId) return ex;
+      const current = (ex.notes ?? "").trim();
+      if (current.includes(note)) return ex;   // already carried over
+      return { ...ex, notes: current ? `${current}\n${note}` : note };
+    }));
+  }, []);
+
   const deleteCustomExercise = useCallback((name: string) => {
     setCustomExercises(prev => {
       const next = prev.filter(e => e.name !== name);
@@ -1204,6 +1249,9 @@ export default function LogWorkoutScreen() {
       const histRaw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
       const history: CompletedWorkout[] = histRaw ? JSON.parse(histRaw) : [];
       await AsyncStorage.setItem(WORKOUT_HISTORY_KEY, JSON.stringify([completed, ...history]));
+      // A session logged after the fact can still set a PR or reach a milestone:
+      // it's compared against every other workout, before or after its date.
+      void awardWorkoutAchievements(completed, history, isKg);
 
       const datesRaw = await AsyncStorage.getItem(WORKOUT_DATES_KEY);
       const dates: string[] = datesRaw ? JSON.parse(datesRaw) : [];
@@ -1366,6 +1414,8 @@ export default function LogWorkoutScreen() {
               onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
               onInputFocus={handleInputFocus}
               prevSets={(prevByName[normalizeExerciseName(ex.name)] ?? []).map(p => formatPrevHint(p, isKg))}
+              prevNote={prevNotesByName[normalizeExerciseName(ex.name)]}
+              onReuseNote={note => reuseExNote(ex.id, note)}
             />
           ))}
 
@@ -1581,6 +1631,12 @@ const s = StyleSheet.create({
   // Exercise notes
   exNotesRow:   { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
   exNotesInput: { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
+  // "Last time" hint + Reuse chip. Matches the Workout tab's card.
+  prevNoteRow:     { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingTop: 6, paddingBottom: 2 },
+  prevNoteText:    { flex: 1, fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17 },
+  prevNoteLabel:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3, textTransform: "uppercase" },
+  prevNoteBtn:     { flexDirection: "row", alignItems: "center", gap: 3, borderWidth: 1, borderRadius: PILL_RADIUS, paddingHorizontal: 8, paddingVertical: 3 },
+  prevNoteBtnText: { fontFamily: FontFamily.semibold, fontSize: 11 },
 
   // Bottom-left action cluster: Session Notes button + round green + Add Exercise
   actionCluster:      { flexDirection: "row", alignItems: "center", gap: 14 },

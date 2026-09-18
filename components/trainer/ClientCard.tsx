@@ -15,58 +15,69 @@ export default function ClientCard({ client, activeProgramName, badge, badgeColo
   badge?: string;
   /** Tint for `badge`. Defaults to the brand accent. */
   badgeColor?: string;
-  onPress: () => void;
+  /** Omit for a card with nothing behind it — your own row in a group roster,
+   *  or a fellow member a gym user has no coaching relationship with. It then
+   *  renders as a plain card: no bounce, no haptic, no button role, so it never
+   *  promises a destination it doesn't have. Passing a no-op here instead would
+   *  still bounce and buzz, because BounceButton fires the haptic itself. */
+  onPress?: () => void;
 }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
+  const card = (
+    <NeuCard dark={isDark} radius={18}>
+      <View style={styles.row}>
+        <Avatar
+          uri={client.photoUri}
+          initials={client.initials}
+          size={48}
+          backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
+          textColor={ACCT}
+          textStyle={[styles.avatarText, { color: ACCT }]}
+        />
+        <View style={{ flex: 1 }}>
+          <View style={styles.nameRow}>
+            <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+            {client.isTrainer && (
+              <View style={[styles.trainerTag, { backgroundColor: `${ACCT}22` }]}>
+                <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
+              </View>
+            )}
+            {badge ? (
+              <View style={[styles.trainerTag, { backgroundColor: `${badgeColor}22` }]}>
+                <Text style={[styles.trainerTagText, { color: badgeColor }]}>{badge}</Text>
+              </View>
+            ) : null}
+          </View>
+          {activeProgramName ? (
+            <View style={styles.programRow}>
+              <Text style={[styles.programLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
+              <Text style={[styles.programName, { color: t.tp }]} numberOfLines={1}>{activeProgramName}</Text>
+            </View>
+          ) : (
+            <Text style={[styles.sub, { color: t.ts }]} numberOfLines={1}>No active program</Text>
+          )}
+          {/* No timestamp → no row: covers both "never active" and "sharing
+              turned off" (migration 0009) without distinguishing them. */}
+          {!!client.lastActiveISO && (
+            <View style={styles.metaRow}>
+              <View style={[styles.dot, { backgroundColor: isActiveNow(client.lastActiveISO) ? ACCT : t.ts }]} />
+              <Text style={[styles.meta, { color: t.ts }]}>
+                {presenceLabel(client.lastActiveISO)}
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </NeuCard>
+  );
+
+  if (!onPress) return <View style={{ marginBottom: 12 }}>{card}</View>;
+
   return (
     <BounceButton style={{ marginBottom: 12 }} onPress={onPress} accessibilityRole="button" accessibilityLabel={`Open ${client.name}`}>
-      <NeuCard dark={isDark} radius={18}>
-        <View style={styles.row}>
-          <Avatar
-            uri={client.photoUri}
-            initials={client.initials}
-            size={48}
-            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-            textColor={ACCT}
-            textStyle={[styles.avatarText, { color: ACCT }]}
-          />
-          <View style={{ flex: 1 }}>
-            <View style={styles.nameRow}>
-              <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
-              {client.isTrainer && (
-                <View style={[styles.trainerTag, { backgroundColor: `${ACCT}22` }]}>
-                  <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
-                </View>
-              )}
-              {badge ? (
-                <View style={[styles.trainerTag, { backgroundColor: `${badgeColor}22` }]}>
-                  <Text style={[styles.trainerTagText, { color: badgeColor }]}>{badge}</Text>
-                </View>
-              ) : null}
-            </View>
-            {activeProgramName ? (
-              <View style={styles.programRow}>
-                <Text style={[styles.programLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
-                <Text style={[styles.programName, { color: t.tp }]} numberOfLines={1}>{activeProgramName}</Text>
-              </View>
-            ) : (
-              <Text style={[styles.sub, { color: t.ts }]} numberOfLines={1}>No active program</Text>
-            )}
-            {/* No timestamp → no row: covers both "never active" and "sharing
-                turned off" (migration 0009) without distinguishing them. */}
-            {!!client.lastActiveISO && (
-              <View style={styles.metaRow}>
-                <View style={[styles.dot, { backgroundColor: isActiveNow(client.lastActiveISO) ? ACCT : t.ts }]} />
-                <Text style={[styles.meta, { color: t.ts }]}>
-                  {presenceLabel(client.lastActiveISO)}
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-      </NeuCard>
+      {card}
     </BounceButton>
   );
 }

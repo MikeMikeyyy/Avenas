@@ -45,6 +45,26 @@ export async function fetchGroupShareRows(groupId: string): Promise<SharedProgra
   return (data as SharedProgramRow[] | null) ?? [];
 }
 
+/** Every OPEN group review I'm entitled to, across all my groups, newest first.
+ *
+ *  Separate from `fetchMyShareRows` for the same reason `fetchGroupShareRows`
+ *  is: that one narrows to rows I'm a party to, and a group review is addressed
+ *  to the group's OWNER, so a coach who isn't the owner is not a party to one.
+ *  The filter here is deliberately just "an open group review" — the
+ *  `shared_programs_select` policy (0026, extended by 0028) is what scopes it to
+ *  groups I coach, plus anything I sent myself. */
+export async function fetchMyGroupReviewRows(): Promise<SharedProgramRow[]> {
+  const { data, error } = await supabase
+    .from("shared_programs")
+    .select("*")
+    .eq("kind", "review")
+    .not("group_id", "is", null)
+    .is("completed_at", null)
+    .order("sent_at", { ascending: false });
+  if (error) throw new Error(`load my group reviews: ${error.message}`);
+  return (data as SharedProgramRow[] | null) ?? [];
+}
+
 export async function fetchShareRow(id: string): Promise<SharedProgramRow | null> {
   const { data, error } = await supabase
     .from("shared_programs")

@@ -585,7 +585,7 @@ export default function ExercisePicker({
             {pickedOrder.length > 0 ? (
               <View style={styles.confirmRow}>
                 {withSetCount && (
-                  <View style={[styles.setCountBox, { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div }]}>
+                  <View style={[styles.setCountBox, { backgroundColor: t.div }]}>
                     <TouchableOpacity
                       onPress={() => changeSetCount(-1)}
                       style={styles.setCountBtn}

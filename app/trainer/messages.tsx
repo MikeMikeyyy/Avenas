@@ -23,7 +23,7 @@ import NeuCard from "../../components/NeuCard";
 import BounceButton from "../../components/BounceButton";
 import PlusIcon from "../../components/icons/PlusIcon";
 import ChatIcon from "../../components/icons/ChatIcon";
-import PeopleIcon from "../../components/icons/PeopleIcon";
+import GroupAvatar from "../../components/trainer/GroupAvatar";
 import MessageComposeSheet from "../../components/trainer/MessageComposeSheet";
 import Avatar from "../../components/Avatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
@@ -102,6 +102,7 @@ export default function MessagesScreen() {
       id: toGroupKey(g.group.id),
       name: g.group.name,
       initials: makeInitials(g.group.name),
+      photoUri: g.group.photoUri,
       subtitle: `${g.group.memberCount} member${g.group.memberCount === 1 ? "" : "s"}`,
       lastText: g.lastText,
       lastAtISO: g.lastAtISO,
@@ -299,9 +300,7 @@ export default function MessagesScreen() {
               <NeuCard dark={isDark} radius={16}>
                 <View style={styles.row}>
                   {r.kind === "group" ? (
-                    <View style={[styles.groupAvatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                      <PeopleIcon size={22} color={ACCT} />
-                    </View>
+                    <GroupAvatar uri={r.photoUri} size={48} isDark={isDark} />
                   ) : (
                     <Avatar
                       uri={r.photoUri}
@@ -356,7 +355,7 @@ const styles = StyleSheet.create({
 
   row:         { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   avatarText:  { fontFamily: FontFamily.bold, fontSize: 16 },
-  groupAvatar: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
+  // The group's circle is GroupAvatar's own, at the 48pt this list used.
   rowTop:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   name:        { flex: 1, fontFamily: FontFamily.bold, fontSize: 16 },
   time:        { fontFamily: FontFamily.regular, fontSize: 12 },

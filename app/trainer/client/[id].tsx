@@ -440,7 +440,7 @@ export default function ClientDetailScreen() {
                                 styles.cycleChip,
                                 isTraining
                                   ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                  : { backgroundColor: isDark ? "rgba(255,255,255,0.1)" : t.div },
+                                  : { backgroundColor: t.div },
                               ]}
                             >
                               <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>

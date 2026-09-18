@@ -8,7 +8,7 @@
 // filtered view of the roster rather than a separate concept, and tapping one
 // opens that client exactly as it would from the hub.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
@@ -21,11 +21,14 @@ import NeuCard from "../../../../components/NeuCard";
 import BounceButton from "../../../../components/BounceButton";
 import Avatar from "../../../../components/Avatar";
 import ClientCard from "../../../../components/trainer/ClientCard";
+import GroupAvatar from "../../../../components/trainer/GroupAvatar";
 import SimpleSheet from "../../../../components/trainer/SimpleSheet";
 import ProgramPickerSheet from "../../../../components/trainer/ProgramPickerSheet";
 import UnreadBadge from "../../../../components/UnreadBadge";
 import ChevronToggle from "../../../../components/ChevronToggle";
+import ExpandReveal, { useReveal } from "../../../../components/ExpandReveal";
 import TrashIcon from "../../../../components/TrashIcon";
+import KeyboardDismissButton from "../../../../components/KeyboardDismissButton";
 import ChatIcon from "../../../../components/icons/ChatIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
@@ -41,6 +44,7 @@ import { loadFavouriteGroupIds, loadGroupRows, toggleFavouriteGroup } from "../.
 import { resolveTrainerRoster } from "../../../../utils/roster";
 import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, batchKeyOf, loadClientData, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, setGroupReviewDone, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
 import { getJSON } from "../../../../utils/storage";
+import { fmtAgo } from "../../../../utils/dates";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../../constants/programs";
 import { canCoachGroup, type Group, type GroupMember, type GroupRole } from "../../../../constants/groups";
 
@@ -58,6 +62,189 @@ const ROLE_COLOR: Record<GroupRole, string> = {
   trainer: ROLE_TRAINER,
   member:  ROLE_MEMBER,
 };
+
+/** One send to this group: one `shared_programs` row per invited member,
+ *  collapsed onto the batch key they share. */
+type SentBatch = {
+  key: string;
+  programName: string;
+  sentAtISO: string;
+  entries: SharedProgram[];
+  acceptedCount: number;
+};
+
+/**
+ * One send's card: the program, who has accepted it, and the actions behind a
+ * tap. Its own component so it can own the open/close animation
+ * (components/ExpandReveal.tsx, shared with Home's achievement cards and the
+ * Help & FAQ accordion). The actions used to fade in and out while the card's
+ * height jumped to fit them.
+ */
+function SentBatchCard({ batch, open, myUid, iCoachGroup, isDark, onToggle, onView, onAccept, onDelete }: {
+  batch: SentBatch;
+  open: boolean;
+  myUid: string | null;
+  iCoachGroup: boolean;
+  isDark: boolean;
+  onToggle: () => void;
+  onView: (sharedId: string) => void;
+  onAccept: () => void;
+  onDelete: () => void;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const reveal = useReveal();
+  useEffect(() => { reveal.setOpen(open); }, [open, reveal]);
+
+  // My own entry in this batch — what Accept acts on. A coach who sent it has
+  // no entry of their own, which is one more reason they never see Accept.
+  const mine = batch.entries.find(e => e.clientId === myUid);
+  // The count is only the truth when I can see the whole batch, which the
+  // database grants to this group's coaches and no one else. A member sees one
+  // row and would read "0 of 1".
+  const meta = mine?.acceptedAtISO
+    ? "Accepted"
+    : iCoachGroup
+      ? (batch.acceptedCount === batch.entries.length
+          ? "Accepted by everyone"
+          : `${batch.acceptedCount} of ${batch.entries.length} accepted`)
+      : "Shared with this group";
+
+  return (
+    <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+      <View>
+        <Pressable
+          onPress={onToggle}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          accessibilityLabel={`${batch.programName}, ${meta}, ${open ? "collapse" : "expand"}`}
+        >
+          <View style={styles.sentRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.sentName, { color: t.tp }]} numberOfLines={1}>{batch.programName}</Text>
+              <Text style={[styles.sentMeta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
+            </View>
+            <ChevronToggle expanded={open} color={t.ts} upDown />
+          </View>
+        </Pressable>
+        <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} contentStyle={styles.sentActions}>
+          <BounceButton
+            style={styles.sentActionSlot}
+            onPress={() => onView((mine ?? batch.entries[0]).id)}
+            accessibilityLabel={`View ${batch.programName}`}
+          >
+            <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
+              <Text style={[styles.sentActionText, { color: t.tp }]}>View Program</Text>
+            </View>
+          </BounceButton>
+          {/* Not mutually exclusive: a trainer who is a member of the group both
+              received a copy and may remove the send, so they get all three.
+              The sender has no entry of their own, so no Accept. */}
+          {mine && !mine.acceptedAtISO && (
+            <BounceButton style={styles.sentActionSlot} onPress={onAccept} accessibilityLabel={`Accept ${batch.programName}`}>
+              <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                <Text style={[styles.sentActionText, { color: "#fff" }]}>Accept</Text>
+              </View>
+            </BounceButton>
+          )}
+          {iCoachGroup && (
+            <BounceButton style={styles.sentActionSlot} onPress={onDelete} accessibilityLabel={`Delete ${batch.programName}`}>
+              <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                <TrashIcon size={15} color="#fff" />
+                <Text style={[styles.sentActionText, { color: "#fff" }]}>Delete</Text>
+              </View>
+            </BounceButton>
+          )}
+        </ExpandReveal>
+      </View>
+    </NeuCard>
+  );
+}
+
+/**
+ * One program a member posted here for a coach to look at — the receiving half
+ * of the group's program traffic, and deliberately the same card as the trainer
+ * hub's "Programs Received": name, who it came from and when, a status pill,
+ * and the review behind a tap.
+ *
+ * Shown to the SENDER too, without the actions. A gym user tracks their request
+ * on their own trainer page, but a TRAINER who is a plain member of someone
+ * else's group has no such page — their own hub only lists reviews addressed to
+ * them — so without this their request vanished the moment they sent it.
+ */
+function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOpen, onDone }: {
+  review: SentProgram;
+  /** Who asked, resolved against the roster. */
+  from: string;
+  open: boolean;
+  canReview: boolean;
+  isDark: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+  onDone: () => void;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const reveal = useReveal();
+  useEffect(() => { reveal.setOpen(open); }, [open, reveal]);
+
+  const returned = review.status === "returned";
+
+  const row = (
+    <View style={styles.sentRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.sentName, { color: t.tp }]} numberOfLines={1}>{review.programName}</Text>
+        <Text style={[styles.sentMeta, { color: t.ts }]} numberOfLines={1}>
+          {from} · Sent {fmtAgo(review.sentAtISO)}
+        </Text>
+      </View>
+      <View style={[styles.statusPill, returned
+        ? { backgroundColor: `${ACCT}22` }
+        : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
+      ]}>
+        <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+          {returned ? "Returned" : "Awaiting review"}
+        </Text>
+      </View>
+      {canReview && <ChevronToggle expanded={open} color={t.ts} upDown />}
+    </View>
+  );
+
+  // Nothing behind the tap for a member, so it isn't a tap: the card states
+  // where their request stands and stops there.
+  if (!canReview) return <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>{row}</NeuCard>;
+
+  return (
+    <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+      <View>
+        <Pressable
+          onPress={onToggle}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          accessibilityLabel={`${review.programName} from ${from}, ${returned ? "returned" : "awaiting review"}, ${open ? "collapse" : "expand"}`}
+        >
+          {row}
+        </Pressable>
+        <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} contentStyle={styles.sentActions}>
+          <BounceButton style={styles.sentActionSlot} onPress={onOpen} accessibilityLabel={`Review ${review.programName}`}>
+            <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
+              <Text style={[styles.sentActionText, { color: t.tp }]}>
+                {returned ? "View Review" : "Edit & Send Back"}
+              </Text>
+            </View>
+          </BounceButton>
+          {/* Closing the item is what keeps this a queue rather than an
+              ever-growing log. It only clears the GROUP's copy — the member
+              keeps the feedback on their own page. */}
+          <BounceButton style={styles.sentActionSlot} onPress={onDone} accessibilityLabel={`Mark ${review.programName} as done`}>
+            <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+              <Ionicons name="checkmark" size={15} color="#fff" />
+              <Text style={[styles.sentActionText, { color: "#fff" }]}>Mark Done</Text>
+            </View>
+          </BounceButton>
+        </ExpandReveal>
+      </View>
+    </NeuCard>
+  );
+}
 
 export default function GroupPageScreen() {
   const router = useRouter();
@@ -92,6 +279,7 @@ export default function GroupPageScreen() {
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   const [groupShares, setGroupShares] = useState<SharedProgram[]>([]);
   const [expandedSent, setExpandedSent] = useState<Set<string>>(new Set());
+  const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
   // The group's review queue: programs members posted here, still open. Empty
   // for a member — RLS returns a group's reviews to its coaches only.
   const [groupReviews, setGroupReviews] = useState<SentProgram[]>([]);
@@ -113,6 +301,15 @@ export default function GroupPageScreen() {
     setExpandedSent(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const toggleReview = useCallback((id: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setExpandedReviews(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   }, []);
@@ -181,8 +378,11 @@ export default function GroupPageScreen() {
       Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
       return;
     }
-    Alert.alert("Sent for Review", `"${program.name}" was sent to the trainers in ${displayName}. You'll see it on your trainer page too.`);
-  }, [group?.ownerId, groupId, displayName]);
+    // Put it in the section on this tick: the request now has a card of its own
+    // here, and waiting for the next focus would look like the send was lost.
+    await refreshGroupShares();
+    Alert.alert("Sent for Review", `"${program.name}" was sent to the trainers in ${displayName}. It stays on this page until a trainer marks it done.`);
+  }, [group?.ownerId, groupId, displayName, refreshGroupShares]);
 
   const handleDeleteBatch = useCallback((batchKey: string, programName: string) => {
     Alert.alert(
@@ -217,7 +417,7 @@ export default function GroupPageScreen() {
    * is built from — so they're collapsed on `batchKeyOf`, the same key the hub
    * uses. Both surfaces therefore agree on what counts as one send.
    */
-  const sentBatches = useMemo(() => {
+  const sentBatches = useMemo<SentBatch[]>(() => {
     const byKey = new Map<string, SharedProgram[]>();
     for (const s of groupShares) {
       const k = batchKeyOf(s);
@@ -437,6 +637,21 @@ export default function GroupPageScreen() {
   const clientFor = (m: GroupMember): Client =>
     clients.find(c => c.id === m.id) ?? { id: m.id, name: m.name, initials: m.initials, photoUri: m.photoUri };
 
+  /** Who a review came from, for the line under its name. My own request reads
+   *  "You" — it's on this page so I can see where it got to, not to tell me who
+   *  I am. Someone who has since left the group falls back to a neutral label
+   *  rather than blanking the line: the request is still in the queue. */
+  const reviewFrom = (r: SentProgram): string => {
+    if (r.senderId && r.senderId === myUid) return "You";
+    return members.find(m => m.id === r.senderId)?.name ?? "A member";
+  };
+
+  /** My own row reads its program from MY programs, not from the per-client
+   *  store the other rows use: that store is keyed by client id and I'm not one
+   *  of my own clients, so my card claimed "No active program" however many I
+   *  was running. */
+  const myActiveProgramName = myPrograms.find(p => p.status === "active")?.name;
+
   const shown = members.slice(0, AVATAR_STACK);
   const overflow = Math.max(0, members.length - AVATAR_STACK);
 
@@ -469,9 +684,20 @@ export default function GroupPageScreen() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: insets.bottom + 40 }}
         >
-          {/* Banner: who's in it, and the two things you do with a group. */}
+          {/* Banner: the group's own face, who's in it, and the two things you
+              do with a group. The photo leads because it's what the group is
+              recognised by everywhere else; the member stack stays underneath,
+              since who's in it is the other half of the answer. */}
           <NeuCard dark={isDark} radius={20}>
             <View style={styles.bannerInner}>
+              <TouchableOpacity
+                activeOpacity={group?.isOwner ? 0.8 : 1}
+                onPress={group?.isOwner ? openManage : undefined}
+                accessibilityRole={group?.isOwner ? "button" : "image"}
+                accessibilityLabel={group?.isOwner ? "Change group photo" : `${displayName} photo`}
+              >
+                <GroupAvatar uri={group?.photoUri} size={64} isDark={isDark} />
+              </TouchableOpacity>
               <View style={styles.avatarStack}>
                 {shown.map((m, i) => (
                   <View key={m.id} style={[styles.stackItem, { marginLeft: i === 0 ? 0 : -12, borderColor: t.bg }]}>
@@ -491,9 +717,6 @@ export default function GroupPageScreen() {
                   </View>
                 )}
               </View>
-              <Text style={[styles.memberCount, { color: t.ts }]}>
-                {members.length} member{members.length === 1 ? "" : "s"}
-              </Text>
 
               {/* Sending belongs to the owner and anyone they've promoted to
                   trainer; a plain member being coached here gets the chat full
@@ -530,68 +753,37 @@ export default function GroupPageScreen() {
             </View>
           </NeuCard>
 
-          {/* The group's review queue: programs members posted here for a coach
-              to look at. Coaches only — a member can read their OWN row (they
-              sent it), but this is a work list, not a status board, and the
-              member already tracks their request on their own trainer page.
+          {/* Programs members posted here for a coach to look at — the other
+              direction from "Programs Sent" below, and the same section a coach
+              sees on their hub. A coach gets the review actions; the person who
+              posted it gets the card as a status line, because for a trainer
+              who's a plain member here this is the only page it appears on.
 
               Anything marked done has left the list entirely; that's the point
               of it being a queue rather than a log. */}
-          {iCoachGroup && groupReviews.length > 0 && (
+          {groupReviews.length > 0 && (
             <>
               <View style={styles.sectionRow}>
-                <Text style={[styles.sectionHeading, { color: t.tp }]}>For Review</Text>
+                <Text style={[styles.sectionHeading, { color: t.tp }]}>
+                  {iCoachGroup ? "Programs Received" : "Sent for Review"}
+                </Text>
                 <View style={[styles.countBadge, { backgroundColor: ACCT }]}>
                   <Text style={styles.countBadgeText}>{groupReviews.length}</Text>
                 </View>
               </View>
-              {groupReviews.map(r => {
-                const returned = !!r.returnedAtISO;
-                return (
-                  <NeuCard key={r.id} dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                    <View style={styles.sentRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.sentName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                        <Text style={[styles.sentMeta, { color: t.ts }]} numberOfLines={1}>
-                          {returned ? "Sent back, waiting on the member" : "Waiting for a trainer"}
-                        </Text>
-                      </View>
-                      <View style={[styles.statusPill, returned
-                        ? { backgroundColor: `${ACCT}22` }
-                        : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-                      ]}>
-                        <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
-                          {returned ? "Reviewed" : "New"}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={styles.sentActions}>
-                      <BounceButton
-                        style={styles.sentActionSlot}
-                        onPress={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id, groupId } })}
-                        accessibilityLabel={`Review ${r.programName}`}
-                      >
-                        <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
-                          <Text style={[styles.sentActionText, { color: t.tp }]}>{returned ? "View" : "Review"}</Text>
-                        </View>
-                      </BounceButton>
-                      {/* Closing the item is what keeps this a queue rather than
-                          an ever-growing log. It only clears the GROUP's copy —
-                          the member keeps the feedback on their own page. */}
-                      <BounceButton
-                        style={styles.sentActionSlot}
-                        onPress={() => handleCompleteReview(r)}
-                        accessibilityLabel={`Mark ${r.programName} as done`}
-                      >
-                        <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
-                          <Ionicons name="checkmark" size={15} color="#fff" />
-                          <Text style={[styles.sentActionText, { color: "#fff" }]}>Mark Done</Text>
-                        </View>
-                      </BounceButton>
-                    </View>
-                  </NeuCard>
-                );
-              })}
+              {groupReviews.map(r => (
+                <GroupReviewCard
+                  key={r.id}
+                  review={r}
+                  from={reviewFrom(r)}
+                  open={expandedReviews.has(r.id)}
+                  canReview={iCoachGroup}
+                  isDark={isDark}
+                  onToggle={() => toggleReview(r.id)}
+                  onOpen={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id, groupId } })}
+                  onDone={() => handleCompleteReview(r)}
+                />
+              ))}
             </>
           )}
 
@@ -607,68 +799,20 @@ export default function GroupPageScreen() {
                   <Text style={styles.countBadgeText}>{sentBatches.length}</Text>
                 </View>
               </View>
-              {sentBatches.map(b => {
-                const open = expandedSent.has(b.key);
-                // My own entry in this batch — what Accept acts on. A coach who
-                // sent it has no entry of their own, which is one more reason
-                // they never see Accept.
-                const mine = b.entries.find(e => e.clientId === myUid);
-                // The open count is only the truth when I can see the whole
-                // batch, which the database grants to this group's coaches and
-                // no one else. A member sees one row and would read "0 of 1".
-                const meta = mine?.acceptedAtISO
-                  ? "Accepted"
-                  : iCoachGroup
-                    ? (b.acceptedCount === b.entries.length
-                        ? "Opened by everyone"
-                        : `${b.acceptedCount} of ${b.entries.length} opened`)
-                    : "Shared with this group";
-                return (
-                  <NeuCard key={b.key} dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                    <Pressable onPress={() => toggleSent(b.key)} accessibilityRole="button" accessibilityLabel={`${b.programName}, ${open ? "collapse" : "expand"}`}>
-                      <View style={styles.sentRow}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.sentName, { color: t.tp }]} numberOfLines={1}>{b.programName}</Text>
-                          <Text style={[styles.sentMeta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
-                        </View>
-                        <ChevronToggle expanded={open} color={t.ts} upDown />
-                      </View>
-                    </Pressable>
-                    {open && (
-                      <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(140)} style={styles.sentActions}>
-                        <BounceButton
-                          style={styles.sentActionSlot}
-                          onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: (mine ?? b.entries[0]).id } })}
-                          accessibilityLabel={`View ${b.programName}`}
-                        >
-                          <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
-                            <Text style={[styles.sentActionText, { color: t.tp }]}>View Program</Text>
-                          </View>
-                        </BounceButton>
-                        {/* Not mutually exclusive: a trainer who is a member of
-                            the group both received a copy and may remove the
-                            send, so they get all three. The sender has no entry
-                            of their own, so no Accept. */}
-                        {mine && !mine.acceptedAtISO && (
-                          <BounceButton style={styles.sentActionSlot} onPress={() => handleAcceptBatch(b.key, b.programName)} accessibilityLabel={`Accept ${b.programName}`}>
-                            <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
-                              <Text style={[styles.sentActionText, { color: "#fff" }]}>Accept</Text>
-                            </View>
-                          </BounceButton>
-                        )}
-                        {iCoachGroup && (
-                          <BounceButton style={styles.sentActionSlot} onPress={() => handleDeleteBatch(b.key, b.programName)} accessibilityLabel={`Delete ${b.programName}`}>
-                            <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
-                              <TrashIcon size={15} color="#fff" />
-                              <Text style={[styles.sentActionText, { color: "#fff" }]}>Delete</Text>
-                            </View>
-                          </BounceButton>
-                        )}
-                      </Animated.View>
-                    )}
-                  </NeuCard>
-                );
-              })}
+              {sentBatches.map(b => (
+                <SentBatchCard
+                  key={b.key}
+                  batch={b}
+                  open={expandedSent.has(b.key)}
+                  myUid={myUid}
+                  iCoachGroup={iCoachGroup}
+                  isDark={isDark}
+                  onToggle={() => toggleSent(b.key)}
+                  onView={(sharedId) => router.navigate({ pathname: "/program-view", params: { sharedId } })}
+                  onAccept={() => handleAcceptBatch(b.key, b.programName)}
+                  onDelete={() => handleDeleteBatch(b.key, b.programName)}
+                />
+              ))}
             </>
           )}
 
@@ -692,27 +836,49 @@ export default function GroupPageScreen() {
                 </View>
               </TouchableOpacity>
             )}
+            {/* Adding people was only ever behind the ⋯ menu's "Manage members",
+                which reads as reviewing a roster rather than growing one. The +
+                sits where the Groups list's own + sits, next to the heading. */}
+            {group?.isOwner && (
+              <TouchableOpacity
+                onPress={openManage}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Add members"
+              >
+                <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
+                  <Ionicons name="person-add-outline" size={16} color={t.tp} />
+                </View>
+              </TouchableOpacity>
+            )}
           </View>
 
           {searchOpen && (
-            <View style={[styles.searchBox, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}>
-              <Ionicons name="search" size={16} color={t.ts} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Search members"
-                placeholderTextColor={t.ts}
-                autoFocus
-                autoCorrect={false}
-                returnKeyType="search"
-                style={[styles.searchInput, { color: t.tp }]}
-              />
-              {query.trim().length > 0 && (
-                <TouchableOpacity onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
-                  <Ionicons name="close-circle" size={18} color={t.ts} />
-                </TouchableOpacity>
-              )}
-            </View>
+            <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(140)} style={styles.searchRow}>
+              {/* Same field as PTHome's client search, Messages and the exercise
+                  picker: a filled, fully rounded pill on t.ctrl (white on light)
+                  rather than a faint tinted box, so it reads as something you
+                  type into and matches every other search in the app. */}
+              <View style={[styles.searchBox, { backgroundColor: t.ctrl, borderColor: t.div }]}>
+                <Ionicons name="search" size={17} color={t.ts} />
+                <TextInput
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder="Search members"
+                  placeholderTextColor={t.ts}
+                  autoFocus
+                  autoCorrect={false}
+                  returnKeyType="search"
+                  clearButtonMode="never"
+                  style={[styles.searchInput, { color: t.tp }]}
+                />
+                {query.trim().length > 0 && (
+                  <TouchableOpacity onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
+                    <Ionicons name="close-circle" size={19} color={t.ts} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </Animated.View>
           )}
 
           {members.length === 0 ? (
@@ -735,29 +901,45 @@ export default function GroupPageScreen() {
               </View>
             </NeuCard>
           ) : (
-            visibleMembers.map(m => (
-              <ClientCard
-                key={m.id}
-                client={clientFor(m)}
-                activeProgramName={activeProgramByClient[m.id]}
-                // get_group_members orders owner, then trainers, then members,
-                // so the badges read top to bottom in rank order. An outstanding
-                // invite outranks the role: what they'd be once they join is
-                // less useful than knowing they haven't joined.
-                badge={m.accepted ? ROLE_LABEL[m.role] : "INVITED"}
-                badgeColor={m.accepted ? ROLE_COLOR[m.role] : t.ts}
-                // The owner gets a sheet to promote or demote. A coach of the
-                // group opens the client page. Everyone else — a gym user
-                // looking at who else is in their group — gets a roster entry
-                // and nothing more: the client page is a coaching surface
-                // (progress, journal, send a program) and opening it on a
-                // fellow member would claim a relationship that isn't there.
-                onPress={() => {
-                  if (group?.isOwner && m.id !== myUid) { openMemberMenu(m); return; }
-                  if (iCoachGroup) router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } });
-                }}
-              />
-            ))
+            visibleMembers.map(m => {
+              // YOUR OWN row never opens anything. The client page is a page
+              // ABOUT someone you coach, built from the client roster, and you
+              // are not on your own roster — so it loaded, found nothing and
+              // said "client not found". A coach's own card used to reach it
+              // because the self-check only guarded the owner's sheet and then
+              // fell through to the navigate below.
+              const isMe = m.id === myUid;
+              // The owner gets a sheet to promote or demote. A coach of the
+              // group opens the client page. Everyone else — a gym user
+              // looking at who else is in their group — gets a roster entry
+              // and nothing more: the client page is a coaching surface
+              // (progress, journal, send a program) and opening it on a
+              // fellow member would claim a relationship that isn't there.
+              // No action → no onPress at all, so the card doesn't bounce and
+              // buzz on a tap that goes nowhere.
+              const onPress = isMe
+                ? undefined
+                : group?.isOwner
+                  ? () => openMemberMenu(m)
+                  : iCoachGroup
+                    ? () => router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } })
+                    : undefined;
+              return (
+                <ClientCard
+                  key={m.id}
+                  client={clientFor(m)}
+                  activeProgramName={isMe ? myActiveProgramName : activeProgramByClient[m.id]}
+                  // get_group_members orders owner, then trainers, then members,
+                  // so the badges read top to bottom in rank order. An outstanding
+                  // invite outranks the role: what they'd be once they join is
+                  // less useful than knowing they haven't joined. "YOU" outranks
+                  // both — it's why that one card doesn't respond to a tap.
+                  badge={isMe ? "YOU" : m.accepted ? ROLE_LABEL[m.role] : "INVITED"}
+                  badgeColor={isMe ? t.ts : m.accepted ? ROLE_COLOR[m.role] : t.ts}
+                  onPress={onPress}
+                />
+              );
+            })
           )}
         </ScrollView>
       )}
@@ -842,6 +1024,11 @@ export default function GroupPageScreen() {
         onPick={picker === "review" ? handleAskForReview : handleSendProgram}
         onClose={() => setPicker(null)}
       />
+
+      {/* The floating keyboard-down button for the member search, the same one
+          PTHome's client search and the group edit screen show. Last child so
+          it sits above the scroll content; renders nothing without a keyboard. */}
+      <KeyboardDismissButton />
     </FadeScreen>
   );
 }
@@ -860,8 +1047,6 @@ const styles = StyleSheet.create({
   stackText:    { fontFamily: FontFamily.bold, fontSize: 13 },
   overflowChip: { width: 38, height: 38, alignItems: "center", justifyContent: "center" },
   overflowText: { fontFamily: FontFamily.bold, fontSize: 12 },
-  memberCount:  { fontFamily: FontFamily.regular, fontSize: 13 },
-
   actionRow:    { flexDirection: "row", gap: 10, marginTop: 2 },
   // Layout only. The shadow lives on the variants below, because sharing one
   // shadow meant the white button rendered it with the default BLACK colour at
@@ -893,8 +1078,9 @@ const styles = StyleSheet.create({
   countBadge:   { minWidth: 24, height: 22, borderRadius: 11, paddingHorizontal: 7, alignItems: "center", justifyContent: "center" },
   countBadgeText: { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff" },
   searchBtn:    { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  searchBox:    { flexDirection: "row", alignItems: "center", gap: 8, height: 44, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, marginBottom: 12 },
-  searchInput:  { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, paddingVertical: 0 },
+  searchRow:    { marginBottom: 12 },
+  searchBox:    { flexDirection: "row", alignItems: "center", gap: 9, height: 42, paddingHorizontal: 14, borderRadius: PILL_RADIUS, borderWidth: 1, ...PILL_SHADOW },
+  searchInput:  { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0 },
   noMatchRow:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 12 },
   noMatchText:  { fontFamily: FontFamily.regular, fontSize: 13 },
 

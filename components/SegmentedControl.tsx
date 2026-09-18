@@ -18,9 +18,8 @@ interface Props<K extends string> {
 // over both NEU_BG and NEU_BG_DARK cards — solid hexes would need a
 // per-surface variant). The sliding thumb uses the shared bubble-pill colors.
 const TRACK_LIGHT = "rgba(118, 118, 128, 0.12)";
-// Translucent white overlay, not a solid colour — the dark card (NEU_BG_DARK)
-// and APP_DARK.div are the same #252840, so a solid t.div track would be
-// invisible. The overlay always lifts off whatever dark surface it sits on.
+// A touch quieter than APP_DARK.div (0.14), which is tuned for hairlines: this
+// is a filled track sitting under a white thumb, so it wants less weight.
 const TRACK_DARK = "rgba(255, 255, 255, 0.10)";
 
 const TRACK_PAD = 3;

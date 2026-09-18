@@ -15,12 +15,14 @@ import * as Haptics from "expo-haptics";
 import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import GroupAvatar from "./GroupAvatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { Client } from "../../utils/trainerStore";
 
 /** A group offered as a one-tap way to tick all its members. */
-export type RecipientGroup = { id: string; name: string; memberIds: string[] };
+export type RecipientGroup = { id: string; name: string; memberIds: string[]; photoUri?: string };
 
 interface Props {
   visible: boolean;
@@ -156,9 +158,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                 >
                   <NeuCard dark={isDark} radius={14}>
                     <View style={[styles.row, (sendToAll || ids.length === 0) && { opacity: 0.45 }]}>
-                      <View style={[styles.allIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                        <Ionicons name="people-outline" size={18} color={ACCT} />
-                      </View>
+                      <GroupAvatar uri={g.photoUri} size={34} isDark={isDark} />
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
                         <Text style={[styles.rowMeta, { color: t.ts }]}>
@@ -256,8 +256,8 @@ const styles = StyleSheet.create({
   allIcon:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   check:      { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   actions:    { paddingHorizontal: 20, paddingTop: 12 },
-  send:       { borderRadius: 14, paddingVertical: 14, alignItems: "center", backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
+  send:       { ...pill(PILL_H_SM), backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
   sendText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-  cancel:     { borderRadius: 14, paddingVertical: 13, alignItems: "center" },
+  cancel:     { ...pill(PILL_H_SM) },
   cancelText: { fontFamily: FontFamily.bold, fontSize: 14 },
 });

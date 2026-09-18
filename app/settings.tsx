@@ -1,4 +1,4 @@
-import { Alert, Platform, View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
+import { Alert, Linking, Platform, View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -7,13 +7,13 @@ import { useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolateColor } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
-import * as StoreReview from "expo-store-review";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
 import { removeKey } from "../utils/storage";
 import { isApplePrivateEmail, signOut } from "../lib/auth";
 import { deleteAccount } from "../lib/cloud";
+import { appStoreReviewUrl, appStoreReviewWebUrl } from "../lib/appConfig";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import { WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY } from "../constants/programs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -33,15 +33,18 @@ type AutofillItem = BaseItem & { autofillToggle: true };
 type LiveActivityItem = BaseItem & { liveActivityToggle: true };
 type SettingsItem = NavigateItem | ToggleItem | UnitItem | ViewModeItem | AutofillItem | LiveActivityItem;
 
-// In-app rating prompt (Apple allows max 3 per year). Silently no-ops when the
-// native prompt is unavailable (simulator, or after the yearly limit) instead
-// of opening a hardcoded App Store URL.
-const requestAppRating = async () => {
+// "Rate Avenas" opens the App Store on Avenas' Write a Review sheet. It used to
+// call StoreReview.requestReview(), but that prompt is iOS's to show or not:
+// capped at three a year, never shown in TestFlight, and silent when skipped,
+// so tapping the row usually did nothing. Apple reserves that prompt for asking
+// unprompted and says a button the user taps should deep-link here instead.
+// Same itms-apps → https fallback as the force-update gate.
+const openAppStoreReview = async () => {
   try {
-    if (await StoreReview.isAvailableAsync()) {
-      await StoreReview.requestReview();
-    }
-  } catch {}
+    await Linking.openURL(appStoreReviewUrl());
+  } catch {
+    try { await Linking.openURL(appStoreReviewWebUrl()); } catch { /* nothing more to try */ }
+  }
 };
 
 // ─── Static values for StyleSheet (dark overrides applied inline) ─────────────
@@ -84,7 +87,7 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
           <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={c} strokeWidth="1.5" />
         </Svg>
       ) },
-      { icon: "cloud-outline", label: "Data & Sync" },
+      { icon: "cloud-outline", label: "Data & Sync", route: "/data-sync" },
     ],
   },
   {
@@ -104,7 +107,7 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
       { icon: "bulb-outline",          label: "Request a Feature", route: "/request-feature"  },
       // Dev-only backend test harness — must never ship to users.
       ...(__DEV__ ? [{ icon: "cloud-outline" as const, label: "Cloud sync (test)", route: "/cloud-test" }] : []),
-      { icon: "star-outline",          label: "Rate Avenas",       onPress: requestAppRating  },
+      { icon: "star-outline",          label: "Rate Avenas",       onPress: openAppStoreReview },
     ],
   },
 ];

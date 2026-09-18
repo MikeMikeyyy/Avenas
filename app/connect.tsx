@@ -28,7 +28,7 @@ import SimpleSheet from "../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, DANGER, FontFamily } from "../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_H_XS } from "../constants/buttons";
+import { pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
 import { addTrainerAsClient } from "../utils/trainerStore";
 import type { ReportReason } from "../constants/chat";
@@ -374,14 +374,16 @@ export default function ConnectScreen() {
             </View>
             <Text style={[styles.codeText, { color: t.tp }]}>{myCode ?? "—"}</Text>
             <View style={styles.codeActions}>
+              {/* White pills (t.ctrl + PILL_SHADOW), the same secondary button
+                  the rest of the app uses, rather than a bare outline. */}
               <BounceButton style={{ flex: 1 }} onPress={onCopy} accessibilityLabel="Copy code">
-                <View style={[styles.smallBtn, { borderColor: t.div }]}>
+                <View style={[styles.smallBtn, { backgroundColor: t.ctrl }]}>
                   <Ionicons name="copy-outline" size={16} color={t.tp} />
                   <Text style={[styles.smallBtnText, { color: t.tp }]}>Copy</Text>
                 </View>
               </BounceButton>
               <BounceButton style={{ flex: 1 }} onPress={onShare} accessibilityLabel="Share code">
-                <View style={[styles.smallBtn, { borderColor: t.div }]}>
+                <View style={[styles.smallBtn, { backgroundColor: t.ctrl }]}>
                   <Ionicons name="share-outline" size={16} color={t.tp} />
                   <Text style={[styles.smallBtnText, { color: t.tp }]}>Share</Text>
                 </View>
@@ -533,7 +535,7 @@ const styles = StyleSheet.create({
   qrWrap:      { width: 200, height: 200, borderRadius: 16, backgroundColor: "#ffffff", alignItems: "center", justifyContent: "center" },
   codeText:    { fontFamily: FontFamily.bold, fontSize: 24, letterSpacing: 4 },
   codeActions: { flexDirection: "row", gap: 12, alignSelf: "stretch" },
-  smallBtn:    { ...pill(PILL_H_XS), gap: 7, borderWidth: 1 },
+  smallBtn:    { ...pill(PILL_H_XS), gap: 7, ...PILL_SHADOW },
   smallBtnText:{ fontFamily: FontFamily.semibold, fontSize: 14 },
   scanWrap:    { ...pill(), gap: 9, ...pillGlow(ACCT, 0.4) },
   scanText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff" },

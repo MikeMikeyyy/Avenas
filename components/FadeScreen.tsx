@@ -8,29 +8,36 @@ interface FadeScreenProps {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   duration?: number;
-  // Fade in only on the FIRST focus, not on every re-focus. Use this on a screen
-  // that can be re-focused while it's already visible — e.g. Home when a modal
-  // (Insights) is dismissed on top of it. Re-running the fade there drops the view
-  // to opacity 0 and flashes whatever is behind it (a white "reload"). With `once`
-  // the entrance fade still plays the first time, then the screen stays put.
-  once?: boolean;
 }
 
-export default function FadeScreen({ children, style, duration = 180, once = false }: FadeScreenProps) {
+/**
+ * A screen that fades in when it first appears.
+ *
+ * ONCE PER MOUNT, deliberately. It used to re-run on every focus, dropping an
+ * already-visible screen to opacity 0 and revealing whatever sat behind it: the
+ * white root view, which is a flashbang in dark mode. Every tab switch and every
+ * back-navigation did it, since both re-focus a screen that is already mounted
+ * and painted. Home had opted out through a prop; that is now how all of them
+ * behave, and the entrance fade still plays the first time a screen mounts.
+ *
+ * The root view is themed too (contexts/ThemeContext.tsx), so a frame that this
+ * can't cover (a screen the OS reclaimed and is rebuilding) lands on the app's
+ * own background rather than white.
+ */
+export default function FadeScreen({ children, style, duration = 180 }: FadeScreenProps) {
   const opacity = useRef(new Animated.Value(0)).current;
   const hasFaded = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
-      if (once && hasFaded.current) return;   // already faded once — don't replay (no flash)
+      if (hasFaded.current) return;   // already visible: never drop back to 0
       hasFaded.current = true;
-      opacity.setValue(0);
       Animated.timing(opacity, {
         toValue: 1,
         duration,
         useNativeDriver: true,
       }).start();
-    }, [once, duration, opacity])
+    }, [duration, opacity])
   );
 
   return (

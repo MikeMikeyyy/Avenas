@@ -414,6 +414,44 @@ export function prevDayScopeFor(
  *
  * Omit `day` for the day-agnostic map (most recent appearance anywhere).
  */
+/**
+ * Map of normalized exercise name → the note written on it LAST TIME, for the
+ * "Last time" hint under an exercise's notes box.
+ *
+ * Same walk and same day scoping as `buildPrevByName`, and deliberately only
+ * the MOST RECENT session that included the exercise: if you wrote a note in
+ * week 1 and none in week 2, week 3 shows nothing. Older notes aren't lost, they
+ * live in the journal with the session that recorded them. Carrying the newest
+ * note forward instead would make a one-off remark ("shoulder twinge today")
+ * follow you for months.
+ *
+ * A session that included the exercise with an empty note therefore BLOCKS the
+ * older one rather than being skipped over.
+ */
+export function buildPrevNotesByName(
+  history: CompletedWorkout[],
+  beforeDate?: string,
+  day?: PrevDayScope,
+): Record<string, string> {
+  const sorted = [...history].sort(
+    (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
+  );
+  const out: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const workout of sorted) {
+    if (beforeDate && !(workout.date < beforeDate)) continue;
+    if (day && !sessionIsOnDay(workout, day)) continue;
+    for (const ex of workout.exercises) {
+      const key = normalizeExerciseName(ex.name);
+      if (seen.has(key)) continue; // newest session wins, note or no note
+      seen.add(key);
+      const note = (ex.notes ?? "").trim();
+      if (note) out[key] = note;
+    }
+  }
+  return out;
+}
+
 export function buildPrevByName(
   history: CompletedWorkout[],
   beforeDate?: string,

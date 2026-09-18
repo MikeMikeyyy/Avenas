@@ -24,8 +24,8 @@ import ChatBubble from "../../../../components/trainer/ChatBubble";
 import ChatThreadView from "../../../../components/trainer/ChatThreadView";
 import SimpleSheet from "../../../../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../../../../components/trainer/ReportReasonSheet";
-import PeopleIcon from "../../../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../../constants/theme";
+import GroupAvatar from "../../../../components/trainer/GroupAvatar";
+import { APP_DARK, APP_LIGHT, FontFamily } from "../../../../constants/theme";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import {
   deleteGroupMessage,
@@ -171,9 +171,7 @@ export default function GroupThreadScreen() {
           <Ionicons name="chevron-back" size={22} color={t.tp} />
         </View>
       </TouchableOpacity>
-      <View style={[styles.groupAvatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-        <PeopleIcon size={20} color={ACCT} />
-      </View>
+      <GroupAvatar uri={group?.photoUri} size={38} isDark={isDark} />
       <View style={{ flex: 1 }}>
         <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
         <Text style={[styles.headerSub, { color: t.ts }]} numberOfLines={1}>{memberLabel}</Text>
@@ -234,7 +232,7 @@ export default function GroupThreadScreen() {
 const styles = StyleSheet.create({
   header:      { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
   backBtn:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  groupAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
+  // The group's circle is GroupAvatar's own, at the 38pt this header used.
   headerName:  { fontFamily: FontFamily.bold, fontSize: 18 },
   headerSub:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
 
