@@ -30,7 +30,7 @@ import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
 import FavouriteStar from "../FavouriteStar";
@@ -257,25 +257,23 @@ function ReceivedCard({ review, open, isDark, from, onToggle, onOpen, onRemove }
               {from} · Sent {fmtAgo(review.sentAtISO)}
             </Text>
           </View>
-          <View style={[styles.statusPill, returned
-            ? { backgroundColor: `${ACCT}22` }
-            : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-          ]}>
-            <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+          {/* Green once it's gone back; orange while it's still waiting on
+              you (AWAITING_ORANGE), so the ones needing work stand out. */}
+          <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
+            <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
               {returned ? "Returned" : "Awaiting review"}
             </Text>
           </View>
         </View>
         <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} isDark={isDark} />
-        {/* The same pair as the sent cards: the white action and the red
-            Remove. It was a raised neumorphic card sitting inside a raised
-            card, the one button in the column in the old style. */}
+        {/* The same pair as the sent cards: a white Review and a red Remove,
+            the same width. Review opens the review screen, where the edit and
+            the Send Back live (it was "Edit & Send Back", then "View Review"
+            once sent). Matches the group page's Programs Received card. */}
         <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} bleed={REVEAL_BLEED} contentStyle={styles.sharedActionRow}>
-          <BounceButton style={{ flex: 2 }} onPress={onOpen} accessibilityLabel={returned ? `View your review of ${review.programName}` : `Edit and send back ${review.programName}`}>
+          <BounceButton style={{ flex: 1 }} onPress={onOpen} accessibilityLabel={returned ? `Review ${review.programName}, already sent back` : `Review ${review.programName}`}>
             <View style={[styles.sharedActionBtnInner, { backgroundColor: t.ctrl }]}>
-              <Text style={[styles.reviewBtnText, { color: t.tp }]}>
-                {returned ? "View Review" : "Edit & Send Back"}
-              </Text>
+              <Text style={[styles.reviewBtnText, { color: t.tp }]}>Review</Text>
             </View>
           </BounceButton>
           <BounceButton style={{ flex: 1 }} onPress={onRemove} accessibilityLabel={`Remove ${review.programName}`}>
@@ -1096,11 +1094,8 @@ export default function PTHome() {
                       ]}
                     >
                       <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                      <View style={[styles.statusPill, returned
-                        ? { backgroundColor: `${ACCT}22` }
-                        : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-                      ]}>
-                        <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+                      <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
+                        <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
                           {returned ? "Returned" : "Awaiting review"}
                         </Text>
                       </View>

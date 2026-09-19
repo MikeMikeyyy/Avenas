@@ -108,6 +108,15 @@ export const ROLE_MEMBER  = "#60A5FA";  // soft blue
 // "Make Inactive" uses, so the two read as different actions at a glance.
 export const PAUSED_ORANGE = "#FF9500";
 
+// ─── Awaiting review ──────────────────────────────────────────────────────────
+// A program sent for review that no trainer has sent back yet: its status pill
+// on every trainer page and group page (text in this, fill at 22 alpha). The
+// same orange as Paused on purpose: both mean "waiting, not done", where green
+// means it's back or accepted. It was a grey pill, the same as a plain label,
+// so a request still waiting on a trainer didn't stand out from one that
+// wasn't.
+export const AWAITING_ORANGE = PAUSED_ORANGE;
+
 // ─── Aurora (soft pastel gradient system) ─────────────────────────────────────
 // Bubbly pastel accents built around the brand green, with an aqua and a blush
 // counterpoint. Base colors are full-strength; surfaces fade them via gradient

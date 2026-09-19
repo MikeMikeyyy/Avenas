@@ -32,7 +32,7 @@ import KeyboardDismissButton from "../../../../components/KeyboardDismissButton"
 import ChatIcon from "../../../../components/icons/ChatIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../../../constants/cards";
 import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
@@ -299,11 +299,10 @@ function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOp
             {from} · Sent {fmtAgo(review.sentAtISO)}
           </Text>
         </View>
-        <View style={[styles.statusPill, returned
-          ? { backgroundColor: `${ACCT}22` }
-          : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-        ]}>
-          <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+        {/* Green once it's gone back; orange while it's still waiting on a
+            trainer (AWAITING_ORANGE), as on the trainer hub. */}
+        <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
+          <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
             {returned ? "Returned" : "Awaiting review"}
           </Text>
         </View>
@@ -337,22 +336,21 @@ function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOp
           above the chevron that opens it, and takes no space while closed. */}
       {canReview && (
         <>
-          {/* The trainer hub's Programs Received card, exactly: the white
-              "Edit & Send Back" (or "View Review" once it's gone back) and the
-              red Remove. Remove is what Mark Done was — it clears the item
-              from this group's queue for every coach, and the member keeps
-              their copy and any feedback. */}
-          <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} bleed={REVEAL_BLEED} contentStyle={styles.revealActions}>
+          {/* The trainer hub's Programs Received card, exactly: a white Review
+              and a red Remove, the same width. Review opens the review screen,
+              where the edit and the Send Back live (it was labelled "Edit &
+              Send Back", then "View Review" once sent). Remove is what Mark
+              Done was: it clears the item from this group's queue for every
+              coach, and the member keeps their copy and any feedback. */}
+          <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} bleed={REVEAL_BLEED} contentStyle={styles.revealColumn}>
             <View style={styles.sentActionRow}>
               <BounceButton
-                style={{ flex: 2 }}
+                style={{ flex: 1 }}
                 onPress={onOpen}
-                accessibilityLabel={returned ? `View your review of ${review.programName}` : `Edit and send back ${review.programName}`}
+                accessibilityLabel={returned ? `Review ${review.programName}, already sent back` : `Review ${review.programName}`}
               >
                 <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
-                  <Text style={[styles.sentActionText, { color: t.tp }]}>
-                    {returned ? "View Review" : "Edit & Send Back"}
-                  </Text>
+                  <Text style={[styles.sentActionText, { color: t.tp }]}>Review</Text>
                 </View>
               </BounceButton>
               <BounceButton style={{ flex: 1 }} onPress={onDone} accessibilityLabel={`Remove ${review.programName}`}>
@@ -618,12 +616,10 @@ export default function GroupPageScreen() {
   const sentBatches = useMemo<SentBatch[]>(() => {
     const byKey = new Map<string, SharedProgram[]>();
     for (const s of groupShares) {
-      // A member's view is programs a trainer sent THEM ("From Your Trainer"),
-      // so their own sends aren't part of it. They only have any from a time
-      // they held the trainer role: those stay in the group for everyone else
-      // and on its coaches' Programs Sent, but a member has no Programs Sent
-      // section, and listing them under From Your Trainer called them
-      // something they're not.
+      // A member's Group Programs are what the group's trainers sent them, so
+      // their own sends aren't part of it. They only have any from a time they
+      // held the trainer role: those stay in the group for everyone else, and
+      // in its coaches' Group Programs, but not in the member's own view.
       if (!iCoachGroup && myUid && s.senderId === myUid) continue;
       const k = batchKeyOf(s);
       const list = byKey.get(k);
@@ -895,7 +891,7 @@ export default function GroupPageScreen() {
       return;
     }
     // One row per member, exactly like the hub's send flow — the shared batch
-    // key collapses them into a single card in "Programs Sent".
+    // key collapses them into a single card in "Group Programs".
     const now = new Date().toISOString();
     const base = `share_${Date.now()}`;
     const entries: SharedProgram[] = recipientIds.map((cid, i) => ({
@@ -916,7 +912,7 @@ export default function GroupPageScreen() {
       Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
       return;
     }
-    // Re-read so the Programs Sent section updates on this tick. The page loads
+    // Re-read so the Group Programs section updates on this tick. The page loads
     // on focus, and sending never leaves it — so without this the send only
     // appeared after navigating away and back.
     await refreshGroupShares();
@@ -1015,7 +1011,7 @@ export default function GroupPageScreen() {
                           All a plain member ever has (RLS gives a group's
                           other reviews to its coaches only).
       Nobody reviews their own request, so a trainer's own ask is never in
-      their Programs Received with Edit & Send Back on it. */
+      their Programs Received with Review on it. */
   const receivedReviews = iCoachGroup ? groupReviews.filter(r => r.senderId !== myUid) : [];
   const myReviewRequests = groupReviews.filter(r => !iCoachGroup || r.senderId === myUid);
 
@@ -1059,11 +1055,8 @@ export default function GroupPageScreen() {
                 ]}
               >
                 <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                <View style={[styles.statusPill, returned
-                  ? { backgroundColor: `${ACCT}22` }
-                  : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-                ]}>
-                  <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+                <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
+                  <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
                     {returned ? "Returned" : "Awaiting review"}
                   </Text>
                 </View>
@@ -1101,12 +1094,14 @@ export default function GroupPageScreen() {
         onPress={toggleSentSection}
         style={styles.sectionRow}
         accessibilityRole="button"
-        accessibilityLabel={`${iCoachGroup ? "Programs Sent" : "From Your Trainer"}, ${sentBatches.length}. Toggle list`}
+        accessibilityLabel={`Group Programs, ${sentBatches.length}. Toggle list`}
       >
-        {/* Same idea: a coach sent these; a member received them, and
-            only a coach can send into a group, so to a member every
-            one is from their trainer. */}
-        <Text style={[styles.sectionHeading, { color: t.tp }]}>{iCoachGroup ? "Programs Sent" : "From Your Trainer"}</Text>
+        {/* One name for everyone: the programs the group's trainers and owner
+            have sent out to it. It used to be named from where the reader
+            stood ("Programs Sent" to a coach, "From Your Trainer" to a
+            member), which put the same programs under "Programs Sent" for a
+            gym user holding the trainer role, who hadn't sent any of them. */}
+        <Text style={[styles.sectionHeading, { color: t.tp }]}>Group Programs</Text>
         <View style={[styles.countBadge, { backgroundColor: ACCT }]}>
           <Text style={styles.countBadgeText}>{sentBatches.length}</Text>
         </View>
@@ -1296,11 +1291,10 @@ export default function GroupPageScreen() {
           </NeuCard>
 
           {/* The program sections, ordered from where the reader stands.
-              A member reads it as their own trainer page does: From Your
-              Trainer above Sent to Trainer. A coach keeps the order this page
-              has always had, the review queue (work waiting on them) above
-              what's been sent out, then any review they've asked for
-              themselves. */}
+              A member: Group Programs above Sent to Trainer, the order of
+              their own trainer page. A coach keeps the order this page has
+              always had, the review queue (work waiting on them) above Group
+              Programs, then any review they've asked for themselves. */}
           {iCoachGroup ? (
             <>
               {reviewsSection}
@@ -1635,7 +1629,7 @@ const styles = StyleSheet.create({
   // same list/cards toggle the title is already in the place a summary row
   // would put it.
   // (The program cards' own row + action styles are cardInner/cardTop and
-  // revealActions below; sentRow/sentActions went with the old flat layout.)
+  // revealColumn below; sentRow/sentActions went with the old flat layout.)
   // The detailed card: a padded body holding the title row, the cycle strip and
   // the chevron, matching the hub's program cards.
   // No `gap` on the body: a closed ExpandReveal is a zero-height child, and a
@@ -1644,9 +1638,12 @@ const styles = StyleSheet.create({
   // exists while it's open.
   cardInner: { ...CARD_INNER },
   cardTop:   { ...CARD_TOP },
-  revealActions: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingTop: 10 },
-  // The sent card's revealed half: who has it (coaches only), then one row of
-  // actions beneath.
+  // A program card's revealed half, both kinds: a COLUMN, so the action row
+  // inside it stretches to the card's full width. The review card used a
+  // wrapping ROW here instead, which shrank the action row to its contents and
+  // left two equal-flex buttons with no width to share: tiny, overlapping, at
+  // the left of the card. The sent card also puts who has it (coaches only)
+  // above its actions.
   revealColumn:  { gap: 10, paddingTop: 10 },
   // View and Accept share the width; Remove is only as wide as its label.
   sentActionRow:  { flexDirection: "row", alignItems: "center", gap: 10 },
@@ -1665,10 +1662,6 @@ const styles = StyleSheet.create({
   sentMeta: { ...CARD_META },
   statusPill: { ...CARD_PILL },
   statusText: { ...CARD_PILL_TEXT },
-  // Wraps because a trainer who is also a member gets three buttons. Two share
-  // a row; the third takes a full row of its own rather than being squeezed to
-  // a third of a phone's width.
-  sentActionSlot: { flexGrow: 1, flexBasis: "45%" },
   sentActionBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   sentActionText: { fontFamily: FontFamily.bold, fontSize: 14 },
   countBadge:   { minWidth: 24, height: 22, borderRadius: 11, paddingHorizontal: 7, alignItems: "center", justifyContent: "center" },

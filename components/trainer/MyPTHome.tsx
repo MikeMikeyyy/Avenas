@@ -29,7 +29,7 @@ import { loadGroupRows, type GroupChatRow } from "../../utils/groupStore";
 import { groupAlertCounts } from "../../utils/groupAlerts";
 import { getMyUid } from "../../lib/chat";
 import type { GroupInvite } from "../../constants/groups";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
 import { haloGlow, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PAD, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -1141,8 +1141,11 @@ export default function MyPTHome() {
                     {s.groupId ? ` · ${groups.find(g => g.group.id === s.groupId)?.group.name ?? "a group"}` : ""}
                   </Text>
                 </View>
-                <View style={[styles.statusPill, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" }]}>
-                  <Text style={[styles.statusText, { color: t.ts }]}>Pending</Text>
+                {/* The same words and orange as the trainer's side of this
+                    request, and as this list's one-line rows (it said
+                    "Pending" here and "Awaiting review" there). */}
+                <View style={[styles.statusPill, { backgroundColor: `${AWAITING_ORANGE}22` }]}>
+                  <Text style={[styles.statusText, { color: AWAITING_ORANGE }]}>Awaiting review</Text>
                 </View>
               </View>
               <CycleGrid cycle={s.programSnapshot?.cyclePattern ?? []} isDark={isDark} />
@@ -1172,11 +1175,8 @@ export default function MyPTHome() {
                   ]}
                 >
                   <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
-                  <View style={[styles.statusPill, accent
-                    ? { backgroundColor: `${ACCT}22` }
-                    : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-                  ]}>
-                    <Text style={[styles.statusText, { color: accent ? ACCT : t.ts }]}>{label}</Text>
+                  <View style={[styles.statusPill, { backgroundColor: `${accent ? ACCT : AWAITING_ORANGE}22` }]}>
+                    <Text style={[styles.statusText, { color: accent ? ACCT : AWAITING_ORANGE }]}>{label}</Text>
                   </View>
                 </TouchableOpacity>
               );
