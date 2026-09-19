@@ -23,8 +23,12 @@ export type ChatMessage = {
   id: string;
   /** true = sent by the current account; false = received from the contact. */
   mine: boolean;
+  /** "" once deleted. */
   text: string;
   sentAtISO: string;
+  /** Its sender deleted it (migration 0031). The thread keeps it in place as
+   *  "Message deleted"; previews say so and it never counts as unread. */
+  deleted?: boolean;
 };
 
 /** All conversations in one blob: contactId → messages, oldest → newest. */

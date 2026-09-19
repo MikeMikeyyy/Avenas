@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Alert, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
@@ -7,12 +7,16 @@ import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
 import Svg, { Path } from "react-native-svg";
 import * as Haptics from "expo-haptics";
-import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
+// FadeIn/FadeOut are for the search row only. The program cards deliberately
+// carry NO layout animation: LinearTransition on a card froze the UI-thread
+// height tween inside ExpandReveal, which is the open/close animation itself.
+import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 
 import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import ChevronToggle from "../ChevronToggle";
+import ExpandReveal, { useReveal } from "../ExpandReveal";
 import ClientCard from "./ClientCard";
 import Avatar from "../Avatar";
 import AddClientSheet from "./AddClientSheet";
@@ -28,7 +32,7 @@ import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
-import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, SUMMARY_ROW } from "../../constants/cards";
+import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
 import FavouriteStar from "../FavouriteStar";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
@@ -45,6 +49,7 @@ import {
   removeSharedProgramBatch,
   saveClients,
   setGroupReviewDone,
+  dismissReceivedReview,
   type Client,
   type SentProgram,
   type SharedProgram,
@@ -52,8 +57,10 @@ import {
 import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { getJSON } from "../../utils/storage";
-import { loadFavouriteGroupIds, sortByFavourite } from "../../utils/groupStore";
-import { acceptGroupInvite, declineGroupInvite, fetchAllGroupMemberships, fetchMyGroupInvites, fetchMyGroups } from "../../lib/groups";
+import { removeShareConfirm } from "../../utils/removeShare";
+import { loadFavouriteGroupIds, loadFavouriteMemberIds, loadGroupRows, sortByFavourite } from "../../utils/groupStore";
+import { groupAlertCounts } from "../../utils/groupAlerts";
+import { acceptGroupInvite, declineGroupInvite, fetchAllGroupMemberships, fetchMyGroupInvites } from "../../lib/groups";
 import GroupInviteCard from "./GroupInviteCard";
 import GroupAvatar from "./GroupAvatar";
 import { getMyUid } from "../../lib/chat";
@@ -79,12 +86,219 @@ function fmtAgo(iso: string): string {
   return `${Math.floor(days / 7)}w ago`;
 }
 
+/** The cycle strip a program card shows before you open it. */
+function CycleStrip({ cycle, isDark }: { cycle: string[]; isDark: boolean }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  if (cycle.length === 0) return null;
+  return (
+    <View style={styles.cycleGrid}>
+      {cycle.map((day, i) => {
+        const isTraining = day !== "Rest" && day !== "";
+        return (
+          <View
+            key={i}
+            style={[
+              styles.cycleChip,
+              isTraining
+                ? { backgroundColor: `${ACCT}22`, borderColor: ACCT, borderWidth: 1 }
+                : { backgroundColor: t.div },
+            ]}
+          >
+            <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]} numberOfLines={1}>
+              {day || "Rest"}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * One send, in "Programs Sent".
+ *
+ * Its own component so it can hold a `useReveal` — a hook can't live inside the
+ * map — and so the card owns its open/close animation instead of swapping
+ * content in and out. It used to render the expanded half only while open, with
+ * a fade over a height that jumped, so the card snapped to its new size and the
+ * contents faded into it afterwards.
+ *
+ * There is deliberately NO Reanimated layout wrapper (LinearTransition) around
+ * this card: a layout animation on an ancestor freezes the UI-thread height
+ * tween inside ExpandReveal, which is the whole animation.
+ */
+function SentCard({ batch, open, isDark, sentTo, nameFor, onToggle, onView, onRemove }: {
+  batch: { key: string; programName: string; sentAtISO: string; entries: SharedProgram[]; acceptedCount: number; total: number; allAccepted: boolean; programSnapshot?: SavedProgram };
+  open: boolean;
+  isDark: boolean;
+  /** "Gym Crew · 5 members" or "3 clients" — worked out by the caller, which is
+   *  the one holding the group list. */
+  sentTo: string;
+  nameFor: (clientId: string) => string;
+  onToggle: () => void;
+  onView: () => void;
+  onRemove: () => void;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const reveal = useReveal();
+  useEffect(() => { reveal.setOpen(open); }, [open, reveal]);
+
+  const pillLabel = batch.allAccepted ? "Accepted" : `${batch.acceptedCount}/${batch.total} accepted`;
+
+  return (
+    <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+      <Pressable
+        onPress={onToggle}
+        style={styles.reviewInner}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${batch.programName}, ${pillLabel}, ${open ? "collapse" : "expand"}`}
+      >
+        <View style={styles.reviewTop}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{batch.programName}</Text>
+            {/* The group belongs on the COLLAPSED card: where a program went is
+                the first thing you want to know, and putting it behind a tap
+                meant opening every card to find out. */}
+            <Text style={[styles.reviewMeta, { color: t.ts }]} numberOfLines={1}>
+              Sent {fmtAgo(batch.sentAtISO)} · {sentTo}
+            </Text>
+          </View>
+          <View style={[styles.statusPill, batch.allAccepted
+            ? { backgroundColor: `${ACCT}22` }
+            : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
+          ]}>
+            <Text style={[styles.statusText, { color: batch.allAccepted ? ACCT : t.ts }]}>{pillLabel}</Text>
+          </View>
+        </View>
+        <CycleStrip cycle={batch.programSnapshot?.cyclePattern ?? []} isDark={isDark} />
+        {/* bleed: room for the buttons' glow inside the reveal's clip, which
+            otherwise cut it off in a straight line (constants/cards.ts). */}
+        <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} bleed={REVEAL_BLEED} contentStyle={styles.revealBody}>
+          <View style={[styles.recipientList, { borderColor: t.div }]}>
+            {batch.entries.map((e, i) => {
+              const eAccepted = !!e.acceptedAtISO;
+              return (
+                <View
+                  key={e.id}
+                  style={[
+                    styles.recipientRow,
+                    { borderBottomColor: t.div, borderBottomWidth: i === batch.entries.length - 1 ? 0 : StyleSheet.hairlineWidth },
+                  ]}
+                >
+                  <View style={[styles.recipientDot, eAccepted
+                    ? { backgroundColor: ACCT, borderColor: ACCT }
+                    : { backgroundColor: "transparent", borderColor: t.ts },
+                  ]} />
+                  <Text style={[styles.recipientName, { color: t.tp }]} numberOfLines={1}>{nameFor(e.clientId)}</Text>
+                  <Text style={[styles.recipientStatus, { color: eAccepted ? ACCT : t.ts }]}>
+                    {eAccepted ? `Accepted · ${fmtAgo(e.acceptedAtISO!)}` : "Pending"}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+          <View style={styles.sharedActionRow}>
+            <BounceButton style={{ flex: 2 }} onPress={onView} accessibilityLabel={`View ${batch.programName}`}>
+              <View style={[styles.sharedActionBtnInner, { backgroundColor: t.ctrl }]}>
+                <Text style={[styles.reviewBtnText, { color: t.tp }]}>View Program</Text>
+              </View>
+            </BounceButton>
+            <BounceButton style={{ flex: 1 }} onPress={onRemove} accessibilityLabel={`Remove ${batch.programName}`}>
+              <View style={[styles.sharedActionBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                <TrashIcon size={16} color="#fff" />
+                <Text style={[styles.deleteBtnText, { color: "#fff" }]}>Remove</Text>
+              </View>
+            </BounceButton>
+          </View>
+        </ExpandReveal>
+        <View style={styles.chevronRow}>
+          <ChevronToggle expanded={open} color={t.ts} upDown />
+        </View>
+      </Pressable>
+    </NeuCard>
+  );
+}
+
+/** One program someone sent for review, in "Programs Received". Same structure
+ *  and the same reveal as SentCard — the two sit in one column and open the
+ *  same way. */
+function ReceivedCard({ review, open, isDark, from, onToggle, onOpen, onRemove }: {
+  review: SentProgram;
+  open: boolean;
+  isDark: boolean;
+  /** The group it came from, or that it's a direct request. */
+  from: string;
+  onToggle: () => void;
+  onOpen: () => void;
+  /** Take it off this list. For a group review that clears the group's queue
+   *  for every coach; for a 1:1 one it hides it from mine. The caller decides. */
+  onRemove: () => void;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const reveal = useReveal();
+  useEffect(() => { reveal.setOpen(open); }, [open, reveal]);
+
+  const returned = review.status === "returned";
+
+  return (
+    <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+      <Pressable
+        onPress={onToggle}
+        style={styles.reviewInner}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${review.programName}, ${returned ? "returned" : "awaiting review"}, ${open ? "collapse" : "expand"}`}
+      >
+        <View style={styles.reviewTop}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{review.programName}</Text>
+            <Text style={[styles.reviewMeta, { color: t.ts }]} numberOfLines={1}>
+              {from} · Sent {fmtAgo(review.sentAtISO)}
+            </Text>
+          </View>
+          <View style={[styles.statusPill, returned
+            ? { backgroundColor: `${ACCT}22` }
+            : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
+          ]}>
+            <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
+              {returned ? "Returned" : "Awaiting review"}
+            </Text>
+          </View>
+        </View>
+        <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} isDark={isDark} />
+        {/* The same pair as the sent cards: the white action and the red
+            Remove. It was a raised neumorphic card sitting inside a raised
+            card, the one button in the column in the old style. */}
+        <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} bleed={REVEAL_BLEED} contentStyle={styles.sharedActionRow}>
+          <BounceButton style={{ flex: 2 }} onPress={onOpen} accessibilityLabel={returned ? `View your review of ${review.programName}` : `Edit and send back ${review.programName}`}>
+            <View style={[styles.sharedActionBtnInner, { backgroundColor: t.ctrl }]}>
+              <Text style={[styles.reviewBtnText, { color: t.tp }]}>
+                {returned ? "View Review" : "Edit & Send Back"}
+              </Text>
+            </View>
+          </BounceButton>
+          <BounceButton style={{ flex: 1 }} onPress={onRemove} accessibilityLabel={`Remove ${review.programName}`}>
+            <View style={[styles.sharedActionBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+              <TrashIcon size={16} color="#fff" />
+              <Text style={[styles.reviewBtnText, { color: "#fff" }]}>Remove</Text>
+            </View>
+          </BounceButton>
+        </ExpandReveal>
+        <View style={styles.chevronRow}>
+          <ChevronToggle expanded={open} color={t.ts} upDown />
+        </View>
+      </Pressable>
+    </NeuCard>
+  );
+}
+
 export default function PTHome() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const unreadMessages = useUnreadMessages();
+  const { unread: unreadMessages, refresh: refreshUnread } = useUnreadMessages();
 
   const [clients, setClients] = useState<Client[]>([]);
   // "None" is only true once we've looked. Both empty states ("No clients yet",
@@ -103,7 +317,14 @@ export default function PTHome() {
   // Groups another trainer has added me to and I haven't answered yet.
   const [groupInvites, setGroupInvites] = useState<GroupInvite[]>([]);
   const [groupMemberships, setGroupMemberships] = useState<Record<string, string[]>>({});
+  /** groupId → unread messages in its thread, one half of a group's badge. */
+  const [unreadByGroup, setUnreadByGroup] = useState<Record<string, number>>({});
+  /** Mine, for "is this share addressed to me". Null until the load resolves. */
+  const [myUid, setMyUid] = useState<string | null>(null);
   const [favourites, setFavourites] = useState<Set<string>>(new Set());
+  /** Starred PEOPLE, oldest star first. Set from a client's own page (its ⋯
+   *  menu) or a group roster; this list only reads it. */
+  const [favouriteMembers, setFavouriteMembers] = useState<Set<string>>(new Set());
   const [kbHeight, setKbHeight] = useState(0);
   // Live-ish presence for connected clients + the Connect button badge count.
   // Disconnecting a real connection lives on the Connect screen (app/connect.tsx).
@@ -166,9 +387,15 @@ export default function PTHome() {
     });
   }, []);
 
-  useFocusEffect(useCallback(() => {
-    let cancelled = false;
-    (async () => {
+  /**
+   * Everything this page shows, in one pass.
+   *
+   * Driven by two things: arriving at the page, and pulling it down. The caller
+   * owns the `cancelled` flag, because a focus load has to stop writing state
+   * when you navigate away mid-flight, while a pull-to-refresh runs to
+   * completion — you're looking right at it.
+   */
+  const loadAll = useCallback(async (isCancelled: () => boolean) => {
       try {
         const seeded = await seedMockClientsIfNeeded();
         const fresh = seeded.length > 0 ? seeded : await loadClients();
@@ -184,7 +411,7 @@ export default function PTHome() {
         // each client's data — run one after another, and drew "No clients yet"
         // for the whole of that.
         const merged = (await resolveTrainerRoster()).clients;
-        if (!cancelled) { setClients(merged); setClientsLoaded(true); }
+        if (!isCancelled()) { setClients(merged); setClientsLoaded(true); }
 
         const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
         const sent = await loadSentPrograms();
@@ -196,19 +423,28 @@ export default function PTHome() {
         let memberships: Record<string, string[]> = {};
         let favIds = new Set<string>();
         let invites: GroupInvite[] = [];
+        let unreadByGroup: Record<string, number> = {};
         try {
           favIds = await loadFavouriteGroupIds();
+          const favPeople = await loadFavouriteMemberIds();
+          if (!isCancelled()) setFavouriteMembers(favPeople);
           const uid = await getMyUid();
+          if (!isCancelled()) setMyUid(uid);
           if (uid) {
             // A trainer gets invited to other trainers' groups the same way a gym
             // user does, so the invite list belongs on both hubs.
-            const [gs, ms, inv] = await Promise.all([
-              fetchMyGroups(uid),
+            //
+            // loadGroupRows rather than fetchMyGroups: it's the same groups with
+            // each thread's unread count worked out, which is half of what the
+            // badge on a group card counts.
+            const [rows, ms, inv] = await Promise.all([
+              loadGroupRows(),
               fetchAllGroupMemberships(uid),
               fetchMyGroupInvites(),
             ]);
             // Starred groups pinned above the rest, newest-first within each half.
-            groupList = sortByFavourite(gs, favIds);
+            groupList = sortByFavourite(rows.map(r => r.group), favIds);
+            unreadByGroup = Object.fromEntries(rows.map(r => [r.group.id, r.unreadCount]));
             memberships = ms;
             invites = inv;
           }
@@ -216,11 +452,12 @@ export default function PTHome() {
           if (__DEV__) console.warn("[avenas] load groups", e);
         }
         // Groups show as soon as they're known too, rather than after shares.
-        if (!cancelled) {
+        if (!isCancelled()) {
           setGroups(groupList);
           setGroupMemberships(memberships);
           setFavourites(favIds);
           setGroupInvites(invites);
+          setUnreadByGroup(unreadByGroup);
           setGroupsLoaded(true);
         }
 
@@ -233,7 +470,7 @@ export default function PTHome() {
           const active = data.programs.find(p => p.status === "active");
           if (active) activeMap[c.id] = active.name;
         }));
-        if (!cancelled) {
+        if (!isCancelled()) {
           setMyPrograms(Array.isArray(progs) ? progs : []);
           setReviews(sent);
           setGroupReviews(fromGroups);
@@ -245,17 +482,45 @@ export default function PTHome() {
       } finally {
         // Settle both even on failure, so a thrown load leaves an honest empty
         // state rather than a blank page. Harmless when already true.
-        if (!cancelled) { setClientsLoaded(true); setGroupsLoaded(true); }
+        if (!isCancelled()) { setClientsLoaded(true); setGroupsLoaded(true); }
       }
-    })();
-    return () => { cancelled = true; };
-  }, []));
+  }, []);
 
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    void loadAll(() => cancelled);
+    return () => { cancelled = true; };
+  }, [loadAll]));
+
+  /**
+   * Pull down to re-read everything: new messages, programs a client sent back,
+   * a review someone posted to a group. The page already refreshes when you
+   * arrive, but a trainer sitting on it waiting for a reply had no way to ask
+   * again short of leaving and coming back.
+   *
+   * It runs to completion rather than taking a cancel flag — you're holding the
+   * page open, so there's nothing to cancel — and always clears the spinner,
+   * since `loadAll` swallows its own failures.
+   */
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    // The Messages badge too: it normally recounts on focus, which a pull
+    // isn't, so without this the one number you pulled for wouldn't move.
+    await Promise.all([loadAll(() => false), refreshUnread()]);
+    setRefreshing(false);
+  }, [loadAll, refreshUnread]);
+
+  // Starred clients pinned on top, oldest star first, then the roster's own
+  // order — the same rule the group roster and the groups list follow, off the
+  // same account-wide list, so someone starred on their client page is pinned
+  // in every group you share with them too. Sorted after the search filter, so
+  // a search result list is pinned the same way the full one is.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return clients;
-    return clients.filter(c => c.name.toLowerCase().includes(q));
-  }, [clients, search]);
+    const matched = q ? clients.filter(c => c.name.toLowerCase().includes(q)) : clients;
+    return sortByFavourite(matched, favouriteMembers);
+  }, [clients, search, favouriteMembers]);
 
   const handleAddClient = useCallback(async (name: string, note: string) => {
     const newClient: Client = {
@@ -295,12 +560,11 @@ export default function PTHome() {
       Alert.alert("Couldn't join group", e instanceof Error ? e.message : "Check your connection and try again.");
       return;
     }
-    const uid = await getMyUid();
-    const [gs, inv] = await Promise.all([
-      uid ? fetchMyGroups(uid) : Promise.resolve([]),
-      fetchMyGroupInvites(),
-    ]);
-    setGroups(sortByFavourite(gs, favourites));
+    // Same read as the initial load, so a group joined from an invite arrives
+    // with its badge rather than an empty one until the next focus.
+    const [rows, inv] = await Promise.all([loadGroupRows(), fetchMyGroupInvites()]);
+    setGroups(sortByFavourite(rows.map(r => r.group), favourites));
+    setUnreadByGroup(Object.fromEntries(rows.map(r => [r.group.id, r.unreadCount])));
     setGroupInvites(inv);
   }, [favourites]);
 
@@ -354,25 +618,41 @@ export default function PTHome() {
     [groups],
   );
 
-  /** Clear a group review out of its group's queue, from here rather than by
-   *  opening the group. Coach-only at the database (`set_group_review_completed`
-   *  raises for anyone else), and it leaves the member's own copy untouched. */
-  const handleCompleteGroupReview = useCallback((entry: SentProgram) => {
+  /**
+   * Take a program off Programs Received. What that means depends on where it
+   * came from, and the prompt says which, because the two reach different
+   * people:
+   *
+   *   a GROUP review — cleared from the group's queue, for every coach of the
+   *     group (`set_group_review_completed`, coach-only at the database). This
+   *     is what Mark Done used to be.
+   *   a 1:1 review — hidden from MY list only (dismissReceivedReview).
+   *
+   * Either way the person who sent it keeps their copy and any feedback, and
+   * the prompt warns when it hasn't been sent back yet, since removing it then
+   * leaves them waiting on a review nobody will do.
+   */
+  const handleRemoveReview = useCallback((entry: SentProgram) => {
+    const notBack = !entry.returnedAtISO;
+    const where = entry.groupId ? "the group's review list" : "your list";
     Alert.alert(
-      "Mark Done",
-      `Clear "${entry.programName}" from the group's review list? ${entry.returnedAtISO ? "The member keeps the feedback on their own page." : "It hasn't been sent back yet."}`,
+      "Remove Program",
+      `Remove "${entry.programName}" from ${where}?${notBack ? " You haven't sent it back yet, so they'll still be waiting on a review." : " They keep the feedback you sent back."}`,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Mark Done",
+          text: "Remove",
+          style: "destructive",
           onPress: async () => {
             try {
-              await setGroupReviewDone(entry.id, true);
+              if (entry.groupId) await setGroupReviewDone(entry.id, true);
+              else await dismissReceivedReview(entry.id);
             } catch (e) {
-              Alert.alert("Couldn't update", e instanceof Error ? e.message : "Check your internet and try again.");
+              Alert.alert("Couldn't remove it", e instanceof Error ? e.message : "Check your internet and try again.");
               return;
             }
-            setGroupReviews(prev => prev.filter(r => r.id !== entry.id));
+            if (entry.groupId) setGroupReviews(prev => prev.filter(r => r.id !== entry.id));
+            else setReviews(prev => prev.filter(r => r.id !== entry.id));
           },
         },
       ],
@@ -389,11 +669,18 @@ export default function PTHome() {
     });
   }, [router]);
 
+  /** groupId → everything in that group waiting on me: unread messages, a
+   *  program shared with me I haven't accepted, a review I could pick up. */
+  const groupAlerts = useMemo(
+    () => groupAlertCounts({ unreadByGroup, shares: sharedOut, reviews: groupReviews, myUid }),
+    [unreadByGroup, sharedOut, groupReviews, myUid],
+  );
+
   const batches = useMemo(() => {
     const byKey = new Map<string, SharedProgram[]>();
     for (const s of sharedOut) {
       // Skip programs a coach sent ME — those belong on the My Coaches page,
-      // not in this trainer's "Programs You've Sent" list.
+      // not in this trainer's "Programs Sent" list.
       if (s.receivedFromCoachId) continue;
       const k = batchKeyOf(s);
       const arr = byKey.get(k);
@@ -421,14 +708,21 @@ export default function PTHome() {
   }, [sharedOut]);
 
   const handleUnshareBatch = useCallback((batch: typeof batches[number]) => {
-    const anyAccepted = batch.entries.some(e => !!e.acceptedAtISO);
+    const prompt = removeShareConfirm({
+      programName: batch.programName,
+      recipients: batch.groupId
+        ? `${groups.find(g => g.id === batch.groupId)?.name ?? "this group"}`
+        : `${batch.total} client${batch.total === 1 ? "" : "s"}`,
+      total: batch.total,
+      accepted: batch.acceptedCount,
+    });
     Alert.alert(
-      "Unsend Program",
-      `Unsend "${batch.programName}" from ${batch.total} client${batch.total === 1 ? "" : "s"}? ${anyAccepted ? "Clients who already accepted will keep the program in their library." : "They will no longer see it."}`,
+      prompt.title,
+      prompt.body,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: prompt.cancel, style: "cancel" },
         {
-          text: "Unsend",
+          text: prompt.confirm,
           style: "destructive",
           onPress: async () => {
             await removeSharedProgramBatch(batch.key);
@@ -437,7 +731,7 @@ export default function PTHome() {
         },
       ]
     );
-  }, []);
+  }, [groups]);
 
   const handleProgramPicked = useCallback((program: SavedProgram) => {
     if (clients.length === 0) {
@@ -500,6 +794,15 @@ export default function PTHome() {
         // (my-trainers back/plus sit at insets.top+14). Keep in sync with
         // MyPTHome so both hub views share the same first-row line.
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 14, paddingBottom: insets.bottom + 140 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={ACCT}
+            colors={[ACCT]}
+            progressViewOffset={insets.top}
+          />
+        }
       >
         <View style={styles.coachesRow}>
           <BounceButton
@@ -626,6 +929,7 @@ export default function PTHome() {
                   textStyle={[styles.summaryAvatarText, { color: ACCT }]}
                 />
                 <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
+                {favouriteMembers.has(c.id) && <FavouriteStar size={15} />}
                 <Ionicons name="chevron-forward" size={16} color={t.ts} />
               </TouchableOpacity>
             ))}
@@ -638,6 +942,9 @@ export default function PTHome() {
               // entries aren't in the map and keep their stored value.
               client={presenceById.has(c.id) ? { ...c, lastActiveISO: presenceById.get(c.id) ?? undefined } : c}
               activeProgramName={activeProgramByClient[c.id]}
+              // Marks the pinned ones. Not a control: starring is done on the
+              // client's own page, from its ⋯ menu.
+              isFavourite={favouriteMembers.has(c.id)}
               onPress={() => router.navigate({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
             />
           ))
@@ -687,13 +994,24 @@ export default function PTHome() {
                 <View style={styles.summaryRow}>
                   <GroupAvatar uri={g.photoUri} size={30} isDark={isDark} />
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
+                    <View style={styles.groupNameRow}>
+                      <Text style={[styles.groupName, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
+                      {/* Beside the NAME, not out at the right edge: it's a fact
+                          about this group, so it reads as part of the title
+                          rather than as another control in the row of them. It
+                          counts unread messages, a program shared with me and a
+                          review to pick up — the same red pill the Messages
+                          button wears, for the same reason. */}
+                      <UnreadBadge count={groupAlerts[g.id] ?? 0} />
+                    </View>
                     <Text style={[styles.groupMeta, { color: t.ts }]}>
                       {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
                     </Text>
                   </View>
-                  {/* Display only — favouriting happens in the group's own
-                      options menu, so this card has a single tap target. */}
+                  {/* Display only, and only once starred. Favouriting is done
+                      INSIDE the group, from its options menu: a star on every
+                      card put an empty control on a row whose whole job is to
+                      be tapped once, to open the group. */}
                   {favourites.has(g.id) && <FavouriteStar size={16} />}
                   <Ionicons name="chevron-forward" size={16} color={t.ts} />
                 </View>
@@ -705,7 +1023,7 @@ export default function PTHome() {
         {batches.length > 0 && (
           <>
             <Pressable onPress={toggleSharedSection} style={styles.sectionHeaderRow} accessibilityRole="button">
-              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>{`Programs You've Sent`}</Text>
+              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Programs Sent</Text>
               <ChevronToggle expanded={!collapsedSharedSection} color={t.ts} />
             </Pressable>
             {collapsedSharedSection ? (
@@ -737,126 +1055,21 @@ export default function PTHome() {
                   );
                 })}
               </NeuCard>
-            ) : batches.map(b => {
-              const cycle = b.programSnapshot?.cyclePattern ?? [];
-              const isExpanded = expandedShared.has(b.key);
-              const pillLabel = b.allAccepted ? "Accepted" : `${b.acceptedCount}/${b.total} accepted`;
-              return (
-                <Animated.View key={b.key} layout={LinearTransition.duration(220)}>
-                  <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                    <Pressable onPress={() => toggleShared(b.key)} style={styles.reviewInner}>
-                      <View style={styles.reviewTop}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{b.programName}</Text>
-                          {/* The group belongs on the COLLAPSED card: where a
-                              program went is the first thing you want to know,
-                              and putting it behind a tap meant opening every
-                              card to find out. Name is looked up live, so a
-                              renamed group updates its past sends; a deleted one
-                              falls back to a neutral label rather than dropping
-                              the card. */}
-                          <Text style={[styles.reviewMeta, { color: t.ts }]} numberOfLines={1}>
-                            Sent {fmtAgo(b.sentAtISO)} · {b.groupId
-                              ? `${groups.find(g => g.id === b.groupId)?.name ?? "a group"} · ${b.total} member${b.total === 1 ? "" : "s"}`
-                              : `${b.total} client${b.total === 1 ? "" : "s"}`}
-                          </Text>
-                        </View>
-                        <View style={[styles.statusPill, b.allAccepted
-                          ? { backgroundColor: `${ACCT}22` }
-                          : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-                        ]}>
-                          <Text style={[styles.statusText, { color: b.allAccepted ? ACCT : t.ts }]}>
-                            {pillLabel}
-                          </Text>
-                        </View>
-                      </View>
-                      {cycle.length > 0 && (
-                        <View style={styles.cycleGrid}>
-                          {cycle.map((day, i) => {
-                            const isTraining = day !== "Rest" && day !== "";
-                            return (
-                              <View
-                                key={i}
-                                style={[
-                                  styles.cycleChip,
-                                  isTraining
-                                    ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                    : { backgroundColor: t.div },
-                                ]}
-                              >
-                                <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                                  {day || "Rest"}
-                                </Text>
-                              </View>
-                            );
-                          })}
-                        </View>
-                      )}
-                      {isExpanded && (
-                        <Animated.View
-                          entering={FadeIn.duration(180)}
-                          exiting={FadeOut.duration(140)}
-                          style={{ gap: 4 }}
-                        >
-                          <View style={[styles.recipientList, { borderColor: t.div }]}>
-                            {b.entries.map((e, i) => {
-                              const eAccepted = !!e.acceptedAtISO;
-                              const name = clients.find(c => c.id === e.clientId)?.name ?? "Removed client";
-                              return (
-                                <View
-                                  key={e.id}
-                                  style={[
-                                    styles.recipientRow,
-                                    { borderBottomColor: t.div, borderBottomWidth: i === b.entries.length - 1 ? 0 : StyleSheet.hairlineWidth },
-                                  ]}
-                                >
-                                  <View
-                                    style={[
-                                      styles.recipientDot,
-                                      eAccepted
-                                        ? { backgroundColor: ACCT, borderColor: ACCT }
-                                        : { backgroundColor: "transparent", borderColor: t.ts },
-                                    ]}
-                                  />
-                                  <Text style={[styles.recipientName, { color: t.tp }]} numberOfLines={1}>{name}</Text>
-                                  <Text style={[styles.recipientStatus, { color: eAccepted ? ACCT : t.ts }]}>
-                                    {eAccepted ? `Accepted · ${fmtAgo(e.acceptedAtISO!)}` : "Pending"}
-                                  </Text>
-                                </View>
-                              );
-                            })}
-                          </View>
-                          <View style={styles.sharedActionRow}>
-                            <BounceButton
-                              style={{ flex: 2 }}
-                              onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
-                              accessibilityLabel={`View ${b.programName}`}
-                            >
-                              <View style={[styles.sharedActionBtnInner, { backgroundColor: t.ctrl }]}>
-                                <Text style={[styles.reviewBtnText, { color: t.tp }]}>View Program</Text>
-                              </View>
-                            </BounceButton>
-                            <BounceButton
-                              style={{ flex: 1 }}
-                              onPress={() => handleUnshareBatch(b)}
-                              accessibilityLabel={`Delete ${b.programName}`}
-                            >
-                              <View style={[styles.sharedActionBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
-                                <TrashIcon size={16} color="#fff" />
-                                <Text style={[styles.deleteBtnText, { color: "#fff" }]}>Delete</Text>
-                              </View>
-                            </BounceButton>
-                          </View>
-                        </Animated.View>
-                      )}
-                      <View style={styles.chevronRow}>
-                        <ChevronToggle expanded={isExpanded} color={t.ts} upDown />
-                      </View>
-                    </Pressable>
-                  </NeuCard>
-                </Animated.View>
-              );
-            })}
+            ) : batches.map(b => (
+              <SentCard
+                key={b.key}
+                batch={b}
+                open={expandedShared.has(b.key)}
+                isDark={isDark}
+                sentTo={b.groupId
+                  ? `${groups.find(g => g.id === b.groupId)?.name ?? "a group"} · ${b.total} member${b.total === 1 ? "" : "s"}`
+                  : `${b.total} client${b.total === 1 ? "" : "s"}`}
+                nameFor={(clientId) => clients.find(c => c.id === clientId)?.name ?? "Removed client"}
+                onToggle={() => toggleShared(b.key)}
+                onView={() => router.navigate({ pathname: "/program-view", params: { sharedId: b.entries[0].id } })}
+                onRemove={() => handleUnshareBatch(b)}
+              />
+            ))}
           </>
         )}
 
@@ -895,91 +1108,18 @@ export default function PTHome() {
                   );
                 })}
               </NeuCard>
-            ) : received.map(r => {
-              const returned = r.status === "returned";
-              const cycle = r.programSnapshot?.cyclePattern ?? [];
-              const isExpanded = expandedReviews.has(r.id);
-              return (
-                <Animated.View key={r.id} layout={LinearTransition.duration(220)}>
-                  <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                    <Pressable onPress={() => toggleReview(r.id)} style={styles.reviewInner}>
-                      <View style={styles.reviewTop}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.reviewName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                          <Text style={[styles.reviewMeta, { color: t.ts }]} numberOfLines={1}>
-                            {receivedFrom(r)} · Sent {fmtAgo(r.sentAtISO)}
-                          </Text>
-                        </View>
-                        <View style={[styles.statusPill, returned
-                          ? { backgroundColor: `${ACCT}22` }
-                          : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-                        ]}>
-                          <Text style={[styles.statusText, { color: returned ? ACCT : t.ts }]}>
-                            {returned ? "Returned" : "Awaiting review"}
-                          </Text>
-                        </View>
-                      </View>
-                      {cycle.length > 0 && (
-                        <View style={styles.cycleGrid}>
-                          {cycle.map((day, i) => {
-                            const isTraining = day !== "Rest" && day !== "";
-                            return (
-                              <View
-                                key={i}
-                                style={[
-                                  styles.cycleChip,
-                                  isTraining
-                                    ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                    : { backgroundColor: t.div },
-                                ]}
-                              >
-                                <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                                  {day || "Rest"}
-                                </Text>
-                              </View>
-                            );
-                          })}
-                        </View>
-                      )}
-                      {isExpanded && (
-                        <Animated.View
-                          entering={FadeIn.duration(180)}
-                          exiting={FadeOut.duration(140)}
-                          style={styles.sharedActionRow}
-                        >
-                          <BounceButton style={{ flex: 2 }} onPress={() => openReview(r)}>
-                            <NeuCard dark={isDark} radius={14} innerStyle={styles.sharedActionBtnInner}>
-                              <Text style={[styles.reviewBtnText, { color: t.tp }]}>
-                                {returned ? "View Review" : "Edit & Send Back"}
-                              </Text>
-                            </NeuCard>
-                          </BounceButton>
-                          {/* Closing the item belongs wherever you did the work,
-                              or this is a queue you can only clear by opening
-                              the group. It clears the GROUP's copy — the member
-                              keeps the feedback on their own page. */}
-                          {r.groupId && (
-                            <BounceButton
-                              style={{ flex: 1 }}
-                              onPress={() => handleCompleteGroupReview(r)}
-                              accessibilityLabel={`Mark ${r.programName} as done`}
-                            >
-                              <View style={[styles.sharedActionBtnInner, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
-                                <Ionicons name="checkmark" size={15} color="#fff" />
-                                <Text style={[styles.reviewBtnText, { color: "#fff" }]}>Mark Done</Text>
-                              </View>
-                            </BounceButton>
-                          )}
-                        </Animated.View>
-                      )}
-                      <View style={styles.chevronRow}>
-                        <ChevronToggle expanded={isExpanded} color={t.ts} upDown />
-                      </View>
-                    </Pressable>
-                  </NeuCard>
-                </Animated.View>
-              );
-            })}
+            ) : received.map(r => (
+              <ReceivedCard
+                key={r.id}
+                review={r}
+                open={expandedReviews.has(r.id)}
+                isDark={isDark}
+                from={receivedFrom(r)}
+                onToggle={() => toggleReview(r.id)}
+                onOpen={() => openReview(r)}
+                onRemove={() => handleRemoveReview(r)}
+              />
+            ))}
           </>
         )}
       </ScrollView>
@@ -1056,21 +1196,32 @@ const styles = StyleSheet.create({
   summaryName:   { flex: 1, ...CARD_TITLE },
   groupAddBtn:   { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   groupIcon:     { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  // The name and its badge share a line. `flexShrink` on the name (not `flex`)
+  // so a long group name truncates and the badge stays put, rather than the
+  // name taking the width and pushing the count off the card.
+  groupNameRow:  { flexDirection: "row", alignItems: "center", gap: 8 },
+  groupName:     { flexShrink: 1, ...CARD_TITLE },
   groupMeta:     { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 1 },
   groupEmpty:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, padding: 16, textAlign: "center" },
-  reviewInner:  { ...CARD_INNER, gap: 12 },
+  // No `gap` here: a closed ExpandReveal is a zero-height child, and a gap
+  // would reserve space on both sides of it, loosening every collapsed card.
+  // The children carry their own top margins instead, and the reveal's lives on
+  // its content, which only exists while it's open.
+  reviewInner:  { ...CARD_INNER },
+  /** The sent card's revealed half: recipient list above the action row. */
+  revealBody:   { gap: 10, paddingTop: 12 },
   reviewTop:    { ...CARD_TOP },
   reviewName:   { ...CARD_TITLE },
   reviewMeta:   { ...CARD_META },
   statusPill:   { ...CARD_PILL },
   statusText:   { ...CARD_PILL_TEXT },
   reviewBtnText:{ fontFamily: FontFamily.bold, fontSize: 14 },
-  cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4 },
+  cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 12 },
   cycleChip:    { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
   cycleChipText:{ fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
   kbFloatBtn:   { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
-  chevronRow:    { alignItems: "center", paddingTop: 2 },
-  sharedActionRow:{ flexDirection: "row", gap: 10, marginTop: 4 },
+  chevronRow:    { alignItems: "center", paddingTop: 2, marginTop: 10 },
+  sharedActionRow:{ flexDirection: "row", gap: 10, paddingTop: 12 },
   // Pills rather than NeuCards: these sit INSIDE an expanded card, and a raised
   // neumorphic button on a raised card reads as two stacked surfaces. The white
   // control surface + soft shadow is the same treatment the rest of the app's

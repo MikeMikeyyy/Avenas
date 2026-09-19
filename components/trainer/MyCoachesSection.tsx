@@ -32,9 +32,10 @@ import {
   acceptSharedProgram,
   addTrainerAsClient,
   appendSharedPrograms,
+  batchKeyOf,
+  dismissSharedBatch,
   loadSharedPrograms,
   migrateCoachReceivedShares,
-  removeSharedProgram,
   removeTrainerAsClient,
   type AssignedPT,
   type Client,
@@ -296,8 +297,14 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         {
           text: "Remove",
           style: "destructive",
+          // A hide on this device, the same as removing a program from a gym
+          // user's trainer page (DISMISSED_SHARES_KEY). This called
+          // removeSharedProgram, which for a recipient stamps the row "deleted"
+          // and clears its acceptance: that's the "you deleted your copy"
+          // signal the SENDER sees as "Removed", and the list here doesn't
+          // filter on it, so the program came straight back — minus its tick.
           onPress: async () => {
-            await removeSharedProgram(share.id);
+            await dismissSharedBatch(batchKeyOf(share));
             await reload();
           },
         },

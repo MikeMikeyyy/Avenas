@@ -25,9 +25,9 @@
 import { Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
-import { MONTH_NAMES, todayYMD } from "./dates";
-import { getWorkoutForDate, normalizeDriftDates } from "./workout";
+import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
+import { MONTH_NAMES } from "./dates";
+import { getEffectiveToday, normalizeDriftDates, resolveWorkoutForDate, type DayOverride } from "./workout";
 import { isDatePulled, isDatePushed, isDateSkipped, planDoItTomorrow, skipDate, unskipDate } from "./skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { resyncScheduledNotifications } from "./notificationScheduler";
@@ -42,6 +42,26 @@ export type RestDayMode =
 
 function warn(op: string, err: unknown) {
   if (__DEV__) console.warn("[avenas]", op, PROGRAMS_KEY, err);
+}
+
+/**
+ * Drop a change-day override that names `ymd`.
+ *
+ * Marking a day off has to take the override with it, or the two screens
+ * disagree: `resolveWorkoutForDate` honours a matching override BEFORE the skip
+ * gate, so the Workout tab would keep offering the workout the strip has just
+ * crossed out. Only an override for this exact date is touched — one for
+ * another day is none of this call's business.
+ */
+async function clearOverrideFor(ymd: string): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY);
+    if (!raw) return;
+    const override = JSON.parse(raw) as DayOverride;
+    if (override?.date === ymd) await AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY);
+  } catch (e) {
+    warn("clearOverride", e);
+  }
 }
 
 async function commit(programId: string, apply: (p: SavedProgram) => SavedProgram): Promise<void> {
@@ -89,9 +109,12 @@ function dayName(ymd: string, from: string): string {
 
 /** "Tomorrow" for today, otherwise the next day's name ("Saturday"). The prompt
  *  can be opened for any upcoming day from the week strip, and "Move to
- *  tomorrow" on a Friday tapped from Tuesday would name the wrong day. */
-function nextDayPhrase(ymd: string): string {
-  if (ymd === todayYMD()) return "Tomorrow";
+ *  tomorrow" on a Friday tapped from Tuesday would name the wrong day.
+ *
+ *  `today` is the EFFECTIVE day, so at 1am — when the app is still on
+ *  yesterday — the button says Tomorrow for the day the user is actually on. */
+function nextDayPhrase(ymd: string, today: string): string {
+  if (ymd === today) return "Tomorrow";
   const d = parse(ymd);
   if (!d) return "the next day";
   d.setDate(d.getDate() + 1);
@@ -120,7 +143,11 @@ export async function applyRestDay(
   ymd: string,
   mode: RestDayMode = "ask",
 ): Promise<RestDayOutcome> {
-  if (mode === "skip") { await commit(programId, p => skipDate(p, ymd)); return "skip"; }
+  if (mode === "skip") {
+    await commit(programId, p => skipDate(p, ymd));
+    await clearOverrideFor(ymd);
+    return "skip";
+  }
   if (mode === "moveToTomorrow") {
     let kind: "moved" | "extended" = "moved";
     await commit(programId, p => {
@@ -128,6 +155,7 @@ export async function applyRestDay(
       kind = plan.kind === "absorbed" ? "moved" : "extended";
       return plan.program;
     });
+    await clearOverrideFor(ymd);
     return kind;
   }
 
@@ -136,7 +164,16 @@ export async function applyRestDay(
   const program = programs.find(p => p.id === programId);
   if (!program) return null;
 
-  const scheduled = getWorkoutForDate(program, ymd);
+  // What the USER sees on that date, not what the cycle plans for it. Home's
+  // strip shows the effective day through resolveWorkoutForDate, so a day
+  // swapped in with Change Workout Day reads as that workout — and asking the
+  // raw cycle here answered "Rest", which sent today straight down the silent
+  // "nothing scheduled" path below: no prompt, an instant X, and the Workout tab
+  // still offering the workout. Every other day worked, because only the
+  // effective day can carry an override.
+  const overrideRaw = await AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => null);
+  const override = overrideRaw ? (JSON.parse(overrideRaw) as DayOverride) : null;
+  const scheduled = resolveWorkoutForDate(program, override, ymd, programs);
   // Nothing scheduled: just mark it off without an interruption.
   if (!scheduled) { await commit(programId, p => skipDate(p, ymd)); return "skip"; }
 
@@ -147,7 +184,15 @@ export async function applyRestDay(
   // too and a move there would re-label days you've already lived through. A
   // plain skip is safe after the fact: it empties this one date and never
   // shifts the cycle, so nothing else on the strip or in history moves.
-  if (ymd < todayYMD()) {
+  //
+  // Measured against the EFFECTIVE day, the same "today" Home's strip highlights
+  // and the Workout tab is on. Against the calendar day, a 1am tap on the row
+  // the app still calls today would have been treated as history.
+  const historyRaw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY).catch(() => null);
+  const history: CompletedWorkout[] = historyRaw ? JSON.parse(historyRaw) : [];
+  const today = getEffectiveToday(program, Array.isArray(history) ? history : []);
+
+  if (ymd < today) {
     return new Promise<RestDayOutcome>(resolve => {
       Alert.alert(
         `Missed '${name}'?`,
@@ -164,7 +209,7 @@ export async function applyRestDay(
     });
   }
 
-  const next = nextDayPhrase(ymd);
+  const next = nextDayPhrase(ymd, today);
   const plan = planDoItTomorrow(program, ymd);
 
   // One short line per button, naming it exactly as the button does, and saying

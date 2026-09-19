@@ -9,12 +9,12 @@
 // it, so signed out / offline simply yields an empty list rather than falling
 // back to a local blob the way chatStore does for the mock roster.
 
-import { fetchAllGroupMessages, fetchGroupReads, fetchMyGroups } from "../lib/groups";
+import { fetchAllGroupMessages, fetchGroupMessagesSince, fetchGroupReads, fetchMyGroups } from "../lib/groups";
 import { getMyUid } from "../lib/chat";
-import { countUnreadInThread } from "./chatStore";
+import { countUnreadInThread, previewText } from "./chatStore";
 import { loadBlockedIds, loadHiddenMessageIds } from "./moderation";
 import { getJSON, setJSON } from "./storage";
-import { GROUP_FAVOURITES_KEY, type Group, type GroupMessage } from "../constants/groups";
+import { GROUP_FAVOURITES_KEY, MEMBER_FAVOURITES_KEY, type Group, type GroupMessage } from "../constants/groups";
 
 /** A group as the conversations list renders it. */
 export type GroupChatRow = {
@@ -52,9 +52,7 @@ export async function loadGroupRows(): Promise<GroupChatRow[]> {
       const last: GroupMessage | undefined = msgs[msgs.length - 1];
       return {
         group,
-        lastText: last
-          ? (last.mine ? `You: ${last.text}` : last.text)
-          : "Tap to start the conversation",
+        lastText: previewText(last),
         lastAtISO: last?.sentAtISO ?? "",
         unreadCount: countUnreadInThread(msgs, reads[group.id]),
       };
@@ -65,6 +63,34 @@ export async function loadGroupRows(): Promise<GroupChatRow[]> {
   }
 }
 
+/**
+ * Unread messages in ONE group — the group page's Group Chat badge.
+ *
+ * Reads just this group's messages since my read stamp instead of every
+ * message in every group (loadGroupRows), which is both lighter and immune to
+ * the API's row cap. Same rules as every other unread count: other people's
+ * messages only, never a deleted one, never a hidden (reported) one or one
+ * from someone I've blocked. 0 when signed out or on any failure — a badge
+ * isn't worth an error.
+ */
+export async function loadGroupUnread(groupId: string): Promise<number> {
+  const uid = await getMyUid();
+  if (!uid) return 0;
+  try {
+    const [reads, hidden, blocked] = await Promise.all([
+      fetchGroupReads(uid),
+      loadHiddenMessageIds(),
+      loadBlockedIds(),
+    ]);
+    const since = reads[groupId];
+    const msgs = await fetchGroupMessagesSince(uid, groupId, since);
+    return countUnreadInThread(msgs.filter(m => !hidden.has(m.id) && !blocked.has(m.senderId)), since);
+  } catch (err) {
+    if (__DEV__) console.warn("[avenas] load group unread", groupId, err);
+    return 0;
+  }
+}
+
 /** Total unread across every group — the group half of the Messages badge. */
 export function sumGroupUnread(rows: GroupChatRow[]): number {
   return rows.reduce((n, r) => n + r.unreadCount, 0);
@@ -72,13 +98,20 @@ export function sumGroupUnread(rows: GroupChatRow[]): number {
 
 // ─── favourites ──────────────────────────────────────────────────────────────
 
-/** Group ids this account has starred. See GROUP_FAVOURITES_KEY. */
+// Both favourite lists are stored as `string[]` in the order things were
+// starred, and every read keeps that order: a Set built from an array iterates
+// in insertion order (ES2015, guaranteed), so the Set these return is an
+// ORDERED set, oldest favourite first. `sortByFavourite` reads that order —
+// don't rebuild either Set from something unordered.
+
+/** Group ids this account has starred, oldest first. See GROUP_FAVOURITES_KEY. */
 export async function loadFavouriteGroupIds(): Promise<Set<string>> {
   return new Set(await getJSON<string[]>(GROUP_FAVOURITES_KEY, []));
 }
 
 /** Star or unstar a group. Returns the new set so callers can update state
- *  without a second read. */
+ *  without a second read. A new favourite is APPENDED, which is what puts it
+ *  below the ones starred before it. */
 export async function toggleFavouriteGroup(groupId: string): Promise<Set<string>> {
   const ids = await getJSON<string[]>(GROUP_FAVOURITES_KEY, []);
   const next = ids.includes(groupId) ? ids.filter(id => id !== groupId) : [...ids, groupId];
@@ -86,15 +119,38 @@ export async function toggleFavouriteGroup(groupId: string): Promise<Set<string>
   return new Set(next);
 }
 
+/** Account ids this person has starred, oldest first. See MEMBER_FAVOURITES_KEY. */
+export async function loadFavouriteMemberIds(): Promise<Set<string>> {
+  return new Set(await getJSON<string[]>(MEMBER_FAVOURITES_KEY, []));
+}
+
+/** Star or unstar a person. Same shape as the group one, and deliberately NOT
+ *  scoped to a group: someone you've starred is someone you want at the top of
+ *  whichever roster they appear in. */
+export async function toggleFavouriteMember(memberId: string): Promise<Set<string>> {
+  const ids = await getJSON<string[]>(MEMBER_FAVOURITES_KEY, []);
+  const next = ids.includes(memberId) ? ids.filter(id => id !== memberId) : [...ids, memberId];
+  await setJSON(MEMBER_FAVOURITES_KEY, next);
+  return new Set(next);
+}
+
 /**
- * Starred groups first, everything else in the order it arrived.
+ * Starred items first, OLDEST favourite at the top; everything else in the
+ * order it arrived.
  *
- * A stable partition rather than a sort: `fetchMyGroups` already returns newest
- * first, and that ordering should survive within each half.
+ * The unstarred half is a stable partition on purpose — `fetchMyGroups` returns
+ * newest first and `get_group_members` returns owner, then trainers, then name,
+ * and those orders should survive underneath the pinned ones. The starred half
+ * is ranked by `favourites`' own iteration order rather than by the incoming
+ * list, so a group starred months ago stays above one starred today however new
+ * either of them is.
  */
-export function sortByFavourite<T extends { id: string }>(groups: T[], favourites: Set<string>): T[] {
-  return [
-    ...groups.filter(g => favourites.has(g.id)),
-    ...groups.filter(g => !favourites.has(g.id)),
-  ];
+export function sortByFavourite<T extends { id: string }>(items: T[], favourites: Set<string>): T[] {
+  const rank = new Map<string, number>();
+  let i = 0;
+  for (const id of favourites) rank.set(id, i++);
+  const starred = items
+    .filter(x => rank.has(x.id))
+    .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+  return [...starred, ...items.filter(x => !rank.has(x.id))];
 }

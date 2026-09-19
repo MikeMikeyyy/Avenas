@@ -418,7 +418,16 @@ function DetailReorderSheet({ visible, exercises, isDark, t, onReorder, onClose 
 // ─── WorkoutDetailScreen ───────────────────────────────────────────────────────
 
 export default function WorkoutDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  /**
+   * `edit=1` opens straight into edit mode.
+   *
+   * Set by the Workout tab's "Edit Workout" button, which is a request to edit,
+   * not to look: landing read-only meant finishing a session, tapping Edit
+   * Workout, and then having to find a second Edit in the top right before a
+   * single number could be changed. Every other route here — a card on Home, a
+   * day in the journal calendar, a PR tile — is a view, and stays one.
+   */
+  const { id, edit } = useLocalSearchParams<{ id: string; edit?: string }>();
   const router = useRouter();
   const { isDark } = useTheme();
   const { isKg } = useUnit();
@@ -492,6 +501,11 @@ export default function WorkoutDetailScreen() {
         setEditedCompletedAt(found.completedAt);
         setEditedDurationSeconds(found.durationSeconds);
         setEditedSessionNotes(found.sessionNotes ?? "");
+        // Here, not on mount: edit mode renders from the buffers seeded above,
+        // so flipping it before they exist would show one empty frame. This
+        // effect runs once per workout (deps are [id, edit]), so saving and
+        // leaving edit mode afterwards can't be undone by a re-run.
+        if (edit === "1") setIsEditing(true);
       }
     }).catch(() => {});
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
@@ -499,7 +513,7 @@ export default function WorkoutDetailScreen() {
       const parsed: unknown = JSON.parse(v);
       if (Array.isArray(parsed)) setCustomExercises(parsed as CustomExercise[]);
     }).catch(() => {});
-  }, [id]);
+  }, [id, edit]);
 
   const changeExercise = (exIdx: number, newName: string) => {
     setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name: newName }));

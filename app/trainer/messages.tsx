@@ -30,7 +30,7 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
-import { loadChatContacts, loadAllThreads, broadcastMessage, loadReads, countUnreadInThread } from "../../utils/chatStore";
+import { loadChatContacts, loadAllThreads, broadcastMessage, loadReads, countUnreadInThread, previewText } from "../../utils/chatStore";
 import { loadGroupRows, type GroupChatRow } from "../../utils/groupStore";
 import { makeInitials } from "../../utils/trainerStore";
 import { getMyConnections } from "../../lib/connections";
@@ -88,7 +88,7 @@ export default function MessagesScreen() {
       const unreadCount = countUnreadInThread(msgs, reads[c.id]);
       return {
         ...c,
-        lastText: last ? (last.mine ? `You: ${last.text}` : last.text) : "Tap to start the conversation",
+        lastText: previewText(last),
         lastAtISO: last?.sentAtISO ?? "",
         unreadCount,
         unread: unreadCount > 0,

@@ -15,14 +15,14 @@ import { getMyConnections } from "../lib/connections";
 import { loadBlockedIds, loadHiddenMessageIds } from "../utils/moderation";
 import type { ChatContact } from "../constants/chat";
 
-export function useUnreadMessages(): number {
+export function useUnreadMessages(): { unread: number; refresh: () => Promise<void> } {
   const { accountType } = useAccountType();
   const [total, setTotal] = useState(0);
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      (async () => {
+  /** The count, recomputed. Exposed so a hub's pull-to-refresh updates the
+   *  Messages badge in the same gesture as everything else on the page —
+   *  focus alone can't, since you never left. */
+  const recount = useCallback(async (isCancelled: () => boolean = () => false) => {
         // Mirror app/trainer/messages.tsx:gatherContacts so the badge counts the
         // same set of threads as the list — local roster merged with every real
         // accepted connection. Without this merge, unreads from a real connected
@@ -51,7 +51,7 @@ export function useUnreadMessages(): number {
           loadHiddenMessageIds(),
           loadGroupRows(),
         ]);
-        if (cancelled) return;
+        if (isCancelled()) return;
         let sum = 0;
         for (const c of contacts) {
           if (blocked.has(c.id)) continue; // blocked people don't surface in chat
@@ -59,10 +59,15 @@ export function useUnreadMessages(): number {
           sum += countUnreadInThread(msgs, reads[c.id]);
         }
         setTotal(sum + sumGroupUnread(groups));
-      })();
+  }, [accountType]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void recount(() => cancelled);
       return () => { cancelled = true; };
-    }, [accountType]),
+    }, [recount]),
   );
 
-  return total;
+  return { unread: total, refresh: () => recount() };
 }

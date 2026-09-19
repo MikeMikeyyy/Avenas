@@ -27,6 +27,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
+import ActiveBadge from "../components/ActiveBadge";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
@@ -37,6 +38,7 @@ import {
 } from "../constants/programs";
 import { indexOfDayId, programDays } from "../utils/programDays";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
+import { buildJournalFeed } from "../utils/journalFeed";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { fmtDuration } from "../utils/dates";
 import { workoutBelongsToProgram } from "../utils/progressStats";
@@ -237,35 +239,6 @@ function DeleteSheet({ visible, isDark, entryTitle, onConfirm, onClose, title = 
         </View>
       </Animated.View>
     </Modal>
-  );
-}
-
-// ─── Active badge (pulsing green pill) ────────────────────────────────────────
-
-function ActiveBadge() {
-  const scale    = useRef(new Animated.Value(1)).current;
-  const dotPulse = useRef(new Animated.Value(0.25)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(scale,    { toValue: 1.08, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-          Animated.timing(dotPulse, { toValue: 1,    duration: 900, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(scale,    { toValue: 1,    duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-          Animated.timing(dotPulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
-        ]),
-      ])
-    ).start();
-  }, []);
-
-  return (
-    <Animated.View style={[styles.activeBadge, { transform: [{ scale }] }]}>
-      <Animated.View style={[styles.activeBadgeDot, { opacity: dotPulse }]} />
-      <Text style={styles.activeBadgeText}>Active</Text>
-    </Animated.View>
   );
 }
 
@@ -686,17 +659,13 @@ export default function JournalScreen() {
     return result;
   }, [workoutHistory, owningProgramByWorkoutId]);
 
-  // Merge journal entries and workout history newest-first
-  const timeline = useMemo(() => {
-    type JItem = { kind: "journal"; data: JournalEntry; ts: number };
-    type WItem = { kind: "workout"; data: CompletedWorkout; ts: number };
-    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
-    const items: (JItem | WItem)[] = [
-      ...entries.map(e => ({ kind: "journal" as const, data: e, ts: new Date(e.createdAt).getTime() })).filter(i => i.ts >= cutoff),
-      ...workoutHistory.map(w => ({ kind: "workout" as const, data: w, ts: new Date(w.completedAt).getTime() })).filter(i => i.ts >= cutoff),
-    ];
-    return items.sort((a, b) => b.ts - a.ts);
-  }, [entries, workoutHistory]);
+  // Journal entries and completed workouts as one newest-first list. The merge
+  // lives in utils/journalFeed.ts, shared with the client-side journal a trainer
+  // reads — only the window differs (two weeks here, a month there).
+  const timeline = useMemo(
+    () => buildJournalFeed({ entries, workouts: workoutHistory, windowDays: 14 }),
+    [entries, workoutHistory],
+  );
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -951,9 +920,6 @@ const styles = StyleSheet.create({
   // Fully rounded like every other button in the app. paddingHorizontal goes up
   // with it: rounded ends eat into the usable width, so the same 10 that looked
   // balanced at radius 10 reads tight on a pill.
-  activeBadge:     { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: ACCT, borderRadius: PILL_RADIUS, paddingHorizontal: 12, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  activeBadgeDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
-  activeBadgeText: { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff", letterSpacing: 0.3 },
   apSub:            { fontFamily: FontFamily.regular, fontSize: 13, color: TS },
   apDateRow:        { flexDirection: "row", alignItems: "center", gap: 6 },
   apDate:           { fontFamily: FontFamily.regular, fontSize: 13, color: TS },

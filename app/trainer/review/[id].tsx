@@ -13,8 +13,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
 import Svg, { Path } from "react-native-svg";
 
-import NeuCard from "../../../components/NeuCard";
 import BounceButton from "../../../components/BounceButton";
+import ProgramHeaderCard from "../../../components/ProgramHeaderCard";
 import ProgramSnapshotView from "../../../components/ProgramSnapshotView";
 import ProgramActionFabs from "../../../components/ProgramActionFabs";
 import ProgramSummarySheet from "../../../components/ProgramSummarySheet";
@@ -95,7 +95,7 @@ export default function ReviewScreen() {
     if (!entry) return;
     Alert.alert(
       "Send Update",
-      "Send the latest edits to your client? They'll get a tick to accept the new version into their programs.",
+      `Send the latest edits to the ${entry.groupId ? "member" : "client"}? They'll get a tick to accept the new version into their programs.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -131,6 +131,10 @@ export default function ReviewScreen() {
 
   const snap = entry.programSnapshot;
   const isReturned = entry.status === "returned";
+  // Who it goes back to. A group review came from a member of the group, who
+  // may be nobody's client — "Send Back to Client" was wrong for them.
+  const who = entry.groupId ? "member" : "client";
+  const Who = entry.groupId ? "Member" : "Client";
   // Trainer made edits in the program builder AFTER the last Send Back —
   // surface a "Send Update to Client" CTA so they can push the new version.
   const hasUnsentEdits =
@@ -175,26 +179,45 @@ export default function ReviewScreen() {
             <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>REVIEW PROGRAM</Text>
             <View style={{ width: 66 }} />
           </View>
-          <NeuCard dark={isDark} radius={20}>
-            <View style={styles.programInner}>
-              <View style={styles.programHeader}>
-                <Text style={[styles.label, { color: t.ts }]}>PROGRAM NAME</Text>
-                <Text style={[styles.nameDisplay, { color: t.tp }]} numberOfLines={2}>
-                  {entry.programSnapshot?.name ?? entry.programName}
+          <ProgramHeaderCard name={snap?.name ?? entry.programName} snapshot={snap} isDark={isDark} />
+
+          {/* Send Back sits UNDER THE TITLE, where you land, not at the foot of
+              the page. It used to follow the whole program, and once this
+              screen started showing every day in full — sets, reps, weights —
+              it ended up a long scroll down, below the floating Builder and
+              Summary pills, and read as missing. The decision is "is this ready
+              to go back?", and that button belongs next to the name of the
+              thing you're deciding about. */}
+          {!isReturned ? (
+            <BounceButton style={{ marginTop: 14 }} onPress={handleSendBack} accessibilityLabel={`Send back to the ${who}`}>
+              <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                <Ionicons name="paper-plane-outline" size={16} color="#fff" />
+                <Text style={styles.sendBtnText}>{`Send Back to ${Who}`}</Text>
+              </View>
+            </BounceButton>
+          ) : hasUnsentEdits ? (
+            <>
+              <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
+                <Ionicons name="checkmark-circle" size={18} color={ACCT} />
+                <Text style={[styles.returnedText, { color: ACCT }]}>
+                  {`Already sent back to the ${who}.`}
                 </Text>
               </View>
-              {snap ? (
-                <View style={styles.metaRow}>
-                  <Ionicons name="calendar-outline" size={13} color={t.ts} />
-                  <Text style={[styles.metaText, { color: t.ts }]}>
-                    {snap.totalWeeks} week{snap.totalWeeks === 1 ? "" : "s"} · {snap.trainingDays} training day{snap.trainingDays === 1 ? "" : "s"} · {snap.cycleDays}-day cycle
-                  </Text>
+              <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} accessibilityLabel={`Send your latest edits to the ${who}`}>
+                <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                  <Ionicons name="paper-plane-outline" size={16} color="#fff" />
+                  <Text style={styles.sendBtnText}>{`Send Update to ${Who}`}</Text>
                 </View>
-              ) : (
-                <Text style={[styles.noSnap, { color: t.ts }]}>This entry has no program snapshot.</Text>
-              )}
+              </BounceButton>
+            </>
+          ) : (
+            <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
+              <Ionicons name="checkmark-circle" size={18} color={ACCT} />
+              <Text style={[styles.returnedText, { color: ACCT }]}>
+                {`Already sent back to the ${who}.`}
+              </Text>
             </View>
-          </NeuCard>
+          )}
 
           {/* The program itself, in the same detail as viewing a program that
               was sent: a trainer deciding whether this needs changing is being
@@ -203,37 +226,6 @@ export default function ReviewScreen() {
           {snap && (
             <View style={{ marginTop: 18 }}>
               <ProgramSnapshotView snapshot={snap} isDark={isDark} />
-            </View>
-          )}
-
-          {!isReturned ? (
-            <BounceButton style={{ marginTop: 16 }} onPress={handleSendBack}>
-              <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                <Ionicons name="paper-plane-outline" size={16} color="#fff" />
-                <Text style={styles.sendBtnText}>Send Back to Client</Text>
-              </View>
-            </BounceButton>
-          ) : hasUnsentEdits ? (
-            <>
-              <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
-                <Ionicons name="checkmark-circle" size={18} color={ACCT} />
-                <Text style={[styles.returnedText, { color: ACCT }]}>
-                  Already sent back to the client.
-                </Text>
-              </View>
-              <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate}>
-                <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                  <Ionicons name="paper-plane-outline" size={16} color="#fff" />
-                  <Text style={styles.sendBtnText}>Send Update to Client</Text>
-                </View>
-              </BounceButton>
-            </>
-          ) : (
-            <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
-              <Ionicons name="checkmark-circle" size={18} color={ACCT} />
-              <Text style={[styles.returnedText, { color: ACCT }]}>
-                Already sent back to the client.
-              </Text>
             </View>
           )}
         </ScrollView>
@@ -287,15 +279,9 @@ const styles = StyleSheet.create({
   iconBtn:        { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   titleRow:       { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
   screenTitle:    { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1 },
-  programInner:   { padding: 18, gap: 10 },
-  programHeader:  { gap: 6 },
-  label:          { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.9 },
-  nameDisplay:    { fontFamily: FontFamily.bold, fontSize: 18 },
-  metaRow:        { flexDirection: "row", alignItems: "center", gap: 6 },
-  metaText:       { fontFamily: FontFamily.regular, fontSize: 13 },
-  // The cycle strip and the day-by-day breakdown are drawn by
-  // components/ProgramSnapshotView.tsx, which owns their styles.
-  noSnap:         { fontFamily: FontFamily.regular, fontSize: 13, padding: 8 },
+  // The name card is components/ProgramHeaderCard.tsx, and the cycle strip and
+  // the day-by-day breakdown are components/ProgramSnapshotView.tsx; each owns
+  // its styles, shared with /program-view.
   // Opening the builder moved out of this card and onto the floating pair at
   // the bottom (components/ProgramActionFabs.tsx), beside Summary.
   sendBtn:        { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: PILL_RADIUS, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },

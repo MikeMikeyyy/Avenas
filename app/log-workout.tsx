@@ -17,6 +17,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard, { NEU_BG, NEU_BG_DARK } from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import CollapsibleCard from "../components/CollapsibleCard";
+import ExerciseNotesField from "../components/ExerciseNotesField";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
@@ -541,17 +542,16 @@ interface ExerciseCardProps {
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   prevSets?: string[];
   /** The note written on this exercise the time before this date
-   *  (utils/workout.ts buildPrevNotesByName). A hint, never typed into. */
+   *  (utils/workout.ts buildPrevNotesByName). Shown as the empty box's
+   *  placeholder; Reuse and Undo write through onUpdateNotes. */
   prevNote?: string;
-  /** Copy that note into this session's box, appending if it has text. */
-  onReuseNote?: (note: string) => void;
 }
 
 function ExerciseCard({
   ex, exIndex, totalExercises, isDark,
   onUpdateSet, onToggleDone, onToggleType, onAddSet, onRemoveLastSet,
   onRemoveExercise, onOpenReorder, onChangeExercise, onToggleIsometric, onUpdateNotes,
-  onInputFocus, prevSets, prevNote, onReuseNote,
+  onInputFocus, prevSets, prevNote,
 }: ExerciseCardProps) {
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -813,38 +813,14 @@ function ExerciseCard({
 
         {/* Exercise notes */}
         <View style={[s.exNotesRow, { borderTopColor: divider }]}>
-          <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: t.tp, marginBottom: 6 }}>Notes</Text>
-          <TextInput
-            style={[s.exNotesInput, { color: t.tp }]}
-            placeholder="Add exercise notes..."
-            placeholderTextColor={t.ts}
-            value={ex.notes}
-            onChangeText={onUpdateNotes}
-            multiline
-            textAlignVertical="top"
+          {/* The note from the session before this date, as the Workout tab
+              shows it: "Previous: …" in the empty box, Reuse, then Undo. */}
+          <ExerciseNotesField
+            value={ex.notes ?? ""}
+            onChange={onUpdateNotes}
+            prevNote={prevNote}
+            isDark={isDark}
           />
-          {/* The note from the session before this date, same as the Workout
-              tab. Reference only: Reuse is what carries it into this one. */}
-          {!!prevNote && !!onReuseNote && (
-            <View style={s.prevNoteRow}>
-              <Text style={[s.prevNoteText, { color: t.ts }]}>
-                <Text style={s.prevNoteLabel}>Last time  </Text>
-                {prevNote}
-              </Text>
-              <TouchableOpacity
-                onPress={() => onReuseNote(prevNote)}
-                activeOpacity={0.7}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Reuse last time's note"
-              >
-                <View style={[s.prevNoteBtn, { borderColor: t.div }]}>
-                  <Ionicons name="return-down-forward" size={11} color={t.ts} />
-                  <Text style={[s.prevNoteBtnText, { color: t.ts }]}>Reuse</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
 
       </View>
@@ -1176,18 +1152,6 @@ export default function LogWorkoutScreen() {
     setExercises(prev => prev.map(ex => ex.id === exId ? { ...ex, notes: exNotes } : ex));
   }, []);
 
-  // Reuse last time's note: into an empty box as-is, otherwise appended on its
-  // own line so anything already typed survives.
-  const reuseExNote = useCallback((exId: string, note: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setExercises(prev => prev.map(ex => {
-      if (ex.id !== exId) return ex;
-      const current = (ex.notes ?? "").trim();
-      if (current.includes(note)) return ex;   // already carried over
-      return { ...ex, notes: current ? `${current}\n${note}` : note };
-    }));
-  }, []);
-
   const deleteCustomExercise = useCallback((name: string) => {
     setCustomExercises(prev => {
       const next = prev.filter(e => e.name !== name);
@@ -1415,7 +1379,6 @@ export default function LogWorkoutScreen() {
               onInputFocus={handleInputFocus}
               prevSets={(prevByName[normalizeExerciseName(ex.name)] ?? []).map(p => formatPrevHint(p, isKg))}
               prevNote={prevNotesByName[normalizeExerciseName(ex.name)]}
-              onReuseNote={note => reuseExNote(ex.id, note)}
             />
           ))}
 
@@ -1630,13 +1593,8 @@ const s = StyleSheet.create({
 
   // Exercise notes
   exNotesRow:   { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
-  exNotesInput: { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
-  // "Last time" hint + Reuse chip. Matches the Workout tab's card.
-  prevNoteRow:     { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingTop: 6, paddingBottom: 2 },
-  prevNoteText:    { flex: 1, fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17 },
-  prevNoteLabel:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3, textTransform: "uppercase" },
-  prevNoteBtn:     { flexDirection: "row", alignItems: "center", gap: 3, borderWidth: 1, borderRadius: PILL_RADIUS, paddingHorizontal: 8, paddingVertical: 3 },
-  prevNoteBtnText: { fontFamily: FontFamily.semibold, fontSize: 11 },
+  // The notes box itself is components/ExerciseNotesField, shared with the
+  // Workout tab.
 
   // Bottom-left action cluster: Session Notes button + round green + Add Exercise
   actionCluster:      { flexDirection: "row", alignItems: "center", gap: 14 },

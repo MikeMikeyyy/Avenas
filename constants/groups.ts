@@ -78,8 +78,11 @@ export type GroupMessage = {
   id: string;
   /** true = sent by the current account. */
   mine: boolean;
+  /** "" once deleted. */
   text: string;
   sentAtISO: string;
+  /** Its sender deleted it (migration 0031). See ChatMessage.deleted. */
+  deleted?: boolean;
   senderId: string;
   /** Resolved from the group roster; falls back to "Someone" if a member left. */
   senderName: string;
@@ -94,6 +97,12 @@ export type GroupMessage = {
  * shrug, which is why it doesn't carry the weight of a synced column.
  */
 export const GROUP_FAVOURITES_KEY = "@avenas/pt/group_favourites";
+
+/** Starred PEOPLE, by account id — the group roster's counterpart to
+ *  GROUP_FAVOURITES_KEY. Both are `string[]` in the order they were starred,
+ *  OLDEST FIRST, which is the order they're pinned to the top of a list in.
+ *  Local-only preference, never synced. */
+export const MEMBER_FAVOURITES_KEY = "@avenas/pt/member_favourites";
 
 /** Prefix that marks a chat-list row / recipient as a GROUP rather than a
  *  person. Group ids and account ids are both uuids, so the id alone can't

@@ -15,7 +15,7 @@
 
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import {
-  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Pressable, Platform, Alert,
+  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Platform, Alert,
   NativeSyntheticEvent, NativeScrollEvent,
 } from "react-native";
 import Animated, { useAnimatedStyle, interpolate, Extrapolation, ZoomIn, ZoomOut } from "react-native-reanimated";
@@ -25,9 +25,14 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import SendIcon from "../icons/SendIcon";
 import { toYMD, relativeDayLabel } from "../../utils/dates";
+
+/** The composer's height, and the send button's. Matches the app's search
+ *  fields (42), which is what makes the two read as the same control. */
+const FIELD_H = 42;
 
 /** The minimum a message needs to render in the thread. Both ChatMessage and
  *  GroupMessage satisfy it; the screen's renderBubble sees the full type. */
@@ -52,7 +57,6 @@ interface Props<T extends ThreadMessage> {
   /** Send handler. Throws to signal failure: the draft is restored and the
    *  standard "not sent" alert is shown, so neither screen has to reimplement it. */
   onSend: (text: string) => Promise<void>;
-  onLongPressMessage?: (msg: T) => void;
   placeholder: string;
   emptyText?: string;
   /** Pinned above the thread, never lifted by the keyboard. */
@@ -63,7 +67,6 @@ export default function ChatThreadView<T extends ThreadMessage>({
   messages,
   renderBubble,
   onSend,
-  onLongPressMessage,
   placeholder,
   emptyText = "No messages yet — say hi 👋",
   header,
@@ -171,11 +174,10 @@ export default function ChatThreadView<T extends ThreadMessage>({
                     <Text style={[styles.dayText, { color: t.ts }]}>{item.label}</Text>
                   </View>
                 </View>
-              ) : onLongPressMessage ? (
-                <Pressable onLongPress={() => onLongPressMessage(item.msg)} delayLongPress={250}>
-                  {renderBubble(item.msg)}
-                </Pressable>
               ) : (
+                // Taps belong to the bubble (ChatBubble's onPress), not the row:
+                // the row spans the thread, so a row-wide target opened a
+                // message from a tap on the empty space beside it.
                 <>{renderBubble(item.msg)}</>
               )
             }
@@ -205,7 +207,7 @@ export default function ChatThreadView<T extends ThreadMessage>({
 
         {/* Input bar — barStyle collapses the bottom inset as the keyboard rises */}
         <Animated.View style={[styles.inputBar, { borderTopColor: t.div }, barStyle]}>
-          <View style={[styles.inputBox, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "#ffffff", borderColor: t.div }]}>
+          <View style={[styles.inputBox, { backgroundColor: t.ctrl, borderColor: t.div }]}>
             <TextInput
               style={[styles.input, { color: t.tp }]}
               value={input}
@@ -239,7 +241,18 @@ const styles = StyleSheet.create({
   jumpBtnFallback: { shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4 },
 
   inputBar:   { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1 },
-  inputBox:   { flex: 1, borderRadius: 22, borderWidth: 1, paddingHorizontal: 16, paddingVertical: Platform.OS === "ios" ? 10 : 4, maxHeight: 120, justifyContent: "center" },
-  input:      { fontFamily: FontFamily.regular, fontSize: 15, maxHeight: 100 },
-  sendBtn:    { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
+  // The same field as every search in the app (PTHome, Messages, the group
+  // roster, the exercise picker): 42 tall on t.ctrl, fully rounded, a t.div
+  // hairline and the neutral pill shadow. It was a 22-radius box with its own
+  // white fill and heavier padding, which read as a different control from the
+  // search bar one screen back.
+  //
+  // minHeight rather than height, because this one grows: a wrapped line takes
+  // the padding past 42 while a single line still sits at the search bar's
+  // height. maxHeight stops it eating the thread.
+  inputBox:   { flex: 1, flexDirection: "row", alignItems: "center", minHeight: FIELD_H, maxHeight: 120, paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 10 : 4, borderRadius: PILL_RADIUS, borderWidth: 1, ...PILL_SHADOW },
+  input:      { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0, maxHeight: 100 },
+  // Square to the field's height, so the two read as one control pair rather
+  // than a button that outgrew its input.
+  sendBtn:    { width: FIELD_H, height: FIELD_H, borderRadius: FIELD_H / 2, alignItems: "center", justifyContent: "center", ...pillGlow(ACCT, 0.4) },
 });

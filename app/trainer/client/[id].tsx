@@ -15,6 +15,8 @@ import ProgressView from "../../../components/progress/ProgressView";
 import ClientJournalView from "../../../components/journal/ClientJournalView";
 import ProgramPickerSheet from "../../../components/trainer/ProgramPickerSheet";
 import SimpleSheet from "../../../components/trainer/SimpleSheet";
+import FavouriteStar, { useFavouriteGold } from "../../../components/FavouriteStar";
+import { loadFavouriteMemberIds, toggleFavouriteMember } from "../../../utils/groupStore";
 import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
 import ChatIcon from "../../../components/icons/ChatIcon";
 import SendIcon from "../../../components/icons/SendIcon";
@@ -26,6 +28,7 @@ import { useAccountType } from "../../../contexts/AccountTypeContext";
 import type { ReportReason } from "../../../constants/chat";
 import {
   appendSharedPrograms,
+  batchKeyOf,
   loadClientData,
   loadClients,
   loadSharedPrograms,
@@ -41,6 +44,7 @@ import UnreadBadge from "../../../components/UnreadBadge";
 import { loadThread, loadReads, countUnreadInThread } from "../../../utils/chatStore";
 import { loadHiddenMessageIds, blockContact, unaddContact, reportUser } from "../../../utils/moderation";
 import { getJSON } from "../../../utils/storage";
+import { removeShareConfirm } from "../../../utils/removeShare";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
 
 type Tab = "progress" | "journal" | "programs";
@@ -96,6 +100,11 @@ export default function ClientDetailScreen() {
   // menu the chat screen offers) + the report-reason picker it can open.
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  /** Starred, from the account-wide favourites list this shares with a group's
+   *  roster — star someone here and they're pinned in both. */
+  const [isFavourite, setIsFavourite] = useState(false);
+  // The gold the star is drawn in, for the label beside it.
+  const favouriteGold = useFavouriteGold();
 
   const TABS: readonly Tab[] = useMemo(() => ["progress", "journal", "programs"] as const, []);
   const tabIndex = TABS.indexOf(tab);
@@ -120,7 +129,7 @@ export default function ClientDetailScreen() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     (async () => {
-      const [list, d, progs, sharedAll, thread, reads, hidden] = await Promise.all([
+      const [list, d, progs, sharedAll, thread, reads, hidden, favs] = await Promise.all([
         loadClients(),
         id ? loadClientData(id) : Promise.resolve({ workoutHistory: [], programs: [], journal: [] } as ClientData),
         getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
@@ -128,7 +137,9 @@ export default function ClientDetailScreen() {
         id ? loadThread(id) : Promise.resolve([]),
         loadReads(),
         loadHiddenMessageIds(),
+        loadFavouriteMemberIds(),
       ]);
+      if (!cancelled && id) setIsFavourite(favs.has(id));
       let found: Client | null = list.find(c => c.id === id) ?? null;
       if (!found && id) {
         // Real connected account (not in the local roster) — build a lightweight
@@ -174,13 +185,19 @@ export default function ClientDetailScreen() {
   );
 
   const handleUnshare = useCallback((entry: SharedProgram) => {
+    const prompt = removeShareConfirm({
+      programName: entry.programName,
+      recipients: client?.name ?? "this client",
+      total: 1,
+      accepted: entry.acceptedAtISO ? 1 : 0,
+    });
     Alert.alert(
-      "Unsend Program",
-      `Unsend "${entry.programName}" from ${client?.name ?? "this client"}? ${entry.acceptedAtISO ? "They have already accepted it — the program will stay in their library." : "They will no longer see it."}`,
+      prompt.title,
+      prompt.body,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: prompt.cancel, style: "cancel" },
         {
-          text: "Unsend",
+          text: prompt.confirm,
           style: "destructive",
           onPress: async () => {
             await removeSharedProgram(entry.id);
@@ -207,7 +224,14 @@ export default function ClientDetailScreen() {
       Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
       return;
     }
-    setShared(prev => [entry, ...prev]);
+    // Re-read rather than prepend `entry`: its `share_…` id is a local
+    // placeholder, and the cloud row has a uuid. A card holding the placeholder
+    // couldn't be removed — removeSharedProgram took it for a local entry and
+    // left the real program in the cloud, where it reappeared on the next load.
+    // The prepend survives only as a fallback if the reload fails.
+    const fresh = await loadSharedPrograms();
+    const landed = fresh.some(s => batchKeyOf(s) === batchKeyOf(entry));
+    setShared(landed ? fresh : [entry, ...fresh]);
     Alert.alert("Program Sent", `"${program.name}" was sent to ${client?.name ?? "this client"}.`);
   }, [id, client]);
 
@@ -218,6 +242,16 @@ export default function ClientDetailScreen() {
 
   // Report / Block / Remove — mirrors the chat screen's conversation-options
   // menu so moderation is reachable from the client page too.
+  /** Star or unstar this person. Closes the sheet, because the answer is the
+   *  list you came from re-ordering itself behind it. */
+  const onToggleFavourite = async () => {
+    if (!id) return;
+    setMenuOpen(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const next = await toggleFavouriteMember(id);
+    setIsFavourite(next.has(id));
+  };
+
   const onReportUser = () => { setMenuOpen(false); setReportOpen(true); };
 
   const onBlock = () => {
@@ -485,7 +519,7 @@ export default function ClientDetailScreen() {
                         onPress={() => handleUnshare(s)}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         activeOpacity={0.7}
-                        accessibilityLabel="Unsend program"
+                        accessibilityLabel="Remove program"
                         accessibilityRole="button"
                       >
                         <TrashIcon size={18} color="#E53935" />
@@ -508,10 +542,26 @@ export default function ClientDetailScreen() {
         onClose={() => setShareOpen(false)}
       />
 
-      {/* Client options — Report / Block / Remove (same menu as the chat screen) */}
+      {/* Client options — favourite first, then Report / Block / Remove (the
+          same moderation trio as the chat screen). Starring is the everyday one
+          and the only one that isn't destructive, so it leads. */}
       <SimpleSheet visible={menuOpen} onClose={() => setMenuOpen(false)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
         <View style={styles.menu}>
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.8}
+            onPress={onToggleFavourite}
+            accessibilityRole="button"
+            accessibilityState={{ selected: isFavourite }}
+            accessibilityLabel={isFavourite ? "Remove from favourites" : "Add to favourites"}
+          >
+            <FavouriteStar size={20} filled={isFavourite} inactiveColor={t.tp} />
+            <Text style={[styles.menuText, { color: isFavourite ? favouriteGold : t.tp }]}>
+              {isFavourite ? "Remove from favourites" : "Add to favourites"}
+            </Text>
+          </TouchableOpacity>
+          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
           <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onReportUser} accessibilityRole="button" accessibilityLabel={`Report ${client.name}`}>
             <Ionicons name="flag-outline" size={20} color={t.tp} />
             <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>

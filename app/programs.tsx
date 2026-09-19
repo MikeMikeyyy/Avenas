@@ -20,6 +20,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
+import ActiveBadge from "../components/ActiveBadge";
 import { formatStoredDate, todayYMD } from "../utils/dates";
 import { cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
 import { clearShifts } from "../utils/skippedDates";
@@ -177,35 +178,6 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
         </Animated.View>
       </View>
     </Modal>
-  );
-}
-
-// ─── Active Badge ─────────────────────────────────────────────────────────────
-
-function ActiveBadge() {
-  const scale    = useRef(new Animated.Value(1)).current;
-  const dotPulse = useRef(new Animated.Value(0.25)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(scale,    { toValue: 1.08, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-          Animated.timing(dotPulse, { toValue: 1,    duration: 900, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(scale,    { toValue: 1,    duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-          Animated.timing(dotPulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
-        ]),
-      ])
-    ).start();
-  }, []);
-
-  return (
-    <Animated.View style={[styles.activeBadge, { transform: [{ scale }] }]}>
-      <Animated.View style={[styles.activeBadgeDot, { opacity: dotPulse }]} />
-      <Text style={styles.activeBadgeText}>Active</Text>
-    </Animated.View>
   );
 }
 
@@ -1059,9 +1031,6 @@ const styles = StyleSheet.create({
   programName:        { fontFamily: FontFamily.semibold, fontSize: 15, flex: 1, marginRight: 8 },
   statusBadge:        { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   statusBadgeText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
-  activeBadge:        { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: ACCT, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, shadowColor: ACCT, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  activeBadgeDot:     { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
-  activeBadgeText:    { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff", letterSpacing: 0.3 },
 
   rowBetween:         { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
 

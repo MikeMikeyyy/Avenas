@@ -29,6 +29,17 @@ import { FontFamily } from "./theme";
 
 /** Inner padding of a card, and of one summary row. */
 export const CARD_PAD = 14;
+
+/**
+ * How far an ExpandReveal inside a card body may reach past its content, so a
+ * button's shadow isn't cut off at the reveal's clip (its `bleed` prop).
+ *
+ * Exactly CARD_PAD, and no more: the reveal sits in a body padded by CARD_PAD,
+ * and NeuCard clips at its own edge, so that's all the room there is. It also
+ * happens to be what's needed — pillGlow reaches 14pt below a button (a 4pt
+ * offset plus a 10pt radius) and 10pt to either side.
+ */
+export const REVEAL_BLEED = CARD_PAD;
 export const CARD_TITLE_LINE = 22;
 export const CARD_PILL_H = 22;
 

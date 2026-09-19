@@ -15,6 +15,7 @@ import { loadClients, loadCoaches, loadAssignedPT, loadOtherTrainers } from "./t
 import {
   getMyUid, isCloudContactId, fetchAllCloudThreads, fetchCloudThread,
   sendCloudMessage, sendCloudBroadcast, fetchCloudReads, markCloudThreadRead,
+  deleteCloudMessage,
 } from "../lib/chat";
 import { CHATS_KEY, CHAT_READS_KEY, type ChatMessage, type ChatThreads, type ChatReads, type ChatContact } from "../constants/chat";
 import type { AccountType } from "../contexts/AccountTypeContext";
@@ -162,14 +163,29 @@ export async function markThreadRead(contactId: string): Promise<void> {
  * is what makes the unread badge disappear once messages are read. With no read
  * stamp yet, every inbound message counts.
  */
-export function countUnreadInThread(msgs: ChatMessage[], lastReadISO?: string): number {
+export function countUnreadInThread(msgs: Pick<ChatMessage, "mine" | "sentAtISO" | "deleted">[], lastReadISO?: string): number {
   const readMs = lastReadISO ? new Date(lastReadISO).getTime() : 0;
   let n = 0;
   for (const m of msgs) {
     if (m.mine) continue;
+    // A deleted message is nothing to read: a badge for it would open onto
+    // "Message deleted".
+    if (m.deleted) continue;
     if (new Date(m.sentAtISO).getTime() > readMs) n++;
   }
   return n;
+}
+
+/**
+ * The one-line preview of a thread's last message, for the conversations list
+ * (1:1 rows and group rows alike, so the two read the same). A deleted message
+ * says so rather than showing an empty line — or its old text, which it no
+ * longer has.
+ */
+export function previewText(last: Pick<ChatMessage, "mine" | "text" | "deleted"> | undefined): string {
+  if (!last) return "Tap to start the conversation";
+  if (last.deleted) return last.mine ? "You deleted a message" : "Message deleted";
+  return last.mine ? `You: ${last.text}` : last.text;
 }
 
 // ─── sending ─────────────────────────────────────────────────────────────────
@@ -202,6 +218,26 @@ export async function appendMessage(contactId: string, text: string): Promise<Ch
   }
   const [msg] = await appendLocalMessages([contactId], text);
   return msg;
+}
+
+/**
+ * Delete a message I sent in a 1:1 thread. It stays in the thread as "Message
+ * deleted" on both sides; the words are gone. A real connection's message is
+ * deleted on the server (migration 0031) and THROWS if that fails, so the
+ * screen can put it back rather than show a deletion that didn't happen. A
+ * mock contact's message is blanked in the local blob the same way.
+ */
+export async function deleteMessage(contactId: string, messageId: string): Promise<void> {
+  const uid = await getMyUid();
+  if (uid && isCloudContactId(contactId) && isCloudContactId(messageId)) {
+    await deleteCloudMessage(messageId);
+    return;
+  }
+  const all = await getJSON<ChatThreads>(CHATS_KEY, {});
+  const thread = all[contactId];
+  if (!thread) return;
+  all[contactId] = thread.map(m => (m.id === messageId && m.mine ? { ...m, text: "", deleted: true } : m));
+  await setJSON(CHATS_KEY, all);
 }
 
 /**

@@ -120,11 +120,15 @@ const SECTIONS: { title: string; items: { q: string; a: string }[] }[] = [
       },
       {
         q: "How do I get feedback on a program?",
-        a: "Send it to your trainer from Sent to Trainer on the Trainer tab, or tap the program in My Programs and choose Send to Trainer. When they send it back with changes, tap Accept changes to use their version.",
+        a: "Tap Send a Program for Review at the top of the Trainer tab, or tap the program in My Programs and choose Send to Trainer. When they send it back, it appears under From Your Trainer. Tap Accept to use their version.",
       },
       {
         q: "What are groups?",
         a: "Trainers can put clients into a group to message everyone at once and send one program to the whole group. If you're invited to a group, the invite appears on your Trainer tab. Once you join, you can use Ask for Review to have a trainer in the group look over one of your programs.",
+      },
+      {
+        q: "Can I delete a message I sent?",
+        a: "Yes, in any chat or group chat. Tap your message and choose Delete message. It's removed for everyone, and the chat shows that a message was deleted in its place. Tap someone else's message to report it.",
       },
       {
         q: "How do I switch between Gym User and Trainer?",

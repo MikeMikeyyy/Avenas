@@ -1,20 +1,44 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import Avatar from "../Avatar";
+import FavouriteStar from "../FavouriteStar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { Client } from "../../utils/trainerStore";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
 
-export default function ClientCard({ client, activeProgramName, badge, badgeColor = ACCT, onPress }: {
+export default function ClientCard({ client, activeProgramName, badge, badgeColor = ACCT, showAccountType = true, isFavourite = false, onToggleFavourite, onPress }: {
   client: Client;
   activeProgramName?: string;
-  /** Extra tag beside the name, e.g. a group role. Rendered in addition to the
-   *  automatic TRAINER tag, not instead of it. */
+  /** Extra tag beside the name, e.g. a group role. */
   badge?: string;
   /** Tint for `badge`. Defaults to the brand accent. */
   badgeColor?: string;
+  /**
+   * Whether to show the automatic TRAINER tag for a trainer ACCOUNT.
+   *
+   * False inside a group, where the card already states the person's standing
+   * IN that group and a second TRAINER chip says something else entirely — in
+   * the accent, which is the colour a group's OWNER badge uses. A trainer
+   * demoted to member read as "TRAINER" (green) next to "MEMBER" (blue) and
+   * looked like the demotion hadn't taken, when the stored role was right all
+   * along.
+   */
+  showAccountType?: boolean;
+  /**
+   * Starred state. Three cases, in order of how the card reads:
+   *
+   *   isFavourite + onToggleFavourite → a tappable star, hollow when unstarred
+   *   isFavourite alone              → a static gold star, no control
+   *   neither                        → nothing at all
+   *
+   * The middle one is what a roster wants: an empty outline on every row puts a
+   * control on a card whose job is to be tapped once, and a star you can only
+   * see when it means something is the point of a star.
+   */
+  isFavourite?: boolean;
+  onToggleFavourite?: () => void;
   /** Omit for a card with nothing behind it — your own row in a group roster,
    *  or a fellow member a gym user has no coaching relationship with. It then
    *  renders as a plain card: no bounce, no haptic, no button role, so it never
@@ -39,7 +63,7 @@ export default function ClientCard({ client, activeProgramName, badge, badgeColo
         <View style={{ flex: 1 }}>
           <View style={styles.nameRow}>
             <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
-            {client.isTrainer && (
+            {client.isTrainer && showAccountType && (
               <View style={[styles.trainerTag, { backgroundColor: `${ACCT}22` }]}>
                 <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
               </View>
@@ -69,6 +93,23 @@ export default function ClientCard({ client, activeProgramName, badge, badgeColo
             </View>
           )}
         </View>
+        {/* Right edge, vertically centred: its own tap target inside the card,
+            so starring someone never opens them. A nested touchable wins the
+            responder, which is what keeps the two apart. */}
+        {onToggleFavourite ? (
+          <TouchableOpacity
+            onPress={onToggleFavourite}
+            activeOpacity={0.7}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityState={{ selected: isFavourite }}
+            accessibilityLabel={isFavourite ? `Unfavourite ${client.name}` : `Favourite ${client.name}`}
+          >
+            <FavouriteStar size={18} filled={isFavourite} inactiveColor={t.ts} />
+          </TouchableOpacity>
+        ) : isFavourite ? (
+          <FavouriteStar size={18} />
+        ) : null}
       </View>
     </NeuCard>
   );

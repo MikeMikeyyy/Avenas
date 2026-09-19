@@ -21,6 +21,7 @@ import FadeScreen from "../../components/FadeScreen";
 import BounceButton from "../../components/BounceButton";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
+import ExerciseNotesField from "../../components/ExerciseNotesField";
 import DumbbellIcon from "../../components/DumbbellIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
@@ -978,10 +979,9 @@ interface ExerciseCardProps {
   onUpdateSet: (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade?: boolean) => void;
   onToggleDone: (exId: string, type: "warmup" | "working", idx: number) => void;
   onAutoTick: (exId: string, type: "warmup" | "working", idx: number) => void;
+  /** Also how Reuse and Undo write: the notes field puts last time's note in,
+   *  or empties the box again, through this same setter. */
   onUpdateNotes: (exId: string, notes: string) => void;
-  /** Copy last time's note into this session's box (appending if it has text).
-   *  Omitted by the locked completed-workout card, which shows no hint. */
-  onReuseNote?: (exId: string, note: string) => void;
   exNotes: string;
   onAddSet: (exId: string) => void;
   onRemoveSet: (exId: string) => void;
@@ -1002,7 +1002,7 @@ interface ExerciseCardProps {
   numberBadge?: number;
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, onReuseNote, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -1346,41 +1346,17 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
         {/* ── Exercise notes ── */}
         <View style={[styles.exNotesRow, { borderTopColor: divider }]}>
-          <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: t.tp, marginBottom: 6 }}>Notes</Text>
-          <TextInput
-            style={[styles.exNotesInput, { color: t.tp }]}
-            placeholder="Add exercise notes..."
-            placeholderTextColor={t.ts}
+          {/* Last time's note shows as the empty box's "Previous: …" with a
+              Reuse chip, and Undo once reused (components/ExerciseNotesField).
+              Shared with log-workout so the two can't drift. */}
+          <ExerciseNotesField
             value={exNotes}
+            onChange={v => onUpdateNotes(exercise.id, v)}
+            prevNote={prevNote}
             editable={!isLocked}
-            onChangeText={v => onUpdateNotes(exercise.id, v)}
             onFocus={() => onInputFocus(null, null)}
-            multiline
-            textAlignVertical="top"
+            isDark={isDark}
           />
-          {/* Last time's note, for reference only: typing over it is a choice,
-              so an untouched hint carries nothing into next week. Reuse drops it
-              into the box to edit or add to, rather than retyping it. */}
-          {!isLocked && !!prevNote && !!onReuseNote && (
-            <View style={styles.prevNoteRow}>
-              <Text style={[styles.prevNoteText, { color: t.ts }]}>
-                <Text style={styles.prevNoteLabel}>Last time  </Text>
-                {prevNote}
-              </Text>
-              <TouchableOpacity
-                onPress={() => onReuseNote(exercise.id, prevNote)}
-                activeOpacity={0.7}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Reuse last time's note"
-              >
-                <View style={[styles.prevNoteBtn, { borderColor: t.div }]}>
-                  <Ionicons name="return-down-forward" size={11} color={t.ts} />
-                  <Text style={[styles.prevNoteBtnText, { color: t.ts }]}>Reuse</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
 
       </View>
@@ -1968,19 +1944,10 @@ export default function WorkoutScreen() {
     });
   }, []);
 
-  // Reuse last time's note: into an empty box as-is, otherwise appended on its
-  // own line so whatever you've already typed this session survives.
-  const reuseExNote = useCallback((exId: string, note: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setLog(prev => {
-      const exLog = prev[exId];
-      if (!exLog) return prev;
-      const current = exLog.notes.trim();
-      if (current.includes(note)) return prev;   // already carried over
-      return { ...prev, [exId]: { ...exLog, notes: current ? `${current}\n${note}` : note } };
-    });
-  }, []);
-
+  // Reuse and Undo both land here: the notes field offers last time's note only
+  // while the box is empty, so reusing is just setting it, and undoing is
+  // setting it back to empty. (There used to be a separate append-style reuse
+  // for a box that already had text; the field no longer offers Reuse then.)
   const updateExNotes = useCallback((exId: string, notes: string) => {
     setLog(prev => {
       const exLog = prev[exId];
@@ -2829,7 +2796,10 @@ export default function WorkoutScreen() {
                 session, so they take the top bar's control styling (see
                 completedActionBtn). */}
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 16 }}>
-              <BounceButton onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id } })} style={{ flex: 1 }}>
+              {/* edit=1 lands in edit mode: this button is a request to change
+                  the numbers, so a second Edit on the next screen was a tap
+                  that did nothing but confirm what you'd already said. */}
+              <BounceButton onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id, edit: "1" } })} style={{ flex: 1 }}>
                 <View style={[styles.completedActionBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
                   <Ionicons name="create-outline" size={17} color={isDark ? APP_DARK.bg : "#fff"} />
                   <Text style={[styles.completedActionText, { color: isDark ? APP_DARK.bg : "#fff" }]} numberOfLines={1}>Edit Workout</Text>
@@ -2903,7 +2873,6 @@ export default function WorkoutScreen() {
                   onAutoTick={autoTickIfComplete}
                   exNotes={log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={updateExNotes}
-                  onReuseNote={reuseExNote}
                   prevNote={prevNotesByName[normalizeExerciseName(exercise.name)]}
                   onAddSet={addSet}
                   onRemoveSet={removeSet}
@@ -3311,14 +3280,8 @@ const styles = StyleSheet.create({
   exNumLabel:   { fontFamily: FontFamily.semibold, fontSize: 13 },
   exName:       { fontFamily: FontFamily.bold, fontSize: 22, flex: 1 },
   exNotesRow:    { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
-  exNotesInput:  { fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
-  // Last time's note: quieter than the box above it, with the Reuse chip pinned
-  // right so a long note wraps under the label instead of squeezing the button.
-  prevNoteRow:     { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingTop: 6, paddingBottom: 2 },
-  prevNoteText:    { flex: 1, fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17 },
-  prevNoteLabel:   { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3, textTransform: "uppercase" },
-  prevNoteBtn:     { flexDirection: "row", alignItems: "center", gap: 3, borderWidth: 1, borderRadius: PILL_RADIUS, paddingHorizontal: 8, paddingVertical: 3 },
-  prevNoteBtnText: { fontFamily: FontFamily.semibold, fontSize: 11 },
+  // The notes box itself — label, input, Reuse/Undo chip — is
+  // components/ExerciseNotesField, shared with log-workout.
 
   // Column headers
   colHeaderRow:   { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 4, paddingBottom: 4 },

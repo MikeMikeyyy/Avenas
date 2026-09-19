@@ -58,8 +58,12 @@ export type MessageRow = {
   id: string;
   sender_id: string;
   recipient_id: string;
+  /** Empty once deleted (migration 0031). */
   body: string;
   created_at: string;
+  /** The sender deleted it (migration 0031, via delete_message). Null = live.
+   *  Optional because a row from before 0031 is applied has no such column. */
+  deleted_at?: string | null;
 };
 
 /** Per-peer "last read" stamp for the caller — drives the unread badges. */
@@ -98,8 +102,11 @@ export type GroupMessageRow = {
   id: string;
   group_id: string;
   sender_id: string;
+  /** Empty once deleted (migration 0031). */
   body: string;
   created_at: string;
+  /** The sender deleted it (migration 0031, via delete_group_message). */
+  deleted_at?: string | null;
 };
 
 /** Per-group "last read" stamp for the caller — drives the group unread badge. */

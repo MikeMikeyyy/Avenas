@@ -4,7 +4,7 @@
 // Groups are a SHORTCUT, not a separate delivery channel: tapping one ticks
 // every member, and the send still goes out as one shared_programs row per
 // person (migration 0013, unchanged). They land in the recipients' libraries
-// exactly like an individual send, and the sender's "Programs You've Sent"
+// exactly like an individual send, and the sender's "Programs Sent"
 // groups them into a single card via the existing batch key.
 
 import { useCallback, useEffect, useMemo, useState } from "react";

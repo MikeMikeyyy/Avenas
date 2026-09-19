@@ -1,5 +1,5 @@
-import { useCallback, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -8,15 +8,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
-import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
 import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import ChevronToggle from "../ChevronToggle";
+import ExpandReveal, { useReveal } from "../ExpandReveal";
 import ChatIcon from "../icons/ChatIcon";
 import PeopleIcon from "../icons/PeopleIcon";
-import PlusIcon from "../icons/PlusIcon";
+import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
 import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
@@ -24,12 +24,14 @@ import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import GroupInviteCard from "./GroupInviteCard";
 import GroupAvatar from "./GroupAvatar";
-import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites } from "../../lib/groups";
+import { acceptGroupInvite, declineGroupInvite, fetchGroupMembers, fetchMyGroupInvites } from "../../lib/groups";
 import { loadGroupRows, type GroupChatRow } from "../../utils/groupStore";
+import { groupAlertCounts } from "../../utils/groupAlerts";
+import { getMyUid } from "../../lib/chat";
 import type { GroupInvite } from "../../constants/groups";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
-import { haloGlow, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
-import { CARD_INNER, CARD_META, CARD_PAD, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, SUMMARY_ROW } from "../../constants/cards";
+import { haloGlow, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { CARD_INNER, CARD_META, CARD_PAD, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgramBatch,
@@ -37,6 +39,9 @@ import {
   applyReturnedProgram,
   backfillAcceptedProgramIds,
   batchKeyOf,
+  dismissSharedBatch,
+  loadDismissedShareKeys,
+  sentKeyOf,
   loadClients,
   loadSentPrograms,
   loadSharedPrograms,
@@ -52,12 +57,197 @@ import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 
+/** The trainer who runs a group, as its card shows them. */
+type GroupOwner = { name: string; initials: string; photoUri?: string };
+
 function fmtAgo(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
   if (days < 1) return "Today";
   if (days === 1) return "Yesterday";
   if (days < 7) return `${days}d ago`;
   return `${Math.floor(days / 7)}w ago`;
+}
+
+/** A program's cycle as a wrap of day chips: training days tinted, rest days
+ *  quiet. Nothing when the program has no cycle. */
+function CycleGrid({ cycle, isDark }: { cycle: string[]; isDark: boolean }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  if (cycle.length === 0) return null;
+  return (
+    <View style={styles.cycleGrid}>
+      {cycle.map((day, i) => {
+        const isTraining = day !== "Rest" && day !== "";
+        return (
+          <View
+            key={i}
+            style={[styles.cycleChip, isTraining
+              ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
+              : { backgroundColor: t.div }]}
+          >
+            <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>{day || "Rest"}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * A program card whose actions open on tap.
+ *
+ * The body is the tap target, the buttons reveal beneath it with the shared
+ * ExpandReveal motion (the same open and close as the trainer page's program
+ * cards), and a chevron at the foot shows which way it'll go. Every program
+ * card on this page uses it, so a received program, a returned review and one
+ * you've sent all open the same way. They used to show their buttons all the
+ * time, which made a list of three programs a list of nine buttons.
+ *
+ * Laid out exactly like the trainer hub's cards (PTHome's SentCard): the
+ * content is its own gapped column, and the reveal and chevron follow it with
+ * explicit spacing, because a closed reveal is a zero-height box and a `gap`
+ * around it would reserve space for it anyway. No Reanimated layout animation
+ * on any ancestor either — that freezes the UI-thread height tween, which is
+ * the whole animation.
+ */
+function TapToOpenCard({ open, onToggle, isDark, label, actions, children }: {
+  open: boolean;
+  onToggle: () => void;
+  isDark: boolean;
+  /** For VoiceOver: what the card is, before "expand"/"collapse". */
+  label: string;
+  /** The row of buttons, revealed on tap. */
+  actions: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const reveal = useReveal();
+  useEffect(() => { reveal.setOpen(open); }, [open, reveal]);
+
+  return (
+    <View style={{ marginBottom: 10 }}>
+      <NeuCard dark={isDark} radius={16}>
+        <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggle(); }}
+          style={styles.cardInner}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          accessibilityLabel={`${label}, ${open ? "collapse" : "expand"}`}
+        >
+          <View style={styles.cardBody}>{children}</View>
+          {/* The glow needs room inside the reveal's clip, which is `overflow:
+              hidden` and would slice it off in a straight line. `bleed` gives
+              the sides and bottom (constants/cards.ts REVEAL_BLEED); the top
+              padding gives the top, and is also the distance from the content.
+              It's padding INSIDE the reveal rather than the reveal reaching up
+              into the space above (`pullTop`), because that moved the whole
+              reveal up as it opened: the buttons rose 12pt into place while
+              every other card's unfold downward and stay still. */}
+          <ExpandReveal
+            progress={reveal.progress}
+            fade={reveal.fade}
+            open={open}
+            bleed={REVEAL_BLEED}
+            contentStyle={styles.revealBody}
+          >
+            {actions}
+          </ExpandReveal>
+          <View style={styles.chevronRow}>
+            <ChevronToggle expanded={open} color={t.ts} upDown />
+          </View>
+        </Pressable>
+      </NeuCard>
+    </View>
+  );
+}
+
+/**
+ * A program I sent for review that my trainer has sent BACK, shown among the
+ * programs I've received — because that's what it is now: something a trainer
+ * has handed me to take on. The line under it says so in plain words, so it
+ * can't be mistaken for a new program they wrote.
+ *
+ * Same card and the same button order as a received program — View, Accept
+ * (while the changes haven't been applied), Remove — so the two read as one
+ * list. Accept here is "apply the trainer's changes over my program";
+ * Remove takes it off this list only, and never undoes applied changes.
+ */
+function ReturnedReviewCard({ review, fromLabel, isDark, open, onToggle, onView, onAccept, onRemove }: {
+  review: SentProgram;
+  /** "Your trainer", or the group it went to. */
+  fromLabel: string;
+  isDark: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onView: () => void;
+  onAccept: () => void;
+  onRemove: () => void;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const applied = !!review.appliedAtISO;
+  const cycle = review.programSnapshot?.cyclePattern ?? [];
+
+  return (
+    <TapToOpenCard
+      open={open}
+      onToggle={onToggle}
+      isDark={isDark}
+      label={`${review.programName}, reviewed by your trainer`}
+      actions={
+        <View style={styles.actionRow}>
+          <BounceButton style={{ flex: 1 }} onPress={onView} accessibilityLabel={`View ${review.programName}`}>
+            <View style={[styles.viewBtnInner, { backgroundColor: t.ctrl }]}>
+              <Text style={[styles.viewBtnText, { color: t.tp }]}>View</Text>
+            </View>
+          </BounceButton>
+          {!applied && (
+            <BounceButton style={{ flex: 1 }} onPress={onAccept} accessibilityLabel={`Accept your trainer's changes to ${review.programName}`}>
+              <View style={[styles.viewBtnInner, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                <Text style={[styles.viewBtnText, { color: "#fff" }]}>Accept</Text>
+              </View>
+            </BounceButton>
+          )}
+          <BounceButton onPress={onRemove} accessibilityLabel={`Remove ${review.programName} from this list`}>
+            <View style={[styles.viewBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+              <TrashIcon size={16} color="#fff" />
+              <Text style={[styles.viewBtnText, { color: "#fff" }]}>Remove</Text>
+            </View>
+          </BounceButton>
+        </View>
+      }
+    >
+      <View style={styles.receivedTop}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{review.programName}</Text>
+          <Text style={[styles.itemMeta, { color: t.ts }]} numberOfLines={1}>
+            {`Sent back ${fmtAgo(review.returnedAtISO ?? review.sentAtISO).toLowerCase()} · ${fromLabel}`}
+          </Text>
+        </View>
+        {applied ? (
+          <View
+            style={[styles.acceptBox, { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }]}
+            accessibilityLabel="Changes applied"
+          >
+            <Ionicons name="checkmark" size={14} color="#fff" />
+          </View>
+        ) : (
+          <View style={[styles.statusPill, { backgroundColor: `${ACCT}22` }]}>
+            <Text style={[styles.statusText, { color: ACCT }]}>Reviewed</Text>
+          </View>
+        )}
+      </View>
+      <CycleGrid cycle={cycle} isDark={isDark} />
+      {/* What this is, in the user's terms: their own program, back. */}
+      <Text style={[styles.acceptedLine, { color: applied ? ACCT : t.ts }]}>
+        {applied ? "You sent this for review · Changes added to your programs" : "You sent this for review · It's back with your trainer's changes"}
+      </Text>
+      {review.trainerComments ? (
+        <View style={[styles.commentBox, { borderTopColor: t.div }]}>
+          <Text style={[styles.commentLabel, { color: t.ts }]}>TRAINER COMMENTS</Text>
+          <Text style={[styles.commentBody, { color: t.tp }]}>{review.trainerComments}</Text>
+        </View>
+      ) : null}
+    </TapToOpenCard>
+  );
 }
 
 export default function MyPTHome() {
@@ -67,7 +257,7 @@ export default function MyPTHome() {
   const skeletonFill = isDark ? "rgba(255,255,255,0.08)" : t.div;
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const unreadMessages = useUnreadMessages();
+  const { unread: unreadMessages, refresh: refreshUnread } = useUnreadMessages();
 
   // `undefined` = still resolving, `null` = resolved and there isn't one. The
   // difference is the whole point: with only null, the page drew "No trainer
@@ -83,14 +273,26 @@ export default function MyPTHome() {
   const { presenceById, pendingIncoming } = useConnectionPresence();
   const [received, setReceived] = useState<SharedProgram[]>([]);
   const [sent, setSent] = useState<SentProgram[]>([]);
-  const [expandedReceived, setExpandedReceived] = useState<Set<string>>(new Set());
-  const [expandedSent, setExpandedSent] = useState<Set<string>>(new Set());
+  /** What I've removed from my received list (see DISMISSED_SHARES_KEY). The
+   *  shares are filtered at the load layer; this is for returned reviews, which
+   *  come from my SENT list and aren't. */
+  const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(new Set());
+  /** Which program cards are open, by row id. One set for all three lists: the
+   *  ids are share rows, so a card I sent and one I received never collide. */
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [collapsedFromTrainer, setCollapsedFromTrainer] = useState(false);
   const [collapsedSentToTrainer, setCollapsedSentToTrainer] = useState(false);
   // Groups I've joined, and the ones still waiting on an answer. Invites come
   // from their own RPC rather than from the group rows: until you accept, the
   // group itself is not readable to you (migration 0027).
   const [groups, setGroups] = useState<GroupChatRow[]>([]);
+  /** groupId → who runs it, for the line under each group's name. Absent for
+   *  a group I own, and until the lookup lands. */
+  const [groupOwners, setGroupOwners] = useState<Record<string, GroupOwner>>({});
+  /** Every share row I can see, for the per-group badge: a program sent into a
+   *  group I'm in and not yet accepted is something waiting on me. */
+  const [shares, setShares] = useState<SharedProgram[]>([]);
+  const [myUid, setMyUid] = useState<string | null>(null);
   const [groupInvites, setGroupInvites] = useState<GroupInvite[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState(false);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
@@ -109,27 +311,23 @@ export default function MyPTHome() {
     setCollapsedGroups(v => !v);
   }, []);
 
-  const toggleReceived = useCallback((id: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setExpandedReceived(prev => {
+
+  // The card plays its own haptic, so this is only the state.
+  const toggleCard = useCallback((id: string) => {
+    setExpandedCards(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   }, []);
 
-  const toggleSent = useCallback((id: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setExpandedSent(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }, []);
-
-  useFocusEffect(useCallback(() => {
-    let cancelled = false;
-
+  /**
+   * Everything this page shows. Driven by arriving at the page and by pulling
+   * it down; the caller owns the cancel flag, because a focus load must stop
+   * writing state when you navigate away mid-flight while a pull runs to
+   * completion — you're looking right at it.
+   */
+  const loadAll = useCallback(async (isCancelled: () => boolean) => {
     // The trainer card resolves ON ITS OWN. It used to wait inside one
     // Promise.all for the slowest of six loads — five of them network calls
     // about groups, invites and shares — after three share migrations ran first.
@@ -138,30 +336,36 @@ export default function MyPTHome() {
     // choice, falls back to the first connected trainer, and only fills this
     // slot with a PT-typed account. Blocked ids and severed-but-still-local
     // entries are filtered there too.
-    resolveMyTrainers()
-      .then(t => { if (!cancelled) setPT(t.primary); })
+    // Held as a promise so the group owners below can reuse the same lookup.
+    const trainersPromise = resolveMyTrainers();
+    const trainerCard = trainersPromise
+      .then(t => { if (!isCancelled()) setPT(t.primary); })
       .catch(err => {
         if (__DEV__) console.warn("[avenas] resolve trainers", err);
         // Settle a first load so the page isn't stuck on a placeholder; keep a
         // trainer already on screen rather than blanking it on a refresh error.
-        if (!cancelled) setPT(prev => (prev === undefined ? null : prev));
+        if (!isCancelled()) setPT(prev => (prev === undefined ? null : prev));
       });
 
-    (async () => {
+    // Resolves to the groups it loaded, for the owner lookup that follows.
+    const rest = (async (): Promise<GroupChatRow[]> => {
       try {
         // Backfill acceptedProgramId on any pre-existing accepted shares so the
         // "tap to view in /programs" navigation can find the local program by id.
         await backfillAcceptedProgramIds();
         const clientsForMigration = await loadClients();
         await migrateBroadcastShares(clientsForMigration);
-        const [r, s, progs, groupRows, invites] = await Promise.all([
+        const [r, s, progs, groupRows, invites, dismissed, uid] = await Promise.all([
           loadSharedPrograms(),
           loadSentPrograms(),
           getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
           loadGroupRows(),
           fetchMyGroupInvites(),
+          loadDismissedShareKeys(),
+          getMyUid().catch(() => null),
         ]);
-        if (cancelled) return;
+        if (isCancelled()) return [];
+        setDismissedKeys(dismissed);
         // Dedupe per batch — broadcasts expand into N per-client entries, but
         // the gym user represents all recipients on this device and should see
         // one card per batch.
@@ -171,6 +375,14 @@ export default function MyPTHome() {
           // Skip trainer-to-trainer programs: they belong on the trainer-side
           // My Trainers page, not a gym user's My Trainer feed.
           if (entry.receivedFromCoachId) continue;
+          // Skip programs I SENT. loadSharedPrograms returns both directions,
+          // and a gym user who holds a group's trainer role can send a program
+          // into that group, so without this their own send was listed here as
+          // if it had come from their trainer. It belongs on the group's page
+          // (Programs Sent), where it already is. It also couldn't be removed
+          // from here: the dismissed list never hides a row I sent, so it came
+          // back on the next load.
+          if (uid && entry.senderId === uid) continue;
           const k = batchKeyOf(entry);
           if (seen.has(k)) continue;
           seen.add(k);
@@ -181,16 +393,74 @@ export default function MyPTHome() {
         setMyPrograms(Array.isArray(progs) ? progs : []);
         setGroups(groupRows);
         setGroupInvites(invites);
+        // `r` is pre-dedupe on purpose: a group send writes one row per member
+        // and only MINE counts here, which the dedupe above could have dropped.
+        setShares(r);
+        setMyUid(uid);
+        return groupRows;
       } catch (err) {
         if (__DEV__) console.warn("[avenas] load trainer hub", err);
+        return [];
       } finally {
         // Even on failure: an empty state is honest once we've tried, and a list
         // that never settles would hide the "send a program" affordances.
-        if (!cancelled) setProgramsLoaded(true);
+        if (!isCancelled()) setProgramsLoaded(true);
       }
     })();
+
+    /**
+     * Who runs each group, for its card: a gym user can be in groups from
+     * several trainers, and "Monday Strength" alone doesn't say whose it is.
+     *
+     * Almost always one of my connected trainers (being added needed an
+     * accepted connection), so their name and photo come from the trainer list
+     * this page already loads. A group whose owner I've since disconnected from
+     * falls back to that group's roster, which always includes the owner. Runs
+     * after the list is on screen, so the cards never wait for it.
+     */
+    const owners = rest.then(async rows => {
+      const trainers = await trainersPromise.then(t => t.all).catch(() => [] as AssignedPT[]);
+      const out: Record<string, GroupOwner> = {};
+      await Promise.all(rows.map(async ({ group }) => {
+        if (group.isOwner) return;
+        const known = trainers.find(t => t.id === group.ownerId);
+        if (known) {
+          out[group.id] = { name: known.name, initials: known.initials, photoUri: known.photoUri };
+          return;
+        }
+        try {
+          const owner = (await fetchGroupMembers(group.id)).find(m => m.isOwner);
+          if (owner) out[group.id] = { name: owner.name, initials: owner.initials, photoUri: owner.photoUri };
+        } catch (err) {
+          // No owner line on that card rather than no card.
+          if (__DEV__) console.warn("[avenas] group owner", group.id, err);
+        }
+      }));
+      if (!isCancelled()) setGroupOwners(out);
+    });
+
+    // Everything, so a pull-to-refresh's spinner lasts until the page is
+    // actually up to date rather than until the first part finishes.
+    await Promise.all([trainerCard, rest, owners]);
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    void loadAll(() => cancelled);
     return () => { cancelled = true; };
-  }, []));
+  }, [loadAll]));
+
+  /** Pull down to re-read: new messages, a program your trainer sent back, a
+   *  group invite. Runs to completion, and always clears the spinner because
+   *  `loadAll` swallows its own failures. */
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    // The Messages badge too: it normally recounts on focus, which a pull
+    // isn't, so without this the one number you pulled for wouldn't move.
+    await Promise.all([loadAll(() => false), refreshUnread()]);
+    setRefreshing(false);
+  }, [loadAll, refreshUnread]);
 
   const openChat = () => {
     if (!pt) return;
@@ -202,6 +472,19 @@ export default function MyPTHome() {
   /** Join a group I was invited to. The group only becomes readable once the
    *  RPC returns, so the list is re-read rather than moved across optimistically
    *  — a failed accept must not leave a group card that opens to nothing. */
+  /** groupId → what's waiting on me in it. Same helper the trainer hub uses, so
+   *  a badge means the same thing on both sides. */
+  const groupAlerts = useMemo(
+    () => groupAlertCounts({
+      unreadByGroup: Object.fromEntries(groups.map(g => [g.group.id, g.unreadCount])),
+      shares,
+      // A gym user never picks up a group's reviews; that half is a coach's.
+      reviews: [],
+      myUid,
+    }),
+    [groups, shares, myUid],
+  );
+
   const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {
     try {
       await acceptGroupInvite(invite.groupId);
@@ -247,14 +530,89 @@ export default function MyPTHome() {
     Alert.alert("Program Updated", `"${entry.programName}" in your programs was updated with your trainer's edits.`);
   }, []);
 
-  const handleUnsendProgram = useCallback((entry: SentProgram) => {
+  /**
+   * Take a program someone sent me off this list.
+   *
+   * It's a hide on my side only (see DISMISSED_SHARES_KEY): an accepted copy
+   * stays in My Programs, and the trainer still sees it as sent. The prompt
+   * says which of those applies, because the two cases lose different things —
+   * nothing at all once it's accepted, the chance to accept it if it isn't.
+   */
+  const handleRemoveReceived = useCallback((entry: SharedProgram) => {
+    const accepted = !!entry.acceptedAtISO;
     Alert.alert(
-      "Unsend Program",
-      `Unsend "${entry.programName}" from your trainer? They will no longer see it.`,
+      "Remove Program",
+      accepted
+        ? `Remove "${entry.programName}" from this list? It stays in your programs.`
+        : `Remove "${entry.programName}" without accepting it? You won't be able to add it to your programs unless it's sent again.`,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Unsend",
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            const key = batchKeyOf(entry);
+            await dismissSharedBatch(key);
+            setReceived(prev => prev.filter(r => batchKeyOf(r) !== key));
+            // The badge counts from these too, so a removed program stops
+            // counting as waiting on me straight away.
+            setShares(prev => prev.filter(r => batchKeyOf(r) !== key));
+          },
+        },
+      ],
+    );
+  }, []);
+
+  // A review I sent splits across the two sections by whether it's come back:
+  // still waiting → "Sent to Trainer"; returned → "From Your Trainer", among
+  // the programs I've received, because it's now something a trainer has
+  // handed me. One place each, never both.
+  const pendingSent = useMemo(() => sent.filter(s => s.status !== "returned"), [sent]);
+  const returnedToMe = useMemo(
+    () => sent.filter(s => s.status === "returned" && !dismissedKeys.has(sentKeyOf(s))),
+    [sent, dismissedKeys],
+  );
+
+  /** Take a returned review off "From Your Trainer". A hide on this device, like
+   *  removing a received program. It never undoes applied changes, and if they
+   *  weren't applied your program just stays as it was. */
+  const handleRemoveReturned = useCallback((entry: SentProgram) => {
+    const applied = !!entry.appliedAtISO;
+    Alert.alert(
+      "Remove Program",
+      applied
+        ? `Remove "${entry.programName}" from this list? The changes stay in your programs.`
+        : `Remove "${entry.programName}" without accepting the changes? Your program stays as it was.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            const key = sentKeyOf(entry);
+            await dismissSharedBatch(key);
+            setDismissedKeys(prev => new Set(prev).add(key));
+          },
+        },
+      ],
+    );
+  }, []);
+
+  /** Where a returned review came from, for the line under its name. */
+  const returnedFrom = useCallback((s: SentProgram) => (
+    s.groupId ? (groups.find(g => g.group.id === s.groupId)?.group.name ?? "A group") : (pt?.name ?? "Your trainer")
+  ), [groups, pt]);
+
+  // Worded to match the button that opens it ("Remove"), and saying plainly
+  // that your own copy is safe, since that's the worry a red button raises.
+  const handleUnsendProgram = useCallback((entry: SentProgram) => {
+    Alert.alert(
+      "Remove Program",
+      `Remove "${entry.programName}" from your trainer? They won't see it any more. Your own copy stays in your programs.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
           style: "destructive",
           onPress: async () => {
             await removeSentProgram(entry.id);
@@ -285,7 +643,15 @@ export default function MyPTHome() {
       Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
       return;
     }
-    setSent(prev => [entry, ...prev]);
+    // Re-read rather than prepend `entry`: its `sent_…` id is only a local
+    // placeholder, and the cloud row it became has a uuid of its own. A card
+    // holding the placeholder can't be removed, because removeSentProgram
+    // treats a non-uuid id as a local entry, clears nothing in the cloud, and
+    // the program came back on the next load. The prepend is kept only as a
+    // fallback for a reload that fails, so a send that worked never looks lost.
+    const fresh = await loadSentPrograms();
+    const landed = fresh.some(s => sentKeyOf(s) === sentKeyOf(entry));
+    setSent(landed ? fresh : [entry, ...fresh]);
     Alert.alert("Sent", `"${program.name}" was sent to ${pt.name}.`);
   }, [pt]);
 
@@ -321,6 +687,15 @@ export default function MyPTHome() {
         // +14 top: same first-row line as PTHome (the my-trainers back/plus
         // chrome line) — keep the two hub views in sync.
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 14, paddingBottom: insets.bottom + 140 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={ACCT}
+            colors={[ACCT]}
+            progressViewOffset={insets.top}
+          />
+        }
       >
         <View style={styles.topPills}>
           <BounceButton
@@ -353,6 +728,26 @@ export default function MyPTHome() {
         </View>
 
         <Text style={[styles.title, { color: t.tp }]}>My Trainer</Text>
+
+        {/* The trainer hub's "Send a Program" button, in the same place: under
+            the page title, above the people you'd send to. It was a small "+"
+            beside the Sent to Trainer heading, halfway down the page. Hidden
+            only once we know there's no trainer, where the empty card's
+            "Connect a Trainer" is the one green action; while the trainer is
+            still resolving it holds its place so the card below doesn't jump,
+            and a tap in that moment does nothing. */}
+        {pt !== null && (
+          <BounceButton
+            style={{ marginTop: 16 }}
+            onPress={() => { if (pt) setSendOpen(true); }}
+            accessibilityLabel={pt ? `Send a program to ${pt.name} for review` : "Send a program to your trainer for review"}
+          >
+            <View style={styles.sendProgramBtn}>
+              <SendIcon size={18} color="#fff" />
+              <Text style={styles.sendProgramText}>Send a Program for Review</Text>
+            </View>
+          </BounceButton>
+        )}
 
         {pt === undefined ? (
           // Still resolving. Same card, same row, same height as the real one,
@@ -418,29 +813,177 @@ export default function MyPTHome() {
           </NeuCard>
         )}
 
-        <Pressable onPress={toggleFromTrainer} style={styles.sectionHeaderRow} accessibilityRole="button">
+        {/* Groups a trainer has put me in, directly under the trainer card:
+            people and places first, then the programs moving between them. It
+            sat at the foot of the page, below both program lists. The section
+            only exists once there's something in it: a gym user who has never
+            been added to one has no use for an empty Groups heading.
+
+            Invites sit above the joined groups and are the only thing here that
+            isn't a link — until you accept, there is no group page to open. */}
+        {(groups.length > 0 || groupInvites.length > 0) && (
+          <>
+            <Pressable onPress={toggleGroups} style={styles.sectionHeaderRow} accessibilityRole="button">
+              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Groups</Text>
+              <ChevronToggle expanded={!collapsedGroups} color={t.ts} />
+              {groupInvites.length > 0 && <UnreadBadge count={groupInvites.length} />}
+            </Pressable>
+            {!collapsedGroups && (
+              <>
+                {groupInvites.map(inv => (
+                  <GroupInviteCard
+                    key={inv.groupId}
+                    invite={inv}
+                    onAccept={handleAcceptInvite}
+                    onDecline={handleDeclineInvite}
+                  />
+                ))}
+                {/* One card per group, matching the invite cards directly
+                    above them and the trainer side's list. */}
+                {groups.map(g => {
+                  // Whose group it is, ahead of its size: with groups from
+                  // several trainers, that's what tells two apart.
+                  const owner = groupOwners[g.group.id];
+                  const members = `${g.group.memberCount} member${g.group.memberCount === 1 ? "" : "s"}`;
+                  const meta = g.group.isOwner ? `Your group · ${members}` : owner ? `Run by ${owner.name} · ${members}` : members;
+                  return (
+                  <BounceButton
+                    key={g.group.id}
+                    style={{ marginBottom: 10 }}
+                    onPress={() => router.navigate({ pathname: "/trainer/group/[id]", params: { id: g.group.id, name: g.group.name } })}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open group ${g.group.name}${owner ? `, run by ${owner.name}` : ""}`}
+                  >
+                    <NeuCard dark={isDark} radius={16}>
+                      <View style={styles.summaryRow}>
+                        <GroupAvatar uri={g.group.photoUri} size={30} isDark={isDark} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.group.name}</Text>
+                          <Text style={[styles.groupMeta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
+                        </View>
+                        {/* Unread messages plus any program sent into this
+                            group that I haven't accepted. A gym user picks up
+                            no reviews, so that third source is always 0 here. */}
+                        <UnreadBadge count={groupAlerts[g.group.id] ?? 0} />
+                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                      </View>
+                    </NeuCard>
+                  </BounceButton>
+                  );
+                })}
+              </>
+            )}
+          </>
+        )}
+
+        <Pressable
+          onPress={toggleFromTrainer}
+          style={styles.sectionHeaderRow}
+          accessibilityRole="button"
+          accessibilityLabel={`From Your Trainer, ${received.length + returnedToMe.length}. Toggle list`}
+        >
           <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>From Your Trainer</Text>
+          {/* The group page's section count: heading, count, chevron. Only when
+              there's something to count — an empty section already says so. */}
+          {received.length + returnedToMe.length > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{received.length + returnedToMe.length}</Text>
+            </View>
+          )}
           <ChevronToggle expanded={!collapsedFromTrainer} color={t.ts} />
         </Pressable>
-        {!collapsedFromTrainer ? (received.length === 0 ? (
+        {!collapsedFromTrainer ? (received.length === 0 && returnedToMe.length === 0 ? (
           // Only say "none" once we've actually looked; before that it's a lie.
           !programsLoaded ? null : <NeuCard dark={isDark} radius={16}>
             <Text style={[styles.smallEmpty, { color: t.ts }]}>No programs received yet.</Text>
           </NeuCard>
         ) : (
           <View>
+            {/* Reviews that have come back lead: they're the newest thing a
+                trainer has done for you, and usually the one to act on. */}
+            {returnedToMe.map(s => (
+              <ReturnedReviewCard
+                key={s.id}
+                review={s}
+                fromLabel={returnedFrom(s)}
+                isDark={isDark}
+                open={expandedCards.has(s.id)}
+                onToggle={() => toggleCard(s.id)}
+                onView={() => router.navigate(
+                  s.appliedAtISO
+                    ? { pathname: "/programs", params: { focus: s.programId } }
+                    : { pathname: "/program-view", params: { sentId: s.id } },
+                )}
+                onAccept={() => handleApplyReturned(s)}
+                onRemove={() => handleRemoveReturned(s)}
+              />
+            ))}
             {received.map(r => {
               const accepted = !!r.acceptedAtISO;
               // Was accepted at some point but the gym user deleted it from
               // /programs. acceptedAtISO is cleared on delete and
               // deletedByRecipientAtISO is stamped — see removeSharedProgramByLocalId.
               const wasDeleted = !accepted && !!r.deletedByRecipientAtISO;
-              const isExpanded = expandedReceived.has(r.id);
-              const cycle = r.programSnapshot?.cyclePattern ?? [];
 
-              // Shared top + cycle grid — used by every state.
-              const headerAndCycle = (
-                <>
+              // One row of actions, in the same order in every state: View,
+              // Accept (only while there's something to accept), Remove.
+              //
+              // View opens the program itself — or, once accepted, your copy in
+              // My Programs, since that's the one you'll be training from.
+              // Remove only takes it off THIS list: an accepted copy stays in
+              // My Programs, and the trainer's view doesn't change.
+              const actions = (
+                <View style={styles.actionRow}>
+                  <BounceButton
+                    style={{ flex: 1 }}
+                    onPress={() => router.navigate(
+                      accepted
+                        ? (r.acceptedProgramId ? { pathname: "/programs", params: { focus: r.acceptedProgramId } } : "/programs")
+                        : { pathname: "/program-view", params: { sharedId: r.id } }
+                    )}
+                    accessibilityLabel={accepted ? `Open ${r.programName} in your programs` : `View ${r.programName}`}
+                  >
+                    <View style={[styles.viewBtnInner, { backgroundColor: t.ctrl }]}>
+                      <Text style={[styles.viewBtnText, { color: t.tp }]}>View</Text>
+                    </View>
+                  </BounceButton>
+                  {!accepted && (
+                    <BounceButton
+                      style={{ flex: 1 }}
+                      onPress={() => handleAccept(r)}
+                      accessibilityLabel={`Accept ${r.programName}`}
+                    >
+                      <View style={[styles.viewBtnInner, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                        <Text style={[styles.viewBtnText, { color: "#fff" }]}>Accept</Text>
+                      </View>
+                    </BounceButton>
+                  )}
+                  <BounceButton
+                    onPress={() => handleRemoveReceived(r)}
+                    accessibilityLabel={`Remove ${r.programName} from this list`}
+                  >
+                    <View style={[styles.viewBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                      <TrashIcon size={16} color="#fff" />
+                      <Text style={[styles.viewBtnText, { color: "#fff" }]}>Remove</Text>
+                    </View>
+                  </BounceButton>
+                </View>
+              );
+
+              // One card for every state; only the line under the cycle differs,
+              // and every state opens to the same row. (The "was deleted" state
+              // used to be the only one behind a tap and the accepted one had no
+              // buttons, so the same program offered different things depending
+              // on its history.)
+              return (
+                <TapToOpenCard
+                  key={r.id}
+                  open={expandedCards.has(r.id)}
+                  onToggle={() => toggleCard(r.id)}
+                  isDark={isDark}
+                  label={`${r.programName}, ${accepted ? "accepted" : "received"}`}
+                  actions={actions}
+                >
                   <View style={styles.receivedTop}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
@@ -458,124 +1001,46 @@ export default function MyPTHome() {
                       </View>
                     )}
                   </View>
-                  {cycle.length > 0 && (
-                    <View style={styles.cycleGrid}>
-                      {cycle.map((day, i) => {
-                        const isTraining = day !== "Rest" && day !== "";
-                        return (
-                          <View
-                            key={i}
-                            style={[
-                              styles.cycleChip,
-                              isTraining
-                                ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                : { backgroundColor: t.div },
-                            ]}
-                          >
-                            <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                              {day || "Rest"}
-                            </Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  )}
-                </>
-              );
-
-              // Inline View + Accept buttons reused by both the "never accepted"
-              // state and the expanded body of the "was deleted" state.
-              const viewAcceptRow = (
-                <View style={styles.actionRow}>
-                  <BounceButton
-                    style={{ flex: 1 }}
-                    onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: r.id } })}
-                    accessibilityLabel={`View ${r.programName}`}
-                  >
-                    <View style={[styles.viewBtnInner, { backgroundColor: t.ctrl }]}>
-                      <Text style={[styles.viewBtnText, { color: t.tp }]}>View</Text>
-                    </View>
-                  </BounceButton>
-                  <BounceButton
-                    style={{ flex: 1 }}
-                    onPress={() => handleAccept(r)}
-                    accessibilityLabel={`Accept ${r.programName}`}
-                  >
-                    <View style={[styles.acceptCta, { backgroundColor: ACCT }]}>
-                      <Text style={styles.acceptCtaText}>Accept program</Text>
-                    </View>
-                  </BounceButton>
-                </View>
-              );
-
-              // ── ACCEPTED ──────────────────────────────────────────────
-              if (accepted) {
-                return (
-                  <TouchableOpacity
-                    key={r.id}
-                    activeOpacity={0.85}
-                    onPress={() => router.navigate(
-                      r.acceptedProgramId
-                        ? { pathname: "/programs", params: { focus: r.acceptedProgramId } }
-                        : "/programs"
-                    )}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open ${r.programName} in your programs`}
-                    style={{ marginBottom: 10 }}
-                  >
-                    <NeuCard dark={isDark} radius={16}>
-                      <View style={styles.receivedInner}>
-                        {headerAndCycle}
-                        <Text style={[styles.acceptedLine, { color: ACCT }]}>Added to your programs · Tap to view</Text>
-                      </View>
-                    </NeuCard>
-                  </TouchableOpacity>
-                );
-              }
-
-              // ── WAS DELETED (accepted-then-removed-from-/programs) ────
-              // Expand-on-tap dropdown with View + Accept Program (re-add).
-              if (wasDeleted) {
-                return (
-                  <Animated.View key={r.id} layout={LinearTransition.duration(220)}>
-                    <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                      <Pressable onPress={() => toggleReceived(r.id)} style={styles.receivedInner}>
-                        {headerAndCycle}
-                        <Text style={[styles.acceptedLine, { color: t.ts }]}>
-                          Removed from your programs · Tap to view or add back
-                        </Text>
-                        {isExpanded && (
-                          <Animated.View
-                            entering={FadeIn.duration(180)}
-                            exiting={FadeOut.duration(140)}
-                          >
-                            {viewAcceptRow}
-                          </Animated.View>
-                        )}
-                        <View style={styles.chevronRow}>
-                          <ChevronToggle expanded={isExpanded} color={t.ts} upDown />
-                        </View>
-                      </Pressable>
-                    </NeuCard>
-                  </Animated.View>
-                );
-              }
-
-              // ── NEVER ACCEPTED ────────────────────────────────────────
-              return (
-                <View key={r.id} style={{ marginBottom: 10 }}>
-                  <NeuCard dark={isDark} radius={16}>
-                    <View style={styles.receivedInner}>
-                      {headerAndCycle}
-                      {viewAcceptRow}
-                    </View>
-                  </NeuCard>
-                </View>
+                  <CycleGrid cycle={r.programSnapshot?.cyclePattern ?? []} isDark={isDark} />
+                  {accepted ? (
+                    <Text style={[styles.acceptedLine, { color: ACCT }]}>Added to your programs</Text>
+                  ) : wasDeleted ? (
+                    // Accepted once, then deleted from My Programs. Accept
+                    // here adds it back.
+                    <Text style={[styles.acceptedLine, { color: t.ts }]}>Removed from your programs</Text>
+                  ) : null}
+                </TapToOpenCard>
               );
             })}
           </View>
-        )) : received.length > 0 ? (
+        )) : received.length > 0 || returnedToMe.length > 0 ? (
           <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+            {/* Same order as the cards: returned reviews, then programs sent to
+                me. The divider logic counts across both, so the last row of
+                the combined list is the one without a line under it. */}
+            {returnedToMe.map((s, i) => {
+              const applied = !!s.appliedAtISO;
+              const isLast = i === returnedToMe.length - 1 && received.length === 0;
+              return (
+                <TouchableOpacity
+                  key={s.id}
+                  onPress={() => router.navigate(
+                    applied
+                      ? { pathname: "/programs", params: { focus: s.programId } }
+                      : { pathname: "/program-view", params: { sentId: s.id } },
+                  )}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={`View ${s.programName}, your program reviewed`}
+                  style={[styles.summaryRow, { borderBottomColor: t.div, borderBottomWidth: isLast ? 0 : 1 }]}
+                >
+                  <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
+                  <View style={[styles.statusPill, { backgroundColor: `${ACCT}22` }]}>
+                    <Text style={[styles.statusText, { color: ACCT }]}>{applied ? "Applied" : "Reviewed"}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
             {received.map((r, i) => {
               const accepted = !!r.acceptedAtISO;
               const wasDeleted = !accepted && !!r.deletedByRecipientAtISO;
@@ -606,140 +1071,86 @@ export default function MyPTHome() {
           </NeuCard>
         ) : null}
 
-        <View style={styles.sentHeaderRow}>
-          <Pressable onPress={toggleSentToTrainer} style={styles.sectionHeaderTap} accessibilityRole="button">
-            <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Sent to Trainer</Text>
-            <ChevronToggle expanded={!collapsedSentToTrainer} color={t.ts} />
-          </Pressable>
-          <BounceButton onPress={() => setSendOpen(true)} accessibilityLabel="Send a program to trainer">
-            <View style={[styles.addBtn, { backgroundColor: t.ctrl }]}>
-              <PlusIcon size={15} color={t.tp} />
+        {/* A plain heading now, like From Your Trainer: sending moved to the
+            green button at the top of the page. */}
+        <Pressable
+          onPress={toggleSentToTrainer}
+          style={styles.sectionHeaderRow}
+          accessibilityRole="button"
+          accessibilityLabel={`Sent to Trainer, ${pendingSent.length}. Toggle list`}
+        >
+          <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Sent to Trainer</Text>
+          {pendingSent.length > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{pendingSent.length}</Text>
             </View>
-          </BounceButton>
-        </View>
-        {!collapsedSentToTrainer ? (sent.length === 0 ? (
+          )}
+          <ChevronToggle expanded={!collapsedSentToTrainer} color={t.ts} />
+        </Pressable>
+        {!collapsedSentToTrainer ? (pendingSent.length === 0 ? (
           !programsLoaded ? null : <NeuCard dark={isDark} radius={16}>
             <Text style={[styles.smallEmpty, { color: t.ts }]}>{`You haven't sent any programs to your trainer yet.`}</Text>
           </NeuCard>
         ) : (
-          sent.map(s => {
-            const returned = s.status === "returned";
-            const applied = !!s.appliedAtISO;
-            const cycle = s.programSnapshot?.cyclePattern ?? [];
-            const isExpanded = expandedSent.has(s.id);
-
-            return (
-              <Animated.View key={s.id} layout={LinearTransition.duration(220)}>
-                <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                  <Pressable onPress={() => toggleSent(s.id)} style={styles.sentInner}>
-                    <View style={styles.sentTopRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
-                        {/* Where it went matters here: a program posted to a
-                            group could come back from any trainer in it, and
-                            the name is looked up live so a renamed group reads
-                            correctly on old sends. */}
-                        <Text style={[styles.itemMeta, { color: t.ts }]} numberOfLines={1}>
-                          Sent {fmtAgo(s.sentAtISO)}
-                          {s.groupId ? ` · ${groups.find(g => g.group.id === s.groupId)?.group.name ?? "a group"}` : ""}
-                          {returned && s.returnedAtISO ? ` · Returned ${fmtAgo(s.returnedAtISO)}` : ""}
-                        </Text>
-                      </View>
-                      {returned && applied ? (
-                        <View
-                          style={[
-                            styles.acceptBox,
-                            { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
-                          ]}
-                          accessibilityLabel="Changes applied"
-                        >
-                          <Ionicons name="checkmark" size={14} color="#fff" />
-                        </View>
-                      ) : returned ? (
-                        <View style={[styles.statusPill, { backgroundColor: `${ACCT}22` }]}>
-                          <Text style={[styles.statusText, { color: ACCT }]}>Returned</Text>
-                        </View>
-                      ) : (
-                        <View style={[styles.statusPill, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" }]}>
-                          <Text style={[styles.statusText, { color: t.ts }]}>Pending</Text>
-                        </View>
-                      )}
+          // Everything here is still waiting on a trainer: a review that's come
+          // back has moved up to "From Your Trainer", so these cards only ever
+          // offer View and Remove.
+          pendingSent.map(s => (
+            <TapToOpenCard
+              key={s.id}
+              open={expandedCards.has(s.id)}
+              onToggle={() => toggleCard(s.id)}
+              isDark={isDark}
+              label={`${s.programName}, awaiting review`}
+              actions={
+                <View style={styles.actionRow}>
+                  <BounceButton
+                    style={{ flex: 1 }}
+                    onPress={() => router.navigate({ pathname: "/program-view", params: { sentId: s.id } })}
+                    accessibilityLabel={`View ${s.programName}`}
+                  >
+                    <View style={[styles.viewBtnInner, { backgroundColor: t.ctrl }]}>
+                      <Text style={[styles.viewBtnText, { color: t.tp }]}>View</Text>
                     </View>
-                    {cycle.length > 0 && (
-                      <View style={styles.cycleGrid}>
-                        {cycle.map((day, i) => {
-                          const isTraining = day !== "Rest" && day !== "";
-                          return (
-                            <View
-                              key={i}
-                              style={[
-                                styles.cycleChip,
-                                isTraining
-                                  ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                  : { backgroundColor: t.div },
-                              ]}
-                            >
-                              <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                                {day || "Rest"}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                      </View>
-                    )}
-                    {returned && s.trainerComments ? (
-                      <View style={[styles.commentBox, { borderTopColor: t.div }]}>
-                        <Text style={[styles.commentLabel, { color: t.ts }]}>TRAINER COMMENTS</Text>
-                        <Text style={[styles.commentBody, { color: t.tp }]}>{s.trainerComments}</Text>
-                      </View>
-                    ) : null}
-                    {isExpanded && (
-                      <Animated.View
-                        entering={FadeIn.duration(180)}
-                        exiting={FadeOut.duration(140)}
-                        style={styles.actionRow}
-                      >
-                        {returned && !applied && (
-                          <BounceButton
-                            style={{ flex: 1 }}
-                            onPress={() => handleApplyReturned(s)}
-                            accessibilityLabel="Accept trainer's changes"
-                          >
-                            <View style={[styles.acceptCta, { backgroundColor: ACCT }]}>
-                              <Text style={styles.acceptCtaText}>Accept changes</Text>
-                            </View>
-                          </BounceButton>
-                        )}
-                        <BounceButton
-                          style={{ flex: 1 }}
-                          onPress={() => router.navigate({ pathname: "/program-view", params: { sentId: s.id } })}
-                          accessibilityLabel={`View ${s.programName}`}
-                        >
-                          <View style={[styles.viewBtnInner, { backgroundColor: t.ctrl }]}>
-                            <Text style={[styles.viewBtnText, { color: t.tp }]}>View</Text>
-                          </View>
-                        </BounceButton>
-                        <BounceButton
-                          onPress={() => handleUnsendProgram(s)}
-                          accessibilityLabel="Delete program"
-                        >
-                          <View style={[styles.viewBtnInner, styles.deleteSentBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
-                            <TrashIcon size={16} color="#fff" />
-                          </View>
-                        </BounceButton>
-                      </Animated.View>
-                    )}
-                    <View style={styles.chevronRow}>
-                      <ChevronToggle expanded={!isExpanded} color={t.ts} upDown />
+                  </BounceButton>
+                  {/* Labelled, like the trainer side's Remove. A bare bin was
+                      the one unlabelled action on the card, and a red square
+                      with no word on it reads as "delete", which this isn't:
+                      your own copy of the program stays. */}
+                  <BounceButton
+                    onPress={() => handleUnsendProgram(s)}
+                    accessibilityLabel={`Remove ${s.programName}`}
+                  >
+                    <View style={[styles.viewBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                      <TrashIcon size={16} color="#fff" />
+                      <Text style={[styles.viewBtnText, { color: "#fff" }]}>Remove</Text>
                     </View>
-                  </Pressable>
-                </NeuCard>
-              </Animated.View>
-            );
-          })
-        )) : sent.length > 0 ? (
+                  </BounceButton>
+                </View>
+              }
+            >
+              <View style={styles.receivedTop}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
+                  {/* Where it went matters here: a program posted to a group
+                      could come back from any trainer in it, and the name is
+                      looked up live so a renamed group reads correctly on old
+                      sends. */}
+                  <Text style={[styles.itemMeta, { color: t.ts }]} numberOfLines={1}>
+                    Sent {fmtAgo(s.sentAtISO)}
+                    {s.groupId ? ` · ${groups.find(g => g.group.id === s.groupId)?.group.name ?? "a group"}` : ""}
+                  </Text>
+                </View>
+                <View style={[styles.statusPill, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" }]}>
+                  <Text style={[styles.statusText, { color: t.ts }]}>Pending</Text>
+                </View>
+              </View>
+              <CycleGrid cycle={s.programSnapshot?.cyclePattern ?? []} isDark={isDark} />
+            </TapToOpenCard>
+          ))
+        )) : pendingSent.length > 0 ? (
           <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-            {sent.map((s, i) => {
+            {pendingSent.map((s, i) => {
               const applied = !!s.appliedAtISO;
               const returned = s.status === "returned";
               const label = applied ? "Applied" : returned ? "Returned" : "Awaiting review";
@@ -757,7 +1168,7 @@ export default function MyPTHome() {
                   accessibilityLabel={`Open ${s.programName}`}
                   style={[
                     styles.summaryRow,
-                    { borderBottomColor: t.div, borderBottomWidth: i === sent.length - 1 ? 0 : 1 },
+                    { borderBottomColor: t.div, borderBottomWidth: i === pendingSent.length - 1 ? 0 : 1 },
                   ]}
                 >
                   <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
@@ -772,59 +1183,6 @@ export default function MyPTHome() {
             })}
           </NeuCard>
         ) : null}
-
-        {/* Groups a trainer has put me in. The section only exists once there's
-            something in it: a gym user who has never been added to one has no
-            use for an empty Groups heading.
-
-            Invites sit above the joined groups and are the only thing here that
-            isn't a link — until you accept, there is no group page to open. */}
-        {(groups.length > 0 || groupInvites.length > 0) && (
-          <>
-            <Pressable onPress={toggleGroups} style={styles.sectionHeaderRow} accessibilityRole="button">
-              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Groups</Text>
-              <ChevronToggle expanded={!collapsedGroups} color={t.ts} />
-              {groupInvites.length > 0 && <UnreadBadge count={groupInvites.length} />}
-            </Pressable>
-            {!collapsedGroups && (
-              <>
-                {groupInvites.map(inv => (
-                  <GroupInviteCard
-                    key={inv.groupId}
-                    invite={inv}
-                    onAccept={handleAcceptInvite}
-                    onDecline={handleDeclineInvite}
-                  />
-                ))}
-                {/* One card per group, matching the invite cards directly
-                    above them and the trainer side's list. */}
-                {groups.map(g => (
-                  <BounceButton
-                    key={g.group.id}
-                    style={{ marginBottom: 10 }}
-                    onPress={() => router.navigate({ pathname: "/trainer/group/[id]", params: { id: g.group.id, name: g.group.name } })}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open group ${g.group.name}`}
-                  >
-                    <NeuCard dark={isDark} radius={16}>
-                      <View style={styles.summaryRow}>
-                        <GroupAvatar uri={g.group.photoUri} size={30} isDark={isDark} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.group.name}</Text>
-                          <Text style={[styles.groupMeta, { color: t.ts }]}>
-                            {g.group.memberCount} member{g.group.memberCount === 1 ? "" : "s"}
-                          </Text>
-                        </View>
-                        <UnreadBadge count={g.unreadCount} />
-                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                      </View>
-                    </NeuCard>
-                  </BounceButton>
-                ))}
-              </>
-            )}
-          </>
-        )}
       </ScrollView>
 
       <ProgramPickerSheet
@@ -876,7 +1234,6 @@ const styles = StyleSheet.create({
   // card and as a list row, and the two must land in the same place.
   itemName:     { ...CARD_TITLE },
   itemMeta:     { ...CARD_META },
-  receivedInner:{ ...CARD_INNER, gap: 10 },
   receivedTop:  { ...CARD_TOP },
   acceptBox:    { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4 },
@@ -889,20 +1246,23 @@ const styles = StyleSheet.create({
   // control surface for View, DANGER for Delete, same shape either way.
   viewBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   viewBtnText:  { fontFamily: FontFamily.bold, fontSize: 14 },
-  // Same geometry as viewBtnInner — the two always sit side by side, and any
-  // difference in height reads as a mistake rather than as emphasis.
-  acceptCta:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...pillGlow(ACCT, 0.4) },
-  acceptCtaText:{ fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
-  deleteSentBtn:{ width: 56 },
-  chevronRow:   { alignItems: "center", paddingTop: 2 },
-  sentHeaderRow:{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 24, marginBottom: 12 },
+  // TapToOpenCard, with the same numbers as the trainer hub's program cards
+  // (PTHome reviewInner / sharedActionRow / chevronRow). No `gap` on the inner:
+  // the content column carries its own, and the reveal and chevron are spaced
+  // explicitly, since a gap would reserve room around the closed reveal.
+  cardInner:    { ...CARD_INNER },
+  cardBody:     { gap: 10 },
+  revealBody:   { paddingTop: 12 },
+  chevronRow:   { alignItems: "center", marginTop: 10 },
   sectionHeaderRow:{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 12 },
-  sectionHeaderTap:{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
-  // Neutral chrome, matching the circular buttons on the trainer hub — a soft
-  // drop shadow rather than the ACCT glow reserved for primary green actions.
-  addBtn:       { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  sentInner:    { ...CARD_INNER, gap: 10 },
-  sentTopRow:   { ...CARD_TOP },
+  // A section's count, the group page's badge value for value
+  // (app/trainer/group/[id] countBadge), beside the same 18pt heading.
+  countBadge:     { minWidth: 24, height: 22, borderRadius: 11, paddingHorizontal: 7, alignItems: "center", justifyContent: "center", backgroundColor: ACCT },
+  countBadgeText: { fontFamily: FontFamily.bold, fontSize: 12, color: "#fff" },
+  // The trainer hub's "Send a Program" pill (PTHome broadcast / broadcastText),
+  // value for value, so the two sides' send buttons are the same button.
+  sendProgramBtn:  { ...pill(), gap: 10, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  sendProgramText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff", letterSpacing: 0.2 },
   commentBox:   { paddingTop: 10, borderTopWidth: 1, gap: 6 },
   commentLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.8 },
   commentBody:  { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },

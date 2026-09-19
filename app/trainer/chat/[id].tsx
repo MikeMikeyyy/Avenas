@@ -4,10 +4,14 @@
 // input bar) lives in components/trainer/ChatThreadView so this screen and the
 // group thread render the same UI. What stays here is what's specific to a
 // conversation with ONE person: the header, the realtime subscription filtered
-// to that peer, and the Report / Block / Remove-connection menu.
+// to that peer, the Report / Block / Remove-connection menu, and what a tap on
+// a message offers (delete your own, report theirs).
+//
+// All of it is ONE sheet with steps, not a sheet per job: two RN Modals mounted
+// on a screen at once is the bug where the second never presents again.
 
 import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Keyboard } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,11 +22,12 @@ import Avatar from "../../../components/Avatar";
 import ChatBubble from "../../../components/trainer/ChatBubble";
 import ChatThreadView from "../../../components/trainer/ChatThreadView";
 import SimpleSheet from "../../../components/trainer/SimpleSheet";
-import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
+import { ReportReasonList } from "../../../components/trainer/ReportReasonSheet";
+import MessageActions from "../../../components/trainer/MessageActions";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constants/theme";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
-import { loadThread, appendMessage, markThreadRead } from "../../../utils/chatStore";
+import { loadThread, appendMessage, markThreadRead, deleteMessage } from "../../../utils/chatStore";
 import { getMyUid, isCloudContactId, subscribeToInbound } from "../../../lib/chat";
 import { loadHiddenMessageIds, loadBlockedIds, blockContact, unaddContact, reportPerson, reportMessage } from "../../../utils/moderation";
 import type { ChatMessage, ReportReason } from "../../../constants/chat";
@@ -41,9 +46,14 @@ export default function ChatThreadScreen() {
   const contact = { id: contactId, name: displayName, initials: displayInitials };
 
   const [messages, setMessages] = useState<ChatMessage[]>([]); // newest-first
-  const [menuOpen, setMenuOpen] = useState(false);
-  // null = no report sheet open; the variant drives the reason picker's title.
-  const [report, setReport] = useState<{ kind: "user" } | { kind: "message"; msg: ChatMessage } | null>(null);
+  /** The one sheet, and which step it's on. null = closed. */
+  const [sheet, setSheet] = useState<
+    | { step: "menu" }
+    | { step: "message"; msg: ChatMessage }
+    | { step: "reasons"; target: { kind: "user" } | { kind: "message"; msg: ChatMessage } }
+    | null
+  >(null);
+  const closeSheet = useCallback(() => setSheet(null), []);
 
   // Re-fetch the thread (merged local + cloud) and mark it read. Used by the
   // focus effect and by the realtime subscription when a message arrives live.
@@ -91,10 +101,10 @@ export default function ChatThreadScreen() {
     }, [contactId, refresh]),
   );
 
-  const onReportUser = () => { setMenuOpen(false); setReport({ kind: "user" }); };
+  const onReportUser = () => setSheet({ step: "reasons", target: { kind: "user" } });
 
   const onBlock = () => {
-    setMenuOpen(false);
+    closeSheet();
     Alert.alert(
       `Block ${displayName}?`,
       "They'll be removed from your connections and can no longer message you. You can unblock them later in Settings.",
@@ -110,7 +120,7 @@ export default function ChatThreadScreen() {
   };
 
   const onUnadd = () => {
-    setMenuOpen(false);
+    closeSheet();
     Alert.alert(
       `Remove ${displayName}?`,
       "This removes your connection. Any programs already shared stay in your library.",
@@ -130,15 +140,48 @@ export default function ChatThreadScreen() {
     );
   };
 
-  const onLongPressMessage = useCallback((msg: ChatMessage) => {
-    if (msg.mine) return; // you only report messages from the other person
+  /** Tap (or press and hold) a message: what you can do with it. */
+  const openMessage = useCallback((msg: ChatMessage) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setReport({ kind: "message", msg });
+    // The sheet would otherwise open above a raised keyboard, half the screen up.
+    Keyboard.dismiss();
+    setSheet({ step: "message", msg });
   }, []);
 
+  /**
+   * Delete a message I sent. It stays in the thread as "You deleted this
+   * message", and as "Message deleted by …" on their side, with the words gone
+   * from the server. Shown at once and put back if the server refuses, so a
+   * deletion that didn't happen never looks like it did.
+   */
+  const onDeleteMessage = useCallback((msg: ChatMessage) => {
+    closeSheet();
+    Alert.alert(
+      "Delete message?",
+      `It will show as deleted for ${displayName} too.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setMessages(prev => prev.map(m => (m.id === msg.id ? { ...m, text: "", deleted: true } : m)));
+            try {
+              await deleteMessage(contactId, msg.id);
+            } catch (err) {
+              if (__DEV__) console.warn("[avenas] delete message", err);
+              setMessages(prev => prev.map(m => (m.id === msg.id ? msg : m)));
+              Alert.alert("Couldn't delete message", "Check your connection and try again.");
+            }
+          },
+        },
+      ],
+    );
+  }, [closeSheet, contactId, displayName]);
+
   const submitReport = async (reason: ReportReason) => {
-    const target = report;
-    setReport(null);
+    const target = sheet?.step === "reasons" ? sheet.target : null;
+    closeSheet();
     if (!target) return;
     if (target.kind === "message") {
       await reportMessage(contact, { id: target.msg.id, text: target.msg.text }, reason);
@@ -185,7 +228,7 @@ export default function ChatThreadScreen() {
         textStyle={[styles.avatarText, { color: ACCT }]}
       />
       <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
-      <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Conversation options" accessibilityRole="button">
+      <TouchableOpacity onPress={() => setSheet({ step: "menu" })} activeOpacity={0.8} accessibilityLabel="Conversation options" accessibilityRole="button">
         <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
           <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
         </View>
@@ -197,40 +240,53 @@ export default function ChatThreadScreen() {
     <FadeScreen style={{ backgroundColor: t.bg }}>
       <ChatThreadView
         messages={messages}
-        renderBubble={msg => <ChatBubble msg={msg} />}
+        renderBubble={msg => <ChatBubble msg={msg} authorName={displayName} onPress={() => openMessage(msg)} />}
         onSend={send}
-        onLongPressMessage={onLongPressMessage}
         placeholder={`Message ${displayName}…`}
         header={header}
       />
 
-      {/* Conversation options — Report / Block / Remove (Apple Guideline 1.2) */}
-      <SimpleSheet visible={menuOpen} onClose={() => setMenuOpen(false)}>
-        <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
-        <View style={styles.menu}>
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onReportUser} accessibilityRole="button" accessibilityLabel={`Report ${displayName}`}>
-            <Ionicons name="flag-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onBlock} accessibilityRole="button" accessibilityLabel={`Block ${displayName}`}>
-            <Ionicons name="ban-outline" size={20} color={DANGER} />
-            <Text style={[styles.menuText, { color: DANGER }]}>Block</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onUnadd} accessibilityRole="button" accessibilityLabel={`Remove ${displayName}`}>
-            <Ionicons name="person-remove-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Remove connection</Text>
-          </TouchableOpacity>
-        </View>
+      <SimpleSheet visible={sheet !== null} onClose={closeSheet}>
+        {sheet?.step === "message" ? (
+          // A tapped message: delete it if it's mine, report it if it's theirs.
+          <MessageActions
+            message={sheet.msg}
+            authorName={displayName}
+            onDelete={() => onDeleteMessage(sheet.msg)}
+            onReport={() => setSheet({ step: "reasons", target: { kind: "message", msg: sheet.msg } })}
+          />
+        ) : sheet?.step === "reasons" ? (
+          <ReportReasonList
+            title={sheet.target.kind === "message" ? "Report message" : `Report ${displayName}`}
+            onSubmit={submitReport}
+            onCancel={closeSheet}
+          />
+        ) : (
+          // Conversation options — Report / Block / Remove (Apple Guideline 1.2)
+          <>
+            <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
+            <View style={styles.menu}>
+              <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onReportUser} accessibilityRole="button" accessibilityLabel={`Report ${displayName}`}>
+                <Ionicons name="flag-outline" size={20} color={t.tp} />
+                <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>
+              </TouchableOpacity>
+              <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+              <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onBlock} accessibilityRole="button" accessibilityLabel={`Block ${displayName}`}>
+                <Ionicons name="ban-outline" size={20} color={DANGER} />
+                <Text style={[styles.menuText, { color: DANGER }]}>Block</Text>
+              </TouchableOpacity>
+              <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+              <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onUnadd} accessibilityRole="button" accessibilityLabel={`Remove ${displayName}`}>
+                <Ionicons name="person-remove-outline" size={20} color={t.tp} />
+                <Text style={[styles.menuText, { color: t.tp }]}>Remove connection</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.menuHint, { color: t.ts }]}>
+              Tap any message to delete it or report it.
+            </Text>
+          </>
+        )}
       </SimpleSheet>
-
-      <ReportReasonSheet
-        visible={report !== null}
-        title={report?.kind === "message" ? "Report message" : `Report ${displayName}`}
-        onSubmit={submitReport}
-        onClose={() => setReport(null)}
-      />
     </FadeScreen>
   );
 }
@@ -246,4 +302,6 @@ const styles = StyleSheet.create({
   menuRow:    { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
   menuDivider:{ height: 1, marginHorizontal: 8 },
   menuText:   { fontFamily: FontFamily.semibold, fontSize: 16 },
+  // The group chat's menu hint, value for value.
+  menuHint:   { fontFamily: FontFamily.regular, fontSize: 12, textAlign: "center", paddingHorizontal: 24, paddingTop: 10 },
 });

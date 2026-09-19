@@ -16,6 +16,7 @@ import BounceButton from "./BounceButton";
 import SegmentedControl from "./SegmentedControl";
 import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import { pill, pillGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { niceAxis } from "../utils/niceAxis";
 import { MONTH_NAMES } from "../utils/dates";
@@ -666,27 +667,16 @@ const styles = StyleSheet.create({
     gap: 8,
   },
 
-  // "See exercise history" — primary ACCT-filled CTA. The shadow glow
-  // matches the active metric button so primary actions feel consistent
-  // across the page. Sits clearly apart from the surrounding NeuCards.
+  // "See exercise history" — primary ACCT-filled CTA, in the canonical pill
+  // shape (constants/buttons.ts). It was a hand-rolled 20-radius box with its
+  // own padding and glow, which made it the one squared-off primary button on
+  // the page — and a different button from the exercise summary's own "See
+  // Exercise History", which already used pill() + pillGlow. Same numbers now.
   historyBtnWrap: {
     marginTop: 14,
     marginHorizontal: 20,
   },
-  historyBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    gap: 10,
-    borderRadius: 20,
-    backgroundColor: ACCT,
-    shadowColor: ACCT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 8,
-    elevation: 8,
-  },
+  historyBtn: { ...pill(), paddingHorizontal: 18, gap: 10, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4), elevation: 8 },
   historyBtnLabel: {
     fontFamily: FontFamily.bold,
     fontSize: 15,

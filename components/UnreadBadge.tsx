@@ -4,7 +4,8 @@
 // over a button corner).
 
 import { View, Text, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
-import { DANGER, FontFamily } from "../constants/theme";
+import { DANGER_BRIGHT, FontFamily } from "../constants/theme";
+import { haloGlow } from "../constants/buttons";
 
 export default function UnreadBadge({ count, style }: { count: number; style?: StyleProp<ViewStyle> }) {
   if (count <= 0) return null;
@@ -21,12 +22,18 @@ export default function UnreadBadge({ count, style }: { count: number; style?: S
 }
 
 const styles = StyleSheet.create({
+  // The app's red, glowing: the same DANGER_BRIGHT fill and centred halo the
+  // red buttons wear (Remove, Delete), so an unread count reads as part of that
+  // family instead of a flat dot pasted on. A halo rather than pillGlow's
+  // downward drop — on something this small a drop shadow looks like it's
+  // floating off the button it belongs to; an even glow keeps it pinned there.
   badge: {
     minWidth: 18,
     height: 18,
     borderRadius: 9,
     paddingHorizontal: 5,
-    backgroundColor: DANGER,
+    backgroundColor: DANGER_BRIGHT,
+    ...haloGlow(DANGER_BRIGHT),
     alignItems: "center",
     justifyContent: "center",
   },

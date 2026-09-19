@@ -29,35 +29,43 @@ export async function getMyUid(): Promise<string | null> {
 const toChatMessage = (r: MessageRow, uid: string): ChatMessage => ({
   id: r.id,
   mine: r.sender_id === uid,
-  text: r.body,
+  // The server blanks a deleted body; this is belt and braces for a row read
+  // mid-way, so a deleted message can never render its old text.
+  text: r.deleted_at ? "" : r.body,
   sentAtISO: r.created_at,
+  deleted: !!r.deleted_at,
 });
 
-/** All of my cloud messages grouped per peer, oldest → newest per thread. */
+/** All of my cloud messages grouped per peer, oldest → newest per thread.
+ *  Fetched newest first and reversed: the API caps a read at 1000 rows, and
+ *  oldest-first meant that past that the rows dropped were the NEWEST — the
+ *  ones the conversation previews and unread badges are built from. */
 export async function fetchAllCloudThreads(uid: string): Promise<ChatThreads> {
   const { data, error } = await supabase
     .from("messages")
     .select("*")
     .or(`sender_id.eq.${uid},recipient_id.eq.${uid}`)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false });
   if (error) throw new Error(`load messages: ${error.message}`);
   const out: ChatThreads = {};
   for (const r of (data as MessageRow[] | null) ?? []) {
     const peer = r.sender_id === uid ? r.recipient_id : r.sender_id;
     (out[peer] ??= []).push(toChatMessage(r, uid));
   }
+  for (const peer of Object.keys(out)) out[peer].reverse(); // → oldest → newest
   return out;
 }
 
-/** One conversation with `otherId`, oldest → newest. */
+/** One conversation with `otherId`, oldest → newest. Newest first then
+ *  reversed, for the same row cap: a long thread keeps its latest messages. */
 export async function fetchCloudThread(uid: string, otherId: string): Promise<ChatMessage[]> {
   const { data, error } = await supabase
     .from("messages")
     .select("*")
     .or(`and(sender_id.eq.${uid},recipient_id.eq.${otherId}),and(sender_id.eq.${otherId},recipient_id.eq.${uid})`)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false });
   if (error) throw new Error(`load thread: ${error.message}`);
-  return ((data as MessageRow[] | null) ?? []).map(r => toChatMessage(r, uid));
+  return ((data as MessageRow[] | null) ?? []).map(r => toChatMessage(r, uid)).reverse();
 }
 
 /** Insert one message; returns the stored row mapped for the UI. Throws when
@@ -82,6 +90,14 @@ export async function sendCloudBroadcast(uid: string, otherIds: string[], body: 
   if (error) throw new Error(`send broadcast: ${error.message}`);
 }
 
+/** Delete a message I sent (migration 0031): the server blanks its text and
+ *  marks it deleted, and both sides then show "Message deleted" in its place.
+ *  Throws when it didn't happen (offline, or not my message). */
+export async function deleteCloudMessage(messageId: string): Promise<void> {
+  const { error } = await supabase.rpc("delete_message", { p_message_id: messageId });
+  if (error) throw new Error(`delete message: ${error.message}`);
+}
+
 /** peer_id → last_read_at for my account ({} when none). */
 export async function fetchCloudReads(uid: string): Promise<ChatReads> {
   const { data, error } = await supabase
@@ -102,16 +118,30 @@ export async function markCloudThreadRead(uid: string, peerId: string): Promise<
   if (error) throw new Error(`mark thread read: ${error.message}`);
 }
 
+/** Makes every inbound channel name unique; see subscribeToInbound. */
+let inboundSeq = 0;
+
 /** Live inbound messages: fires with the sender's id on every INSERT addressed
- *  to me (Postgres Changes respects the RLS select policy). Returns an
- *  unsubscribe. The open thread uses this to refresh without waiting for a
- *  refocus; delivery still works without it via the focus-effect reloads. */
+ *  to me (Postgres Changes respects the RLS select policy), and on every UPDATE
+ *  to one — which is a deletion, the only update a message can get (0031) — so
+ *  an open thread shows "Message deleted" the moment the other side deletes.
+ *  Returns an unsubscribe. The open thread uses this to refresh without waiting
+ *  for a refocus; delivery still works without it via the focus-effect reloads. */
 export function subscribeToInbound(uid: string, onInbound: (senderId: string) => void): () => void {
+  const filter = `recipient_id=eq.${uid}`;
+  // Unique per call: supabase.channel(name) returns an existing channel of the
+  // same name, including one still closing from the last visit, whose new
+  // listeners then never fire. See lib/groups.ts:subscribeToGroup.
   const channel = supabase
-    .channel(`inbound_messages_${uid}`)
+    .channel(`inbound_messages_${uid}_${++inboundSeq}`)
     .on(
       "postgres_changes",
-      { event: "INSERT", schema: "public", table: "messages", filter: `recipient_id=eq.${uid}` },
+      { event: "INSERT", schema: "public", table: "messages", filter },
+      payload => onInbound((payload.new as MessageRow).sender_id),
+    )
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "messages", filter },
       payload => onInbound((payload.new as MessageRow).sender_id),
     )
     .subscribe();

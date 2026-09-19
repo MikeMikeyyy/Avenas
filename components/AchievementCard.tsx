@@ -19,6 +19,7 @@ import BounceButton from "./BounceButton";
 import DumbbellIcon from "./DumbbellIcon";
 import ExpandReveal, { useReveal, useRevealChevron } from "./ExpandReveal";
 import { APP_DARK, APP_LIGHT, ACCT, AURORA, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
+import { pill, pillGlow, PILL_H_XS } from "../constants/buttons";
 import { getTier } from "../constants/streakTiers";
 import type { Achievement } from "../constants/achievements";
 import { describeAchievement, formatPRLine } from "../utils/achievements";
@@ -122,16 +123,20 @@ function AchievementCard({ achievement, isDark, isKg, onOpenWorkout }: {
                 <Text style={[styles.prValue, { color: t.ts }]} numberOfLines={1}>{formatPRLine(pr, isKg)}</Text>
               </View>
             ))}
-            <TouchableOpacity
-              onPress={onOpenWorkout}
-              activeOpacity={0.7}
+            {/* A real button, not green text: it's the one action on this card,
+                and the app's primary action everywhere else is an ACCT pill
+                with white text and the accent glow. */}
+            <BounceButton
               style={styles.viewRow}
+              onPress={onOpenWorkout}
               accessibilityRole="button"
               accessibilityLabel="View the workout these PRs were set in"
             >
-              <Text style={[styles.viewText, { color: ACCT }]}>View workout</Text>
-              <Ionicons name="chevron-forward" size={13} color={ACCT} />
-            </TouchableOpacity>
+              <View style={[styles.viewBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                <Text style={styles.viewText}>View workout</Text>
+                <Ionicons name="chevron-forward" size={14} color="#fff" />
+              </View>
+            </BounceButton>
           </ExpandReveal>
         </View>
       </NeuCard>
@@ -153,6 +158,12 @@ const styles = StyleSheet.create({
   prRow:     { gap: 1 },
   prName:    { fontFamily: FontFamily.semibold, fontSize: 13 },
   prValue:   { fontFamily: FontFamily.regular, fontSize: 12 },
-  viewRow:   { flexDirection: "row", alignItems: "center", gap: 3, paddingTop: 4 },
-  viewText:  { fontFamily: FontFamily.semibold, fontSize: 13 },
+  // Bottom right: the list above is indented to the title, so a left-aligned
+  // pill sat in that indent looking like one more PR line. At the right edge it
+  // reads as where the card ends and what to do next, the same corner the
+  // program pages' Summary pill and most sheets' confirm live in. alignSelf
+  // keeps it only as wide as its label rather than the card.
+  viewRow:   { alignSelf: "flex-end", marginTop: 8 },
+  viewBtn:   { ...pill(PILL_H_XS), gap: 4, paddingHorizontal: 14 },
+  viewText:  { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
 });

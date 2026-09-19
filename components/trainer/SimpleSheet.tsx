@@ -64,6 +64,13 @@ export default function SimpleSheet({ visible, onClose, children }: Props) {
         Animated.timing(slideY, { toValue: 0, duration: 340, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
         Animated.timing(backdropOpacity, { toValue: 1, duration: 280, useNativeDriver: true }),
       ]).start();
+    } else {
+      // Closed by the parent rather than by a swipe or backdrop tap (which
+      // reset these at the end of their own animation): the Modal goes at once
+      // and leaves the sheet at its open position, so the NEXT open had nothing
+      // to slide from and just appeared. Put it back below the screen.
+      slideY.setValue(600);
+      backdropOpacity.setValue(0);
     }
   }, [visible]);
 

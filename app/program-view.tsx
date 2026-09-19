@@ -1,6 +1,6 @@
 // Read-only viewer for a SharedProgram's snapshot — walks each non-rest day
 // in the cycle and lists its exercises + sets. Reached by tapping a shared-
-// program card on either PTHome ("Programs You've Sent") or the My Coaches
+// program card on either PTHome ("Programs Sent") or the My Coaches
 // page ("From Your Coaches"). Action buttons (Edit / Delete / Accept / Send
 // to clients) are surfaced contextually based on whether the share is the
 // trainer's own outgoing share or one received from a coach.
@@ -19,12 +19,13 @@ import { scheduleCloudPush } from "../lib/syncManager";
 import FadeScreen from "../components/FadeScreen";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import ProgramHeaderCard from "../components/ProgramHeaderCard";
 import ProgramSnapshotView from "../components/ProgramSnapshotView";
 import ProgramActionFabs from "../components/ProgramActionFabs";
 import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import { pill, PILL_H_SM } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
@@ -35,15 +36,19 @@ import {
   acceptSharedProgram,
   appendSharedPrograms,
   applyReturnedProgram,
+  batchKeyOf,
   loadClients,
+  loadGroupSharedPrograms,
   loadSentPrograms,
   loadSharedPrograms,
+  removeGroupSharedProgramBatch,
   removeSharedProgram,
   type Client,
   type SentProgram,
   type SharedProgram,
 } from "../utils/trainerStore";
 import { getJSON } from "../utils/storage";
+import { removeShareConfirm } from "../utils/removeShare";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 
 export default function ProgramViewScreen() {
@@ -150,6 +155,9 @@ export default function ProgramViewScreen() {
    * an effect body is what triggers cascading renders.
    */
   const canDelete = isOutgoing || (!!shareGroupId && !!groupRole && canCoachGroup(groupRole));
+  /** The widest of the round buttons pinned across the top: the back button
+   *  alone (40 + gap), or Edit and Remove side by side on the right. */
+  const topChromeW = isOutgoing ? 88 : 44;
 
   // Snapshot + title come from whichever record was loaded.
   const snapshot = share?.programSnapshot ?? sent?.programSnapshot ?? null;
@@ -196,15 +204,60 @@ export default function ProgramViewScreen() {
     router.navigate({ pathname: "/new-program", params: { sharedId: share.id } });
   }, [router, share]);
 
-  const handleDelete = useCallback(() => {
+  const handleDelete = useCallback(async () => {
     if (!share) return;
-    Alert.alert(
-      "Unsend Program",
-      `Unsend "${share.programName}"? ${share.acceptedAtISO ? "The recipient already accepted it — their copy will stay in their library." : "They will no longer see it."}`,
-      [
-        { text: "Cancel", style: "cancel" },
+
+    // A GROUP send is one program in the group, however it was opened here:
+    // the bin takes it out of the group for everyone, exactly like the group
+    // page's Remove. It used to go through removeSharedProgram, which only
+    // knows "I sent it" vs "I received it": the group's OWNER removing another
+    // trainer's send was treated as a recipient and only hid their own copy (so
+    // nothing visibly happened), and the sender removed one member's copy out of
+    // many. canDelete already limits the bin to the sender or a group coach.
+    if (share.groupId) {
+      const groupId = share.groupId;
+      const key = batchKeyOf(share);
+      const batch = (await loadGroupSharedPrograms(groupId).catch(() => [] as SharedProgram[]))
+        .filter(s => batchKeyOf(s) === key);
+      const prompt = removeShareConfirm({
+        programName: share.programName,
+        recipients: "this group",
+        total: batch.length || 1,
+        accepted: batch.length ? batch.filter(s => s.acceptedAtISO).length : (share.acceptedAtISO ? 1 : 0),
+      });
+      Alert.alert(prompt.title, prompt.body, [
+        { text: prompt.cancel, style: "cancel" },
         {
-          text: "Unsend",
+          text: prompt.confirm,
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await removeGroupSharedProgramBatch(groupId, key);
+            } catch (e) {
+              Alert.alert("Couldn't remove program", e instanceof Error ? e.message : "Check your connection and try again.");
+              return;
+            }
+            router.back();
+          },
+        },
+      ]);
+      return;
+    }
+
+    // A direct send: this screen shows ONE row, so it's one recipient.
+    const prompt = removeShareConfirm({
+      programName: share.programName,
+      recipients: "them",
+      total: 1,
+      accepted: share.acceptedAtISO ? 1 : 0,
+    });
+    Alert.alert(
+      prompt.title,
+      prompt.body,
+      [
+        { text: prompt.cancel, style: "cancel" },
+        {
+          text: prompt.confirm,
           style: "destructive",
           onPress: async () => {
             await removeSharedProgram(share.id);
@@ -276,7 +329,7 @@ export default function ProgramViewScreen() {
 
       <TouchableOpacity
         onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
+        style={{ position: "absolute", top: insets.top + 16, left: 20, zIndex: 10 }}
         activeOpacity={0.8}
         accessibilityLabel="Go back"
         accessibilityRole="button"
@@ -292,7 +345,7 @@ export default function ProgramViewScreen() {
           sender, plus anyone who coaches the group it went to, so a program can
           be pulled out of a group by whoever runs it. Members get neither. */}
       {canDelete && (
-        <View style={[styles.topActions, { top: insets.top + 14 }]}>
+        <View style={[styles.topActions, { top: insets.top + 16 }]}>
           {isOutgoing && (
           <TouchableOpacity
             onPress={handleEdit}
@@ -308,7 +361,7 @@ export default function ProgramViewScreen() {
           <TouchableOpacity
             onPress={handleDelete}
             activeOpacity={0.8}
-            accessibilityLabel="Delete program"
+            accessibilityLabel="Remove program"
             accessibilityRole="button"
           >
             <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
@@ -328,12 +381,16 @@ export default function ProgramViewScreen() {
           paddingBottom: insets.bottom + (showFloatingAccept ? 170 : 100),
         }}
       >
+        {/* A screen title in the review screen's style, with the program's name
+            on the card below rather than up here: the two screens show the
+            same program from the two ends of one flow, so they open the same
+            way. The spacers match the widest chrome either side (the back
+            button, or Edit + Remove on the right) so the title stays centred
+            and clear of both. */}
         <View style={styles.header}>
-          <View style={{ width: 44 }} />
-          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>
-            {snapshot?.name ?? headerName}
-          </Text>
-          <View style={{ width: 44 }} />
+          <View style={{ width: topChromeW }} />
+          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>View Program</Text>
+          <View style={{ width: topChromeW }} />
         </View>
 
         {!loaded ? null : (!share && !sent) ? (
@@ -342,88 +399,85 @@ export default function ProgramViewScreen() {
               This program is no longer available.
             </Text>
           </NeuCard>
-        ) : !snapshot ? (
-          <NeuCard dark={isDark} radius={16}>
-            <Text style={[styles.bodyText, { color: t.ts, padding: 18, textAlign: "center" }]}>
-              No program details to show.
-            </Text>
-          </NeuCard>
         ) : (
           <>
-            <View style={styles.metaRow}>
-              <Text style={[styles.metaText, { color: t.ts }]}>
-                {snapshot.totalWeeks} week{snapshot.totalWeeks === 1 ? "" : "s"} · {snapshot.trainingDays} training day{snapshot.trainingDays === 1 ? "" : "s"} · {snapshot.cycleDays}-day cycle
-              </Text>
-            </View>
+            {/* Name, weeks, training days and cycle length: the same card the
+                review screen opens with (components/ProgramHeaderCard.tsx). It
+                also says so when a legacy row has no details to show. */}
+            <ProgramHeaderCard name={snapshot?.name ?? headerName} snapshot={snapshot} isDark={isDark} />
 
-            {/* The program itself, drawn by the same component the trainer's
-                review screen uses — the two are the same program seen from the
-                two ends of one flow, and must read identically. */}
-            <ProgramSnapshotView
-              snapshot={snapshot}
-              isDark={isDark}
-              afterCycle={
-                /* Trainer comments on a returned SentProgram — surfaced near the
-                   top because the user is here specifically to consider those
-                   edits before applying them. */
-                sentReturned && sent?.trainerComments ? (
-                  <NeuCard dark={isDark} radius={14} style={{ marginBottom: 18 }}>
-                    <View style={styles.commentBox}>
-                      <Text style={[styles.commentLabel, { color: t.ts }]}>TRAINER COMMENTS</Text>
-                      <Text style={[styles.commentBody, { color: t.tp }]}>{sent.trainerComments}</Text>
-                    </View>
-                  </NeuCard>
-                ) : null
-              }
-            />
+            {snapshot && (
+              <View style={styles.programBody}>
+                {/* The program itself, drawn by the same component the trainer's
+                    review screen uses — the two are the same program seen from the
+                    two ends of one flow, and must read identically. */}
+                <ProgramSnapshotView
+                  snapshot={snapshot}
+                  isDark={isDark}
+                  afterCycle={
+                    /* Trainer comments on a returned SentProgram — surfaced near the
+                       top because the user is here specifically to consider those
+                       edits before applying them. */
+                    sentReturned && sent?.trainerComments ? (
+                      <NeuCard dark={isDark} radius={14} style={{ marginBottom: 18 }}>
+                        <View style={styles.commentBox}>
+                          <Text style={[styles.commentLabel, { color: t.ts }]}>TRAINER COMMENTS</Text>
+                          <Text style={[styles.commentBody, { color: t.tp }]}>{sent.trainerComments}</Text>
+                        </View>
+                      </NeuCard>
+                    ) : null
+                  }
+                />
 
-            {/* Action row — contextual to which record (shared vs sent) and
-                its current state. Skipped for outgoing shares (Edit + Delete
-                live in the top-right header) and for any state with a floating
-                bottom Accept CTA (handled below). */}
-            {!isOutgoing && !showFloatingAccept && (
-            <View style={styles.actionsWrap}>
-              {isSent ? (
-                sentReturned ? (
-                  <BounceButton
-                    style={{ flex: 1 }}
-                    onPress={() => router.navigate({ pathname: "/programs", params: { focus: sent!.programId } })}
-                  >
-                    <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                      <Text style={styles.primaryBtnText}>Open in My Programs</Text>
-                    </View>
-                  </BounceButton>
-                ) : (
-                  <View style={[styles.statusInfo, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
-                    <Ionicons name="time-outline" size={16} color={t.ts} />
-                    <Text style={[styles.statusInfoText, { color: t.ts }]}>Awaiting trainer review</Text>
-                  </View>
-                )
-              ) : accepted ? (
-                accountType === "pt" ? (
-                  <BounceButton style={{ flex: 1 }} onPress={handleOpenPassDown}>
-                    <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                      <Ionicons name="paper-plane-outline" size={16} color="#fff" />
-                      <Text style={styles.primaryBtnText}>Send to my clients</Text>
-                    </View>
-                  </BounceButton>
-                ) : (
-                  <BounceButton
-                    style={{ flex: 1 }}
-                    onPress={() => router.navigate(
-                      share?.acceptedProgramId
-                        ? { pathname: "/programs", params: { focus: share.acceptedProgramId } }
-                        : "/programs"
-                    )}
-                  >
-                    <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                      <Ionicons name="folder-open-outline" size={16} color="#fff" />
-                      <Text style={styles.primaryBtnText}>Open in My Programs</Text>
-                    </View>
-                  </BounceButton>
-                )
-              ) : null}
-            </View>
+                {/* Action row — contextual to which record (shared vs sent) and
+                    its current state. Skipped for outgoing shares (Edit + Delete
+                    live in the top-right header) and for any state with a floating
+                    bottom Accept CTA (handled below). */}
+                {!isOutgoing && !showFloatingAccept && (
+                <View style={styles.actionsWrap}>
+                  {isSent ? (
+                    sentReturned ? (
+                      <BounceButton
+                        style={{ flex: 1 }}
+                        onPress={() => router.navigate({ pathname: "/programs", params: { focus: sent!.programId } })}
+                      >
+                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                          <Text style={styles.primaryBtnText}>Open in My Programs</Text>
+                        </View>
+                      </BounceButton>
+                    ) : (
+                      <View style={[styles.statusInfo, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
+                        <Ionicons name="time-outline" size={16} color={t.ts} />
+                        <Text style={[styles.statusInfoText, { color: t.ts }]}>Awaiting trainer review</Text>
+                      </View>
+                    )
+                  ) : accepted ? (
+                    accountType === "pt" ? (
+                      <BounceButton style={{ flex: 1 }} onPress={handleOpenPassDown}>
+                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                          <Ionicons name="paper-plane-outline" size={16} color="#fff" />
+                          <Text style={styles.primaryBtnText}>Send to my clients</Text>
+                        </View>
+                      </BounceButton>
+                    ) : (
+                      <BounceButton
+                        style={{ flex: 1 }}
+                        onPress={() => router.navigate(
+                          share?.acceptedProgramId
+                            ? { pathname: "/programs", params: { focus: share.acceptedProgramId } }
+                            : "/programs"
+                        )}
+                      >
+                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                          <Ionicons name="folder-open-outline" size={16} color="#fff" />
+                          <Text style={styles.primaryBtnText}>Open in My Programs</Text>
+                        </View>
+                      </BounceButton>
+                    )
+                  ) : null}
+                </View>
+                )}
+              </View>
             )}
           </>
         )}
@@ -434,12 +488,16 @@ export default function ProgramViewScreen() {
           pointerEvents="box-none"
           style={[styles.floatingBtnWrap, { bottom: insets.bottom + 16 }]}
         >
+          {/* Slate, not green: it sits directly under the green Summary pill,
+              and two green buttons stacked read as one cluster with no clear
+              primary. Slate is the app's other primary colour, the same as
+              the builder's Create pill and "Open in Builder". */}
           <BounceButton
             onPress={showFloatingAcceptChanges ? handleApplyReturned : handleAccept}
             accessibilityLabel={showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
           >
-            <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-              <Text style={styles.primaryBtnText}>
+            <View style={[styles.primaryBtn, styles.slateBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
+              <Text style={[styles.primaryBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>
                 {showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
               </Text>
             </View>
@@ -497,22 +555,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
+  // Same as the review screen's title row: 40 tall so the title centres on the
+  // round buttons pinned beside it.
   header: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    height: 40,
+    marginBottom: 24,
   },
   screenTitle: {
     fontFamily: FontFamily.bold,
-    fontSize: 22,
+    fontSize: 17,
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
     textAlign: "center",
     flex: 1,
   },
-  metaRow: { marginBottom: 14, alignItems: "center" },
-  metaText: { fontFamily: FontFamily.regular, fontSize: 12 },
+  programBody: { marginTop: 18 },
 
-  // The cycle strip, day cards, exercise rows and set rows live in
-  // components/ProgramSnapshotView.tsx, along with the styles that drew them.
+  // The name card is components/ProgramHeaderCard.tsx; the cycle strip, day
+  // cards, exercise rows and set rows live in components/ProgramSnapshotView.tsx,
+  // along with the styles that drew them.
   bodyText: { fontFamily: FontFamily.regular, fontSize: 13 },
 
   actionsWrap: { flexDirection: "row", gap: 10, marginTop: 18 },
@@ -523,5 +586,8 @@ const styles = StyleSheet.create({
   commentBody: { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
   primaryBtn: { ...pill(PILL_H_SM), gap: 8, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   primaryBtnText: { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
+  // The slate pill's own shadow (components/ProgramActionFabs.tsx): a neutral
+  // drop rather than a coloured glow, which is reserved for accent buttons.
+  slateBtn: { shadowColor: "#000", shadowOpacity: 0.3 },
   floatingBtnWrap: { position: "absolute", left: 20, right: 20, zIndex: 20 },
 });

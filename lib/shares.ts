@@ -128,7 +128,11 @@ export async function setGroupReviewCompleted(id: string, done: boolean): Promis
 }
 
 /** Sender-only (RLS): unsend a share/review entirely. */
-export async function deleteShareRow(id: string): Promise<void> {
-  const { error } = await supabase.from("shared_programs").delete().eq("id", id);
+/** Delete one share row. Returns how many rows actually went (0 or 1): a delete
+ *  the policy doesn't allow is not an error to the API, just a no-op, so the
+ *  count is the only way a caller can tell "removed" from "silently refused". */
+export async function deleteShareRow(id: string): Promise<number> {
+  const { data, error } = await supabase.from("shared_programs").delete().eq("id", id).select("id");
   if (error) throw new Error(`delete share: ${error.message}`);
+  return data?.length ?? 0;
 }

@@ -55,6 +55,7 @@ export default function ExpandReveal({
   fade,
   open,
   pullTop = 0,
+  bleed = 0,
   contentStyle,
   children,
 }: {
@@ -64,6 +65,21 @@ export default function ExpandReveal({
   open: boolean;
   /** Pulls the revealed content this many points closer to the row above it. */
   pullTop?: number;
+  /**
+   * Room for what the content draws OUTSIDE its own box — a button's shadow or
+   * glow — on the sides and bottom.
+   *
+   * The clip is `overflow: hidden` and sized exactly to the content, so a
+   * glowing button at the content's edge has its glow cut off in a straight
+   * line where the box ends. With a bleed, the clip grows outward by that many
+   * points on those three sides while the content is padded back in by the
+   * same amount, so nothing visibly moves: the button sits where it did, and
+   * its shadow now has somewhere to go. The extra bottom space is taken back
+   * with a matching negative margin, scaled by progress, so the card below
+   * doesn't grow either. Keep it within the padding of whatever contains the
+   * reveal, or that container clips the glow instead.
+   */
+  bleed?: number;
   contentStyle?: StyleProp<ViewStyle>;
   children: React.ReactNode;
 }) {
@@ -72,6 +88,7 @@ export default function ExpandReveal({
   const clipStyle = useAnimatedStyle(() => ({
     height: height.value * progress.value,
     marginTop: -pullTop * progress.value,
+    marginBottom: -bleed * progress.value,
     opacity: fade.value,
   }));
 
@@ -80,14 +97,16 @@ export default function ExpandReveal({
   return (
     // Hidden from VoiceOver while closed: it's mounted, just clipped to 0.
     <Reanimated.View
-      style={[styles.clip, clipStyle]}
+      style={[styles.clip, bleed ? { marginHorizontal: -bleed } : null, clipStyle]}
       accessibilityElementsHidden={!open}
       importantForAccessibility={open ? "auto" : "no-hide-descendants"}
     >
       {/* Buttons inside stay mounted while closed, clipped to no height. A zero
-          height leaves nothing to hit, but this makes it explicit. */}
+          height leaves nothing to hit, but this makes it explicit. The bleed
+          padding comes BEFORE contentStyle, so a caller's own top padding
+          still applies alongside it. */}
       <View
-        style={[styles.content, contentStyle]}
+        style={[styles.content, bleed ? { paddingHorizontal: bleed, paddingBottom: bleed } : null, contentStyle]}
         onLayout={onLayout}
         pointerEvents={open ? "auto" : "none"}
       >

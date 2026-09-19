@@ -50,6 +50,18 @@ export const PT_SEEDED_KEY = "@avenas/pt/seeded_v2";
 export const ASSIGNED_PT_KEY = "@avenas/gym/assigned_pt";
 export const SENT_PROGRAMS_KEY = "@avenas/gym/sent_programs";
 
+// Programs sent TO me that I've removed from my received lists (the trainer
+// page's "From Your Trainer", a group's "Programs Sent", a trainer's My
+// Trainers page) — batchKeyOf() keys,
+// so one entry covers every row of that send. A review I sent that's come BACK
+// is in the same list under sentKeyOf(), since it shows among received ones. A recipient can't delete a share
+// row (the database allows only the sender or a group coach), and
+// deleted_by_recipient_at already means something else (you deleted your
+// accepted copy; the trainer sees "Removed"), so this is a hide on the
+// RECIPIENT's side only. The trainer's view is untouched, and an accepted copy
+// in My Programs is never affected. Local-only, never synced.
+export const DISMISSED_SHARES_KEY = "@avenas/gym/dismissed_shares";
+
 // Trainers a TRAINER receives programs from. Legacy/mock leftovers only — see
 // loadCoaches(); real ones come from the connections table.
 export const COACHES_KEY = "@avenas/pt/coaches";
@@ -354,14 +366,42 @@ async function loadLocalSharedPrograms(): Promise<SharedProgram[]> {
 export async function loadSharedPrograms(): Promise<SharedProgram[]> {
   const local = await loadLocalSharedPrograms();
   const cloud = await fetchCloudRowsSafe();
-  if (!cloud) return local;
+  if (!cloud) return withoutDismissed(local, null);
   const [isPT, meta] = await Promise.all([viewerIsPT(), loadShareMeta()]);
   const mapped = cloud.rows
     .filter(r => r.kind === "share")
     .map(r => rowToShared(r, cloud.uid, isPT, meta));
-  return [...mapped, ...local].sort(
+  return withoutDismissed([...mapped, ...local], cloud.uid).then(list => list.sort(
     (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
-  );
+  ));
+}
+
+/** Batch keys of programs sent to me that I've removed. See DISMISSED_SHARES_KEY. */
+export async function loadDismissedShareKeys(): Promise<Set<string>> {
+  return new Set(await getJSON<string[]>(DISMISSED_SHARES_KEY, []));
+}
+
+/** Remove a program someone sent me from my received lists. Hides that SEND —
+ *  every row sharing its batch key — on this device. Idempotent. */
+export async function dismissSharedBatch(batchKey: string): Promise<void> {
+  const keys = await getJSON<string[]>(DISMISSED_SHARES_KEY, []);
+  if (keys.includes(batchKey)) return;
+  await setJSON(DISMISSED_SHARES_KEY, [...keys, batchKey]);
+}
+
+/**
+ * Drop the sends I've removed, at the load layer, so every list, badge and
+ * lookup agrees without each screen filtering for itself: the received cards,
+ * a group's Programs Sent, and the group alert count (a program I removed is no
+ * longer "waiting on me").
+ *
+ * Only ever drops a row I RECEIVED. My own sends are never filtered, whatever
+ * is in the list — a trainer's outgoing history can't be hidden by accident.
+ */
+async function withoutDismissed(list: SharedProgram[], myUid: string | null): Promise<SharedProgram[]> {
+  const dismissed = await loadDismissedShareKeys();
+  if (dismissed.size === 0) return list;
+  return list.filter(s => !(dismissed.has(batchKeyOf(s)) && (!myUid || s.senderId !== myUid)));
 }
 
 /** Everything sent to one group, from the group's point of view rather than
@@ -377,21 +417,21 @@ export async function loadSharedPrograms(): Promise<SharedProgram[]> {
 export async function loadGroupSharedPrograms(groupId: string): Promise<SharedProgram[]> {
   const local = (await loadLocalSharedPrograms()).filter(s => s.groupId === groupId);
   const uid = await getMyUid().catch(() => null);
-  if (!uid) return local;
+  if (!uid) return withoutDismissed(local, null);
   let rows: SharedProgramRow[];
   try {
     rows = await fetchGroupShareRows(groupId);
   } catch (e) {
     warnShares("loadGroupShares", e);
-    return local;
+    return withoutDismissed(local, uid);
   }
   const [isPT, meta] = await Promise.all([viewerIsPT(), loadShareMeta()]);
   const mapped = rows
     .filter(r => r.kind === "share")
     .map(r => rowToShared(r, uid, isPT, meta));
-  return [...mapped, ...local].sort(
+  return withoutDismissed([...mapped, ...local], uid).then(list => list.sort(
     (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
-  );
+  ));
 }
 
 /** Send program shares. Entries addressed to REAL accounts (uuid clientId) go
@@ -428,6 +468,13 @@ export async function appendSharedPrograms(entries: SharedProgram[]): Promise<vo
 
 /** Stable grouping key — every entry created in a single send call shares the same sentAtISO. */
 export function batchKeyOf(s: SharedProgram): string {
+  return `${s.programId}|${s.sentAtISO}`;
+}
+
+/** The same key for a review I sent, once it's come back and sits in my
+ *  received list — so removing it there goes into the same dismissed list
+ *  (DISMISSED_SHARES_KEY) as a program a trainer sent me. */
+export function sentKeyOf(s: SentProgram): string {
   return `${s.programId}|${s.sentAtISO}`;
 }
 
@@ -521,8 +568,11 @@ export async function removeSharedProgramBatch(batchKey: string): Promise<void> 
  *  correct for "unsend mine" but would leave a co-trainer deleting only their
  *  own copy while the program stayed in the group for everyone else. Here the
  *  batch is resolved from the GROUP's rows and the database decides what may
- *  actually go (migration 0026), so a member who taps nothing they're allowed
- *  to delete simply deletes nothing. */
+ *  actually go (migration 0026: the sender, or any coach of the group).
+ *
+ *  THROWS when there was something to remove and none of it went — offline, or
+ *  not allowed — so the screen can say so. It used to swallow that, and a
+ *  refused Remove looked exactly like a button that did nothing. */
 export async function removeGroupSharedProgramBatch(groupId: string, batchKey: string): Promise<void> {
   const existing = await loadLocalSharedPrograms();
   await setJSON(
@@ -534,16 +584,19 @@ export async function removeGroupSharedProgramBatch(groupId: string, batchKey: s
     rows = await fetchGroupShareRows(groupId);
   } catch (e) {
     warnShares("unsendGroupBatch", e);
-    return;
+    throw new Error("Couldn't reach the server to remove it.");
   }
-  for (const r of rows.filter(
-    r => r.kind === "share" && `${r.sender_program_id}|${r.sent_key}` === batchKey,
-  )) {
+  const batch = rows.filter(r => r.kind === "share" && `${r.sender_program_id}|${r.sent_key}` === batchKey);
+  let removed = 0;
+  for (const r of batch) {
     try {
-      await deleteShareRow(r.id);
+      removed += await deleteShareRow(r.id);
     } catch (e) {
       warnShares("unsendGroupBatch", e);
     }
+  }
+  if (batch.length > 0 && removed === 0) {
+    throw new Error("Only the trainer who sent it or someone who runs the group can remove it.");
   }
 }
 
@@ -942,6 +995,31 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: st
     nextPrograms = [...programs, imported];
   }
   await setJSON(PROGRAMS_KEY, nextPrograms);
+}
+
+/**
+ * A TRAINER takes a 1:1 review off their Programs Received.
+ *
+ * Stamps `deleted_by_recipient_at` on the row, which `loadSentPrograms`
+ * already filters out of a trainer's inbox — so this is a hide on the
+ * trainer's side, allowed by the update policy (sender or recipient). The
+ * person who sent it still has their copy and still sees where it stands.
+ *
+ * Not for group reviews: those are the GROUP's queue, cleared for every coach
+ * at once with setGroupReviewDone.
+ */
+export async function dismissReceivedReview(id: string): Promise<void> {
+  if (isCloudShareId(id)) {
+    try {
+      await updateShareRow(id, { deleted_by_recipient_at: new Date().toISOString() });
+    } catch (e) {
+      warnShares("dismissReview", e);
+      throw e instanceof Error ? e : new Error("Couldn't remove the program.");
+    }
+    return;
+  }
+  const existing = await loadLocalSentPrograms();
+  await setJSON(SENT_PROGRAMS_KEY, existing.filter(s => s.id !== id));
 }
 
 /** Gym user unsends a program they sent to the trainer. */
