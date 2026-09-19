@@ -43,6 +43,7 @@ import {
   loadDismissedShareKeys,
   sentKeyOf,
   loadClients,
+  loadMyGroupReviews,
   loadSentPrograms,
   loadSharedPrograms,
   migrateBroadcastShares,
@@ -292,6 +293,9 @@ export default function MyPTHome() {
   /** Every share row I can see, for the per-group badge: a program sent into a
    *  group I'm in and not yet accepted is something waiting on me. */
   const [shares, setShares] = useState<SharedProgram[]>([]);
+  /** Open group reviews I could pick up, for the group badges. Only ever
+   *  non-empty when a group's owner has made me a trainer there. */
+  const [groupReviewsToDo, setGroupReviewsToDo] = useState<SentProgram[]>([]);
   const [myUid, setMyUid] = useState<string | null>(null);
   const [groupInvites, setGroupInvites] = useState<GroupInvite[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState(false);
@@ -355,7 +359,7 @@ export default function MyPTHome() {
         await backfillAcceptedProgramIds();
         const clientsForMigration = await loadClients();
         await migrateBroadcastShares(clientsForMigration);
-        const [r, s, progs, groupRows, invites, dismissed, uid] = await Promise.all([
+        const [r, s, progs, groupRows, invites, dismissed, uid, reviewsToDo] = await Promise.all([
           loadSharedPrograms(),
           loadSentPrograms(),
           getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
@@ -363,9 +367,12 @@ export default function MyPTHome() {
           fetchMyGroupInvites(),
           loadDismissedShareKeys(),
           getMyUid().catch(() => null),
+          // Fails soft to [] (see loadMyGroupReviews): only the badge needs it.
+          loadMyGroupReviews(),
         ]);
         if (isCancelled()) return [];
         setDismissedKeys(dismissed);
+        setGroupReviewsToDo(reviewsToDo);
         // Dedupe per batch — broadcasts expand into N per-client entries, but
         // the gym user represents all recipients on this device and should see
         // one card per batch.
@@ -478,11 +485,15 @@ export default function MyPTHome() {
     () => groupAlertCounts({
       unreadByGroup: Object.fromEntries(groups.map(g => [g.group.id, g.unreadCount])),
       shares,
-      // A gym user never picks up a group's reviews; that half is a coach's.
-      reviews: [],
+      // Review requests waiting on me, in groups where the owner has made me a
+      // trainer. A gym user can hold that role, and then picks reviews up like
+      // any trainer; it was hard-coded empty, so their group's badge never
+      // counted a review waiting on them. Empty for a plain member: the query
+      // behind it only returns reviews I coach, never ones I sent.
+      reviews: groupReviewsToDo,
       myUid,
     }),
-    [groups, shares, myUid],
+    [groups, shares, groupReviewsToDo, myUid],
   );
 
   const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {

@@ -116,3 +116,9 @@ begin
 end;
 $$;
 grant execute on function public.set_group_review_completed(uuid, boolean) to authenticated;
+
+-- Make the API see the function straight away. Without it a freshly created
+-- function can be missing from the API's cached schema, and Remove on a group
+-- review fails with "Could not find the function
+-- public.set_group_review_completed(p_done, p_share) in the schema cache".
+notify pgrst, 'reload schema';

@@ -826,14 +826,14 @@ export default function GroupPageScreen() {
   const myRole: GroupRole = members.find(m => m.id === myUid)?.role ?? "member";
   const canCoach = canCoachGroup(myRole);
   /**
-   * Whether I can send a program OUT to the whole group: the owner, and a
-   * trainer ACCOUNT the owner has made a trainer here. A gym user never can,
-   * even holding the trainer role — sending programs to a group is a trainer's
-   * job, and a gym user's program going here is always a request for review.
-   * Their button is the green Ask for Review instead, the same one every member
-   * has. (The role still lets them review and remove, as a coach of the group.)
+   * Whether I can send a program OUT to the whole group: the owner and anyone
+   * they've made a trainer here. The ROLE decides, not the account type: a gym
+   * user the owner makes a trainer sends, reviews and removes exactly like a
+   * trainer account does, which is what the database allows too
+   * (can_coach_in_group). Gating it on the account type as well left a
+   * promoted gym user a trainer in name only, with no Send Program.
    */
-  const canSendToGroup = myRole === "owner" || (canCoach && accountType === "pt");
+  const canSendToGroup = canCoach;
 
   // Filters the list only. The banner, the count badge and a program send all
   // stay whole-group — searching is for finding someone, not for narrowing who
@@ -866,15 +866,17 @@ export default function GroupPageScreen() {
    * get_group_members orders owner, then trainers, then members, so the badges
    * read top to bottom in rank order. An outstanding invite outranks the role:
    * what they'd be once they join is less useful than knowing they haven't.
-   * "YOU" outranks both, and is why that one row doesn't respond to a tap.
+   * My own row says "YOU" AND my role, in the role's colour ("YOU · TRAINER"):
+   * it said "YOU" alone, so someone made a trainer had no way to see it. It's
+   * also why that one row doesn't respond to a tap.
    */
   const memberRows = visibleMembers.map(m => {
     const isMe = m.id === myUid;
     return {
       member: m,
       isMe,
-      badge: isMe ? "YOU" : m.accepted ? ROLE_LABEL[m.role] : "INVITED",
-      badgeColor: isMe ? t.ts : m.accepted ? ROLE_COLOR[m.role] : t.ts,
+      badge: isMe ? `YOU · ${ROLE_LABEL[m.role]}` : m.accepted ? ROLE_LABEL[m.role] : "INVITED",
+      badgeColor: isMe || m.accepted ? ROLE_COLOR[m.role] : t.ts,
       // Everyone but you opens the same sheet, whatever your standing here.
       // It used to be owner-only, with a coach going straight to the client
       // page and a plain member's row doing nothing at all — which left
@@ -1240,10 +1242,10 @@ export default function GroupPageScreen() {
                 )}
               </View>
 
-              {/* Sending OUT to the group belongs to the owner and trainer
-                  accounts they've made trainers here (canSendToGroup). Everyone
-                  else, every member and any gym user whatever their role, gets
-                  Ask for Review in the same green slot. */}
+              {/* Sending OUT to the group belongs to the owner and anyone
+                  they've made a trainer here, gym user or trainer account
+                  (canSendToGroup). Every member gets Ask for Review in the same
+                  green slot. */}
               <View style={styles.actionRow}>
                 <BounceButton style={{ flex: 1 }} onPress={openChat} accessibilityLabel={`Open ${displayName} chat`}>
                   <View style={[styles.actionBtn, styles.actionChrome, { backgroundColor: t.ctrl }]}>
@@ -1272,13 +1274,12 @@ export default function GroupPageScreen() {
                   </BounceButton>
                 )}
               </View>
-              {/* A TRAINER ACCOUNT the owner has made a trainer here can do
-                  both: send programs out, and still ask for a review of their
-                  own. The owner has no one above them in the group, so they
-                  get Send Program alone; a gym user already has Ask for Review
-                  as their green button above. A white button on its own row:
-                  Send Program stays the one green action, and three buttons
-                  wouldn't fit on one line. */}
+              {/* Anyone the owner has made a trainer here can do both: send
+                  programs out, and still ask for a review of their own. The
+                  owner has no one above them in the group, so they get Send
+                  Program alone. A white button on its own row: Send Program
+                  stays the one green action, and three buttons wouldn't fit on
+                  one line. */}
               {canSendToGroup && myRole !== "owner" && (
                 <BounceButton onPress={() => setPicker("review")} accessibilityLabel="Send a program to this group for review">
                   <View style={[styles.actionBtn, styles.actionChrome, { backgroundColor: t.ctrl }]}>
@@ -1527,7 +1528,12 @@ export default function GroupPageScreen() {
               {memberMenu && favouriteMembers.has(memberMenu.id) ? "Remove from favourites" : "Add to favourites"}
             </Text>
           </TouchableOpacity>
-          {iCoachGroup && (
+          {/* Only for someone who IS my client. The client page is a trainer's
+              tool that opens a person from my own roster, so offering it for
+              any group member (as it was, to every coach) sent a gym user made
+              a trainer, or a trainer tapping someone they aren't connected to,
+              to "Client not found". */}
+          {iCoachGroup && accountType === "pt" && !!memberMenu && clients.some(c => c.id === memberMenu.id) && (
             <>
               <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
               <TouchableOpacity
