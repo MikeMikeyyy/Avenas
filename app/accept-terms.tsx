@@ -18,7 +18,7 @@ import { APP_DARK, APP_LIGHT, ACCT, FontFamily } from "../constants/theme";
 // up to the account) and mention an optional Pro plan that doesn't exist.
 const POINTS = [
   "Avenas is free to use.",
-  "Your training data is private to your account and backed up while you're signed in.",
+  "Your training data is backed up while you're signed in, and only you and trainers you connect with can see it.",
   "Be respectful when using community and trainer features.",
   "You can edit or delete your details anytime in Settings.",
 ];

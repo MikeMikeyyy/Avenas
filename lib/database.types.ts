@@ -192,6 +192,11 @@ export type WorkoutRow = {
   id: string;
   user_id: string;
   program_id: string | null;      // program uuid, or null for a free workout
+  /** With program_id null: true for a LEGACY record (programId absent, the
+   *  program is inferred from day name + dates), false for a free workout
+   *  (programId ""). The cloud stored those identically before migration 0033.
+   *  See CompletedWorkout.programId. */
+  program_unknown: boolean;
   date: string;                   // YYYY-MM-DD
   completed_at: string;           // ISO timestamp
   workout_name: string;

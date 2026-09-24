@@ -38,17 +38,27 @@ import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP,
 import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
-import { deleteGroup, fetchGroup, fetchGroupMembers, leaveGroup, setGroupMemberRole, subscribeToGroup } from "../../../../lib/groups";
+import { useAuth } from "../../../../contexts/AuthContext";
+import { deleteGroup, leaveGroup, setGroupMemberRole, subscribeToGroup } from "../../../../lib/groups";
 import { getMyUid } from "../../../../lib/chat";
 import { scheduleCloudPush } from "../../../../lib/syncManager";
-import { loadFavouriteGroupIds, loadFavouriteMemberIds, loadGroupUnread, sortByFavourite, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
-import { resolveTrainerRoster } from "../../../../utils/roster";
-import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, batchKeyOf, dismissSharedBatch, loadClientData, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, setGroupReviewDone, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
+import { loadGroupUnread, sortByFavourite, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
+import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, batchKeyOf, dismissSharedBatch, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, setGroupReviewDone, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
+import {
+  dropGroupPage,
+  EMPTY_GROUP_PAGE,
+  hydrateGroupPage,
+  loadGroupPage,
+  peekGroupPage,
+  saveGroupPage,
+  type GroupPageData,
+  type GroupPageLoad,
+} from "../../../../utils/groupPage";
 import { getJSON } from "../../../../utils/storage";
 import { fmtAgo } from "../../../../utils/dates";
 import { removeShareConfirm } from "../../../../utils/removeShare";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../../constants/programs";
-import { canCoachGroup, type Group, type GroupMember, type GroupRole } from "../../../../constants/groups";
+import { canCoachGroup, type GroupMember, type GroupRole } from "../../../../constants/groups";
 
 /** How many member avatars the banner stacks before collapsing to "+N". */
 const AVATAR_STACK = 4;
@@ -400,15 +410,58 @@ export default function GroupPageScreen() {
   const insets = useSafeAreaInsets();
 
   const groupId = id ?? "";
+  // The account this page's saved copy belongs to (utils/pageSnapshot.ts).
+  const { userId } = useAuth();
+  const owner = userId ?? "";
 
-  const [group, setGroup] = useState<Group | null>(null);
-  const [members, setMembers] = useState<GroupMember[]>([]);
-  /** Members matched against the client roster, so cards can show programs. */
-  const [clients, setClients] = useState<Client[]>([]);
-  const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
-  const [unread, setUnread] = useState(0);
-  const [myUid, setMyUid] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  /**
+   * Everything on this page, as ONE value (utils/groupPage.ts).
+   *
+   * It starts on the copy saved from the last visit, so the page opens whole
+   * rather than on a spinner, and a load replaces it in a single render, so
+   * arriving or pulling down updates it in place. It used to be separate pieces
+   * of state behind a spinner on every visit, with each member's active program
+   * added a moment after the rest.
+   *
+   * Null only when this group has never loaded on this device.
+   */
+  const [page, setPage] = useState<GroupPageData | null>(() => peekGroupPage(owner, groupId));
+  /** A load has answered, even with a failure: the spinner stops either way. */
+  const [settled, setSettled] = useState(false);
+  const loading = page === null && !settled;
+  const {
+    group,
+    members,
+    clients,
+    activeProgramByClient,
+    unread,
+    isFavourite,
+    favouriteMemberIds,
+    groupShares,
+    groupReviews,
+    myUid,
+  } = page ?? EMPTY_GROUP_PAGE;
+  /** Starred PEOPLE, oldest star first — the order they're pinned in. */
+  const favouriteMembers = useMemo(() => new Set(favouriteMemberIds), [favouriteMemberIds]);
+
+  // Whatever the page shows is what it opens on next time, including a change
+  // made here (a role, a star, a removed send) that no load has seen yet.
+  useEffect(() => {
+    if (page) saveGroupPage(owner, groupId, page);
+  }, [page, owner, groupId]);
+
+  // The hub reads its groups' copies off the device ahead of time; opened any
+  // other way (a notification, a link), read it now. A load that has already
+  // landed is newer, so the copy never replaces it.
+  useEffect(() => {
+    let live = true;
+    void hydrateGroupPage(owner, groupId).then(() => {
+      const saved = peekGroupPage(owner, groupId);
+      if (live && saved) setPage(p => p ?? saved);
+    });
+    return () => { live = false; };
+  }, [owner, groupId]);
+
   const [menuOpen, setMenuOpen] = useState(false);
   /** The member whose role sheet is open (owner only; null = closed). */
   const [memberMenu, setMemberMenu] = useState<GroupMember | null>(null);
@@ -419,9 +472,6 @@ export default function GroupPageScreen() {
   const [picker, setPicker] = useState<"send" | "review" | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [isFavourite, setIsFavourite] = useState(false);
-  /** Starred PEOPLE, oldest star first — the order they're pinned in. */
-  const [favouriteMembers, setFavouriteMembers] = useState<Set<string>>(new Set());
   /** Sections shown as one line each instead of full cards. Not persisted:
    *  they're a way to see past a long page on this visit, not preferences. */
   const [collapsedMembers, setCollapsedMembers] = useState(false);
@@ -430,13 +480,11 @@ export default function GroupPageScreen() {
    *  trainer here can have both lists at once. */
   const [collapsedMyRequests, setCollapsedMyRequests] = useState(false);
   const [collapsedSent, setCollapsedSent] = useState(false);
+  // Local, and only the program picker and my own row read it, so it's not
+  // part of the page's saved copy.
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
-  const [groupShares, setGroupShares] = useState<SharedProgram[]>([]);
   const [expandedSent, setExpandedSent] = useState<Set<string>>(new Set());
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
-  // The group's review queue: programs members posted here, still open. Empty
-  // for a member — RLS returns a group's reviews to its coaches only.
-  const [groupReviews, setGroupReviews] = useState<SentProgram[]>([]);
 
   // Declared up here because the handlers below name it: a const referenced in
   // a useCallback dependency array is read during render, not when the callback
@@ -476,8 +524,7 @@ export default function GroupPageScreen() {
         loadGroupSharedPrograms(groupId),
         loadGroupReviewPrograms(groupId),
       ]);
-      setGroupShares(shares);
-      setGroupReviews(reviews);
+      setPage(p => p && { ...p, groupShares: shares, groupReviews: reviews });
     } catch (err) {
       if (__DEV__) console.warn("[avenas] refresh group shares", err);
     }
@@ -503,7 +550,7 @@ export default function GroupPageScreen() {
               Alert.alert("Couldn't update", e instanceof Error ? e.message : "Check your connection and try again.");
               return;
             }
-            setGroupReviews(prev => prev.filter(r => r.id !== entry.id));
+            setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
           },
         },
       ],
@@ -636,65 +683,36 @@ export default function GroupPageScreen() {
       .sort((a, b) => (a.sentAtISO < b.sentAtISO ? 1 : -1));
   }, [groupShares, iCoachGroup, myUid]);
 
+  /** Put a load's answer on the page. A failed load keeps what's showing (the
+   *  saved copy, or the empty page when there's none), and every answer stops
+   *  the spinner. */
+  const applyLoad = useCallback((result: GroupPageLoad) => {
+    setSettled(true);
+    if (result.status === "loaded") {
+      setPage(result.data);
+    } else if (result.status === "gone") {
+      Alert.alert("Group unavailable", "This group no longer exists, or you're no longer a member.");
+      router.back();
+    }
+  }, [router]);
+
+  const loadMyPrograms = useCallback(
+    () => getJSON<SavedProgram[]>(PROGRAMS_KEY, []).then(progs => (Array.isArray(progs) ? progs : [])),
+    [],
+  );
+
   /**
-   * The whole page in one pass. Driven by arriving here and by pulling down;
-   * the caller owns the cancel flag, because a focus load has to stop writing
-   * state when you navigate away mid-flight while a pull runs to completion.
+   * Arriving brings the page up to date: behind the saved copy it opened on,
+   * in one render when the load lands. The cancel flag stops a load that
+   * outlives the visit from writing to the page; a loaded result is saved
+   * regardless (loadGroupPage), so the next visit starts from it.
    */
-  const loadAll = useCallback(async (isCancelled: () => boolean) => {
-      try {
-        const uid = await getMyUid();
-        if (!uid || !groupId) return;
-        const [g, roster, { clients: allClients }, unreadCount, progs, favIds, favMembers, shares, reviews] = await Promise.all([
-          fetchGroup(uid, groupId),
-          fetchGroupMembers(groupId),
-          resolveTrainerRoster(),
-          loadGroupUnread(groupId),
-          getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-          loadFavouriteGroupIds(),
-          loadFavouriteMemberIds(),
-          loadGroupSharedPrograms(groupId),
-          loadGroupReviewPrograms(groupId),
-        ]);
-        if (isCancelled()) return;
-        setIsFavourite(favIds.has(groupId));
-        setFavouriteMembers(favMembers);
-        if (!g) {
-          Alert.alert("Group unavailable", "This group no longer exists, or you're no longer a member.");
-          router.back();
-          return;
-        }
-        setMyUid(uid);
-        setGroup(g);
-        setMembers(roster);
-        setClients(allClients);
-        setUnread(unreadCount);
-        setMyPrograms(Array.isArray(progs) ? progs : []);
-        // Already scoped to this group, in both directions — what arrived here
-        // is a group's noticeboard, not my own inbox.
-        setGroupShares(shares);
-        setGroupReviews(reviews);
-
-        // Active program per member, same as the hub's client list.
-        const byClient: Record<string, string> = {};
-        await Promise.all(roster.map(async m => {
-          const data = await loadClientData(m.id);
-          const active = data.programs.find(p => p.status === "active");
-          if (active) byClient[m.id] = active.name;
-        }));
-        if (!isCancelled()) setActiveProgramByClient(byClient);
-      } catch (err) {
-        if (__DEV__) console.warn("[avenas] load group page", err);
-      } finally {
-        if (!isCancelled()) setLoading(false);
-      }
-  }, [groupId, router]);
-
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    void loadAll(() => cancelled);
+    void loadGroupPage(owner, groupId).then(result => { if (!cancelled) applyLoad(result); });
+    void loadMyPrograms().then(progs => { if (!cancelled) setMyPrograms(progs); });
     return () => { cancelled = true; };
-  }, [loadAll]));
+  }, [owner, groupId, applyLoad, loadMyPrograms]));
 
   /**
    * The Group Chat badge, kept live while this page is on screen.
@@ -718,21 +736,24 @@ export default function GroupPageScreen() {
       const uid = await getMyUid();
       if (!active || senderId === uid) return;
       const count = await loadGroupUnread(groupId);
-      if (active) setUnread(count);
+      if (active) setPage(p => p && { ...p, unread: count });
     }, "page");
     return () => { active = false; unsubscribe(); };
   }, [groupId]));
 
   /** Pull down to re-read the group: new messages waiting in the chat, a
    *  program a coach just sent, a review someone posted, someone who accepted
-   *  their invite. Runs to completion, and always clears the spinner because
-   *  `loadAll` swallows its own failures. */
+   *  their invite. Always its own read of the server, separate from the one
+   *  made on arrival. Runs to completion, and always clears the spinner because
+   *  `loadGroupPage` never rejects. */
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadAll(() => false);
+    const [result, progs] = await Promise.all([loadGroupPage(owner, groupId), loadMyPrograms()]);
+    applyLoad(result);
+    setMyPrograms(progs);
     setRefreshing(false);
-  }, [loadAll]);
+  }, [owner, groupId, applyLoad, loadMyPrograms]);
 
   const openChat = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -748,7 +769,7 @@ export default function GroupPageScreen() {
     setMenuOpen(false);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const next = await toggleFavouriteGroup(groupId);
-    setIsFavourite(next.has(groupId));
+    setPage(p => p && { ...p, isFavourite: next.has(groupId) });
   }, [groupId]);
 
   /** Star or unstar a person. The list re-sorts on the next render, so the card
@@ -757,7 +778,8 @@ export default function GroupPageScreen() {
    *  pinned in both. */
   const onToggleMemberFavourite = useCallback(async (memberId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setFavouriteMembers(await toggleFavouriteMember(memberId));
+    const next = await toggleFavouriteMember(memberId);
+    setPage(p => p && { ...p, favouriteMemberIds: [...next] });
   }, []);
 
   const toggleMembersSection = useCallback(() => {
@@ -806,7 +828,7 @@ export default function GroupPageScreen() {
     const next = m.role === "trainer" ? "member" : "trainer";
     try {
       await setGroupMemberRole(groupId, m.id, next);
-      setMembers(prev => prev.map(x => (x.id === m.id ? { ...x, role: next } : x)));
+      setPage(p => p && { ...p, members: p.members.map(x => (x.id === m.id ? { ...x, role: next } : x)) });
       Alert.alert(
         next === "trainer" ? "Now a trainer" : "Now a member",
         next === "trainer"
@@ -932,6 +954,7 @@ export default function GroupPageScreen() {
           try {
             if (!myUid) throw new Error("not signed in");
             await leaveGroup(myUid, groupId);
+            dropGroupPage(groupId);
             router.back();
           } catch (e) {
             Alert.alert("Couldn't leave", e instanceof Error ? e.message : "Check your connection and try again.");
@@ -951,6 +974,7 @@ export default function GroupPageScreen() {
         { text: "Delete", style: "destructive", onPress: async () => {
           try {
             await deleteGroup(groupId);
+            dropGroupPage(groupId);
             router.back();
           } catch (e) {
             Alert.alert("Couldn't delete group", e instanceof Error ? e.message : "Check your connection and try again.");

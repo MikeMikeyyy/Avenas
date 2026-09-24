@@ -50,7 +50,8 @@ const SECTIONS: { heading: string; body: string }[] = [
   {
     heading: "6. What Other People Can See",
     body:
-      "Your training data is private to your account. People you connect with, and members of groups you join, can see your name, profile photo and account type, the messages you send them and any programs you share with them. They can see when you were last active only if Show Activity Status is on. Nobody else can see your workout history or journal.\n\n" +
+      "People you connect with, and members of groups you join, can see your name, profile photo and account type, the messages you send them and any programs you share with them. They can see when you were last active only if Show Activity Status is on.\n\n" +
+      "Trainers you connect with can also see your training data: your programs, workout history, journal entries and custom exercises, so they can follow your progress and coach you. Being in the same group doesn't share it. It stops as soon as either of you removes the connection or blocks the other. Nobody else can see your training data.\n\n" +
       "Your profile photo is stored so it can be shown in the app, which means anyone who has its web link can view it.",
   },
   {
@@ -69,7 +70,7 @@ const SECTIONS: { heading: string; body: string }[] = [
   },
   {
     heading: "10. Security",
-    body: "Your data travels over encrypted connections, and our database only lets each account reach its own training data. No system is completely secure, so please use a strong password and keep your phone locked.",
+    body: "Your data travels over encrypted connections, and our database only lets your training data be reached by your own account and by trainers you're connected with. No system is completely secure, so please use a strong password and keep your phone locked.",
   },
   {
     heading: "11. Children",

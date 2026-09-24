@@ -99,6 +99,21 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
   const first = detectStreakAchievement(7, NOW)!;
   const state = applyAchievements(EMPTY_ACHIEVEMENTS, [first], NOW);
   eq(state.awarded, [], "streak: not once-only, so a rebuilt streak earns it again");
+
+  // The early ones, then every 50 days for as long as the streak runs — the
+  // list used to stop at 365 and the longest streaks earned nothing after it.
+  const earnedAt = (days: number): number | null => {
+    const a = detectStreakAchievement(days, NOW);
+    return a && a.category === "streak" ? a.days : null;
+  };
+  eq(earnedAt(30), 30, "streak: 30 days is an early milestone");
+  eq(detectStreakAchievement(40, NOW), null, "streak: 40 days (the top flame tier) is not one");
+  for (const days of [50, 100, 150, 200, 250, 400, 1000]) {
+    eq(earnedAt(days), days, `streak: ${days} days is a milestone`);
+  }
+  for (const days of [49, 51, 99, 149, 365]) {
+    eq(detectStreakAchievement(days, NOW), null, `streak: ${days} days is not`);
+  }
 }
 
 // ─── Cards: one per category, newest replaces, a week long ──────────────────

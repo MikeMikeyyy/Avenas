@@ -14,7 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardProgramAchievement } from "../utils/achievementStore";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
@@ -181,6 +181,23 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
   );
 }
 
+// ─── Date Chip ─────────────────────────────────────────────────────────────────
+
+// A program's start / finish date as a pill, matching Home's "Finishes" chip.
+// The start is quiet (t.div fill); the finish line is the green one. Accent
+// green washes out as small text on the light card, so the ink takes the
+// deeper green there (see theme.ts).
+function DateChip({ icon, label, isDark, accent }: { icon: "calendar" | "flag"; label: string; isDark: boolean; accent?: boolean }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const ink = accent ? (isDark ? ACCT : ACCT_DEEP) : t.ts;
+  return (
+    <View style={[styles.dateChip, { backgroundColor: accent ? `${ACCT}26` : t.div }]}>
+      <Ionicons name={icon} size={11} color={ink} />
+      <Text style={[styles.dateChipText, { color: ink }]}>{label}</Text>
+    </View>
+  );
+}
+
 // ─── Active Program Card ───────────────────────────────────────────────────────
 
 interface ActiveProgramCardProps {
@@ -228,21 +245,16 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
             {paused ? `Paused on week ${week} of ${program.totalWeeks}` : `Week ${week} of ${program.totalWeeks}`}
           </Text>
 
-          <View style={styles.metaRow}>
-            <Ionicons name="calendar-outline" size={14} color={t.ts} />
-            <Text style={[styles.metaText, { color: t.ts }]}>Started {program.startDate}</Text>
+          <View style={styles.dateChipRow}>
+            <DateChip icon="calendar" label={`Started ${program.startDate}`} isDark={isDark} />
+            {/* The other end of the timeline. Moves out when a day is pushed and
+                back when a rest day is spent, which is the only place that trade
+                is visible. Not shown while held — a hold has no finish date until
+                it's resumed. */}
+            {!paused && finishLabel && (
+              <DateChip icon="flag" label={`Finishes ${finishLabel}`} isDark={isDark} accent />
+            )}
           </View>
-
-          {/* The other end of the timeline. Moves out when a day is pushed and
-              back when a rest day is spent, which is the only place that trade
-              is visible. Not shown while held — a hold has no finish date until
-              it's resumed. */}
-          {!paused && finishLabel && (
-            <View style={styles.metaRow}>
-              <Ionicons name="flag-outline" size={14} color={t.ts} />
-              <Text style={[styles.metaText, { color: t.ts }]}>Finishes {finishLabel}</Text>
-            </View>
-          )}
 
           <View style={styles.cycleGrid}>
             {program.cyclePattern.map((day, i) => {
@@ -337,16 +349,10 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
             ))}
           </View>
           <Text style={[styles.weekLabel, { color: t.ts }]}>{weekText}</Text>
-          <View style={{ gap: 4 }}>
-            <View style={styles.metaRow}>
-              <Ionicons name="calendar-outline" size={13} color={t.ts} />
-              <Text style={[styles.metaText, { color: t.ts }]}>{dateLabel} {program.startDate}</Text>
-            </View>
+          <View style={styles.dateChipRow}>
+            <DateChip icon="calendar" label={`${dateLabel} ${program.startDate}`} isDark={isDark} />
             {program.status === "completed" && program.completedDate && (
-              <View style={styles.metaRow}>
-                <Ionicons name="flag-outline" size={13} color={ACCT} />
-                <Text style={[styles.metaText, { color: ACCT }]}>Completed {program.completedDate}</Text>
-              </View>
+              <DateChip icon="flag" label={`Completed ${program.completedDate}`} isDark={isDark} accent />
             )}
           </View>
           <View style={styles.cycleGrid}>
@@ -1037,9 +1043,10 @@ const styles = StyleSheet.create({
   progressRow:        { flexDirection: "row", gap: 4 },
   progressSeg:        { flex: 1, height: 6, borderRadius: 3 },
   weekLabel:          { fontFamily: FontFamily.regular, fontSize: 13 },
-  metaRow:            { flexDirection: "row", alignItems: "center", gap: 6 },
+  dateChipRow:        { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  dateChip:           { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: PILL_RADIUS },
+  dateChipText:       { fontFamily: FontFamily.semibold, fontSize: 12 },
   metaDot:            { width: 3, height: 3, borderRadius: 1.5, backgroundColor: "#8896A7" },
-  metaText:           { fontFamily: FontFamily.regular, fontSize: 13 },
   // Neutral chrome (background comes from t.ctrl inline) — a soft drop shadow
   // rather than the ACCT glow reserved for primary green actions.
   newProgramBtn:      { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },

@@ -9,8 +9,9 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts && npx tsx scripts/verify-workout-summary.ts && npx tsx scripts/verify-program-edits.ts && npx tsx scripts/verify-streak.ts && npx tsx scripts/verify-exercise-favourites.ts && npx tsx scripts/verify-skipped-dates.ts",
-    "verify:stats": "npx tsx scripts/verify-progress-stats.ts"
+    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts && npx tsx scripts/verify-workout-summary.ts && npx tsx scripts/verify-program-edits.ts && npx tsx scripts/verify-streak.ts && npx tsx scripts/verify-exercise-favourites.ts && npx tsx scripts/verify-skipped-dates.ts && npx tsx scripts/verify-session-track.ts && npx tsx scripts/verify-client-achievements.ts && npx tsx scripts/verify-db.ts",
+    "verify:stats": "npx tsx scripts/verify-progress-stats.ts",
+    "verify:db": "npx tsx scripts/verify-db.ts"
   },
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",
@@ -62,6 +63,7 @@
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/react": "~19.2.4",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~57.0.2",

@@ -17,6 +17,10 @@ import {
   buildPrevNotesByName,
   prevDayScopeFor,
   normalizeExerciseName,
+  swapOrigin,
+  buildPrevNoteLookup,
+  buildPrevSetsLookup,
+  buildPrevSessionNote,
 } from "../utils/workout";
 import { parseStoredDate, formatStoredDate, todayYMD } from "../utils/dates";
 import {
@@ -254,6 +258,188 @@ eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate:
     "notes: another day's note is never borrowed");
 }
 
+// ── A swapped-in exercise's note reaches the exercise it replaced ──────────────
+// Week 1: Bench Press, noted. Week 2: swapped for Dumbbell Press (not in the
+// program), which gets its own note. Week 3 shows Bench Press again, and its
+// hint is the note written in its place last week.
+{
+  const set = [{ type: "working" as const, weight: "30", reps: "10", done: true }];
+  const session = (id: string, completedAt: string, exercises: CompletedWorkout["exercises"]): CompletedWorkout =>
+    ({ ...makeWorkout(id, completedAt, "Bench Press", "100", "5"), exercises });
+  const week1 = session("s1", "2026-03-02T10:00:00.000Z",
+    [{ name: "Bench Press", notes: "Felt heavy", sets: [{ type: "working", weight: "100", reps: "5", done: true }] }]);
+  const week2 = session("s2", "2026-03-09T10:00:00.000Z",
+    [{ name: "Dumbbell Press", notes: "Bench was taken, 30s felt easy", sets: set, swappedFrom: "Bench Press" }]);
+  const hints = buildPrevNotesByName([week2, week1]);
+  eq(hints["bench press"], "Bench was taken, 30s felt easy", "swap: the swap-in's note is the original's hint next week");
+  eq(hints["dumbbell press"], "Bench was taken, 30s felt easy", "swap: ...and still its own, for the next time it's swapped in");
+
+  const week2Blank = session("s2b", "2026-03-09T10:00:00.000Z",
+    [{ name: "Dumbbell Press", notes: "", sets: set, swappedFrom: "Bench Press" }]);
+  eq(buildPrevNotesByName([week2Blank, week1])["bench press"], undefined,
+    "swap: a swap-in with no note blocks the older one, like any session with no note");
+
+  // Previous WEIGHTS stay by name: Dumbbell Press numbers under Bench Press would be wrong.
+  eq(buildPrevByName([week2, week1])["bench press"], ["100×5"],
+    "swap: previous weights still come from the last time the exercise itself was done");
+
+  // The exercise done under its own name wins over a swap-in standing for it.
+  const both = session("s3", "2026-03-16T10:00:00.000Z", [
+    { name: "Dumbbell Press", notes: "Swap-in note", sets: set, swappedFrom: "Bench Press" },
+    { name: "Bench Press", notes: "The real bench", sets: set },
+  ]);
+  eq(buildPrevNotesByName([both])["bench press"], "The real bench", "swap: an exercise's own entry wins within a session");
+
+  // Reordering the session (Move exercise) changes the order they're saved in,
+  // never whose note is whose: each note travels on its own exercise, and next
+  // week's hints are looked up by name. Program order here: Bench Press, Cable
+  // Fly, Squat. The session moved Squat to the top and swapped Cable Fly for
+  // Dumbbell Fly.
+  const benchEx = { name: "Bench Press", notes: "Pause at the bottom", sets: set };
+  const flyEx = { name: "Dumbbell Fly", notes: "Cable machine was busy", sets: set, swappedFrom: "Cable Fly" };
+  const squatEx = { name: "Squat", notes: "", sets: set };
+  const expected = {
+    "bench press": "Pause at the bottom",
+    "cable fly": "Cable machine was busy",
+    "dumbbell fly": "Cable machine was busy",
+  };
+  // Compared as sorted entries: which note is under which exercise is the
+  // point, not the order the map was filled in.
+  const sorted = (m: Record<string, string>) => Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
+  eq(sorted(buildPrevNotesByName([session("o1", "2026-03-09T10:00:00.000Z", [benchEx, flyEx, squatEx])])), sorted(expected),
+    "reorder: in program order, each note is its own exercise's (the swap-in's reaches Cable Fly)");
+  eq(sorted(buildPrevNotesByName([session("o2", "2026-03-09T10:00:00.000Z", [squatEx, benchEx, flyEx])])), sorted(expected),
+    "reorder: moved around, every note still lands under the same exercise next week");
+
+  // ── buildPrevNoteLookup: a program exercise is found by its PLACE ──────────
+  // A day that lists Bench Press twice (a heavy set, pex_1, and a back-off,
+  // pex_2), then Squat. By name both benches would share one note.
+  const heavy = { name: "Bench Press", notes: "Heavy: pause reps", sets: set, programExerciseId: "pex_1" };
+  const backOff = { name: "Bench Press", notes: "Back-off: slow tempo", sets: set, programExerciseId: "pex_2" };
+  const squat = { name: "Squat", notes: "", sets: set, programExerciseId: "pex_3" };
+  const extra = { name: "Curl", notes: "Added at the end", sets: set }; // added mid-session: no place
+  const lastWeek = session("p1", "2026-03-09T10:00:00.000Z", [heavy, backOff, squat, extra]);
+  const heavyCard = { name: "Bench Press", programExerciseId: "pex_1" };
+  const backOffCard = { name: "Bench Press", programExerciseId: "pex_2" };
+
+  const noteOf = buildPrevNoteLookup([lastWeek]);
+  eq([noteOf(heavyCard), noteOf(backOffCard)], ["Heavy: pause reps", "Back-off: slow tempo"],
+    "place: two of the same exercise in a day each get their own note");
+  const moved = buildPrevNoteLookup([session("p1m", "2026-03-09T10:00:00.000Z", [extra, squat, backOff, heavy])]);
+  eq([moved(heavyCard), moved(backOffCard)], ["Heavy: pause reps", "Back-off: slow tempo"],
+    "place: reordering the session doesn't swap their notes");
+  eq(noteOf({ name: "Curl" }), "Added at the end", "place: an exercise added mid-session is found by name");
+
+  // Swap ONE of the two benches: only that place takes the swap-in's note.
+  const swappedHeavy = { name: "Dumbbell Press", notes: "Bench taken", sets: set, programExerciseId: "pex_1", swappedFrom: "Bench Press" };
+  const withSwap = buildPrevNoteLookup([session("p2", "2026-03-16T10:00:00.000Z", [swappedHeavy, backOff, squat]), lastWeek]);
+  eq([withSwap(heavyCard), withSwap(backOffCard)], ["Bench taken", "Back-off: slow tempo"],
+    "place: a swap on one of two same-named exercises reaches only that one");
+  eq(withSwap({ name: "Dumbbell Press", programExerciseId: "pex_1", swappedFrom: "Bench Press" }), "Bench taken",
+    "place: a swap-in card finds its own last note by name");
+
+  // The usual rules, by place.
+  const blank = buildPrevNoteLookup([session("p3", "2026-03-16T10:00:00.000Z", [{ ...heavy, notes: "" }, backOff]), lastWeek]);
+  eq(blank(heavyCard), undefined, "place: an empty note last time blocks the older one");
+  const dropped = buildPrevNoteLookup([session("p4", "2026-03-16T10:00:00.000Z", [backOff]), lastWeek]);
+  eq(dropped(heavyCard), "Heavy: pause reps", "place: a session that left the exercise out doesn't block");
+  eq(noteOf({ name: "Incline Press", programExerciseId: "pex_1" }), undefined,
+    "place: after the program gives that place another exercise, the old one's notes don't pass on");
+
+  // History saved before places were recorded is read by name, as before.
+  const legacy = session("p0", "2026-03-02T10:00:00.000Z", [{ name: "Bench Press", notes: "Legacy note", sets: set }]);
+  eq(buildPrevNoteLookup([legacy])(backOffCard), "Legacy note", "place: older history without places is read by name");
+  eq(buildPrevNoteLookup([lastWeek, legacy])(backOffCard), "Back-off: slow tempo", "place: a newer session with places wins");
+
+  // ── buildPrevSetsLookup: previous WEIGHTS by place too ────────────────────
+  const w = (weight: string, reps: string) => [{ type: "working" as const, weight, reps, done: true }];
+  const heavyW = { name: "Bench Press", notes: "", sets: w("100", "5"), programExerciseId: "pex_1" };
+  const backOffW = { name: "Bench Press", notes: "", sets: w("80", "8"), programExerciseId: "pex_2" };
+  const wk1 = session("s-w1", "2026-03-09T10:00:00.000Z", [heavyW, backOffW]);
+  const setsOf = buildPrevSetsLookup([wk1]);
+  eq([setsOf(heavyCard), setsOf(backOffCard)], [["100×5"], ["80×8"]],
+    "sets by place: the heavy and back-off benches each show their own numbers");
+  eq(buildPrevSetsLookup([session("s-w1m", "2026-03-09T10:00:00.000Z", [backOffW, heavyW])])(heavyCard), ["100×5"],
+    "sets by place: reordering doesn't swap them");
+
+  // Last week the heavy place was swapped for Dumbbell Press: its numbers
+  // belong to that lift, so the heavy bench shows the time before.
+  const dbW = { name: "Dumbbell Press", notes: "", sets: w("30", "10"), programExerciseId: "pex_1", swappedFrom: "Bench Press" };
+  const wk2 = session("s-w2", "2026-03-16T10:00:00.000Z", [dbW, backOffW]);
+  const afterSwap = buildPrevSetsLookup([wk2, wk1]);
+  eq(afterSwap(heavyCard), ["100×5"], "sets by place: a swap-in's weights never show under the exercise it replaced");
+  eq(afterSwap({ name: "Dumbbell Press", programExerciseId: "pex_1", swappedFrom: "Bench Press" }), ["30×10"],
+    "sets by place: the swap-in card shows its own last numbers");
+
+  // A place with no numbers of its own shows the lift's last numbers on this day.
+  eq(buildPrevSetsLookup([wk1])({ name: "Bench Press", programExerciseId: "pex_new" }), ["100×5"],
+    "sets by place: a place never done yet falls back to the same lift, by name");
+  eq(buildPrevSetsLookup([session("s-w0", "2026-03-02T10:00:00.000Z", [{ name: "Bench Press", notes: "", sets: w("95", "5") }])])(backOffCard),
+    ["95×5"], "sets by place: older history without places is read by name");
+
+  // What a swap records.
+  eq(swapOrigin({ name: "Bench Press" }, "Dumbbell Press"), "Bench Press", "swapOrigin: records what it replaced");
+  eq(swapOrigin({ name: "Dumbbell Press", swappedFrom: "Bench Press" }, "Machine Press"), "Bench Press",
+    "swapOrigin: a second swap still records the original");
+  eq(swapOrigin({ name: "Dumbbell Press", swappedFrom: "Bench Press" }, "bench press"), undefined,
+    "swapOrigin: swapping back to the original records nothing");
+}
+
+// ── Notes follow the DAY, not the date ─────────────────────────────────────────
+// Push (d0) is done on Thu 1 Jan with an exercise note and a session note. The
+// week after, it's done on a different date, and both notes must still be
+// there. makeProgram's cycle also has a second Push (d4), which keeps its own.
+{
+  const prog = makeProgram();
+  const set = [{ type: "working" as const, weight: "100", reps: "5", done: true }];
+  const pushWk1: CompletedWorkout = {
+    id: "md1", date: "2026-01-01", completedAt: "2026-01-01T18:00:00.000Z", workoutName: "Push",
+    programId: "p1", dayId: "d0", durationSeconds: 0, sessionNotes: "Gym was packed",
+    exercises: [{ name: "Bench Press", notes: "Pause reps felt good", sets: set, programExerciseId: "e1" }],
+  };
+  const pullWk1: CompletedWorkout = {
+    ...pushWk1, id: "md2", date: "2026-01-02", completedAt: "2026-01-02T18:00:00.000Z", workoutName: "Pull",
+    dayId: "d1", sessionNotes: "Pull day note", exercises: [{ name: "Row", notes: "", sets: set, programExerciseId: "e2" }],
+  };
+  const history = [pullWk1, pushWk1];
+  const benchCard = { name: "Bench Press", programExerciseId: "e1" };
+  const hintsFor = (day: { name: string; programId?: string; dayId?: string }, beforeDate?: string, p: SavedProgram = prog) => {
+    const scope = prevDayScopeFor(day, p);
+    return [buildPrevNoteLookup(history, beforeDate, scope)(benchCard), buildPrevSessionNote(history, beforeDate, scope)];
+  };
+  const both = ["Pause reps felt good", "Gym was packed"];
+
+  // Change Day: Fri 9 Jan is Pull, switched to Push.
+  const changed = resolveWorkoutForDate(prog, { date: "2026-01-09", workoutName: "Push", programId: "p1", dayId: "d0" }, "2026-01-09", [prog])!;
+  eq(changed.dayId, "d0", "moved day: Change Day resolves the chosen slot");
+  eq(hintsFor(changed), both, "moved day: Change Day onto another date shows last week's exercise AND session notes");
+
+  // Move to Tomorrow: Thu 8 Jan is pushed, so Push lands on Fri 9 Jan.
+  const pushedProg = makeProgram({ pushedDates: ["2026-01-08"] });
+  const movedTomorrow = getWorkoutForDate(pushedProg, "2026-01-09")!;
+  eq(movedTomorrow.dayId, "d0", "moved day: Move to Tomorrow puts Push on the next day");
+  eq(hintsFor(movedTomorrow, undefined, pushedProg), both, "moved day: Move to Tomorrow keeps both notes");
+
+  // A journal log of Push on Sat 10 Jan only sees sessions before that date.
+  eq(hintsFor({ name: "Push", programId: "p1", dayId: "d0" }, "2026-01-10"), both, "moved day: a journal log on another date shows both notes");
+  eq(hintsFor({ name: "Push", programId: "p1", dayId: "d0" }, "2026-01-01"), [undefined, undefined],
+    "moved day: a journal log on or before the noted session doesn't see it");
+
+  // The cycle's other Push is a different day and keeps its own notes.
+  eq(hintsFor({ name: "Push", programId: "p1", dayId: "d4" }), [undefined, undefined], "moved day: the second Push (d4) doesn't borrow d0's notes");
+
+  // Session notes follow the exercise-note rules: newest session of the day
+  // wins, and one with no session note blocks the older one.
+  const scope = prevDayScopeFor({ name: "Push", programId: "p1", dayId: "d0" }, prog);
+  const pushWk2 = { ...pushWk1, id: "md3", date: "2026-01-09", completedAt: "2026-01-09T18:00:00.000Z", sessionNotes: "Felt strong" };
+  eq(buildPrevSessionNote([pushWk2, ...history], undefined, scope), "Felt strong", "session note: the newer note replaces the older one");
+  eq(buildPrevSessionNote([{ ...pushWk2, sessionNotes: "  " }, ...history], undefined, scope), undefined,
+    "session note: a session with no note BLOCKS the older one");
+  eq(buildPrevSessionNote([{ ...pushWk2, sessionNotes: undefined }, ...history], undefined, scope), undefined,
+    "session note: ...including one that never opened the notes card");
+  eq(buildPrevSessionNote([], undefined, scope), undefined, "session note: nothing logged yet -> no hint");
+}
+
 const fmtHist: CompletedWorkout[] = [{
   id: "w", date: "2026-03-01", completedAt: "2026-03-01T10:00:00.000Z", workoutName: "X", durationSeconds: 0,
   exercises: [{
@@ -410,7 +596,18 @@ eq(normalizeExerciseName("  Bench Press  "), "bench press", "normalizeExerciseNa
   const free: CompletedWorkout = { ...w, id: "uuid-f", programId: "" };
   const freeRow: WorkoutRow = { ...workoutToRow(free, "user-1", null), id: "uuid-f", created_at: "t", updated_at: "t" };
   eq(freeRow.program_id, null, "free workout -> program_id null");
+  eq(freeRow.program_unknown, false, "free workout -> program_unknown false");
   eq(workoutFromRow(freeRow).programId, "", "free workout program_id null -> ''");
+
+  // A legacy record (no programId) also has program_id null, and must come back
+  // as legacy (still attributed by name), not as a free workout (0033).
+  const legacy: CompletedWorkout = { ...w, id: "uuid-l", programId: undefined };
+  const legacyRow: WorkoutRow = { ...workoutToRow(legacy, "user-1", null), id: "uuid-l", created_at: "t", updated_at: "t" };
+  eq([legacyRow.program_id, legacyRow.program_unknown], [null, true], "legacy workout -> program_id null, program_unknown true");
+  eq(workoutFromRow(legacyRow).programId, undefined, "legacy workout comes back legacy, not free");
+  const preFlagRow: Partial<WorkoutRow> = { ...legacyRow };
+  delete preFlagRow.program_unknown;
+  eq(workoutFromRow(preFlagRow as WorkoutRow).programId, "", "a row from before program_unknown existed reads as free, as it always did");
 
   const j: JournalEntry = { id: "uuid-j", title: "T", body: "B", createdAt: "2026-01-01T00:00:00.000Z" };
   const jRow: JournalRow = { ...journalToRow(j, "user-1"), id: "uuid-j", updated_at: "t" };
@@ -448,6 +645,8 @@ eq(normalizeExerciseName("  Bench Press  "), "bench press", "normalizeExerciseNa
   eq(payload.p_programs.length, 2, "replacePayload: program count");
   eq(payload.p_programs[0].start_date, "2026-01-01", "replacePayload: start_date converted to YMD");
   eq(payload.p_workouts.map(w => w.program_index), [0, 1, null, null, null], "replacePayload: program_index resolves by array position; free/legacy/missing -> null");
+  eq(payload.p_workouts.map(w => w.program_unknown), [false, false, false, true, false],
+    "replacePayload: only the legacy record is marked program_unknown (a missing program is still a known one)");
   // The uuid-only program_id must NOT leak into the payload (server uses program_index).
   check(!("program_id" in (payload.p_workouts[0] as object)), "replacePayload: program_id stripped from workout payload");
 }

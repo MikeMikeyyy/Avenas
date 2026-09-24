@@ -17,6 +17,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
 import DumbbellIcon from "./DumbbellIcon";
+import FlameIcon from "./FlameIcon";
 import ExpandReveal, { useReveal, useRevealChevron } from "./ExpandReveal";
 import { APP_DARK, APP_LIGHT, ACCT, AURORA, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
 import { pill, pillGlow, PILL_H_XS } from "../constants/buttons";
@@ -24,6 +25,11 @@ import { getTier } from "../constants/streakTiers";
 import type { Achievement } from "../constants/achievements";
 import { describeAchievement, formatPRLine } from "../utils/achievements";
 import { daysBetweenYMD, todayYMD, toYMD } from "../utils/dates";
+
+/** The flame's size budget in the 34pt badge circle. FlameIcon renders 0.86 of
+ *  it tall and about two thirds of that wide, so 26 draws a 22pt flame with a
+ *  ring of the wash around it, like the other glyphs at 17–18pt. */
+const FLAME_SIZE = 26;
 
 /** "Today", "Yesterday", "3 days ago": calendar days, not 24-hour blocks. */
 function earnedWhen(iso: string): string {
@@ -33,7 +39,7 @@ function earnedWhen(iso: string): string {
   return `${days} days ago`;
 }
 
-function badgeFor(a: Achievement, isDark: boolean): { color: string; icon: (c: string) => React.ReactNode } {
+function badgeFor(a: Achievement, isDark: boolean, streakColor?: string): { color: string; icon: (c: string) => React.ReactNode } {
   switch (a.category) {
     case "pr":
       return { color: isDark ? GOLD_DARK : GOLD, icon: c => <Ionicons name="trophy" size={17} color={c} /> };
@@ -41,23 +47,37 @@ function badgeFor(a: Achievement, isDark: boolean): { color: string; icon: (c: s
       return { color: ACCT, icon: c => <DumbbellIcon size={18} color={c} /> };
     case "program":
       return { color: AURORA.aqua, icon: c => <Ionicons name="ribbon" size={17} color={c} /> };
-    case "streak":
-      // The tier colour the streak badge and flame use at that length.
-      return { color: getTier(a.days).color, icon: c => <Ionicons name="flame" size={17} color={c} /> };
+    case "streak": {
+      // The streak's own flame: the animated Lottie (components/FlameIcon.tsx),
+      // the same artwork Home's streak badge and the streak page draw. It was a
+      // static Ionicons flame, the only one of those left in the app.
+      //
+      // `streakColor` is the flame you're actually showing — once a streak
+      // reaches the last tier you pick which one you wear, and the card follows
+      // that choice rather than telling you your flame is a different colour
+      // here. Without a choice it falls back to the tier that length earns.
+      return {
+        color: streakColor ?? getTier(a.days).color,
+        icon: c => <FlameIcon size={FLAME_SIZE} color={c} />,
+      };
+    }
   }
 }
 
-function AchievementCard({ achievement, isDark, isKg, onOpenWorkout }: {
+function AchievementCard({ achievement, isDark, isKg, streakColor, onOpenWorkout }: {
   achievement: Achievement;
   isDark: boolean;
   isKg: boolean;
+  /** The flame the streak is currently wearing (Home's `activeColor`): the one
+   *  you picked at the top tier, or the tier your streak has reached. */
+  streakColor?: string;
   /** Opens where the achievement happened. */
   onOpenWorkout: () => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const copy = describeAchievement(achievement, isKg);
   const when = earnedWhen(achievement.earnedAt);
-  const badge = badgeFor(achievement, isDark);
+  const badge = badgeFor(achievement, isDark, streakColor);
   // Only a multi-PR session has more to say than its own subtitle, so only it
   // expands; every other card goes straight where it happened.
   const prs = achievement.category === "pr" ? achievement.prs : [];

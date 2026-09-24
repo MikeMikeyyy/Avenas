@@ -36,10 +36,15 @@ function previewValues(set: LiveSet, prevHint: string | undefined): { weight: st
   return { weight: set.weight, reps: set.reps };
 }
 
+/**
+ * `prevHintsFor` is asked by the session exercise's id, not its name: a day
+ * can list the same exercise twice, and each has its own previous sets
+ * (utils/workout.ts buildPrevSetsLookup).
+ */
 export function buildLiveActivityQueue(
   exercises: LiveActivityExercise[],
   log: Record<string, LiveExerciseLog | undefined>,
-  prevHintsFor: (exerciseName: string) => string[],
+  prevHintsFor: (exerciseId: string) => string[],
 ): { queue: LiveActivityPendingSet[]; doneCount: number; totalCount: number } {
   const queue: LiveActivityPendingSet[] = [];
   let doneCount = 0;
@@ -48,7 +53,7 @@ export function buildLiveActivityQueue(
   for (const ex of exercises) {
     const exLog = log[ex.id];
     if (!exLog) continue;
-    const hints = prevHintsFor(ex.name);
+    const hints = prevHintsFor(ex.id);
     const workingTotal = exLog.working.length;
     const flat = [
       ...exLog.warmup.map((s, i) => ({ set: s, type: "warmup" as const, localIdx: i })),
@@ -88,7 +93,8 @@ export function buildLiveActivityPayload(args: {
   workoutName: string;
   exercises: LiveActivityExercise[];
   log: Record<string, LiveExerciseLog | undefined>;
-  prevHintsFor: (exerciseName: string) => string[];
+  /** Previous-set hints for a session exercise, by its id. */
+  prevHintsFor: (exerciseId: string) => string[];
   isKg: boolean;
   /** Effective timer start (epoch ms) while running, null when stopped/paused. */
   timerStartMs: number | null;

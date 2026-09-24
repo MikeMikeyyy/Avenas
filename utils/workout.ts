@@ -427,6 +427,14 @@ export function prevDayScopeFor(
  *
  * A session that included the exercise with an empty note therefore BLOCKS the
  * older one rather than being skipped over.
+ *
+ * An exercise SWAPPED IN during a session also stands for the one it replaced
+ * (`swappedFrom`): swap Bench Press for Dumbbell Press and note "bench was
+ * taken", and next week, when the program shows Bench Press again, that's its
+ * hint. It's the most recent note written in that place, which is the rule
+ * above. The swap-in keeps its own note under its own name too. Within one
+ * session an exercise done under its own name wins over a swap-in standing for
+ * it.
  */
 export function buildPrevNotesByName(
   history: CompletedWorkout[],
@@ -438,18 +446,127 @@ export function buildPrevNotesByName(
   );
   const out: Record<string, string> = {};
   const seen = new Set<string>();
+  const claim = (name: string, notes: string | undefined) => {
+    const key = normalizeExerciseName(name);
+    if (!key || seen.has(key)) return; // newest session wins, note or no note
+    seen.add(key);
+    const note = (notes ?? "").trim();
+    if (note) out[key] = note;
+  };
   for (const workout of sorted) {
     if (beforeDate && !(workout.date < beforeDate)) continue;
     if (day && !sessionIsOnDay(workout, day)) continue;
-    for (const ex of workout.exercises) {
-      const key = normalizeExerciseName(ex.name);
-      if (seen.has(key)) continue; // newest session wins, note or no note
-      seen.add(key);
-      const note = (ex.notes ?? "").trim();
-      if (note) out[key] = note;
-    }
+    for (const ex of workout.exercises) claim(ex.name, ex.notes);
+    for (const ex of workout.exercises) if (ex.swappedFrom) claim(ex.swappedFrom, ex.notes);
   }
   return out;
+}
+
+/** What an exercise card asks the note lookup with. */
+export type PrevExerciseKey = {
+  name: string;
+  /** Which program exercise the card is (its id in the day's WorkoutMap).
+   *  Absent for one added during the session, which has no place in the
+   *  program. */
+  programExerciseId?: string;
+  /** Set on a swap-in (see CompletedExercise.swappedFrom). */
+  swappedFrom?: string;
+};
+
+/** The sessions a hint may draw on, newest first: strictly before
+ *  `beforeDate` when given, and only those performed on `day` when given. The
+ *  same filter `buildPrevByName` and `buildPrevNotesByName` apply inline. */
+function hintSessions(history: CompletedWorkout[], beforeDate?: string, day?: PrevDayScope): CompletedWorkout[] {
+  return [...history]
+    .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
+    .filter(w => (!beforeDate || w.date < beforeDate) && (!day || sessionIsOnDay(w, day)));
+}
+
+const sameExercise = (a?: string, b?: string) =>
+  !!a && !!b && normalizeExerciseName(a) === normalizeExerciseName(b);
+
+/** One logged exercise's sets as "weight×reps" hints (or weight / reps / "—"). */
+function formatPrevSets(ex: CompletedWorkout["exercises"][number]): string[] {
+  return ex.sets.map(s => {
+    if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
+    return s.weight || s.reps || "—";
+  });
+}
+
+/**
+ * The "Previous:" note for each exercise card, under the same rules as
+ * `buildPrevNotesByName` (last session only, an empty note blocks, day-scoped),
+ * but with a program exercise matched by its PLACE in the program rather than
+ * its name.
+ *
+ * Why: a day can list the same exercise twice (a heavy and a back-off Bench
+ * Press). By name both would show whichever note came first last week; by
+ * place each shows its own, and moving exercises around in the session changes
+ * nothing. A place counts while it still holds that exercise, done as itself or
+ * swapped out for another that session (whose note it then takes, which is the
+ * swappedFrom rule). A place the program has since given a different exercise
+ * doesn't pass on notes written about the old one.
+ *
+ * A session saved before places were recorded (no programExerciseId anywhere in
+ * it) is read by name exactly as before, so existing history keeps working;
+ * two same-named exercises share its note until a newer session separates them.
+ *
+ * A swap-in, or an exercise added during the session, has no place of its own,
+ * and looks itself up by name (`buildPrevNotesByName`).
+ */
+export function buildPrevNoteLookup(
+  history: CompletedWorkout[],
+  beforeDate?: string,
+  day?: PrevDayScope,
+): (ex: PrevExerciseKey) => string | undefined {
+  const sessions = hintSessions(history, beforeDate, day);
+  const byName = buildPrevNotesByName(history, beforeDate, day);
+  return ex => {
+    if (!ex.programExerciseId || ex.swappedFrom) return byName[normalizeExerciseName(ex.name)];
+    for (const w of sessions) {
+      const placed = w.exercises.some(x => x.programExerciseId);
+      const hit = placed
+        ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId
+            && (sameExercise(x.name, ex.name) || sameExercise(x.swappedFrom, ex.name)))
+        : w.exercises.find(x => sameExercise(x.name, ex.name)) ?? w.exercises.find(x => sameExercise(x.swappedFrom, ex.name));
+      if (hit) return (hit.notes ?? "").trim() || undefined;
+    }
+    return undefined;
+  };
+}
+
+/**
+ * The "Previous:" hint in the SESSION notes box: the session note written the
+ * last time this day was done, under the same rules as an exercise's note. Only
+ * the most recent session counts, and one with no session note blocks the older
+ * ones, so a one-off remark doesn't follow you for months.
+ *
+ * Scoped by `day` exactly as the exercise notes are, which is what makes it
+ * follow the DAY rather than the date: do Monday's Upper on Tuesday (Change Day,
+ * Move to Tomorrow, or a journal log) and it's the same slot, so last week's
+ * note is there.
+ */
+export function buildPrevSessionNote(
+  history: CompletedWorkout[],
+  beforeDate?: string,
+  day?: PrevDayScope,
+): string | undefined {
+  const last = hintSessions(history, beforeDate, day)[0];
+  return (last?.sessionNotes ?? "").trim() || undefined;
+}
+
+/**
+ * What `swappedFrom` becomes when the exercise now called `current.name` is
+ * swapped for `newName`: the FIRST exercise in that place, so swapping A for B
+ * and then B for C still records A (the one the program has). Swapping back to
+ * the original records nothing, since nothing was replaced.
+ */
+export function swapOrigin(
+  current: { name: string; swappedFrom?: string },
+  newName: string,
+): string | undefined {
+  const origin = current.swappedFrom ?? current.name;
+  return normalizeExerciseName(origin) === normalizeExerciseName(newName) ? undefined : origin;
 }
 
 export function buildPrevByName(
@@ -467,11 +584,47 @@ export function buildPrevByName(
     for (const ex of workout.exercises) {
       const key = normalizeExerciseName(ex.name);
       if (out[key]) continue; // newest session wins
-      out[key] = ex.sets.map(s => {
-        if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
-        return s.weight || s.reps || "—";
-      });
+      out[key] = formatPrevSets(ex);
     }
   }
   return out;
+}
+
+/**
+ * The previous sets ("Previous: 100×5") for each exercise card, under the same
+ * day scoping as `buildPrevByName`, but with a program exercise matched by its
+ * PLACE in the program (programExerciseId), as `buildPrevNoteLookup` does for
+ * notes: a day that lists Bench Press twice shows the heavy numbers on the
+ * heavy one and the back-off numbers on the back-off one, whatever order the
+ * session was done in.
+ *
+ * One deliberate difference from notes: a place only answers with numbers
+ * lifted by THIS exercise there. When it was swapped out last time, the
+ * swap-in's weights were for another lift, so the walk goes on to the last time
+ * this exercise itself was done in that place. And a place with no numbers of
+ * its own (new to the program, or only ever swapped out) shows the exercise's
+ * last numbers from anywhere on this day, by name, which is the same lift.
+ *
+ * Sessions saved before places were recorded are read by name, as before. A
+ * swap-in, or an exercise added during the session, is looked up by name.
+ */
+export function buildPrevSetsLookup(
+  history: CompletedWorkout[],
+  beforeDate?: string,
+  day?: PrevDayScope,
+): (ex: PrevExerciseKey) => string[] | undefined {
+  const sessions = hintSessions(history, beforeDate, day);
+  const byName = buildPrevByName(history, beforeDate, day);
+  return ex => {
+    const ownName = byName[normalizeExerciseName(ex.name)];
+    if (!ex.programExerciseId || ex.swappedFrom) return ownName;
+    for (const w of sessions) {
+      const placed = w.exercises.some(x => x.programExerciseId);
+      const hit = placed
+        ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId && sameExercise(x.name, ex.name))
+        : w.exercises.find(x => sameExercise(x.name, ex.name));
+      if (hit) return formatPrevSets(hit);
+    }
+    return ownName;
+  };
 }

@@ -35,17 +35,12 @@ import { pill, pillGlow, haloGlow, PILL_RADIUS, PILL_SHADOW } from "../../consta
 import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
 import FavouriteStar from "../FavouriteStar";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useAuth } from "../../contexts/AuthContext";
 import {
   appendSharedPrograms,
   batchKeyOf,
-  loadClientData,
   loadClients,
-  loadMyGroupReviews,
-  loadSentPrograms,
-  loadSharedPrograms,
   makeInitials,
-  migrateBroadcastShares,
-  migrateCoachReceivedShares,
   removeSharedProgramBatch,
   saveClients,
   setGroupReviewDone,
@@ -54,16 +49,15 @@ import {
   type SentProgram,
   type SharedProgram,
 } from "../../utils/trainerStore";
-import { seedMockClientsIfNeeded } from "../../utils/mockClientSeed";
-import { resolveTrainerRoster } from "../../utils/roster";
+import { EMPTY_PT_HUB, fetchPTHub, peekPTHub, savePTHub, type PTHubData } from "../../utils/trainerHub";
+import { hydrateGroupPages } from "../../utils/groupPage";
 import { getJSON } from "../../utils/storage";
 import { removeShareConfirm } from "../../utils/removeShare";
-import { loadFavouriteGroupIds, loadFavouriteMemberIds, loadGroupRows, sortByFavourite } from "../../utils/groupStore";
+import { loadGroupRows, sortByFavourite } from "../../utils/groupStore";
 import { groupAlertCounts } from "../../utils/groupAlerts";
-import { acceptGroupInvite, declineGroupInvite, fetchAllGroupMemberships, fetchMyGroupInvites } from "../../lib/groups";
+import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites } from "../../lib/groups";
 import GroupInviteCard from "./GroupInviteCard";
 import GroupAvatar from "./GroupAvatar";
-import { getMyUid } from "../../lib/chat";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import type { Group, GroupInvite } from "../../constants/groups";
 
@@ -297,32 +291,59 @@ export default function PTHome() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { unread: unreadMessages, refresh: refreshUnread } = useUnreadMessages();
+  // The account this page's data belongs to. Constant for the page's life: the
+  // tab remounts it when the account changes (app/(tabs)/trainer-hub.tsx).
+  const { userId } = useAuth();
+  const owner = userId ?? "";
 
-  const [clients, setClients] = useState<Client[]>([]);
-  // "None" is only true once we've looked. Both empty states ("No clients yet",
-  // the groups explainer) drew during the load, to trainers who have clients.
-  const [clientsLoaded, setClientsLoaded] = useState(false);
-  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  /**
+   * Everything on this page, as ONE value (utils/trainerHub.ts).
+   *
+   * It starts on the copy saved last time, so the first frame is the whole
+   * page, and a load replaces it in a single render, so a refresh changes the
+   * page in place. It used to be a dozen separate pieces of state filled in by
+   * a chain of reads, each section appearing as its read landed, which built
+   * the page top to bottom over several seconds on every launch.
+   *
+   * Null only before the first load ever finishes (no saved copy yet), and
+   * that's what "not loaded" means below: "None" is only true once we've
+   * looked, so the empty states ("No clients yet", the groups explainer) wait
+   * for it rather than drawing to trainers who have clients.
+   */
+  const [hub, setHub] = useState<PTHubData | null>(() => peekPTHub(owner));
+  const loaded = hub !== null;
+  const {
+    clients,
+    reviews,
+    groupReviews,
+    sharedOut,
+    activeProgramByClient,
+    groups,
+    groupInvites,
+    groupMemberships,
+    unreadByGroup,
+    favouriteGroupIds,
+    favouriteMemberIds,
+    myUid,
+  } = hub ?? EMPTY_PT_HUB;
+  const favourites = useMemo(() => new Set(favouriteGroupIds), [favouriteGroupIds]);
+  const favouriteMembers = useMemo(() => new Set(favouriteMemberIds), [favouriteMemberIds]);
+  // Local, and only the program picker reads it, so it's not part of the hub.
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
-  const [reviews, setReviews] = useState<SentProgram[]>([]);
-  // Open reviews posted to a group I coach. Same shape, different route in:
-  // they're addressed to the group's owner, so they reach me through the group
-  // policy rather than through my own inbox.
-  const [groupReviews, setGroupReviews] = useState<SentProgram[]>([]);
-  const [activeProgramByClient, setActiveProgramByClient] = useState<Record<string, string>>({});
-  const [sharedOut, setSharedOut] = useState<SharedProgram[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  // Groups another trainer has added me to and I haven't answered yet.
-  const [groupInvites, setGroupInvites] = useState<GroupInvite[]>([]);
-  const [groupMemberships, setGroupMemberships] = useState<Record<string, string[]>>({});
-  /** groupId → unread messages in its thread, one half of a group's badge. */
-  const [unreadByGroup, setUnreadByGroup] = useState<Record<string, number>>({});
-  /** Mine, for "is this share addressed to me". Null until the load resolves. */
-  const [myUid, setMyUid] = useState<string | null>(null);
-  const [favourites, setFavourites] = useState<Set<string>>(new Set());
-  /** Starred PEOPLE, oldest star first. Set from a client's own page (its ⋯
-   *  menu) or a group roster; this list only reads it. */
-  const [favouriteMembers, setFavouriteMembers] = useState<Set<string>>(new Set());
+
+  // Whatever the page shows is what it opens on next time, including a change
+  // made here (a removed send, a declined invite) that no load has seen yet.
+  useEffect(() => {
+    if (hub) savePTHub(owner, hub);
+  }, [hub, owner]);
+
+  // Each group's saved page, read off the device now so tapping a group opens
+  // on it rather than on a spinner (utils/groupPage.ts). Device reads only.
+  const groupIdsKey = groups.map(g => g.id).join(",");
+  useEffect(() => {
+    if (groupIdsKey) void hydrateGroupPages(owner, groupIdsKey.split(","));
+  }, [owner, groupIdsKey]);
+
   const [kbHeight, setKbHeight] = useState(0);
   // Live-ish presence for connected clients + the Connect button badge count.
   // Disconnecting a real connection lives on the Connect screen (app/connect.tsx).
@@ -386,109 +407,20 @@ export default function PTHome() {
   }, []);
 
   /**
-   * Everything this page shows, in one pass.
-   *
-   * Driven by two things: arriving at the page, and pulling it down. The caller
-   * owns the `cancelled` flag, because a focus load has to stop writing state
-   * when you navigate away mid-flight, while a pull-to-refresh runs to
-   * completion — you're looking right at it.
+   * Arriving at the page brings it up to date: behind the saved copy it opened
+   * on, and in one render when the load lands. If the startup prefetch is still
+   * running, this joins it rather than asking the server twice. The cancel flag
+   * stops a load that outlives the visit from writing to the page; its result
+   * is saved regardless, so the next open starts from it.
    */
-  const loadAll = useCallback(async (isCancelled: () => boolean) => {
-      try {
-        const seeded = await seedMockClientsIfNeeded();
-        const fresh = seeded.length > 0 ? seeded : await loadClients();
-
-        // Live connections joined with the local roster, bucketed by the
-        // counterpart's account type — a connected TRAINER belongs on the My
-        // Trainers page, not in here. Blocked ids and stale local snapshots of
-        // severed connections are filtered inside the resolver; offline it
-        // degrades to the local roster.
-        //
-        // Resolved FIRST and shown as soon as it lands. The client list used to
-        // wait for every load below — sent programs, three group queries, shares,
-        // each client's data — run one after another, and drew "No clients yet"
-        // for the whole of that.
-        const merged = (await resolveTrainerRoster()).clients;
-        if (!isCancelled()) { setClients(merged); setClientsLoaded(true); }
-
-        const progs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-        const sent = await loadSentPrograms();
-        const fromGroups = await loadMyGroupReviews();
-
-        // Groups + their rosters (two queries total, not one per group), so the
-        // send flow can offer "everyone in this group" without a second load.
-        let groupList: Group[] = [];
-        let memberships: Record<string, string[]> = {};
-        let favIds = new Set<string>();
-        let invites: GroupInvite[] = [];
-        let unreadByGroup: Record<string, number> = {};
-        try {
-          favIds = await loadFavouriteGroupIds();
-          const favPeople = await loadFavouriteMemberIds();
-          if (!isCancelled()) setFavouriteMembers(favPeople);
-          const uid = await getMyUid();
-          if (!isCancelled()) setMyUid(uid);
-          if (uid) {
-            // A trainer gets invited to other trainers' groups the same way a gym
-            // user does, so the invite list belongs on both hubs.
-            //
-            // loadGroupRows rather than fetchMyGroups: it's the same groups with
-            // each thread's unread count worked out, which is half of what the
-            // badge on a group card counts.
-            const [rows, ms, inv] = await Promise.all([
-              loadGroupRows(),
-              fetchAllGroupMemberships(uid),
-              fetchMyGroupInvites(),
-            ]);
-            // Starred groups pinned above the rest, newest-first within each half.
-            groupList = sortByFavourite(rows.map(r => r.group), favIds);
-            unreadByGroup = Object.fromEntries(rows.map(r => [r.group.id, r.unreadCount]));
-            memberships = ms;
-            invites = inv;
-          }
-        } catch (e) {
-          if (__DEV__) console.warn("[avenas] load groups", e);
-        }
-        // Groups show as soon as they're known too, rather than after shares.
-        if (!isCancelled()) {
-          setGroups(groupList);
-          setGroupMemberships(memberships);
-          setFavourites(favIds);
-          setGroupInvites(invites);
-          setUnreadByGroup(unreadByGroup);
-          setGroupsLoaded(true);
-        }
-
-        await migrateBroadcastShares(fresh);
-        await migrateCoachReceivedShares();
-        const shared = await loadSharedPrograms();
-        const activeMap: Record<string, string> = {};
-        await Promise.all(merged.map(async c => {
-          const data = await loadClientData(c.id);
-          const active = data.programs.find(p => p.status === "active");
-          if (active) activeMap[c.id] = active.name;
-        }));
-        if (!isCancelled()) {
-          setMyPrograms(Array.isArray(progs) ? progs : []);
-          setReviews(sent);
-          setGroupReviews(fromGroups);
-          setSharedOut(shared);
-          setActiveProgramByClient(activeMap);
-        }
-      } catch (err) {
-        if (__DEV__) console.warn("[avenas] load trainer hub", err);
-      } finally {
-        // Settle both even on failure, so a thrown load leaves an honest empty
-        // state rather than a blank page. Harmless when already true.
-        if (!isCancelled()) { setClientsLoaded(true); setGroupsLoaded(true); }
-      }
-  }, []);
-
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    void loadAll(() => cancelled);
+    void fetchPTHub(owner).then(next => { if (!cancelled) setHub(next); });
+    void getJSON<SavedProgram[]>(PROGRAMS_KEY, []).then(progs => {
+      if (!cancelled) setMyPrograms(Array.isArray(progs) ? progs : []);
+    });
     return () => { cancelled = true; };
-  }, [loadAll]));
+  }, [owner]));
 
   /**
    * Pull down to re-read everything: new messages, programs a client sent back,
@@ -496,18 +428,26 @@ export default function PTHome() {
    * arrive, but a trainer sitting on it waiting for a reply had no way to ask
    * again short of leaving and coming back.
    *
-   * It runs to completion rather than taking a cancel flag — you're holding the
-   * page open, so there's nothing to cancel — and always clears the spinner,
-   * since `loadAll` swallows its own failures.
+   * Always its OWN read (`fresh`), never the arrival load or the startup
+   * prefetch: what you pulled for is what the server says now. It runs to
+   * completion rather than taking a cancel flag — you're holding the page open,
+   * so there's nothing to cancel — and always clears the spinner, since
+   * `fetchPTHub` never rejects.
    */
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     // The Messages badge too: it normally recounts on focus, which a pull
     // isn't, so without this the one number you pulled for wouldn't move.
-    await Promise.all([loadAll(() => false), refreshUnread()]);
+    const [next, progs] = await Promise.all([
+      fetchPTHub(owner, { fresh: true }),
+      getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+      refreshUnread(),
+    ]);
+    setHub(next);
+    setMyPrograms(Array.isArray(progs) ? progs : []);
     setRefreshing(false);
-  }, [loadAll, refreshUnread]);
+  }, [owner, refreshUnread]);
 
   // Starred clients pinned on top, oldest star first, then the roster's own
   // order — the same rule the group roster and the groups list follow, off the
@@ -535,7 +475,7 @@ export default function PTHome() {
     // connection itself.
     const local = await loadClients();
     await saveClients([newClient, ...local]);
-    setClients(prev => [newClient, ...prev]);
+    setHub(h => h && { ...h, clients: [newClient, ...h.clients] });
   }, []);
 
   const openNewGroup = useCallback(() => {
@@ -561,10 +501,13 @@ export default function PTHome() {
     // Same read as the initial load, so a group joined from an invite arrives
     // with its badge rather than an empty one until the next focus.
     const [rows, inv] = await Promise.all([loadGroupRows(), fetchMyGroupInvites()]);
-    setGroups(sortByFavourite(rows.map(r => r.group), favourites));
-    setUnreadByGroup(Object.fromEntries(rows.map(r => [r.group.id, r.unreadCount])));
-    setGroupInvites(inv);
-  }, [favourites]);
+    setHub(h => h && {
+      ...h,
+      groups: sortByFavourite(rows.map(r => r.group), new Set(h.favouriteGroupIds)),
+      unreadByGroup: Object.fromEntries(rows.map(r => [r.group.id, r.unreadCount])),
+      groupInvites: inv,
+    });
+  }, []);
 
   const handleDeclineInvite = useCallback((invite: GroupInvite) => {
     Alert.alert(
@@ -582,7 +525,7 @@ export default function PTHome() {
               Alert.alert("Couldn't decline", e instanceof Error ? e.message : "Check your connection and try again.");
               return;
             }
-            setGroupInvites(prev => prev.filter(i => i.groupId !== invite.groupId));
+            setHub(h => h && { ...h, groupInvites: h.groupInvites.filter(i => i.groupId !== invite.groupId) });
           },
         },
       ],
@@ -649,8 +592,9 @@ export default function PTHome() {
               Alert.alert("Couldn't remove it", e instanceof Error ? e.message : "Check your internet and try again.");
               return;
             }
-            if (entry.groupId) setGroupReviews(prev => prev.filter(r => r.id !== entry.id));
-            else setReviews(prev => prev.filter(r => r.id !== entry.id));
+            setHub(h => h && (entry.groupId
+              ? { ...h, groupReviews: h.groupReviews.filter(r => r.id !== entry.id) }
+              : { ...h, reviews: h.reviews.filter(r => r.id !== entry.id) }));
           },
         },
       ],
@@ -724,7 +668,7 @@ export default function PTHome() {
           style: "destructive",
           onPress: async () => {
             await removeSharedProgramBatch(batch.key);
-            setSharedOut(prev => prev.filter(s => batchKeyOf(s) !== batch.key));
+            setHub(h => h && { ...h, sharedOut: h.sharedOut.filter(s => batchKeyOf(s) !== batch.key) });
           },
         },
       ]
@@ -764,7 +708,7 @@ export default function PTHome() {
       Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
       return;
     }
-    setSharedOut(prev => [...entries, ...prev]);
+    setHub(h => h && { ...h, sharedOut: [...entries, ...h.sharedOut] });
     Alert.alert("Program Sent", `"${pendingProgram.name}" was sent to ${targets.length} client${targets.length === 1 ? "" : "s"}.`);
     setPendingProgram(null);
   }, [pendingProgram, clients]);
@@ -888,7 +832,7 @@ export default function PTHome() {
           </View>
         </BounceButton>
 
-        {!clientsLoaded ? null : filtered.length === 0 ? (
+        {!loaded ? null : filtered.length === 0 ? (
           search ? (
             <NeuCard dark={isDark} radius={12}>
               <View style={styles.noMatchRow}>
@@ -967,7 +911,7 @@ export default function PTHome() {
           />
         ))}
         {groups.length === 0 ? (
-          groupsLoaded && groupInvites.length === 0 ? (
+          loaded && groupInvites.length === 0 ? (
             <NeuCard dark={isDark} radius={16}>
               <Text style={[styles.groupEmpty, { color: t.ts }]}>
                 Put clients in a group to message them together and send one program to all of them.

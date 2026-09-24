@@ -39,6 +39,26 @@ export type CompletedExercise = {
   name: string;
   sets: CompletedSet[];
   notes: string;
+  /**
+   * The exercise this one was swapped in for during the session: what the
+   * program had in its place. Absent when nothing was swapped.
+   *
+   * Next week the program shows the original again, and this is how the note
+   * written on the swap-in reaches it as the "Previous:" hint
+   * (utils/workout.ts buildPrevNotesByName). Only notes follow it: previous
+   * WEIGHTS stay by name, since another lift's numbers would be wrong.
+   */
+  swappedFrom?: string;
+  /**
+   * The program exercise this was logged against: that exercise's `id` in the
+   * day's WorkoutMap. Kept through a swap (the place is the same, the exercise
+   * in it changed). Absent for one added during the session, and on sessions
+   * saved before this existed.
+   *
+   * It's what tells two same-named exercises in one day apart, so each gets its
+   * own "Previous:" note (utils/workout.ts buildPrevNoteLookup).
+   */
+  programExerciseId?: string;
 };
 
 export type CompletedWorkout = {

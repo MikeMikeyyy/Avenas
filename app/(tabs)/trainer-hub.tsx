@@ -3,15 +3,20 @@ import { View } from "react-native";
 import { useFocusEffect } from "expo-router";
 
 import { useAccountType } from "../../contexts/AccountTypeContext";
+import { useAuth } from "../../contexts/AuthContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT } from "../../constants/theme";
 import { hasAcceptedCommunityTerms, acceptCommunityTerms } from "../../utils/moderation";
+import { hubKindFor, hydrateTrainerHub } from "../../utils/trainerHub";
 import PTHome from "../../components/trainer/PTHome";
 import MyPTHome from "../../components/trainer/MyPTHome";
 import CommunityGuidelinesGate from "../../components/trainer/CommunityGuidelinesGate";
 
 export default function TrainerHubScreen() {
   const { accountType } = useAccountType();
+  const { userId } = useAuth();
+  const owner = userId ?? "";
+  const kind = hubKindFor(accountType);
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
@@ -22,11 +27,15 @@ export default function TrainerHubScreen() {
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        const ok = await hasAcceptedCommunityTerms();
+        // The page's saved copy (utils/pageSnapshot.ts) is read alongside the
+        // terms, so the hub mounts already holding it: its first frame is the
+        // whole page rather than an empty one that fills in as the network
+        // answers. A no-op once the startup prefetch has read it.
+        const [ok] = await Promise.all([hasAcceptedCommunityTerms(), hydrateTrainerHub(kind, owner)]);
         if (!cancelled) setAccepted(ok);
       })();
       return () => { cancelled = true; };
-    }, []),
+    }, [kind, owner]),
   );
 
   const onAccept = useCallback(async () => {
@@ -38,5 +47,8 @@ export default function TrainerHubScreen() {
   if (accepted === null) return <View style={{ flex: 1, backgroundColor: t.bg }} />;
   if (!accepted) return <CommunityGuidelinesGate onAccept={onAccept} />;
 
-  return accountType === "pt" ? <PTHome /> : <MyPTHome />;
+  // Keyed by account: a hub's state belongs to the account it was loaded for,
+  // so a different account starts over from its own saved copy instead of
+  // inheriting (and re-saving) the last one's.
+  return accountType === "pt" ? <PTHome key={owner} /> : <MyPTHome key={owner} />;
 }

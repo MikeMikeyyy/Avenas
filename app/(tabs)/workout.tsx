@@ -21,7 +21,7 @@ import FadeScreen from "../../components/FadeScreen";
 import BounceButton from "../../components/BounceButton";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
-import ExerciseNotesField from "../../components/ExerciseNotesField";
+import ExerciseNotesField, { ReuseNoteChip, prevNotePlaceholder } from "../../components/ExerciseNotesField";
 import DumbbellIcon from "../../components/DumbbellIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
@@ -37,7 +37,7 @@ import { buildLiveActivityPayload } from "../../utils/liveActivity";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
-import { getEffectiveToday, resolveWorkoutForDate, buildPrevByName, buildPrevNotesByName, prevDayScopeFor, normalizeExerciseName, type DayOverride } from "../../utils/workout";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type DayOverride } from "../../utils/workout";
 import { resumeWithPrompt } from "../../utils/programPause";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../../utils/units";
@@ -77,6 +77,22 @@ function fmtTime(secs: number): string {
 type SetLog = { weight: string; reps: string; done: boolean; fillKey: number; originWorkingIdx?: number };
 type ExerciseLog = { warmup: SetLog[]; working: SetLog[]; notes: string };
 type WorkoutLog = Record<string, ExerciseLog>;
+
+/** An exercise in today's session: the program's (or one added mid-session),
+ *  plus what Finish records about where it came from. */
+type SessionExercise = Exercise & {
+  /** What it was swapped in for (CompletedExercise.swappedFrom). */
+  swappedFrom?: string;
+  /** Which program exercise it is (CompletedExercise.programExerciseId). */
+  programExerciseId?: string;
+};
+
+/** A program day's exercises as session exercises, each marked with which
+ *  program exercise it is. An exercise added mid-session never gets one, so a
+ *  session exercise either has a place in the program or plainly doesn't. */
+function withProgramIds(exercises: Exercise[]): SessionExercise[] {
+  return exercises.map(e => ({ ...e, programExerciseId: e.id }));
+}
 
 function makeSet(): SetLog {
   return { weight: "", reps: "", done: false, fillKey: 0 };
@@ -996,7 +1012,7 @@ interface ExerciseCardProps {
   isLocked?: boolean;
   prevSets?: string[];
   /** The note written on this exercise last time (utils/workout.ts
-   *  buildPrevNotesByName). Shown as a hint, never typed into. */
+   *  buildPrevNoteLookup). Shown as a hint, never typed into. */
   prevNote?: string;
   hideIndexLabel?: boolean;
   numberBadge?: number;
@@ -1276,9 +1292,12 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
             <View style={[styles.editMoveRow, { borderTopColor: divider }]}>
               {/* Icon AND label in one target. The handle alone was a 36pt box
                   with the words sitting outside it, so the obvious thing to
-                  aim at wasn't the thing that worked. */}
+                  aim at wasn't the thing that worked. Moving is a finished edit,
+                so the card leaves edit mode as if ticked: the panel folds away
+                behind the opening sheet, and the card comes back as a plain
+                card wherever it lands. */}
               <TouchableOpacity
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(); }}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setEditing(false); onOpenReorder(); }}
                 activeOpacity={0.7}
                 style={styles.exReorderBtn}
                 accessibilityLabel="Reorder exercises"
@@ -1459,7 +1478,11 @@ export default function WorkoutScreen() {
   // `dayId` rides along the same way: the stable id of the cycle slot, so the
   // finished session stays attached to THIS day even after it's renamed, and two
   // days that share a name never pool their history.
-  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: Exercise[]; programId?: string; dayId?: string } | null>(null);
+  // Two things ride on each session exercise (and so in the draft) until
+  // Finish writes them onto its CompletedExercise: `swappedFrom` (see
+  // changeExercise) and `programExerciseId`, which program exercise it is, set
+  // where the session is built from the program (see withProgramIds).
+  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: SessionExercise[]; programId?: string; dayId?: string } | null>(null);
   const [log, setLog] = useState<WorkoutLog>({});
   // Latest committed log for reads inside the stable set-handlers below. Updated
   // in an effect (post-commit), so handlers fired from user events always see
@@ -1628,7 +1651,7 @@ export default function WorkoutScreen() {
         // Pass the full program list so a change-day override that picked a day
         // from a NON-active program re-resolves to that program's exercises.
         const workout = resolveWorkoutForDate(found, override, effective, programs);
-        setWorkoutInfo(workout ? { name: workout.name, exercises: workout.exercises, programId: workout.programId, dayId: workout.dayId } : null);
+        setWorkoutInfo(workout ? { name: workout.name, exercises: withProgramIds(workout.exercises), programId: workout.programId, dayId: workout.dayId } : null);
         if (workout) {
           setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
           setLog(initLog(workout.exercises));
@@ -1956,10 +1979,15 @@ export default function WorkoutScreen() {
     });
   }, []);
 
+  // A swap starts the new exercise clean (its numbers and note were written for
+  // the old one) and remembers what it replaced, so next week the original's
+  // "Previous:" hint is the note written here (buildPrevNoteLookup). It keeps
+  // its programExerciseId: the place in the program is the same, only the
+  // exercise in it changed.
   const changeExercise = (exId: string, newName: string) => {
     setWorkoutInfo(prev => prev ? {
       ...prev,
-      exercises: prev.exercises.map(e => e.id === exId ? { ...e, name: newName } : e),
+      exercises: prev.exercises.map(e => e.id === exId ? { ...e, name: newName, swappedFrom: swapOrigin(e, newName) } : e),
     } : prev);
     setLog(prev => {
       const exLog = prev[exId];
@@ -2055,7 +2083,7 @@ export default function WorkoutScreen() {
     // The ref already carries the exact slot — no `indexOf(name)`, which always
     // returned the first day of that name and so loaded the wrong exercises for
     // the second one.
-    const exercises = src?.workouts[workoutKey(day.index, day.label)] ?? [];
+    const exercises = withProgramIds(src?.workouts[workoutKey(day.index, day.label)] ?? []);
     setWorkoutInfo({ name: day.label, exercises, programId: src?.id, dayId: day.dayId });
     setLog(initLog(exercises));
     // Record the source program AND slot so re-resolution (tab refocus /
@@ -2128,6 +2156,8 @@ export default function WorkoutScreen() {
             ...(exLog?.working ?? []).map(s => ({ type: "working" as const, weight: parseWeightToKg(s.weight, isKg), reps: s.reps, done: s.done })),
           ],
           notes: exLog?.notes ?? "",
+          ...(ex.swappedFrom ? { swappedFrom: ex.swappedFrom } : {}),
+          ...(ex.programExerciseId ? { programExerciseId: ex.programExerciseId } : {}),
         };
       }),
     };
@@ -2135,8 +2165,8 @@ export default function WorkoutScreen() {
 
   // Persist a completed workout to AsyncStorage with sequential awaits so
   // rapid back-to-back finishes (or any concurrent writer) can't interleave
-  // the read→write pair and lose data. Also refreshes prevByName from the
-  // newly-written history.
+  // the read→write pair and lose data. Also refreshes the previous-sets and
+  // note hints (prevHistory) from the newly-written history.
   const persistCompletedWorkout = async (completed: CompletedWorkout) => {
     try {
       const datesRaw = await AsyncStorage.getItem(WORKOUT_DATES_KEY);
@@ -2321,26 +2351,36 @@ export default function WorkoutScreen() {
       : null;
     return prevDayScopeFor(workoutInfo, src);
   }, [workoutInfo, allPrograms]);
-  const prevByName = useMemo(
-    () => buildPrevByName(prevHistory, undefined, prevDayScope),
+  // Last time's sets and note for each card, day-scoped. A program exercise is
+  // found by its place in the program, so two of the same exercise in one day
+  // each keep their own: see buildPrevSetsLookup / buildPrevNoteLookup.
+  const prevSetsOf = useMemo(
+    () => buildPrevSetsLookup(prevHistory, undefined, prevDayScope),
     [prevHistory, prevDayScope],
   );
-  // Pre-formatted "prev" hint strings per normalized exercise name. Memoized so
-  // each card's `prevSets` prop keeps its identity across keystrokes (a fresh
-  // .map() per render would re-render every MemoExerciseCard every character).
-  // Last time's note per exercise, same day scoping as the set hints. Only the
-  // most recent session counts: see buildPrevNotesByName.
-  const prevNotesByName = useMemo(
-    () => buildPrevNotesByName(prevHistory, undefined, prevDayScope),
+  const prevNoteOf = useMemo(
+    () => buildPrevNoteLookup(prevHistory, undefined, prevDayScope),
     [prevHistory, prevDayScope],
   );
-  const prevHintsByName = useMemo(() => {
+  // And last time's session note, for the Session Notes card's "Previous:".
+  const prevSessionNote = useMemo(
+    () => buildPrevSessionNote(prevHistory, undefined, prevDayScope),
+    [prevHistory, prevDayScope],
+  );
+  // Pre-formatted "prev" hint strings per session exercise, by its id: the
+  // card's placeholders and checkbox copy, and the Live Activity, all read this
+  // one map. Memoized so each card's `prevSets` prop keeps its identity across
+  // keystrokes (a fresh .map() per render would re-render every
+  // MemoExerciseCard every character); it only rebuilds when the session's
+  // exercises change (a swap, add, remove or reorder), never on typing.
+  const prevHintsById = useMemo(() => {
     const out: Record<string, string[]> = {};
-    for (const [name, sets] of Object.entries(prevByName)) {
-      out[name] = sets.map(p => formatPrevHint(p, isKg));
+    for (const ex of workoutInfo?.exercises ?? []) {
+      const sets = prevSetsOf(ex);
+      if (sets) out[ex.id] = sets.map(p => formatPrevHint(p, isKg));
     }
     return out;
-  }, [prevByName, isKg]);
+  }, [workoutInfo, prevSetsOf, isKg]);
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -2370,14 +2410,14 @@ export default function WorkoutScreen() {
       exercises: workoutInfo.exercises.map(e => ({ id: e.id, name: e.name, restSeconds: e.restSeconds })),
       log,
       // Exactly the prevSets lookup ExerciseCard feeds its checkboxes.
-      prevHintsFor: name => prevHintsByName[normalizeExerciseName(name)] ?? EMPTY_PREV,
+      prevHintsFor: exId => prevHintsById[exId] ?? EMPTY_PREV,
       isKg,
       timerStartMs: startEpochMs,
       pausedElapsedSec: isPaused ? elapsedSeconds : 0,
       restEndsAt,
       restTotalSec: restTotal,
     });
-  }, [workoutInfo, todaysCompletedWorkout, log, prevHintsByName, isKg, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
+  }, [workoutInfo, todaysCompletedWorkout, log, prevHintsById, isKg, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
 
   const applyLockScreenTicks = useCallback((actions: LiveActivityTickAction[]) => {
     setLog(prev => {
@@ -2873,7 +2913,7 @@ export default function WorkoutScreen() {
                   onAutoTick={autoTickIfComplete}
                   exNotes={log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={updateExNotes}
-                  prevNote={prevNotesByName[normalizeExerciseName(exercise.name)]}
+                  prevNote={prevNoteOf(exercise)}
                   onAddSet={addSet}
                   onRemoveSet={removeSet}
                   onOpenReorder={openReorder}
@@ -2883,7 +2923,7 @@ export default function WorkoutScreen() {
                   onInputFocus={handleInputFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
-                  prevSets={prevHintsByName[normalizeExerciseName(exercise.name)] ?? EMPTY_PREV}
+                  prevSets={prevHintsById[exercise.id] ?? EMPTY_PREV}
                   hideIndexLabel
                   numberBadge={focusMode ? undefined : i + 1}
                   onToggleIsometric={toggleIsometricEx}
@@ -2954,16 +2994,21 @@ export default function WorkoutScreen() {
           >
             <View style={styles.notesHeader}>
               <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
-              <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
-                <View style={styles.notesTickBtn}>
-                  <Ionicons name="checkmark" size={18} color="#fff" />
-                </View>
-              </BounceButton>
+              <View style={styles.notesHeaderActions}>
+                {/* Last time's session note, offered as the exercise notes
+                    offer theirs: the empty box's placeholder, never its value. */}
+                <ReuseNoteChip value={notes} onChange={setNotes} prevNote={prevSessionNote} isDark={isDark} />
+                <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
+                  <View style={styles.notesTickBtn}>
+                    <Ionicons name="checkmark" size={18} color="#fff" />
+                  </View>
+                </BounceButton>
+              </View>
             </View>
             <TextInput
               ref={r => { sessionNotesInputRef.current = r; }}
               style={[styles.notesInput, { color: t.tp, maxHeight: notesInputMaxH }]}
-              placeholder="How's the session going? Anything to note..."
+              placeholder={prevNotePlaceholder(prevSessionNote, "How's the session going? Anything to note...")}
               placeholderTextColor={t.ts}
               multiline
               value={notes}
@@ -3215,22 +3260,29 @@ export default function WorkoutScreen() {
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
       <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
-        <TouchableOpacity
-            onPress={() => prevFnRef.current?.()}
-            activeOpacity={hasPrev ? 0.75 : 1}
-            disabled={!hasPrev}
-            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}
-          >
-            <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => nextFnRef.current?.()}
-            activeOpacity={hasNext ? 0.75 : 1}
-            disabled={!hasNext}
-            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}
-          >
-            <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
-          </TouchableOpacity>
+        {/* The arrows step between set inputs. A notes box (an exercise's or
+            the session's) has nowhere to step to, so it gets the dismiss key
+            alone rather than two greyed-out arrows. */}
+        {(hasPrev || hasNext) && (
+          <>
+            <TouchableOpacity
+              onPress={() => prevFnRef.current?.()}
+              activeOpacity={hasPrev ? 0.75 : 1}
+              disabled={!hasPrev}
+              style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}
+            >
+              <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => nextFnRef.current?.()}
+              activeOpacity={hasNext ? 0.75 : 1}
+              disabled={!hasNext}
+              style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}
+            >
+              <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
+            </TouchableOpacity>
+          </>
+        )}
         <TouchableOpacity
           onPress={() => Keyboard.dismiss()}
           activeOpacity={0.75}
@@ -3320,6 +3372,7 @@ const styles = StyleSheet.create({
   // Session Notes — floating card + tick button
   notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
   notesHeader:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  notesHeaderActions: { flexDirection: "row", alignItems: "center", gap: 10 },
   notesFloatCard: { position: "absolute", left: 20, right: 20, borderRadius: 16, padding: 16, zIndex: 21, transformOrigin: "left bottom", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 18 },
   notesTickBtn:   { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 

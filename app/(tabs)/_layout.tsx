@@ -14,6 +14,7 @@ import { useRef, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useTrainerHubPrefetch } from "../../hooks/useTrainerHubPrefetch";
 let LiquidGlassView: any = View;
 let LiquidGlassContainerView: any = View;
 let isLiquidGlassSupported = false;
@@ -217,6 +218,9 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
 
 export default function TabLayout() {
   const { isDark } = useTheme();
+  // The Trainer tab's data, loaded in the background a couple of seconds after
+  // the tabs appear, so it's current when opened. Never delays Home.
+  useTrainerHubPrefetch();
   // The tab scenes sit on this. Without a colour here the tab area is
   // transparent, so a scene being re-created (or fading in) shows the window
   // behind it rather than the app's own background.

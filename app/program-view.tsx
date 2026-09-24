@@ -4,6 +4,11 @@
 // page ("From Your Coaches"). Action buttons (Edit / Delete / Accept / Send
 // to clients) are surfaced contextually based on whether the share is the
 // trainer's own outgoing share or one received from a coach.
+//
+// Also a trainer's window onto one of a CLIENT's own programs, from the client
+// page's Programs tab (?clientId=&programId=): the same header card, day
+// breakdown and Summary, and nothing else. It's the client's program, so there
+// is nothing here to edit, remove or accept.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -39,6 +44,7 @@ import {
   batchKeyOf,
   loadClients,
   loadGroupSharedPrograms,
+  loadCachedClientData,
   loadSentPrograms,
   loadSharedPrograms,
   removeGroupSharedProgramBatch,
@@ -53,7 +59,9 @@ import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 
 export default function ProgramViewScreen() {
   const router = useRouter();
-  const { sharedId, sentId } = useLocalSearchParams<{ sharedId?: string; sentId?: string }>();
+  const { sharedId, sentId, clientId, programId } = useLocalSearchParams<{
+    sharedId?: string; sentId?: string; clientId?: string; programId?: string;
+  }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { accountType } = useAccountType();
@@ -64,8 +72,13 @@ export default function ProgramViewScreen() {
   //    by this trainer to a client). Reached via ?sharedId=...
   //  - `sent`:  a SentProgram (sent by THIS gym user to their trainer for
   //    review; may have been returned with edits). Reached via ?sentId=...
+  //  - `client`: one of a client's own programs, read-only. Reached via
+  //    ?clientId=...&programId=... and read from the copy the client page just
+  //    loaded (loadCachedClientData), because every backup the client makes
+  //    re-mints their program ids.
   const [share, setShare] = useState<SharedProgram | null>(null);
   const [sent, setSent] = useState<SentProgram | null>(null);
+  const [clientProgram, setClientProgram] = useState<SavedProgram | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
   const [myUid, setMyUid] = useState<string | null>(null);
   const [passDownTarget, setPassDownTarget] = useState<SavedProgram | null>(null);
@@ -73,6 +86,12 @@ export default function ProgramViewScreen() {
   const [summaryOpen, setSummaryOpen] = useState(false);
 
   const reload = useCallback(async () => {
+    if (clientId) {
+      const data = await loadCachedClientData(clientId);
+      setClientProgram(data.programs.find(p => p.id === programId) ?? null);
+      setLoaded(true);
+      return;
+    }
     if (!sharedId && !sentId) {
       setLoaded(true);
       return;
@@ -89,7 +108,7 @@ export default function ProgramViewScreen() {
     setSent(sentId ? sents.find(s => s.id === sentId) ?? null : null);
     setClients(cs);
     setLoaded(true);
-  }, [sharedId, sentId]);
+  }, [sharedId, sentId, clientId, programId]);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -160,8 +179,8 @@ export default function ProgramViewScreen() {
   const topChromeW = isOutgoing ? 88 : 44;
 
   // Snapshot + title come from whichever record was loaded.
-  const snapshot = share?.programSnapshot ?? sent?.programSnapshot ?? null;
-  const headerName = share?.programName ?? sent?.programName ?? "Program";
+  const snapshot = share?.programSnapshot ?? sent?.programSnapshot ?? clientProgram ?? null;
+  const headerName = share?.programName ?? sent?.programName ?? clientProgram?.name ?? "Program";
   const accepted = !!share?.acceptedAtISO;
 
   // Sent-program-specific flags. `returned` = trainer has reviewed and sent
@@ -393,7 +412,7 @@ export default function ProgramViewScreen() {
           <View style={{ width: topChromeW }} />
         </View>
 
-        {!loaded ? null : (!share && !sent) ? (
+        {!loaded ? null : (!share && !sent && !clientProgram) ? (
           <NeuCard dark={isDark} radius={16}>
             <Text style={[styles.bodyText, { color: t.ts, padding: 18, textAlign: "center" }]}>
               This program is no longer available.
@@ -431,9 +450,10 @@ export default function ProgramViewScreen() {
 
                 {/* Action row — contextual to which record (shared vs sent) and
                     its current state. Skipped for outgoing shares (Edit + Delete
-                    live in the top-right header) and for any state with a floating
-                    bottom Accept CTA (handled below). */}
-                {!isOutgoing && !showFloatingAccept && (
+                    live in the top-right header), for any state with a floating
+                    bottom Accept CTA (handled below), and for a client's own
+                    program, which has no action at all. */}
+                {!isOutgoing && !showFloatingAccept && !clientProgram && (
                 <View style={styles.actionsWrap}>
                   {isSent ? (
                     sentReturned ? (

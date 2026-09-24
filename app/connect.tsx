@@ -5,7 +5,8 @@
 //
 // Connecting is a request → accept handshake (lib/connections.ts → migration 0006
 // RPCs). Once accepted, both sides see each other's real name + photo in the
-// trainer hub. Cross-account sharing of training data/programs is a later slice.
+// trainer hub, and a connected TRAINER can read the other side's training
+// (migration 0032, the client page's Progress / Journal / Programs tabs).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Share, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";

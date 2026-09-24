@@ -22,6 +22,10 @@
 // Both states are DERIVED from the text rather than stored, so a draft restored
 // after the app was killed shows the right chip without anything remembering
 // that Reuse was tapped.
+//
+// The session notes box offers last time's SESSION note the same way, so the
+// chip and the placeholder are exported for it (ReuseNoteChip,
+// prevNotePlaceholder) rather than drawn a second time.
 
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -29,6 +33,63 @@ import * as Haptics from "expo-haptics";
 
 import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
+
+/** The empty box's placeholder: last time's note under a "Previous:" heading
+ *  when there is one, else the box's own prompt. "Previous:" sits on its own
+ *  line with the note directly beneath it, so the label reads as a heading and
+ *  the note keeps its own left edge instead of wrapping back under the word. */
+export function prevNotePlaceholder(prevNote: string | undefined, prompt: string, editable = true): string {
+  return editable && prevNote ? `Previous:\n${prevNote}` : prompt;
+}
+
+/** Reuse while the box is empty, Undo while it holds exactly the reused note,
+ *  nothing otherwise (see the file header). Renders nothing when there's no
+ *  previous note or the box is read-only. */
+export function ReuseNoteChip({ value, onChange, prevNote, editable = true, isDark }: {
+  value: string;
+  onChange: (next: string) => void;
+  prevNote?: string;
+  editable?: boolean;
+  isDark: boolean;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+
+  const offer = editable && !!prevNote;
+  const canReuse = offer && value.trim() === "";
+  const canUndo = offer && value === prevNote;
+  if (!canReuse && !canUndo) return null;
+
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        onChange(canReuse ? prevNote! : "");
+      }}
+      activeOpacity={0.7}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={canReuse ? "Reuse last time's note" : "Undo reusing last time's note"}
+    >
+      <View style={[styles.chip, { borderColor: t.div }]}>
+        <Ionicons name={canReuse ? "return-down-forward" : "arrow-undo"} size={11} color={t.ts} />
+        {/* Same width in both states, so the chip doesn't shrink under
+            your thumb when it flips to Undo. "Reuse" is always laid out
+            — it's the longer word, and it sets the width — and is only
+            hidden in the Undo state, where "Undo" sits over it,
+            right-aligned. The extra room therefore opens up between the
+            icon and the word rather than at the chip's edge. Sized by
+            the real text rather than a fixed number, so it can't clip
+            "Reuse" if the font renders a point wider. */}
+        <View>
+          <Text style={[styles.chipText, { color: t.ts, opacity: canReuse ? 1 : 0 }]}>Reuse</Text>
+          {canUndo && !canReuse && (
+            <Text style={[styles.chipText, styles.chipOverlay, { color: t.ts }]}>Undo</Text>
+          )}
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
 
 export default function ExerciseNotesField({ value, onChange, prevNote, editable = true, onFocus, isDark }: {
   value: string;
@@ -42,20 +103,13 @@ export default function ExerciseNotesField({ value, onChange, prevNote, editable
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
 
-  const offer = editable && !!prevNote;
-  const canReuse = offer && value.trim() === "";
-  const canUndo = offer && value === prevNote;
-
   return (
     <>
       <Text style={[styles.label, { color: t.tp }]}>Notes</Text>
       <View style={styles.row}>
         <TextInput
           style={[styles.input, { color: t.tp }]}
-          // "Previous:" on its own line with the note starting directly beneath
-          // it, so the label reads as a heading and the note keeps its own left
-          // edge instead of wrapping back under the word "Previous".
-          placeholder={offer ? `Previous:\n${prevNote}` : "Add exercise notes..."}
+          placeholder={prevNotePlaceholder(prevNote, "Add exercise notes...", editable)}
           placeholderTextColor={t.ts}
           value={value}
           editable={editable}
@@ -64,36 +118,7 @@ export default function ExerciseNotesField({ value, onChange, prevNote, editable
           multiline
           textAlignVertical="top"
         />
-        {(canReuse || canUndo) && (
-          <TouchableOpacity
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onChange(canReuse ? prevNote! : "");
-            }}
-            activeOpacity={0.7}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={canReuse ? "Reuse last time's note" : "Undo reusing last time's note"}
-          >
-            <View style={[styles.chip, { borderColor: t.div }]}>
-              <Ionicons name={canReuse ? "return-down-forward" : "arrow-undo"} size={11} color={t.ts} />
-              {/* Same width in both states, so the chip doesn't shrink under
-                  your thumb when it flips to Undo. "Reuse" is always laid out
-                  — it's the longer word, and it sets the width — and is only
-                  hidden in the Undo state, where "Undo" sits over it,
-                  right-aligned. The extra room therefore opens up between the
-                  icon and the word rather than at the chip's edge. Sized by
-                  the real text rather than a fixed number, so it can't clip
-                  "Reuse" if the font renders a point wider. */}
-              <View>
-                <Text style={[styles.chipText, { color: t.ts, opacity: canReuse ? 1 : 0 }]}>Reuse</Text>
-                {canUndo && !canReuse && (
-                  <Text style={[styles.chipText, styles.chipOverlay, { color: t.ts }]}>Undo</Text>
-                )}
-              </View>
-            </View>
-          </TouchableOpacity>
-        )}
+        <ReuseNoteChip value={value} onChange={onChange} prevNote={prevNote} editable={editable} isDark={isDark} />
       </View>
     </>
   );

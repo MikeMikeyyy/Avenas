@@ -1,7 +1,9 @@
 // Data layer for the Trainer feature.
 //
-// Rosters and client training data are still local/mock, BUT program sharing
-// is now REAL for connected accounts: entries whose counterpart id is an auth
+// A real client's training (programs, workouts, journal) is read from their own
+// cloud backup (migration 0032, lib/clientTraining.ts) and cached on this
+// device; mock-roster people keep their on-device copy. Program sharing is
+// REAL for connected accounts too: entries whose counterpart id is an auth
 // uid ride supabase's shared_programs table (migration 0013, full program
 // snapshot per row) while mock-roster people keep the on-device path — the
 // same routing pattern utils/chatStore.ts uses for messages. Loads merge
@@ -10,14 +12,17 @@
 // Cloud loads fail soft to local-only when offline.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getJSON, setJSON } from "./storage";
+import { getJSON, removeKey, setJSON } from "./storage";
+import { forgetSnapshots, isPageSnapshotKey } from "./pageSnapshot";
 import { formatStoredDate } from "./dates";
 import { forkChangedDayIds, normalizeDayIds } from "./programDays";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
+import type { CustomExercise } from "../constants/exercises";
 import { GROUP_FAVOURITES_KEY } from "../constants/groups";
 import { ACCOUNT_TYPE_KEY } from "../contexts/AccountTypeContext";
 import { isCloudContactId } from "../lib/chat";
+import { fetchClientTraining, fetchClientsActivePrograms } from "../lib/clientTraining";
 import {
   deleteShareRow,
   fetchGroupShareRows,
@@ -98,6 +103,13 @@ export type ClientData = {
   workoutHistory: CompletedWorkout[];
   programs: SavedProgram[];
   journal: JournalEntry[];
+  /** Their custom exercises, so the Progress tab can place them on the muscle
+   *  radar. Absent on mock-seeded entries. */
+  customExercises?: CustomExercise[];
+  /** When the client's phone last backed up (ISO), shown as "Synced 3h ago"
+   *  so a trainer knows how current this is. Absent for mock clients and for
+   *  someone with nothing backed up. */
+  backedUpAt?: string;
 };
 
 export type SharedProgram = {
@@ -349,8 +361,69 @@ export async function saveClients(list: Client[]): Promise<void> {
   await setJSON(CLIENTS_KEY, list);
 }
 
+const emptyClientData = (): ClientData => ({ workoutHistory: [], programs: [], journal: [] });
+
+/**
+ * A client's training: programs, logged workouts, journal, custom exercises.
+ *
+ * For a real account it's read from their own cloud backup, which every
+ * workout, program edit and journal change already pushes (lib/syncManager.ts),
+ * so a client's edits reach this page on its next load. The copy is cached
+ * here and served when the server can't be reached. A refusal is different: it
+ * means the connection is gone (or this account isn't a trainer), so the cached
+ * copy is dropped rather than shown. A mock-roster person has only the local copy.
+ */
 export async function loadClientData(clientId: string): Promise<ClientData> {
-  return getJSON<ClientData>(clientDataKey(clientId), { workoutHistory: [], programs: [], journal: [] });
+  const key = clientDataKey(clientId);
+  if (!isCloudContactId(clientId)) return getJSON<ClientData>(key, emptyClientData());
+  try {
+    const fresh = await fetchClientTraining(clientId);
+    if (!fresh) {
+      await removeKey(key);
+      return emptyClientData();
+    }
+    await setJSON(key, fresh);
+    return fresh;
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] client training", clientId, e);
+    return getJSON<ClientData>(key, emptyClientData());
+  }
+}
+
+/**
+ * The copy of a client's training that the client page last loaded, with no
+ * network. For screens opened FROM that page (a workout tapped on their
+ * journal): every backup the client makes re-mints their workout ids, so a
+ * fresh read could miss the very workout that was tapped, where this copy is
+ * the one the ids came from.
+ */
+export async function loadCachedClientData(clientId: string): Promise<ClientData> {
+  return getJSON<ClientData>(clientDataKey(clientId), emptyClientData());
+}
+
+/**
+ * Each client's active program name, for the line under them on the hub and a
+ * group's roster. One batched read for real accounts rather than each client's
+ * whole history; offline, the names come from whatever copy is cached.
+ */
+export async function loadClientActivePrograms(clientIds: string[]): Promise<Record<string, string>> {
+  const fromCache = async (ids: string[]) => {
+    const out: Record<string, string> = {};
+    await Promise.all(ids.map(async id => {
+      const data = await getJSON<ClientData>(clientDataKey(id), emptyClientData());
+      const active = data.programs.find(p => p.status === "active");
+      if (active) out[id] = active.name;
+    }));
+    return out;
+  };
+  const cloudIds = clientIds.filter(isCloudContactId);
+  const local = await fromCache(clientIds.filter(id => !isCloudContactId(id)));
+  try {
+    return { ...local, ...(await fetchClientsActivePrograms(cloudIds)) };
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] client active programs", e);
+    return { ...local, ...(await fromCache(cloudIds)) };
+  }
 }
 export async function saveClientData(clientId: string, data: ClientData): Promise<void> {
   await setJSON(clientDataKey(clientId), data);
@@ -1072,16 +1145,19 @@ export async function updateSharedProgram(id: string, patch: Partial<SharedProgr
 
 /**
  * Wipe ALL local trainer-hub data: the client roster + each client's data, the
- * assigned/other trainers, coaches, sent/shared programs, and the demo-seed flag.
+ * assigned/other trainers, coaches, sent/shared programs, the saved copies of
+ * the hubs and group pages (utils/pageSnapshot.ts), and the demo-seed flag.
  * Called on account delete / account switch (see lib/cloud.clearLocalUserData) so
  * one account's local data never leaks into the next account on this device. The
  * seed flag is cleared too, so a fresh account re-seeds its own demo clients
  * rather than inheriting the previous account's roster.
  */
 export async function clearTrainerData(): Promise<void> {
+  forgetSnapshots();
   const keys = await AsyncStorage.getAllKeys();
   const clientData = keys.filter(k => k.startsWith(CLIENT_DATA_PREFIX));
   await AsyncStorage.multiRemove([
+    ...keys.filter(isPageSnapshotKey),
     CLIENTS_KEY,
     SHARED_PROGRAMS_KEY,
     CLOUD_SHARE_META_KEY,

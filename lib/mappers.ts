@@ -102,6 +102,9 @@ export function workoutToRow(w: CompletedWorkout, userId: string, programUuid: s
   return {
     user_id: userId,
     program_id: programUuid,
+    // undefined (legacy, inferred by name) and "" (free) both leave program_id
+    // null, so the difference has to travel on its own (migration 0033).
+    program_unknown: w.programId === undefined,
     date: w.date,
     completed_at: w.completedAt,
     workout_name: w.workoutName,
@@ -121,7 +124,11 @@ export function workoutFromRow(r: WorkoutRow): CompletedWorkout {
     durationSeconds: r.duration_seconds,
     exercises: r.exercises as unknown as CompletedExercise[],
     sessionNotes: r.session_notes ?? undefined,
-    programId: r.program_id ?? "",  // null (free / legacy) -> "" free-workout marker
+    // null program_id: a legacy record stays legacy (undefined, so it's still
+    // attributed by name) and anything else is a free workout (""). A row
+    // written before migration 0033 has no flag and reads as free, as it always
+    // did.
+    programId: r.program_id ?? (r.program_unknown ? undefined : ""),
     dayId: r.day_id ?? undefined,
   };
 }

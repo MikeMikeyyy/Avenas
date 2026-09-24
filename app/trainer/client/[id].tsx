@@ -2,7 +2,7 @@
 // Tabs: Progress | Journal | Programs. Chat is a stub.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, StyleSheet, Text, TouchableOpacity, View, ScrollView } from "react-native";
+import { Alert, RefreshControl, StyleSheet, Text, TouchableOpacity, View, ScrollView } from "react-native";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolate, Extrapolation, type SharedValue } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
@@ -78,6 +78,24 @@ function fmtAgo(iso: string): string {
   return `${Math.floor(days / 7)}w ago`;
 }
 
+/**
+ * How long ago the client's phone last backed up, which is how current
+ * everything on this page is. Their app backs up after every change and
+ * whenever it leaves the foreground, so a long gap means they haven't opened
+ * it, or it can't reach the server.
+ */
+function fmtSynced(iso: string): string | null {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "Synced just now";
+  if (mins < 60) return `Synced ${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `Synced ${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return days === 1 ? "Synced yesterday" : `Synced ${days}d ago`;
+}
+
 export default function ClientDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -85,7 +103,7 @@ export default function ClientDetailScreen() {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
 
-  const { accountType } = useAccountType();
+  const { accountType, loaded: accountLoaded } = useAccountType();
 
   const [client, setClient] = useState<Client | null>(null);
   const [data, setData] = useState<ClientData>({ workoutHistory: [], programs: [], journal: [] });
@@ -126,53 +144,83 @@ export default function ClientDetailScreen() {
     setTab(next);
   }, [tab]);
 
+  /**
+   * The whole page in one pass, on arrival and on pull-down. The caller owns
+   * the cancel flag, as on the group page: a focus load stops writing state
+   * once you've navigated away, while a pull runs to completion.
+   */
+  const loadAll = useCallback(async (isCancelled: () => boolean) => {
+    const [list, d, progs, sharedAll, thread, reads, hidden, favs] = await Promise.all([
+      loadClients(),
+      id ? loadClientData(id) : Promise.resolve({ workoutHistory: [], programs: [], journal: [] } as ClientData),
+      getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+      loadSharedPrograms(),
+      id ? loadThread(id) : Promise.resolve([]),
+      loadReads(),
+      loadHiddenMessageIds(),
+      loadFavouriteMemberIds(),
+    ]);
+    if (!isCancelled() && id) setIsFavourite(favs.has(id));
+    let found: Client | null = list.find(c => c.id === id) ?? null;
+    if (!found && id) {
+      // Real connected account (not in the local roster) — build a lightweight
+      // client from the connection's safe profile (real name + photo). Their
+      // training came from their own cloud backup above (loadClientData).
+      try {
+        const conns = await getMyConnections();
+        const conn = conns.find(c => c.status === "accepted" && c.otherId === id);
+        if (conn) {
+          found = {
+            id: conn.otherId,
+            name: conn.name || "Client",
+            initials: makeInitials(conn.name || "Client"),
+            photoUri: conn.photoUri,
+            isTrainer: conn.accountType === "pt",
+            lastActiveISO: conn.lastActiveAt,
+          };
+        }
+      } catch { /* leave as not-found */ }
+    }
+    if (isCancelled()) return;
+    setClient(found);
+    setData(d);
+    setMyPrograms(Array.isArray(progs) ? progs : []);
+    setShared(sharedAll);
+    // Unread count from this person for the chat button badge. Re-runs on
+    // focus, so opening the chat (which marks the thread read) clears it.
+    setUnreadFromClient(id ? countUnreadInThread(thread.filter(m => !hidden.has(m.id)), reads[id]) : 0);
+    setLoaded(true);
+  }, [id]);
+
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    (async () => {
-      const [list, d, progs, sharedAll, thread, reads, hidden, favs] = await Promise.all([
-        loadClients(),
-        id ? loadClientData(id) : Promise.resolve({ workoutHistory: [], programs: [], journal: [] } as ClientData),
-        getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-        loadSharedPrograms(),
-        id ? loadThread(id) : Promise.resolve([]),
-        loadReads(),
-        loadHiddenMessageIds(),
-        loadFavouriteMemberIds(),
-      ]);
-      if (!cancelled && id) setIsFavourite(favs.has(id));
-      let found: Client | null = list.find(c => c.id === id) ?? null;
-      if (!found && id) {
-        // Real connected account (not in the local roster) — build a lightweight
-        // client from the connection's safe profile (real name + photo). Their
-        // training data isn't shared cross-account yet, so the data tabs stay
-        // empty for now.
-        try {
-          const conns = await getMyConnections();
-          const conn = conns.find(c => c.status === "accepted" && c.otherId === id);
-          if (conn) {
-            found = {
-              id: conn.otherId,
-              name: conn.name || "Client",
-              initials: makeInitials(conn.name || "Client"),
-              photoUri: conn.photoUri,
-              isTrainer: conn.accountType === "pt",
-              lastActiveISO: conn.lastActiveAt,
-            };
-          }
-        } catch { /* leave as not-found */ }
-      }
-      if (cancelled) return;
-      setClient(found);
-      setData(d);
-      setMyPrograms(Array.isArray(progs) ? progs : []);
-      setShared(sharedAll);
-      // Unread count from this person for the chat button badge. Re-runs on
-      // focus, so opening the chat (which marks the thread read) clears it.
-      setUnreadFromClient(id ? countUnreadInThread(thread.filter(m => !hidden.has(m.id)), reads[id]) : 0);
-      setLoaded(true);
-    })();
+    void loadAll(() => cancelled);
     return () => { cancelled = true; };
-  }, [id]));
+  }, [loadAll]));
+
+  // Pull down to re-read their training (a session they just finished) and
+  // everything else on the page. Every tab's scroller carries it, so it works
+  // wherever you are.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadAll(() => false);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadAll]);
+  const refreshControl = (
+    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCT} colors={[ACCT]} />
+  );
+
+  // Their programs, the running one first. Every backup rewrites all of a
+  // client's programs in one statement, so the order they arrive in means
+  // nothing.
+  const clientPrograms = useMemo(
+    () => [...data.programs].sort((a, b) => (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1)),
+    [data.programs],
+  );
 
   const sharedForClient = useMemo(
     // Hide entries the client has deleted from their library — the gym user can
@@ -311,9 +359,28 @@ export default function ClientDetailScreen() {
     );
   };
 
-  if (!loaded) {
+  if (!loaded || !accountLoaded) {
     return <View style={{ flex: 1, backgroundColor: t.bg }} />;
   }
+
+  // A client page is a trainer's. The only ways here (the hub's client list and
+  // a group's "Open client page") are trainer-only already, and the server
+  // refuses a gym user's read of anyone's training whatever this screen does.
+  // This covers being opened any other way, such as by a link.
+  if (accountType !== "pt") {
+    return (
+      <View style={{ flex: 1, backgroundColor: t.bg, justifyContent: "center", alignItems: "center", padding: 32 }}>
+        <Text style={{ fontFamily: FontFamily.semibold, fontSize: 16, color: t.tp, textAlign: "center" }}>Only trainers can view client pages</Text>
+        <BounceButton style={{ marginTop: 16 }} onPress={() => router.back()}>
+          <View style={{ paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12, backgroundColor: ACCT }}>
+            <Text style={{ color: "#fff", fontFamily: FontFamily.bold }}>Back</Text>
+          </View>
+        </BounceButton>
+      </View>
+    );
+  }
+
+  const synced = data.backedUpAt ? fmtSynced(data.backedUpAt) : null;
 
   if (!client) {
     return (
@@ -347,7 +414,12 @@ export default function ClientDetailScreen() {
             textColor={ACCT}
             textStyle={[styles.avatarText, { color: ACCT }]}
           />
-          <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+          <View style={styles.nameCol}>
+            <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+            {synced && (
+              <Text style={[styles.synced, { color: t.ts }]} numberOfLines={1}>{synced}</Text>
+            )}
+          </View>
         </View>
 
         <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Client options" accessibilityRole="button">
@@ -415,11 +487,13 @@ export default function ClientDetailScreen() {
           <ProgressView
             history={data.workoutHistory}
             programs={data.programs}
+            customExercises={data.customExercises}
             loaded
             title=""
             asScreen={false}
             withTopInset={false}
             bottomPadding={insets.bottom + 140}
+            refreshControl={refreshControl}
           />
         )}
         {tab === "journal" && (
@@ -428,12 +502,19 @@ export default function ClientDetailScreen() {
             workoutHistory={data.workoutHistory}
             programs={data.programs}
             bottomPadding={insets.bottom + 140}
+            // The user's own workout screen, read-only and reading this
+            // client's copy (see workout-detail's `clientId`).
+            onOpenWorkout={workoutId => router.navigate({ pathname: "/workout-detail", params: { id: workoutId, clientId: client.id } })}
+            // setTab, not selectTab: the card already gave its own haptic.
+            onOpenPrograms={() => setTab("programs")}
+            refreshControl={refreshControl}
           />
         )}
         {tab === "programs" && (
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 34, paddingBottom: insets.bottom + 140 }}
+            refreshControl={refreshControl}
           >
             <BounceButton style={{ marginBottom: 16 }} onPress={() => setShareOpen(true)}>
               <View style={[styles.shareBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
@@ -443,15 +524,24 @@ export default function ClientDetailScreen() {
             </BounceButton>
 
             <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 4 }]}>{`${client.name.split(" ")[0]}'s Programs`}</Text>
-            {data.programs.length === 0 ? (
+            {clientPrograms.length === 0 ? (
               <NeuCard dark={isDark} radius={16}>
                 <Text style={[styles.empty, { color: t.ts }]}>This client has no programs yet.</Text>
               </NeuCard>
             ) : (
-              data.programs.map(p => {
+              clientPrograms.map(p => {
                 const isActive = p.status === "active";
                 return (
-                  <NeuCard key={p.id} dark={isDark} radius={16} style={{ marginBottom: 10 }}>
+                  // Opens the program in full, read-only: every day with its
+                  // exercises, sets, rest and notes (app/program-view.tsx).
+                  <BounceButton
+                    key={p.id}
+                    style={{ marginBottom: 10 }}
+                    onPress={() => router.navigate({ pathname: "/program-view", params: { clientId: client.id, programId: p.id } })}
+                    accessibilityRole="button"
+                    accessibilityLabel={`View ${p.name}`}
+                  >
+                  <NeuCard dark={isDark} radius={16}>
                     <View style={styles.programCardInner}>
                       <View style={styles.programTopRow}>
                         <View style={{ flex: 1 }}>
@@ -463,6 +553,7 @@ export default function ClientDetailScreen() {
                             <Text style={[styles.statusText, { color: ACCT }]}>Active</Text>
                           </View>
                         )}
+                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
                       </View>
                       <View style={styles.cycleGrid}>
                         {p.cyclePattern.map((day, i) => {
@@ -486,6 +577,7 @@ export default function ClientDetailScreen() {
                       </View>
                     </View>
                   </NeuCard>
+                  </BounceButton>
                 );
               })
             )}
@@ -597,7 +689,9 @@ const styles = StyleSheet.create({
   msgBadge:      { position: "absolute", top: -5, right: -5 },
   avatar:        { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   avatarText:    { fontFamily: FontFamily.bold, fontSize: 13 },
-  name:          { fontFamily: FontFamily.bold, fontSize: 18, flex: 1 },
+  nameCol:       { flex: 1 },
+  name:          { fontFamily: FontFamily.bold, fontSize: 18 },
+  synced:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
   tabsWrap:      { paddingHorizontal: 20, paddingBottom: 8 },
   tabs:          { flexDirection: "row", borderRadius: 999, padding: 4, position: "relative", overflow: "hidden" },
   tab:           { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: "center", justifyContent: "center", zIndex: 1 },

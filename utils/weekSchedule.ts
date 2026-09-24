@@ -24,6 +24,7 @@
 // takes its name and tick away again on the next read.
 
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
+import { addDaysYMD } from "./dates";
 import { getWorkoutForDate } from "./workout";
 import { isDatePushed, isDateSkipped } from "./skippedDates";
 
@@ -57,13 +58,9 @@ export type WeekSchedule = {
 };
 
 /** `ymd` plus `days`, as "YYYY-MM-DD". Date-only arithmetic, so a DST
- *  transition inside the week can't shift a row. */
-function addDays(ymd: string, days: number): string {
-  const [y, m, d] = ymd.split("-").map(Number);
-  const dt = new Date(y, (m ?? 1) - 1, (d ?? 1) + days);
-  const p2 = (v: number) => String(v).padStart(2, "0");
-  return `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())}`;
-}
+ *  transition inside the week can't shift a row. Now the shared one in
+ *  utils/dates.ts, which the session track walks days with too. */
+const addDays = addDaysYMD;
 
 export function buildWeekSchedule({
   program,

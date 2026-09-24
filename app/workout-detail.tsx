@@ -48,6 +48,8 @@ import { scheduleCloudPush } from "../lib/syncManager";
 import { useUnit } from "../contexts/UnitContext";
 import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
 import { useTheme } from "../contexts/ThemeContext";
+import { loadCachedClientData } from "../utils/trainerStore";
+import { swapOrigin } from "../utils/workout";
 
 const WARMUP_ORANGE = "#ffbf0f";
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -426,8 +428,15 @@ export default function WorkoutDetailScreen() {
    * Workout, and then having to find a second Edit in the top right before a
    * single number could be changed. Every other route here — a card on Home, a
    * day in the journal calendar, a PR tile — is a view, and stays one.
+   *
+   * `clientId` makes it a TRAINER reading a client's session, opened from the
+   * client page's Journal tab. Same screen on purpose, so a trainer sees the
+   * workout exactly as the client does (weights in the viewer's unit), but
+   * read-only: nothing here may write it, since it isn't this account's
+   * history. The workout comes from the copy the client page just loaded.
    */
-  const { id, edit } = useLocalSearchParams<{ id: string; edit?: string }>();
+  const { id, edit, clientId } = useLocalSearchParams<{ id: string; edit?: string; clientId?: string }>();
+  const readOnly = !!clientId;
   const router = useRouter();
   const { isDark } = useTheme();
   const { isKg } = useUnit();
@@ -490,9 +499,10 @@ export default function WorkoutDetailScreen() {
   const divider = isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)";
 
   useEffect(() => {
-    AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => {
-      if (!raw) return;
-      const history: CompletedWorkout[] = JSON.parse(raw);
+    const loadHistory: Promise<CompletedWorkout[]> = clientId
+      ? loadCachedClientData(clientId).then(d => d.workoutHistory)
+      : AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => (raw ? JSON.parse(raw) : []));
+    loadHistory.then(history => {
       const found = history.find(w => w.id === id) ?? null;
       setWorkout(found);
       if (found) {
@@ -503,20 +513,27 @@ export default function WorkoutDetailScreen() {
         setEditedSessionNotes(found.sessionNotes ?? "");
         // Here, not on mount: edit mode renders from the buffers seeded above,
         // so flipping it before they exist would show one empty frame. This
-        // effect runs once per workout (deps are [id, edit]), so saving and
+        // effect runs once per workout (its deps are route params), so saving and
         // leaving edit mode afterwards can't be undone by a re-run.
-        if (edit === "1") setIsEditing(true);
+        if (edit === "1" && !clientId) setIsEditing(true);
       }
     }).catch(() => {});
+    // Only the edit mode's exercise picker uses these.
+    if (clientId) return;
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
       if (!v) return;
       const parsed: unknown = JSON.parse(v);
       if (Array.isArray(parsed)) setCustomExercises(parsed as CustomExercise[]);
     }).catch(() => {});
-  }, [id, edit]);
+  }, [id, edit, clientId]);
 
+  // Correcting which exercise was done. It keeps its place in the program
+  // (programExerciseId) and records what the program had there, exactly like a
+  // swap on the Workout screen, so the next session's hint still finds that
+  // place (utils/workout.ts buildPrevNoteLookup). The note is kept: this is an
+  // edit of a record, and the note may be exactly what was meant.
   const changeExercise = (exIdx: number, newName: string) => {
-    setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name: newName }));
+    setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name: newName, swappedFrom: swapOrigin(ex, newName) }));
   };
 
   // Append exercises picked from the ExercisePicker, each starting with one
@@ -535,8 +552,10 @@ export default function WorkoutDetailScreen() {
     setEditedIsIsometric(prev => [...prev, ...names.map(() => false)]);
   };
 
+  // The three writers below all target THIS account's history, so each refuses
+  // a client's workout outright rather than relying on its button being hidden.
   const handleSave = async () => {
-    if (!workout) return;
+    if (!workout || readOnly) return;
     const updated = {
       ...workout,
       // display units → canonical kg. A filled set on a logged workout was
@@ -575,7 +594,7 @@ export default function WorkoutDetailScreen() {
   };
 
   const handleDelete = () => {
-    if (!workout) return;
+    if (!workout || readOnly) return;
     Alert.alert(
       "Delete Workout?",
       `"${workout.workoutName}" will be permanently removed.`,
@@ -607,7 +626,7 @@ export default function WorkoutDetailScreen() {
   // mirrors the change into local `workout` state so handleSave's `...workout`
   // carries it forward. No-ops when nothing changed to avoid spurious sync pushes.
   const persistSessionNotes = async (value: string) => {
-    if (!workout) return;
+    if (!workout || readOnly) return;
     const next = value.trim() ? value : undefined;
     if ((workout.sessionNotes ?? "") === (next ?? "")) return;
     const raw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
@@ -644,8 +663,11 @@ export default function WorkoutDetailScreen() {
     }));
   };
 
+  // Typing a different name is the same correction as Change above. Safe per
+  // keystroke: swapOrigin keeps the FIRST name typed over, and typing it back
+  // records nothing.
   const updateExName = (exIdx: number, name: string) => {
-    setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name }));
+    setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name, swappedFrom: swapOrigin(ex, name) }));
   };
 
   const toggleSetType = (exIdx: number, setIdx: number) => {
@@ -726,9 +748,9 @@ export default function WorkoutDetailScreen() {
         </View>
       </TouchableOpacity>
 
-      {/* Action buttons */}
+      {/* Action buttons (none on a client's workout: a trainer only reads it) */}
       <View style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", gap: 10 }}>
-        {isEditing ? (
+        {readOnly ? null : isEditing ? (
           <>
             <TouchableOpacity onPress={handleCancel} activeOpacity={0.8}>
               <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
@@ -787,7 +809,10 @@ export default function WorkoutDetailScreen() {
               )}
             </View>
 
-            {/* Session Notes — workout-level, same button style as the live workout page */}
+            {/* Session Notes — workout-level, same button style as the live workout
+                page. On a client's workout: their notes if they wrote any, not
+                tappable, and no "Add" row when they didn't. */}
+            {!(readOnly && !editedSessionNotes.trim()) && (
             <View style={{ marginBottom: 20 }}>
               {showSessionNotes ? (
                 <NeuCard dark={isDark} style={{ borderRadius: 16 }}>
@@ -808,18 +833,19 @@ export default function WorkoutDetailScreen() {
                       multiline
                       value={editedSessionNotes}
                       onChangeText={setEditedSessionNotes}
+                      onFocus={() => handleInputFocus(null, null)}
                       onBlur={() => void persistSessionNotes(editedSessionNotes)}
                       textAlignVertical="top"
                     />
                   </View>
                 </NeuCard>
               ) : editedSessionNotes.trim() ? (
-                <TouchableOpacity activeOpacity={0.85} onPress={openSessionNotes}>
+                <TouchableOpacity activeOpacity={0.85} onPress={openSessionNotes} disabled={readOnly}>
                   <NeuCard dark={isDark} style={{ borderRadius: 16 }}>
                     <View style={styles.sessionNotesInner}>
                       <View style={styles.sessionNotesHeader}>
                         <Text style={[styles.sessionNotesTitle, { color: t.tp }]}>Session Notes</Text>
-                        <Ionicons name="pencil" size={15} color={t.ts} />
+                        {!readOnly && <Ionicons name="pencil" size={15} color={t.ts} />}
                       </View>
                       <Text style={[styles.sessionNotesText, { color: t.ts }]}>{editedSessionNotes.trim()}</Text>
                     </View>
@@ -841,6 +867,7 @@ export default function WorkoutDetailScreen() {
                 </BounceButton>
               )}
             </View>
+            )}
 
             {/* Exercises */}
             {exercises.map((ex, ei) => {
@@ -867,6 +894,7 @@ export default function WorkoutDetailScreen() {
                         style={[styles.exName, { color: t.tp, flex: 1, padding: 0 }]}
                         value={ex.name}
                         onChangeText={name => updateExName(ei, name.replace(/\n/g, ""))}
+                        onFocus={() => handleInputFocus(null, null)}
                         returnKeyType="default"
                         editable={isEditing}
                         multiline
@@ -1002,6 +1030,7 @@ export default function WorkoutDetailScreen() {
                             style={[styles.notesInput, { color: t.tp }]}
                             value={ex.notes ?? ""}
                             onChangeText={v => updateNote(ei, v)}
+                            onFocus={() => handleInputFocus(null, null)}
                             placeholder="Add note..."
                             placeholderTextColor={t.ts}
                             multiline
@@ -1167,12 +1196,18 @@ export default function WorkoutDetailScreen() {
       )}
       {kbHeight > 0 && Platform.OS === "ios" && (
         <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
-          <TouchableOpacity onPress={() => prevFnRef.current?.()} activeOpacity={hasPrev ? 0.75 : 1} disabled={!hasPrev} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}>
-              <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => nextFnRef.current?.()} activeOpacity={hasNext ? 0.75 : 1} disabled={!hasNext} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}>
-              <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
-            </TouchableOpacity>
+          {/* Arrows only where there's a set input to step to, as on the
+              Workout tab: notes and the exercise name get the dismiss key alone. */}
+          {(hasPrev || hasNext) && (
+            <>
+              <TouchableOpacity onPress={() => prevFnRef.current?.()} activeOpacity={hasPrev ? 0.75 : 1} disabled={!hasPrev} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}>
+                <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => nextFnRef.current?.()} activeOpacity={hasNext ? 0.75 : 1} disabled={!hasNext} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}>
+                <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
+              </TouchableOpacity>
+            </>
+          )}
           <TouchableOpacity onPress={() => Keyboard.dismiss()} activeOpacity={0.75} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}>
             <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
           </TouchableOpacity>

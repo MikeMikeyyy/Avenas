@@ -1,9 +1,10 @@
 // Body of the Progress page, with data passed in as props so it can render
 // either the current user's data (from AsyncStorage) or a PT-viewed client's
-// data (from the mock trainerStore) using identical visuals.
+// data (their cloud backup, via trainerStore.loadClientData) using identical
+// visuals.
 
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, Animated } from "react-native";
+import { useState, useCallback, useMemo, useRef, useEffect, type ReactElement } from "react";
+import { View, Text, StyleSheet, Animated, type RefreshControlProps } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -74,6 +75,9 @@ export interface ProgressViewProps {
   withTopInset?: boolean;
   /** Bottom padding override (defaults to 140 to clear the tab bar). */
   bottomPadding?: number;
+  /** Pull to refresh, when the screen embedding this owns a reload (a
+   *  trainer's client page). */
+  refreshControl?: ReactElement<RefreshControlProps>;
 }
 
 export default function ProgressView({
@@ -85,6 +89,7 @@ export default function ProgressView({
   asScreen = true,
   withTopInset = true,
   bottomPadding,
+  refreshControl,
 }: ProgressViewProps) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -345,6 +350,7 @@ export default function ProgressView({
         contentContainerStyle={[styles.scroll, { paddingTop: topPad, paddingBottom: botPad }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
         scrollEventThrottle={16}
+        refreshControl={refreshControl}
       >
         {title !== "" && (
           <View style={styles.titleRow}>

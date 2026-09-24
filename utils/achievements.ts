@@ -20,7 +20,7 @@
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import {
   ACHIEVEMENT_CARD_DAYS,
-  STREAK_MILESTONES,
+  isStreakMilestone,
   WORKOUT_MILESTONES,
   type Achievement,
   type AchievementCategory,
@@ -97,7 +97,7 @@ export function detectProgramAchievement(
 
 /** The achievement for an app-open streak reaching `days`, or null. */
 export function detectStreakAchievement(days: number, now: Date): Achievement | null {
-  if (!STREAK_MILESTONES.includes(days)) return null;
+  if (!isStreakMilestone(days)) return null;
   const earnedAt = now.toISOString();
   return { id: `streak:${days}:${earnedAt}`, category: "streak", earnedAt, days };
 }

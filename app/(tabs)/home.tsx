@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, Fragment } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { View, Text, StyleSheet, Image, Animated, TouchableOpacity } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import * as Haptics from "expo-haptics";
@@ -35,6 +35,9 @@ import { resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../.
 import { buildWeekSchedule, weekStartFor, type WeekDayPlan } from "../../utils/weekSchedule";
 import { applyRestDay, clearRestDay } from "../../utils/restDay";
 import { dayIdAt } from "../../utils/programDays";
+import { buildSessionTracks } from "../../utils/sessionTrack";
+import { ordinal } from "../../utils/workoutSummary";
+import SessionTrack from "../../components/SessionTrack";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
 import AchievementCard from "../../components/AchievementCard";
@@ -195,15 +198,6 @@ const QUICK_ACTIONS: QuickAction[] = [
 const MONTH_SHORT_J = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_FULL_J    = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
-function ordinal(n: number): string {
-  if (n === 11 || n === 12 || n === 13) return `${n}th`;
-  const mod = n % 10;
-  if (mod === 1) return `${n}st`;
-  if (mod === 2) return `${n}nd`;
-  if (mod === 3) return `${n}rd`;
-  return `${n}th`;
-}
-
 function formatWorkoutDate(completedIso: string, durationSeconds: number): string {
   const d = new Date(completedIso);
   const dateStr = `${DAY_FULL_J[d.getDay()]} ${d.getDate()} ${MONTH_SHORT_J[d.getMonth()]}`;
@@ -214,54 +208,6 @@ function formatWorkoutDate(completedIso: string, durationSeconds: number): strin
     return `${dateStr}  ·  ${startTime} – ${endTime}  ·  ${fmtDuration(durationSeconds)}`;
   }
   return `${dateStr}  ·  ${endTime}`;
-}
-
-function SessionTrack({ current, total, accent, track }: {
-  current: number; total: number; accent: string; track: string;
-}) {
-  if (total <= 12) {
-    return (
-      <View style={{ flexDirection: "row", alignItems: "center" }}>
-        {Array.from({ length: total }).map((_, i) => {
-          const isCurrent = i === current - 1;
-          const isFuture  = i > current - 1;
-          const isDone    = i < current - 1;
-          return (
-            <Fragment key={i}>
-              {i > 0 && (
-                <View style={{
-                  flex: 1, height: 2,
-                  backgroundColor: isFuture ? track : accent,
-                  shadowColor: isFuture ? "transparent" : accent,
-                  shadowOffset: { width: 0, height: 0 },
-                  shadowOpacity: isFuture ? 0 : 0.7,
-                  shadowRadius: 2,
-                }} />
-              )}
-              <View style={{
-                width: isCurrent ? 9 : 7, height: isCurrent ? 9 : 7, borderRadius: 999,
-                backgroundColor: isFuture ? "transparent" : accent,
-                borderWidth: isFuture ? 1.5 : 0, borderColor: track,
-                shadowColor: isFuture ? "transparent" : accent,
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: isCurrent ? 0.95 : isDone ? 0.55 : 0,
-                shadowRadius: isCurrent ? 3 : 2,
-              }} />
-            </Fragment>
-          );
-        })}
-      </View>
-    );
-  }
-  const pct = Math.min(1, current / total);
-  return (
-    <View style={{ height: 4, borderRadius: 2, backgroundColor: track, overflow: "hidden" }}>
-      <View style={{
-        width: `${Math.round(pct * 100)}%`, height: "100%", backgroundColor: accent, borderRadius: 2,
-        shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 6,
-      }} />
-    </View>
-  );
 }
 
 function fmtElapsed(secs: number): string {
@@ -423,25 +369,6 @@ export default function HomeScreen() {
     return map;
   }, [programs]);
 
-  // "Session 3 of 24" on a workout card. Grouped by the session's DAY, not its
-  // name: keying on the name restarted the count when a day was renamed, and
-  // pooled two same-named days into one run. Sessions with no dayId (free
-  // workouts, records the backfill couldn't attribute) still group by name.
-  const sessionNumbers = useMemo(() => {
-    const result: Record<string, number> = {};
-    const byDay: Record<string, CompletedWorkout[]> = {};
-    for (const w of workoutHistory) {
-      const k = w.dayId ? `id:${w.dayId}` : `name:${w.workoutName}`;
-      if (!byDay[k]) byDay[k] = [];
-      byDay[k].push(w);
-    }
-    for (const group of Object.values(byDay)) {
-      group.sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
-      group.forEach((w, i) => { result[w.id] = i + 1; });
-    }
-    return result;
-  }, [workoutHistory]);
-
   // Achievement cards: a week long, one per category, and a card a workout
   // earned disappears if that workout is deleted (utils/achievements.ts).
   const achievementCards = useMemo(
@@ -468,6 +395,29 @@ export default function HomeScreen() {
   }, [workoutHistory]);
 
   const effectiveToday = getEffectiveToday(activeProgram, workoutHistory);
+
+  /**
+   * "3rd session" on a workout card, and which dots on its track are greyed.
+   *
+   * The number is which SCHEDULED occurrence of that day the session was, not a
+   * rank among the ones completed (utils/sessionTrack.ts). Ranking completions
+   * let a missed week vanish: miss two of four sessions while ill, train the next
+   * week, and those two days came back as the "2nd session" while the two you
+   * never missed were on their "3rd".
+   *
+   * Grouped by (program, day): a day id only means anything inside its program,
+   * and a session is attributed with `workoutBelongsToProgram` — the same rule
+   * the Progress page and the Journal use, which also places legacy records that
+   * carry no programId.
+   *
+   * Anything the schedule can't place — a free workout, a session with no slot, a
+   * program whose start has moved (a resumed hold) — keeps the old rank-among-
+   * completed number and no grey dots, rather than a number that would be wrong.
+   */
+  const sessionTracks = useMemo(
+    () => buildSessionTracks(workoutHistory, programs, effectiveToday),
+    [workoutHistory, programs, effectiveToday],
+  );
 
   const isTodayCompleted = useMemo(
     () => workoutHistory.some(w => w.date === effectiveToday),
@@ -897,6 +847,9 @@ export default function HomeScreen() {
                 achievement={a}
                 isDark={isDark}
                 isKg={isKg}
+                // The flame the badge above is wearing, so a streak card can't
+                // show a different colour from the streak itself.
+                streakColor={activeColor}
                 onOpenWorkout={() => onAchievementPress(a)}
               />
             ))}
@@ -906,7 +859,7 @@ export default function HomeScreen() {
         {recentWorkouts.map((w) => {
           const progInfo   = (w.dayId ? programLookup[`id:${w.dayId}`] : undefined)
             ?? programLookup[`name:${w.workoutName}`] ?? null;
-          const sessionNum = sessionNumbers[w.id] ?? 1;
+          const sessionNum = sessionTracks.numberById[w.id] ?? 1;
           return (
             <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}>
               <NeuCard dark={isDark} style={[styles.activityCard, { marginBottom: 0 }]}>
@@ -926,10 +879,14 @@ export default function HomeScreen() {
                       </View>
                       {progInfo.totalSessions > 0 && (
                         <SessionTrack
-                          current={sessionNum}
+                          // The dot is where this sits in the PROGRAM, which is
+                          // past the session count whenever a week was missed.
+                          current={sessionTracks.positionById[w.id] ?? sessionNum}
                           total={progInfo.totalSessions}
+                          missed={sessionTracks.missedById[w.id]}
                           accent={ACCT}
                           track={t.div}
+                          missedColor={t.ts}
                         />
                       )}
                     </View>

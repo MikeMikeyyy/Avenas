@@ -17,7 +17,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard, { NEU_BG, NEU_BG_DARK } from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import CollapsibleCard from "../components/CollapsibleCard";
-import ExerciseNotesField from "../components/ExerciseNotesField";
+import ExerciseNotesField, { ReuseNoteChip, prevNotePlaceholder } from "../components/ExerciseNotesField";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
@@ -31,7 +31,7 @@ import {
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
-import { buildPrevByName, buildPrevNotesByName, prevDayScopeFor, normalizeExerciseName } from "../utils/workout";
+import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type PrevExerciseKey } from "../utils/workout";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
@@ -57,6 +57,12 @@ type LogExercise = {
   notes: string;
   programNotes?: string;
   isIsometric?: boolean;
+  /** What this was swapped in for; saved as CompletedExercise.swappedFrom. */
+  swappedFrom?: string;
+  /** Which program exercise this is: its id in the day's template. `id` above
+   *  is this screen's own row id, freshly made, so the program's is kept here.
+   *  Absent for one added here. Saved as CompletedExercise.programExerciseId. */
+  programExerciseId?: string;
 };
 
 function makeId(): string {
@@ -542,7 +548,7 @@ interface ExerciseCardProps {
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   prevSets?: string[];
   /** The note written on this exercise the time before this date
-   *  (utils/workout.ts buildPrevNotesByName). Shown as the empty box's
+   *  (utils/workout.ts buildPrevNoteLookup). Shown as the empty box's
    *  placeholder; Reuse and Undo write through onUpdateNotes. */
   prevNote?: string;
 }
@@ -744,9 +750,9 @@ function ExerciseCard({
           <>
             {/* Move row + Add Set */}
             <View style={[s.editMoveRow, { borderTopColor: divider }]}>
-              {/* Icon AND label in one target — see workout.tsx. */}
+              {/* Icon AND label in one target, and leaves edit mode, both as in workout.tsx. */}
               <TouchableOpacity
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(); }}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setEditing(false); onOpenReorder(); }}
                 activeOpacity={0.7}
                 style={s.exReorderBtn}
                 accessibilityLabel="Reorder exercises"
@@ -819,6 +825,7 @@ function ExerciseCard({
             value={ex.notes ?? ""}
             onChange={onUpdateNotes}
             prevNote={prevNote}
+            onFocus={() => onInputFocus(null, null)}
             isDark={isDark}
           />
         </View>
@@ -899,8 +906,11 @@ export default function LogWorkoutScreen() {
   const [saving, setSaving] = useState(false);
   const [workoutTime, setWorkoutTime] = useState<WorkoutTime | null>(null);
   const [timePickerVisible, setTimePickerVisible] = useState(false);
-  const [prevByName, setPrevByName] = useState<Record<string, string[]>>({});
-  const [prevNotesByName, setPrevNotesByName] = useState<Record<string, string>>({});
+  // Functions in state, so the updater form is needed to store them (a bare
+  // function would be called as one). Empty until history has loaded.
+  const [prevSetsOf, setPrevSetsOf] = useState<(ex: PrevExerciseKey) => string[] | undefined>(() => () => undefined);
+  const [prevNoteOf, setPrevNoteOf] = useState<(ex: PrevExerciseKey) => string | undefined>(() => () => undefined);
+  const [prevSessionNote, setPrevSessionNote] = useState<string | undefined>(undefined);
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -1001,6 +1011,7 @@ export default function LogWorkoutScreen() {
           notes: "",
           programNotes: ex.programNotes,
           isIsometric: ex.isIsometric,
+          programExerciseId: ex.id,
         };
       });
       setExercises(loaded);
@@ -1031,8 +1042,8 @@ export default function LogWorkoutScreen() {
 
   useEffect(() => {
     // Previous values come only from earlier sessions of the day being logged —
-    // see buildPrevByName. Programs are read alongside history because the day's
-    // own program decides whether it absorbs sessions that recorded no dayId.
+    // see buildPrevSetsLookup. Programs are read alongside history because the
+    // day's own program decides whether it absorbs sessions that recorded no dayId.
     Promise.all([
       AsyncStorage.getItem(WORKOUT_HISTORY_KEY),
       AsyncStorage.getItem(PROGRAMS_KEY),
@@ -1045,10 +1056,15 @@ export default function LogWorkoutScreen() {
         pid ? progs.find(p => p.id === pid) ?? null : null,
       );
       const history = JSON.parse(histRaw);
-      setPrevByName(buildPrevByName(history, date, scope));
-      // Same walk for the "Last time" note hint: only sessions of this day,
-      // and only ones before the date being logged.
-      setPrevNotesByName(buildPrevNotesByName(history, date, scope));
+      // Sets and the "Last time" notes (each exercise's and the session's), all
+      // from sessions of this day before the date being logged. A program
+      // exercise is found by its place in the program, so two of the same
+      // exercise each keep their own.
+      const setsLookup = buildPrevSetsLookup(history, date, scope);
+      const noteLookup = buildPrevNoteLookup(history, date, scope);
+      setPrevSetsOf(() => setsLookup);
+      setPrevNoteOf(() => noteLookup);
+      setPrevSessionNote(buildPrevSessionNote(history, date, scope));
     }).catch(() => {});
   }, []);
 
@@ -1140,8 +1156,23 @@ export default function LogWorkoutScreen() {
     setExercises(prev => [...prev, { id: makeId(), name, sets: [defaultSet("working")], notes: "" }]);
   }, []);
 
+  // As on the Workout screen: the numbers and the note were written about the
+  // old exercise, so they go. The sets keep their count, type and the program's
+  // targets (the placeholders), and start empty and unticked like a program
+  // day's, so typing weight and reps ticks them as usual. The swap remembers
+  // what it replaced, so the note written on the new one becomes the original's
+  // "Previous:" hint (buildPrevNoteLookup). programExerciseId stays: same
+  // place in the program, different exercise in it.
   const changeExercise = useCallback((exId: string, newName: string) => {
-    setExercises(prev => prev.map(ex => ex.id === exId ? { ...ex, name: newName } : ex));
+    setExercises(prev => prev.map(ex => ex.id === exId
+      ? {
+          ...ex,
+          name: newName,
+          sets: ex.sets.map(s => ({ type: s.type, weight: "", reps: "", done: false, programSet: s.programSet })),
+          notes: "",
+          swappedFrom: swapOrigin(ex, newName),
+        }
+      : ex));
   }, []);
 
   const toggleIsometric = useCallback((exId: string) => {
@@ -1206,6 +1237,8 @@ export default function LogWorkoutScreen() {
         // Inputs are in the user's display unit → store canonical kg.
         sets: ex.sets.map(s => ({ type: s.type, weight: parseWeightToKg(s.weight, isKg), reps: s.reps, done: s.done })),
         notes: ex.notes,
+        ...(ex.swappedFrom ? { swappedFrom: ex.swappedFrom } : {}),
+        ...(ex.programExerciseId ? { programExerciseId: ex.programExerciseId } : {}),
       })),
     };
 
@@ -1377,8 +1410,8 @@ export default function LogWorkoutScreen() {
               onToggleIsometric={() => toggleIsometric(ex.id)}
               onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
               onInputFocus={handleInputFocus}
-              prevSets={(prevByName[normalizeExerciseName(ex.name)] ?? []).map(p => formatPrevHint(p, isKg))}
-              prevNote={prevNotesByName[normalizeExerciseName(ex.name)]}
+              prevSets={(prevSetsOf(ex) ?? []).map(p => formatPrevHint(p, isKg))}
+              prevNote={prevNoteOf(ex)}
             />
           ))}
 
@@ -1433,16 +1466,20 @@ export default function LogWorkoutScreen() {
       >
         <View style={s.notesHeader}>
           <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
-          <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
-            <View style={s.notesTickBtn}>
-              <Ionicons name="checkmark" size={18} color="#fff" />
-            </View>
-          </BounceButton>
+          <View style={s.notesHeaderActions}>
+            {/* Last time's session note, as on the Workout tab. */}
+            <ReuseNoteChip value={notes} onChange={setNotes} prevNote={prevSessionNote} isDark={isDark} />
+            <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
+              <View style={s.notesTickBtn}>
+                <Ionicons name="checkmark" size={18} color="#fff" />
+              </View>
+            </BounceButton>
+          </View>
         </View>
         <TextInput
           ref={r => { sessionNotesInputRef.current = r; }}
           style={[s.notesInput, { color: t.tp }]}
-          placeholder="How's the session going? Anything to note..."
+          placeholder={prevNotePlaceholder(prevSessionNote, "How's the session going? Anything to note...")}
           placeholderTextColor={t.ts}
           multiline
           value={notes}
@@ -1456,22 +1493,28 @@ export default function LogWorkoutScreen() {
       {/* Keyboard toolbar */}
       {kbHeight > 0 && Platform.OS === "ios" && (
         <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
-          <TouchableOpacity
-              onPress={() => prevFnRef.current?.()}
-              activeOpacity={hasPrev ? 0.75 : 1}
-              disabled={!hasPrev}
-              style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}
-            >
-              <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => nextFnRef.current?.()}
-              activeOpacity={hasNext ? 0.75 : 1}
-              disabled={!hasNext}
-              style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}
-            >
-              <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
-            </TouchableOpacity>
+          {/* Arrows only where there's a set input to step to, as on the
+              Workout tab: a notes box gets the dismiss key alone. */}
+          {(hasPrev || hasNext) && (
+            <>
+              <TouchableOpacity
+                onPress={() => prevFnRef.current?.()}
+                activeOpacity={hasPrev ? 0.75 : 1}
+                disabled={!hasPrev}
+                style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasPrev ? 1 : 0.35 }]}
+              >
+                <Ionicons name="chevron-back" size={24} color={isDark ? "#fff" : "#333"} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => nextFnRef.current?.()}
+                activeOpacity={hasNext ? 0.75 : 1}
+                disabled={!hasNext}
+                style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff", opacity: hasNext ? 1 : 0.35 }]}
+              >
+                <Ionicons name="chevron-forward" size={24} color={isDark ? "#fff" : "#333"} />
+              </TouchableOpacity>
+            </>
+          )}
           <TouchableOpacity
             onPress={() => Keyboard.dismiss()}
             activeOpacity={0.75}
@@ -1607,6 +1650,7 @@ const s = StyleSheet.create({
   // Session notes — floating card + tick button
   notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
   notesHeader:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  notesHeaderActions: { flexDirection: "row", alignItems: "center", gap: 10 },
   notesFloatCard: { position: "absolute", left: 20, right: 20, borderRadius: 16, padding: 16, zIndex: 21, transformOrigin: "left bottom", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 18 },
   notesTickBtn:   { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 

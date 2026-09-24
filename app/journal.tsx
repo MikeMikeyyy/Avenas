@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -30,18 +30,17 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import ActiveBadge from "../components/ActiveBadge";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
+import JournalWorkoutCard, { useJournalWorkoutInfo } from "../components/journal/JournalWorkoutCard";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   getCurrentWeek, type SavedProgram, type CompletedWorkout, type ProgramDayRef,
 } from "../constants/programs";
-import { indexOfDayId, programDays } from "../utils/programDays";
+import { programDays } from "../utils/programDays";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { buildJournalFeed } from "../utils/journalFeed";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { fmtDuration } from "../utils/dates";
-import { workoutBelongsToProgram } from "../utils/progressStats";
 import { useTheme } from "../contexts/ThemeContext";
 
 // Dev-only warning helper. Compiled out of release builds via `__DEV__`.
@@ -54,7 +53,6 @@ function warnStorage(op: string, key: string, err: unknown) {
 
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_ABBR    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const DAY_FULL    = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
 function formatEntryDate(iso: string): string {
   const d = new Date(iso);
@@ -76,27 +74,6 @@ function formatTimeAgo(iso: string): string {
   return formatEntryDate(iso);
 }
 
-function formatWorkoutDate(completedIso: string, durationSeconds: number): string {
-  const d = new Date(completedIso);
-  const dateStr = `${DAY_FULL[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
-  const endTime = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
-  if (durationSeconds > 0) {
-    const startTime = new Date(d.getTime() - durationSeconds * 1000)
-      .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
-    return `${dateStr}  ·  ${startTime} – ${endTime}  ·  ${fmtDuration(durationSeconds)}`;
-  }
-  return `${dateStr}  ·  ${endTime}`;
-}
-
-function ordinal(n: number): string {
-  if (n === 11 || n === 12 || n === 13) return `${n}th`;
-  const mod = n % 10;
-  if (mod === 1) return `${n}st`;
-  if (mod === 2) return `${n}nd`;
-  if (mod === 3) return `${n}rd`;
-  return `${n}th`;
-}
-
 // Static values for StyleSheet
 const TP  = APP_LIGHT.tp;
 const TS  = APP_LIGHT.ts;
@@ -112,59 +89,6 @@ const WorkoutIcon = ({ size, color }: { size: number; color: string }) => (
     <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={color} strokeWidth="1.5" />
   </Svg>
 );
-
-// ─── Session progress track ───────────────────────────────────────────────────
-
-function SessionTrack({ current, total, accent, track }: {
-  current: number; total: number; accent: string; track: string;
-}) {
-  if (total <= 12) {
-    return (
-      <View style={{ flexDirection: "row", alignItems: "center" }}>
-        {Array.from({ length: total }).map((_, i) => {
-          const isCurrent = i === current - 1;
-          const isFuture  = i > current - 1;
-          const isDone    = i < current - 1;
-          return (
-            <Fragment key={i}>
-              {i > 0 && (
-                <View style={{
-                  flex: 1, height: 2,
-                  backgroundColor: isFuture ? track : accent,
-                  shadowColor: isFuture ? "transparent" : accent,
-                  shadowOffset: { width: 0, height: 0 },
-                  shadowOpacity: isFuture ? 0 : 0.7,
-                  shadowRadius: 2,
-                }} />
-              )}
-              <View style={{
-                width:  isCurrent ? 9 : 7,
-                height: isCurrent ? 9 : 7,
-                borderRadius: 999,
-                backgroundColor: isFuture ? "transparent" : accent,
-                borderWidth: isFuture ? 1.5 : 0,
-                borderColor: track,
-                shadowColor: isFuture ? "transparent" : accent,
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: isCurrent ? 0.95 : isDone ? 0.55 : 0,
-                shadowRadius: isCurrent ? 3 : 2,
-              }} />
-            </Fragment>
-          );
-        })}
-      </View>
-    );
-  }
-  const pct = Math.min(1, current / total);
-  return (
-    <View style={{ height: 4, borderRadius: 2, backgroundColor: track, overflow: "hidden" }}>
-      <View style={{
-        width: `${Math.round(pct * 100)}%`, height: "100%", backgroundColor: accent, borderRadius: 2,
-        shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 6,
-      }} />
-    </View>
-  );
-}
 
 // ─── Delete sheet ─────────────────────────────────────────────────────────────
 
@@ -606,58 +530,10 @@ export default function JournalScreen() {
     });
   }, [router, selectedDate]);
 
-  // workoutId → owning program (or null). Attribution goes through the canonical
-  // workoutBelongsToProgram (utils/progressStats): exact programId match for
-  // new-style records ("" = free workout, owned by nothing), day-name within the
-  // program's date window for legacy ones — the same rules the Progress page
-  // applies, so the two pages can't disagree. Active program wins legacy ties.
-  const owningProgramByWorkoutId = useMemo(() => {
-    const activeFirst = [...programs].sort((a, b) =>
-      a.status === "active" ? -1 : b.status === "active" ? 1 : 0
-    );
-    const map: Record<string, SavedProgram | null> = {};
-    for (const w of workoutHistory) {
-      map[w.id] = activeFirst.find(p => workoutBelongsToProgram(w, p)) ?? null;
-    }
-    return map;
-  }, [workoutHistory, programs]);
-
-  // The program row under a workout card: name + how many sessions of this day
-  // the program schedules in total (0 for extras → the track is hidden).
-  const progInfoOf = (w: CompletedWorkout) => {
-    const prog = owningProgramByWorkoutId[w.id];
-    if (!prog) return null;
-    // A dayId names ONE slot, so the program schedules it once per cycle. The
-    // name count is the fallback for sessions with no dayId — and it reads 0
-    // once the day has been renamed, which is why the id is preferred.
-    const perCycle =
-      w.dayId && indexOfDayId(prog, w.dayId) >= 0
-        ? 1
-        : prog.cyclePattern.filter(n => n === w.workoutName).length;
-    const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
-    return { programName: prog.name, totalSessions: perCycle * totalCycles };
-  };
-
-  // workoutId → session number (1-based, ordered by completedAt). Numbered
-  // within the owning program AND within the day, so two programs reusing a
-  // day name don't share a counter — and neither do two days of one program
-  // that share a name. Sessions with no dayId (free workouts, records the
-  // backfill couldn't attribute) fall back to the day name.
-  const sessionNumbers = useMemo(() => {
-    const result: Record<string, number> = {};
-    const byKey: Record<string, CompletedWorkout[]> = {};
-    for (const w of workoutHistory) {
-      const day = w.dayId ? `id:${w.dayId}` : `name:${w.workoutName}`;
-      const k = `${owningProgramByWorkoutId[w.id]?.id ?? ""}:${day}`;
-      if (!byKey[k]) byKey[k] = [];
-      byKey[k].push(w);
-    }
-    for (const group of Object.values(byKey)) {
-      group.sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
-      group.forEach((w, i) => { result[w.id] = i + 1; });
-    }
-    return result;
-  }, [workoutHistory, owningProgramByWorkoutId]);
+  // The program row under each workout card (program, which session, the
+  // track). Shared with the trainer's view of a client's journal, which draws
+  // the same card from the client's history.
+  const workoutInfoOf = useJournalWorkoutInfo(workoutHistory, programs);
 
   // Journal entries and completed workouts as one newest-first list. The merge
   // lives in utils/journalFeed.ts, shared with the client-side journal a trainer
@@ -812,38 +688,14 @@ export default function JournalScreen() {
         {timeline.map(item => {
           if (item.kind === "workout") {
             const w = item.data;
-            const progInfo   = progInfoOf(w);
-            const sessionNum = sessionNumbers[w.id] ?? 1;
             return (
-              <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}>
-                <NeuCard dark={isDark} style={[styles.entryCard, { marginBottom: 0 }]}>
-                  <View style={styles.workoutCardInner}>
-                    <View style={styles.workoutTopRow}>
-                        <View style={{ flex: 1 }}>
-                        <Text style={[styles.workoutName, { color: t.tp }]}>{w.workoutName}</Text>
-                        <Text style={[styles.workoutDate, { color: t.ts }]}>{formatWorkoutDate(w.completedAt, w.durationSeconds)}</Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                    </View>
-                    {progInfo && (
-                      <View style={styles.workoutProgRow}>
-                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
-                          <Text style={[styles.workoutProgName, { color: t.tp }]}>{progInfo.programName.toUpperCase()}</Text>
-                          <Text style={[styles.workoutProgSession, { color: t.tp }]}>{ordinal(sessionNum)} session</Text>
-                        </View>
-                        {progInfo.totalSessions > 0 && (
-                          <SessionTrack
-                            current={sessionNum}
-                            total={progInfo.totalSessions}
-                            accent={ACCT}
-                            track={t.div}
-                          />
-                        )}
-                      </View>
-                    )}
-                  </View>
-                </NeuCard>
-              </BounceButton>
+              <JournalWorkoutCard
+                key={w.id}
+                workout={w}
+                info={workoutInfoOf(w)}
+                isDark={isDark}
+                onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}
+              />
             );
           }
 
@@ -947,15 +799,6 @@ const styles = StyleSheet.create({
   entryMeta:    { flexDirection: "row", alignItems: "center", gap: 5, paddingTop: 10, borderTopWidth: 1, borderTopColor: DIV },
   entryMetaText:{ fontFamily: FontFamily.regular, fontSize: 12, color: TS },
   entryDot:     { fontFamily: FontFamily.regular, fontSize: 12, color: DIV },
-
-  // Workout summary card
-  workoutCardInner: { padding: 18, gap: 10 },
-  workoutTopRow:    { flexDirection: "row", alignItems: "center", gap: 12 },
-  workoutName:      { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
-  workoutDate:      { fontFamily: FontFamily.regular, fontSize: 12, color: TS, marginTop: 2 },
-  workoutProgRow:    { paddingTop: 10 },
-  workoutProgName:   { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.9 },
-  workoutProgSession:{ fontFamily: FontFamily.semibold, fontSize: 12 },
 
   // Bottom sheet shared
   backdrop:    { backgroundColor: "rgba(0,0,0,0.45)" },

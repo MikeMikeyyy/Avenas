@@ -79,6 +79,22 @@ export function fromYMD(ymd: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * `days` calendar days after "YYYY-MM-DD" (negative goes back), as "YYYY-MM-DD".
+ * Returns the input unchanged when it isn't that shape.
+ *
+ * Steps by CALENDAR DAY through the Date constructor rather than adding
+ * milliseconds, so a daylight-saving transition inside the span can't land it on
+ * the wrong day. Shared because three walks need it (the week strip, the rest-day
+ * search, and the session track).
+ */
+export function addDaysYMD(ymd: string, days: number): string {
+  const d = fromYMD(ymd);
+  if (!d) return ymd;
+  d.setDate(d.getDate() + days);
+  return toYMD(d);
+}
+
 /** Local calendar days from `a` to `b`, both "YYYY-MM-DD". Null if either is
  *  malformed. Positive when `b` is later. DST-safe (both sides are local
  *  midnights, so the rounding absorbs the 23/25-hour days). */
