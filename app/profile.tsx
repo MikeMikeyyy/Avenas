@@ -23,6 +23,7 @@ import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, DANGER, FontFamily } from "../constants/theme";
 import { clearCoachingData, pushAccountType, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
 import { isApplePrivateEmail } from "../lib/auth";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -156,7 +157,7 @@ export default function ProfileScreen() {
       let emailNote = "";
       if (emailChanged) {
         await updateEmail(trimmedEmail);
-        emailNote = ` A confirmation link was sent to ${trimmedEmail} — open it to finish changing your email.`;
+        emailNote = ` A confirmation link was sent to ${trimmedEmail}. Open it to finish changing your email.`;
       }
       Alert.alert("Saved", `Your profile has been updated.${roleNote}${emailNote}`, [
         { text: "OK", onPress: () => router.back() },
@@ -219,21 +220,13 @@ export default function ProfileScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-      >
-        <Ionicons name="chevron-back" size={22} color={t.tp} />
-      </TouchableOpacity>
+      <BackButton />
 
       <KeyboardAwareScrollView
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 64, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: insets.bottom + 32 }]}
       >
         <Text style={[styles.title, { color: t.tp }]}>Profile</Text>
 
@@ -375,7 +368,6 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   root:          { flex: 1 },
-  backBtn:       { position: "absolute", left: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:        { paddingHorizontal: 28 },
   title:         { fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
   avatarSection: { alignItems: "center", marginTop: 18, marginBottom: 8, gap: 8 },

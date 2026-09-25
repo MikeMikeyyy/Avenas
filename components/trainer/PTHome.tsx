@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
-import Svg, { Path } from "react-native-svg";
 import * as Haptics from "expo-haptics";
-// FadeIn/FadeOut are for the search row only. The program cards deliberately
-// carry NO layout animation: LinearTransition on a card froze the UI-thread
-// height tween inside ExpandReveal, which is the open/close animation itself.
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+// No Reanimated layout animation on this page: the program cards deliberately
+// carry none, because LinearTransition on a card froze the UI-thread height
+// tween inside ExpandReveal, which is the open/close animation itself.
 
 import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
@@ -24,13 +22,14 @@ import ProgramPickerSheet from "./ProgramPickerSheet";
 import RecipientPickerSheet from "./RecipientPickerSheet";
 import PeopleIcon from "../icons/PeopleIcon";
 import ChatIcon from "../icons/ChatIcon";
+import UserRoundPlusIcon from "../icons/UserRoundPlusIcon";
 import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
 import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { Ionicons } from "@expo/vector-icons";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
 import FavouriteStar from "../FavouriteStar";
@@ -45,6 +44,8 @@ import {
   saveClients,
   setGroupReviewDone,
   dismissReceivedReview,
+  setReviewArchived,
+  setSendBatchArchived,
   type Client,
   type SentProgram,
   type SharedProgram,
@@ -52,25 +53,18 @@ import {
 import { EMPTY_PT_HUB, fetchPTHub, peekPTHub, savePTHub, type PTHubData } from "../../utils/trainerHub";
 import { hydrateGroupPages } from "../../utils/groupPage";
 import { getJSON } from "../../utils/storage";
-import { removeShareConfirm } from "../../utils/removeShare";
+import { archiveShareChoice } from "../../utils/removeShare";
+import { askArchiveOrDelete } from "../../utils/archiveChoice";
+import ArchiveButton from "../ArchiveButton";
 import { loadGroupRows, sortByFavourite } from "../../utils/groupStore";
 import { groupAlertCounts } from "../../utils/groupAlerts";
-import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites } from "../../lib/groups";
+import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites, isGroupLimitError } from "../../lib/groups";
 import GroupInviteCard from "./GroupInviteCard";
 import GroupAvatar from "./GroupAvatar";
+import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "./ReviewStatusPill";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
-import type { Group, GroupInvite } from "../../constants/groups";
-
-// Same SVG used by workout.tsx / new-program.tsx / review screen.
-function KeyboardDismissIcon({ color }: { color: string }) {
-  return (
-    <Svg width={34} height={29} viewBox="0 0 26 22" fill="none">
-      <Path d="M2 2.5C2 1.67 2.67 1 3.5 1h19c.83 0 1.5.67 1.5 1.5v10c0 .83-.67 1.5-1.5 1.5h-19C2.67 14 2 13.33 2 12.5v-10z" stroke={color} strokeWidth="1.4"/>
-      <Path d="M6 5.5h1.2M10 5.5h1.2M14 5.5h1.2M18 5.5h1.2M6 8.5h1.2M10 8.5h1.2M14 8.5h1.2M18 8.5h1.2M8 11.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
-      <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-    </Svg>
-  );
-}
+import { GROUP_LIMIT_TITLE, MAX_GROUPS, groupLimitMessage, type Group, type GroupInvite } from "../../constants/groups";
+import { alertMessage } from "../../utils/errors";
 
 function fmtAgo(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -242,7 +236,7 @@ function ReceivedCard({ review, open, isDark, from, onToggle, onOpen, onRemove }
         style={styles.reviewInner}
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
-        accessibilityLabel={`${review.programName}, ${returned ? "returned" : "awaiting review"}, ${open ? "collapse" : "expand"}`}
+        accessibilityLabel={`${review.programName}, ${REVIEW_STAGE_LABEL[reviewStage(review)].toLowerCase()}, ${open ? "collapse" : "expand"}`}
       >
         <View style={styles.reviewTop}>
           <View style={{ flex: 1 }}>
@@ -251,13 +245,10 @@ function ReceivedCard({ review, open, isDark, from, onToggle, onOpen, onRemove }
               {from} · Sent {fmtAgo(review.sentAtISO)}
             </Text>
           </View>
-          {/* Green once it's gone back; orange while it's still waiting on
-              you (AWAITING_ORANGE), so the ones needing work stand out. */}
-          <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
-            <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
-              {returned ? "Returned" : "Awaiting review"}
-            </Text>
-          </View>
+          {/* Orange while it's still waiting on you, so the ones needing work
+              stand out; green once it's gone back; solid green once they've
+              accepted it, when there's nothing left but to Remove it. */}
+          <ReviewStatusPill review={review} />
         </View>
         <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} isDark={isDark} />
         {/* The same pair as the sent cards: a white Review and a red Remove,
@@ -344,17 +335,10 @@ export default function PTHome() {
     if (groupIdsKey) void hydrateGroupPages(owner, groupIdsKey.split(","));
   }, [owner, groupIdsKey]);
 
-  const [kbHeight, setKbHeight] = useState(0);
   // Live-ish presence for connected clients + the Connect button badge count.
   // Disconnecting a real connection lives on the Connect screen (app/connect.tsx).
   const { presenceById, pendingIncoming } = useConnectionPresence();
 
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => setKbHeight(0));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
-  const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [pendingProgram, setPendingProgram] = useState<SavedProgram | null>(null);
@@ -363,7 +347,6 @@ export default function PTHome() {
   const [collapsedSharedSection, setCollapsedSharedSection] = useState(false);
   const [collapsedReviewsSection, setCollapsedReviewsSection] = useState(false);
   const [collapsedClientsSection, setCollapsedClientsSection] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
 
   const toggleSharedSection = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -377,26 +360,6 @@ export default function PTHome() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCollapsedClientsSection(v => !v);
   }, []);
-  const searchInputRef = useRef<TextInput>(null);
-  // Closing clears the query and drops the keyboard in the same step, so the
-  // search row and the keyboard go together. The X does this, and so does the
-  // keyboard's down button while you're typing a search.
-  const closeSearch = useCallback(() => {
-    setSearch("");
-    Keyboard.dismiss();
-    setSearchOpen(false);
-  }, []);
-  const toggleSearch = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (searchOpen) closeSearch();
-    else setSearchOpen(true);
-  }, [searchOpen, closeSearch]);
-  // Asked before anything is dismissed: once the keyboard drops, nothing is
-  // focused any more.
-  const onKeyboardDown = useCallback(() => {
-    if (searchInputRef.current?.isFocused()) closeSearch();
-    else Keyboard.dismiss();
-  }, [closeSearch]);
 
   const toggleShared = useCallback((id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -462,13 +425,11 @@ export default function PTHome() {
   // Starred clients pinned on top, oldest star first, then the roster's own
   // order — the same rule the group roster and the groups list follow, off the
   // same account-wide list, so someone starred on their client page is pinned
-  // in every group you share with them too. Sorted after the search filter, so
-  // a search result list is pinned the same way the full one is.
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const matched = q ? clients.filter(c => c.name.toLowerCase().includes(q)) : clients;
-    return sortByFavourite(matched, favouriteMembers);
-  }, [clients, search, favouriteMembers]);
+  // in every group you share with them too.
+  const sortedClients = useMemo(
+    () => sortByFavourite(clients, favouriteMembers),
+    [clients, favouriteMembers],
+  );
 
   const handleAddClient = useCallback(async (name: string, note: string) => {
     const newClient: Client = {
@@ -488,10 +449,20 @@ export default function PTHome() {
     setHub(h => h && { ...h, clients: [newClient, ...h.clients] });
   }, []);
 
+  // The group limit is checked against this list before anything is sent, so
+  // the prompt comes before the form is filled in. The database refuses a 6th
+  // too (0035), which covers a list that's out of date.
+  const atGroupLimit = groups.length >= MAX_GROUPS;
+  const ownsAGroup = groups.some(g => g.isOwner);
+
   const openNewGroup = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (atGroupLimit) {
+      Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("create", ownsAGroup));
+      return;
+    }
     router.navigate("/trainer/group-edit");
-  }, [router]);
+  }, [router, atGroupLimit, ownsAGroup]);
 
   const openGroup = useCallback((g: Group) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -502,10 +473,16 @@ export default function PTHome() {
    *  readable once the RPC returns, so an optimistic card could open to
    *  nothing. Same reasoning as the gym-user hub. */
   const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {
+    // At the limit the invite stays where it is, to accept after leaving a group.
+    if (atGroupLimit) {
+      Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("join", ownsAGroup));
+      return;
+    }
     try {
       await acceptGroupInvite(invite.groupId);
     } catch (e) {
-      Alert.alert("Couldn't join group", e instanceof Error ? e.message : "Check your connection and try again.");
+      if (isGroupLimitError(e)) Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("join", ownsAGroup));
+      else Alert.alert("Couldn't join group", alertMessage(e, "Check your connection and try again."));
       return;
     }
     // Same read as the initial load, so a group joined from an invite arrives
@@ -517,7 +494,7 @@ export default function PTHome() {
       unreadByGroup: Object.fromEntries(rows.map(r => [r.group.id, r.unreadCount])),
       groupInvites: inv,
     });
-  }, []);
+  }, [atGroupLimit, ownsAGroup]);
 
   const handleDeclineInvite = useCallback((invite: GroupInvite) => {
     Alert.alert(
@@ -532,7 +509,7 @@ export default function PTHome() {
             try {
               await declineGroupInvite(invite.groupId);
             } catch (e) {
-              Alert.alert("Couldn't decline", e instanceof Error ? e.message : "Check your connection and try again.");
+              Alert.alert("Couldn't decline", alertMessage(e, "Check your connection and try again."));
               return;
             }
             setHub(h => h && { ...h, groupInvites: h.groupInvites.filter(i => i.groupId !== invite.groupId) });
@@ -570,45 +547,48 @@ export default function PTHome() {
   );
 
   /**
-   * Take a program off Programs Received. What that means depends on where it
-   * came from, and the prompt says which, because the two reach different
-   * people:
+   * Take a program off Programs Received: Archive (back from the archive
+   * button, up top) or Delete. Where either reaches depends on where it came
+   * from, and the prompt says which, because the two reach different people:
    *
-   *   a GROUP review — cleared from the group's queue, for every coach of the
-   *     group (`set_group_review_completed`, coach-only at the database). This
-   *     is what Mark Done used to be.
-   *   a 1:1 review — hidden from MY list only (dismissReceivedReview).
+   *   a GROUP review — off the group's queue, for every coach of the group.
+   *     Delete is `set_group_review_completed` (coach-only at the database),
+   *     what Mark Done used to be; Archive is the same, restorable.
+   *   a 1:1 review — off MY list only (Delete: dismissReceivedReview).
    *
    * Either way the person who sent it keeps their copy and any feedback, and
-   * the prompt warns when it hasn't been sent back yet, since removing it then
-   * leaves them waiting on a review nobody will do.
+   * can still accept what was sent back. The prompt says where it stands
+   * (removeReviewNote), and warns when it hasn't been sent back yet, since
+   * removing it then leaves them waiting on a review nobody will do.
    */
   const handleRemoveReview = useCallback((entry: SentProgram) => {
-    const notBack = !entry.returnedAtISO;
     const where = entry.groupId ? "the group's review list" : "your list";
-    Alert.alert(
-      "Remove Program",
-      `Remove "${entry.programName}" from ${where}?${notBack ? " You haven't sent it back yet, so they'll still be waiting on a review." : " They keep the feedback you sent back."}`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              if (entry.groupId) await setGroupReviewDone(entry.id, true);
-              else await dismissReceivedReview(entry.id);
-            } catch (e) {
-              Alert.alert("Couldn't remove it", e instanceof Error ? e.message : "Check your internet and try again.");
-              return;
-            }
-            setHub(h => h && (entry.groupId
-              ? { ...h, groupReviews: h.groupReviews.filter(r => r.id !== entry.id) }
-              : { ...h, reviews: h.reviews.filter(r => r.id !== entry.id) }));
-          },
-        },
-      ],
-    );
+    const drop = () => setHub(h => h && (entry.groupId
+      ? { ...h, groupReviews: h.groupReviews.filter(r => r.id !== entry.id) }
+      : { ...h, reviews: h.reviews.filter(r => r.id !== entry.id) }));
+    askArchiveOrDelete({
+      title: "Remove Program",
+      body: `Archive "${entry.programName}" to take it off ${where} until you restore it, or delete it. ${removeReviewNote(entry)}`,
+      onArchive: async () => {
+        try {
+          await setReviewArchived(entry.id, true);
+        } catch (e) {
+          Alert.alert("Couldn't archive it", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
+        drop();
+      },
+      onDelete: async () => {
+        try {
+          if (entry.groupId) await setGroupReviewDone(entry.id, true);
+          else await dismissReceivedReview(entry.id);
+        } catch (e) {
+          Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
+        drop();
+      },
+    });
   }, []);
 
   /** Open a review. A group one has to carry its groupId: the review screen
@@ -659,8 +639,11 @@ export default function PTHome() {
     });
   }, [sharedOut]);
 
+  /** Remove on a send: Archive it (off this list and every recipient's, until
+   *  it's restored from the archive up top) or Delete it for good. Accepted
+   *  copies are untouched either way. */
   const handleUnshareBatch = useCallback((batch: typeof batches[number]) => {
-    const prompt = removeShareConfirm({
+    const prompt = archiveShareChoice({
       programName: batch.programName,
       recipients: batch.groupId
         ? `${groups.find(g => g.id === batch.groupId)?.name ?? "this group"}`
@@ -668,21 +651,24 @@ export default function PTHome() {
       total: batch.total,
       accepted: batch.acceptedCount,
     });
-    Alert.alert(
-      prompt.title,
-      prompt.body,
-      [
-        { text: prompt.cancel, style: "cancel" },
-        {
-          text: prompt.confirm,
-          style: "destructive",
-          onPress: async () => {
-            await removeSharedProgramBatch(batch.key);
-            setHub(h => h && { ...h, sharedOut: h.sharedOut.filter(s => batchKeyOf(s) !== batch.key) });
-          },
-        },
-      ]
-    );
+    const drop = () => setHub(h => h && { ...h, sharedOut: h.sharedOut.filter(s => batchKeyOf(s) !== batch.key) });
+    askArchiveOrDelete({
+      title: prompt.title,
+      body: prompt.body,
+      onArchive: async () => {
+        try {
+          await setSendBatchArchived(batch.key, true);
+        } catch (e) {
+          Alert.alert("Couldn't archive it", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
+        drop();
+      },
+      onDelete: async () => {
+        await removeSharedProgramBatch(batch.key);
+        drop();
+      },
+    });
   }, [groups]);
 
   const handleProgramPicked = useCallback((program: SavedProgram) => {
@@ -715,7 +701,7 @@ export default function PTHome() {
     } catch (e) {
       // Real-account sends go through the server and genuinely fail offline —
       // don't pretend it worked.
-      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     setHub(h => h && { ...h, sharedOut: [...entries, ...h.sharedOut] });
@@ -739,9 +725,6 @@ export default function PTHome() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        // Without this the keyboard eats the first tap on any button (incl. the
-        // search-close X) while the search field is focused, forcing a double tap.
-        keyboardShouldPersistTaps="handled"
         // +14 top: exactly the floating-chrome line pushed screens use
         // (my-trainers back/plus sit at insets.top+14). Keep in sync with
         // MyPTHome so both hub views share the same first-row line.
@@ -768,9 +751,13 @@ export default function PTHome() {
             </View>
           </BounceButton>
           <View style={{ flex: 1 }} />
+          {/* Programs archived off Programs Sent and Programs Received. Up
+              here rather than on either heading, because a section with
+              everything archived isn't drawn at all. */}
+          <ArchiveButton onPress={() => router.navigate({ pathname: "/program-archive", params: { scope: "trainer" } })} />
           <BounceButton onPress={() => router.navigate("/trainer/messages")} accessibilityLabel="Open messages">
             <View>
-              <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
+              <View style={[styles.circleBtn, { backgroundColor: t.ctrl }]}>
                 <ChatIcon size={18} color={t.tp} />
               </View>
               <UnreadBadge count={unreadMessages} style={styles.msgBadge} />
@@ -778,8 +765,8 @@ export default function PTHome() {
           </BounceButton>
           <BounceButton onPress={() => router.navigate("/connect")} accessibilityLabel="Connect with someone">
             <View>
-              <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
-                <Ionicons name="add" size={24} color={t.tp} />
+              <View style={[styles.circleBtn, { backgroundColor: t.ctrl }]}>
+                <UserRoundPlusIcon size={20} color={t.tp} />
               </View>
               <UnreadBadge count={pendingIncoming} style={styles.msgBadge} />
             </View>
@@ -801,40 +788,7 @@ export default function PTHome() {
               <ChevronToggle expanded={!collapsedClientsSection} color={t.ts} />
             </View>
           </Pressable>
-          <BounceButton onPress={toggleSearch} accessibilityLabel={searchOpen ? "Close search" : "Search clients"}>
-            <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name={searchOpen ? "close" : "search"} size={18} color={t.tp} />
-            </View>
-          </BounceButton>
         </View>
-
-        {searchOpen && (
-          <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(140)} style={styles.searchRow}>
-            {/* Same field as the exercise picker's: a filled, fully rounded
-                pill on t.ctrl rather than a faint tinted box, so it reads as
-                something you type into. */}
-            <View style={[styles.search, { backgroundColor: t.ctrl, borderColor: t.div }]}>
-              <Ionicons name="search" size={17} color={t.ts} />
-              <TextInput
-                ref={searchInputRef}
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Search clients"
-                placeholderTextColor={t.ts}
-                autoFocus
-                autoCorrect={false}
-                returnKeyType="search"
-                clearButtonMode="never"
-                style={[styles.searchInput, { color: t.tp }]}
-              />
-              {search.length > 0 && (
-                <TouchableOpacity onPress={() => setSearch("")} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
-                  <Ionicons name="close-circle" size={19} color={t.ts} />
-                </TouchableOpacity>
-              )}
-            </View>
-          </Animated.View>
-        )}
 
         <BounceButton style={{ marginBottom: 18 }} onPress={() => setSendOpen(true)}>
           <View style={[styles.broadcast, { backgroundColor: ACCT, shadowColor: ACCT }]}>
@@ -843,35 +797,29 @@ export default function PTHome() {
           </View>
         </BounceButton>
 
-        {!loaded ? null : filtered.length === 0 ? (
-          search ? (
-            <NeuCard dark={isDark} radius={12}>
-              <View style={styles.noMatchRow}>
-                <Ionicons name="search-outline" size={15} color={t.ts} />
-                <Text style={[styles.noMatchText, { color: t.ts }]}>{`No matches for "${search}"`}</Text>
+        {/* No client search: the roster is small enough to scan (a 10-client
+            limit is planned). A search is meant to come back with the Pro
+            tier's larger roster, not before. */}
+        {!loaded ? null : sortedClients.length === 0 ? (
+          <NeuCard dark={isDark} radius={20}>
+            <View style={styles.emptyInner}>
+              <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
+                <PeopleIcon size={28} color={ACCT} />
               </View>
-            </NeuCard>
-          ) : (
-            <NeuCard dark={isDark} radius={20}>
-              <View style={styles.emptyInner}>
-                <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
-                  <PeopleIcon size={28} color={ACCT} />
-                </View>
-                <Text style={[styles.emptyTitle, { color: t.tp }]}>No clients yet</Text>
-                <Text style={[styles.emptyBody, { color: t.ts }]}>Tap the + button to connect with someone by code or QR.</Text>
-              </View>
-            </NeuCard>
-          )
+              <Text style={[styles.emptyTitle, { color: t.tp }]}>No clients yet</Text>
+              <Text style={[styles.emptyBody, { color: t.ts }]}>Tap the + button to connect with someone by code or QR.</Text>
+            </View>
+          </NeuCard>
         ) : collapsedClientsSection ? (
           <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-            {filtered.map((c, i) => (
+            {sortedClients.map((c, i) => (
               <TouchableOpacity
                 key={c.id}
                 onPress={() => router.navigate({ pathname: "/trainer/client/[id]", params: { id: c.id } })}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${c.name}`}
-                style={[styles.summaryRow, { borderBottomColor: t.div, borderBottomWidth: i === filtered.length - 1 ? 0 : 1 }]}
+                style={[styles.summaryRow, { borderBottomColor: t.div, borderBottomWidth: i === sortedClients.length - 1 ? 0 : 1 }]}
               >
                 <Avatar
                   uri={c.photoUri}
@@ -888,7 +836,7 @@ export default function PTHome() {
             ))}
           </NeuCard>
         ) : (
-          filtered.map(c => (
+          sortedClients.map(c => (
             <ClientCard
               key={c.id}
               // Live presence overrides the load-time snapshot; local/mock
@@ -945,7 +893,7 @@ export default function PTHome() {
             >
               <NeuCard dark={isDark} radius={16}>
                 <View style={styles.summaryRow}>
-                  <GroupAvatar uri={g.photoUri} size={30} isDark={isDark} />
+                  <GroupAvatar uri={g.photoUri} size={38} isDark={isDark} />
                   <View style={{ flex: 1 }}>
                     <View style={styles.groupNameRow}>
                       <Text style={[styles.groupName, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
@@ -1034,29 +982,22 @@ export default function PTHome() {
             </Pressable>
             {collapsedReviewsSection ? (
               <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
-                {received.map((r, i) => {
-                  const returned = r.status === "returned";
-                  return (
-                    <TouchableOpacity
-                      key={r.id}
-                      onPress={() => openReview(r)}
-                      activeOpacity={0.7}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open review for ${r.programName}`}
-                      style={[
-                        styles.summaryRow,
-                        { borderBottomColor: t.div, borderBottomWidth: i === received.length - 1 ? 0 : 1 },
-                      ]}
-                    >
-                      <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                      <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
-                        <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
-                          {returned ? "Returned" : "Awaiting review"}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
+                {received.map((r, i) => (
+                  <TouchableOpacity
+                    key={r.id}
+                    onPress={() => openReview(r)}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open review for ${r.programName}`}
+                    style={[
+                      styles.summaryRow,
+                      { borderBottomColor: t.div, borderBottomWidth: i === received.length - 1 ? 0 : 1 },
+                    ]}
+                  >
+                    <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
+                    <ReviewStatusPill review={r} />
+                  </TouchableOpacity>
+                ))}
               </NeuCard>
             ) : received.map(r => (
               <ReceivedCard
@@ -1091,20 +1032,6 @@ export default function PTHome() {
         onConfirm={handleConfirmRecipients}
         onClose={() => setPendingProgram(null)}
       />
-
-      {kbHeight > 0 && Platform.OS === "ios" && (
-        <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, zIndex: 999 }}>
-          <TouchableOpacity
-            onPress={onKeyboardDown}
-            activeOpacity={0.75}
-            style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}
-            accessibilityLabel="Dismiss keyboard"
-            accessibilityRole="button"
-          >
-            <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
-          </TouchableOpacity>
-        </View>
-      )}
     </FadeScreen>
   );
 }
@@ -1122,18 +1049,13 @@ const styles = StyleSheet.create({
   countBadgeText:{ fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.2 },
   addBtn:       { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   manageBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  searchBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  circleBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
   msgBadge:     { position: "absolute", top: -5, right: -5 },
-  searchRow:    { marginBottom: 14 },
-  search:       { flexDirection: "row", alignItems: "center", gap: 9, height: 42, paddingHorizontal: 14, borderRadius: PILL_RADIUS, borderWidth: 1, ...PILL_SHADOW },
-  searchInput:  { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0 },
   summaryAvatar:    { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   summaryAvatarText:{ fontFamily: FontFamily.bold, fontSize: 11 },
   broadcast:    { ...pill(), gap: 10, ...pillGlow(ACCT, 0.4) },
   broadcastText:{ fontFamily: FontFamily.bold, fontSize: 15, color: "#fff", letterSpacing: 0.2 },
   emptyInner:   { padding: 28, alignItems: "center", gap: 10 },
-  noMatchRow:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10 },
-  noMatchText:  { fontFamily: FontFamily.regular, fontSize: 13 },
   emptyIcon:    { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 17 },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 18 },
@@ -1169,7 +1091,6 @@ const styles = StyleSheet.create({
   cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 12 },
   cycleChip:    { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
   cycleChipText:{ fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
-  kbFloatBtn:   { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
   chevronRow:    { alignItems: "center", paddingTop: 2, marginTop: 10 },
   sharedActionRow:{ flexDirection: "row", gap: 10, paddingTop: 12 },
   // Pills rather than NeuCards: these sit INSIDE an expanded card, and a raised
@@ -1177,7 +1098,7 @@ const styles = StyleSheet.create({
   // control surface + soft shadow is the same treatment the rest of the app's
   // secondary actions use, and the delete variant just swaps the fill for DANGER.
   sharedActionBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
-  deleteBtnText:  { fontFamily: FontFamily.bold, fontSize: 14, color: "#E53935", letterSpacing: 0.2 },
+  deleteBtnText:  { fontFamily: FontFamily.bold, fontSize: 14, color: DANGER_BRIGHT, letterSpacing: 0.2 },
   recipientList:  { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, marginTop: 2 },
   recipientRow:   { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
   recipientDot:   { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },

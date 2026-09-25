@@ -57,8 +57,10 @@ export type GroupPageData = {
   /** Programs sent to this group, one row per member per send. Already scoped
    *  to this group, in both directions: a group's noticeboard, not my inbox. */
   groupShares: SharedProgram[];
-  /** The group's review queue: programs members posted here, still open. Empty
-   *  for a member, since RLS gives a group's reviews to its coaches only. */
+  /** The group's review queue: programs members posted here, still open, plus
+   *  my own requests that have come back until I remove them (see
+   *  loadGroupReviewPrograms). A member gets only their own, since RLS gives a
+   *  group's reviews to its coaches. */
   groupReviews: SentProgram[];
   myUid: string | null;
 };

@@ -22,6 +22,8 @@ import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from
 import { pill, PILL_H } from "../constants/buttons";
 import { pullProfile, pushProfile } from "../lib/cloud";
 import { signOut } from "../lib/auth";
+import { alertMessage } from "../utils/errors";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 function Choice({ label, selected, onPress, dark }: { label: string; selected: boolean; onPress: () => void; dark: boolean }) {
   const t = dark ? APP_DARK : APP_LIGHT;
@@ -87,12 +89,13 @@ export default function CompleteProfileScreen() {
     return () => { cancelled = true; };
   }, [userId]);
 
-  // Top-right escape hatch back to the login/signup screen the user came from
-  // (before they picked an email). Picking an account already created a Supabase
+  // The back button's escape hatch to the login/signup screen the user came from
+  // (before they picked an email). It sat top-right; it's now in the same spot as
+  // every other back button. Picking an account already created a Supabase
   // session, so sign out first — otherwise re-picking wouldn't re-prompt and this
   // half-set-up account would be sent straight to Home (no profile) on next launch.
+  // No haptic here: BackButton fires it.
   const onBack = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // force: abandoning a half-created account; there's no data of its own to
     // back up, and being stuck on this screen would be worse than a stale push.
     try { await signOut({ force: true }); } catch { /* navigate back regardless */ }
@@ -115,7 +118,7 @@ export default function CompleteProfileScreen() {
       await pushProfile(userId, { name: trimmed, email, accountType: role, unit: kg ? "kg" : "lb" });
       router.navigate({ pathname: "/accept-terms", params: { name: trimmed, email } });
     } catch (e) {
-      Alert.alert("Couldn't save profile", e instanceof Error ? e.message : "Please try again.");
+      Alert.alert("Couldn't save profile", alertMessage(e, "Please try again."));
     } finally {
       setBusy(false);
     }
@@ -133,21 +136,13 @@ export default function CompleteProfileScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={onBack}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-      >
-        <Ionicons name="chevron-back" size={22} color={t.tp} />
-      </TouchableOpacity>
+      <BackButton onPress={onBack} />
 
       <KeyboardAwareScrollView
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 4, paddingBottom: insets.bottom + 32 }]}
       >
         <View style={styles.avatarSection}>
           <NeuCard dark={isDark} radius={44} style={styles.avatar}>
@@ -206,7 +201,6 @@ export default function CompleteProfileScreen() {
 const styles = StyleSheet.create({
   root:          { flex: 1 },
   center:        { alignItems: "center", justifyContent: "center" },
-  backBtn:       { position: "absolute", right: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:        { paddingHorizontal: 28 },
   avatarSection: { alignItems: "center", marginBottom: 24 },
   avatar:        { width: 88, height: 88, borderRadius: 44 },

@@ -17,13 +17,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard, { NEU_BG, NEU_BG_DARK } from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import CollapsibleCard from "../components/CollapsibleCard";
-import ExerciseNotesField, { ReuseNoteChip, prevNotePlaceholder } from "../components/ExerciseNotesField";
+import ExerciseNotesField, { PrevNoteTag, ReuseNoteChip, prevNotePlaceholder } from "../components/ExerciseNotesField";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
@@ -33,11 +33,12 @@ import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
 import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type PrevExerciseKey } from "../utils/workout";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
-import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../utils/units";
+import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardWorkoutAchievements } from "../utils/achievementStore";
 import { useTheme } from "../contexts/ThemeContext";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const WARMUP_ORANGE = "#ffbf0f";
 
@@ -143,7 +144,7 @@ function TimePickerSheet({ visible, isDark, initialTime, onConfirm, onClear, onC
           <View style={{ width: 44, alignItems: "flex-end" }}>
             {initialTime && (
               <TouchableOpacity onPress={() => { onClear(); dismiss(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={{ fontFamily: FontFamily.semibold, fontSize: 14, color: "#FF4D4F" }}>Clear</Text>
+                <Text style={{ fontFamily: FontFamily.semibold, fontSize: 14, color: DANGER_BRIGHT }}>Clear</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -676,7 +677,7 @@ function ExerciseCard({
                         () => repsRefs.current[idx]?.focus(),
                         idx > 0 ? () => repsRefs.current[idx - 1]?.focus() : null,
                       )}
-                      placeholder={set.programSet?.weightKg ? formatWeightForDisplay(set.programSet.weightKg, isKg) : "—"}
+                      placeholder={set.programSet?.weightKg ? prescribedPlaceholder(set.programSet.weightKg, set.programSet.weightUnit, isKg) : "—"}
                       placeholderTextColor={`${t.tp}66`}
                       selectTextOnFocus
                     />
@@ -801,9 +802,9 @@ function ExerciseCard({
                       ]
                     );
                   },
-                  icon: <TrashIcon size={13} color="#FF4D4F" />,
+                  icon: <TrashIcon size={13} color={DANGER_BRIGHT} />,
                   label: "Remove",
-                  color: "#FF4D4F",
+                  color: DANGER_BRIGHT,
                 },
               ].map(({ onPress, icon, label, color }) => (
                 <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
@@ -820,7 +821,8 @@ function ExerciseCard({
         {/* Exercise notes */}
         <View style={[s.exNotesRow, { borderTopColor: divider }]}>
           {/* The note from the session before this date, as the Workout tab
-              shows it: "Previous: …" in the empty box, Reuse, then Undo. */}
+              shows it: the note in the empty box, "Previous" beside the
+              heading, Reuse, then Undo. */}
           <ExerciseNotesField
             value={ex.notes ?? ""}
             onChange={onUpdateNotes}
@@ -1261,8 +1263,13 @@ export default function LogWorkoutScreen() {
       // session you actually did earlier (e.g. you "started" today but really
       // began two weeks ago) moves the program's start — and therefore its
       // current week / progress everywhere — back to that date.
+      //
+      // Only a PROGRAM DAY moves the start. A custom workout added to the
+      // program isn't evidence the program began then, and moving the start
+      // re-dates the whole cycle: every scheduled day after it would shift.
       if (owningProgramId) {
         const addPid = addToProgramId && addToProgramId.length > 0 ? addToProgramId : null;
+        const isProgramDay = !!programId && programId.length > 0;
         const [yy, mm, dd] = (date ?? "").split("-").map(Number);
         const loggedDate = (Number.isFinite(yy) && Number.isFinite(mm) && Number.isFinite(dd))
           ? new Date(yy, mm - 1, dd) : null;
@@ -1281,7 +1288,7 @@ export default function LogWorkoutScreen() {
           // Move the start back if this session is earlier than the current start
           // (only ever earlier — a later session doesn't change when it began).
           const start = parseStoredDate(next.startDate);
-          if (loggedDate && (!start || loggedDate.getTime() < start.getTime())) {
+          if (isProgramDay && loggedDate && (!start || loggedDate.getTime() < start.getTime())) {
             next = { ...next, startDate: formatStoredDate(loggedDate) };
             changed = true;
           }
@@ -1343,20 +1350,12 @@ export default function LogWorkoutScreen() {
       </View>
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-      >
-        <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       {/* Time button — top right */}
       <TouchableOpacity
         onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTimePickerVisible(true); }}
-        style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
+        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
         activeOpacity={0.8}
       >
         <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
@@ -1368,7 +1367,7 @@ export default function LogWorkoutScreen() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[s.scroll, { paddingTop: insets.top + 14, paddingBottom: safeBottom + 150 }]}
+          contentContainerStyle={[s.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: safeBottom + 150 }]}
         >
           {/* Nav title — scrolls with content like journal page */}
           <View style={s.scrollTitleRow}>
@@ -1465,7 +1464,12 @@ export default function LogWorkoutScreen() {
         ]}
       >
         <View style={s.notesHeader}>
-          <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
+          {/* "Previous" beside the title while the empty box shows last
+              time's note, as on the Workout tab. */}
+          <View style={s.notesTitleRow}>
+            <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
+            <PrevNoteTag value={notes} prevNote={prevSessionNote} isDark={isDark} />
+          </View>
           <View style={s.notesHeaderActions}>
             {/* Last time's session note, as on the Workout tab. */}
             <ReuseNoteChip value={notes} onChange={setNotes} prevNote={prevSessionNote} isDark={isDark} />
@@ -1591,7 +1595,7 @@ export default function LogWorkoutScreen() {
 
 const s = StyleSheet.create({
   topGradient: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 5 },
-  scrollTitleRow: { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 16 },
+  scrollTitleRow: { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 16 },
   navTitle:       { flex: 1, textAlign: "center", fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase" },
   backBtn:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   scroll:      { paddingHorizontal: 20 },
@@ -1625,7 +1629,7 @@ const s = StyleSheet.create({
   inputBox:    { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, justifyContent: "center" },
   inputText:   { fontFamily: FontFamily.bold, fontSize: 15, textAlign: "center", flex: 1, paddingVertical: 0 },
   checkCircle: { width: 24, height: 24, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  removeSetBtn:{ width: 24, height: 24, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  removeSetBtn:{ width: 24, height: 24, borderRadius: 13, backgroundColor: DANGER_BRIGHT, alignItems: "center", justifyContent: "center", shadowColor: DANGER_BRIGHT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 
   // Edit mode
   editMoveRow:  { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
@@ -1653,6 +1657,7 @@ const s = StyleSheet.create({
   notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
   notesHeader:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
   notesHeaderActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  notesTitleRow:  { flexDirection: "row", alignItems: "baseline", gap: 6, flexShrink: 1 },
   notesFloatCard: { position: "absolute", left: 20, right: 20, borderRadius: 16, padding: 16, zIndex: 21, transformOrigin: "left bottom", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 18 },
   notesTickBtn:   { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 

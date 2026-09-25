@@ -6,6 +6,7 @@
 import type { CompletedSet, CompletedWorkout, SavedProgram } from "../constants/programs";
 import { EMPTY_ACHIEVEMENTS, type Achievement, type AchievementsState } from "../constants/achievements";
 import {
+  achievementsForWorkout,
   applyAchievements,
   describeAchievement,
   detectProgramAchievement,
@@ -168,6 +169,29 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
   const text = all.flatMap(a => Object.values(describeAchievement(a, true))).join(" ");
   eq(/[–—]/.test(text), false, "copy: no em or en dashes anywhere");
   eq(describeAchievement(all[2], true).notifyBody, "You finished PPL. Great work.", "copy: a one-week program doesn't say \"all 1 week\"");
+}
+
+// ─── What one workout earned, for its own screen ────────────────────────────
+// Measured against what came BEFORE it, as it was when saved live: a later,
+// heavier session doesn't take its PR away, and it doesn't count itself.
+{
+  const at = (id: string, iso: string, kg: string): CompletedWorkout =>
+    ({ ...workout([ex("Bench Press", [set(kg, "5")])], id), completedAt: iso });
+  const first = at("a", "2026-09-01T10:00:00.000Z", "100");
+  const pr = at("b", "2026-09-08T10:00:00.000Z", "105");
+  const later = at("c", "2026-09-15T10:00:00.000Z", "110");
+  const history = [later, pr, first];
+
+  const earned = achievementsForWorkout(pr, history);
+  eq(earned.map(a => (a.category === "pr" ? a.prs : a.category)),
+    [[{ exerciseName: "Bench Press", valueKg: 105, prevKg: 100 }]],
+    "forWorkout: its PR, against the sessions before it");
+  eq(achievementsForWorkout(first, history), [], "forWorkout: a later, heavier session doesn't make the first one a PR");
+  eq(earned[0]?.earnedAt, pr.completedAt, "forWorkout: earned when the workout was completed");
+  eq(achievementsForWorkout({ ...pr, completedAt: "garbage" }, history), [], "forWorkout: an unreadable time earns nothing, rather than throwing");
+  const nine = Array.from({ length: 9 }, (_, i) => at(`m${i}`, `2026-08-0${i + 1}T10:00:00.000Z`, "50"));
+  eq(categories(achievementsForWorkout(first, [...nine, first])), ["pr", "workouts"],
+    "forWorkout: the tenth workout shows its milestone (and beats the earlier 50s)");
 }
 
 if (failures.length > 0) {

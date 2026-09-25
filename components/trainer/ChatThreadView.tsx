@@ -68,7 +68,7 @@ export default function ChatThreadView<T extends ThreadMessage>({
   renderBubble,
   onSend,
   placeholder,
-  emptyText = "No messages yet — say hi 👋",
+  emptyText = "No messages yet. Say hi 👋",
   header,
 }: Props<T>) {
   const { isDark } = useTheme();

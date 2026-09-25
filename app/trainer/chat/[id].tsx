@@ -32,6 +32,7 @@ import { loadThread, appendMessage, markThreadRead, deleteMessage } from "../../
 import { getMyUid, isCloudContactId, subscribeToInbound } from "../../../lib/chat";
 import { loadHiddenMessageIds, loadBlockedIds, blockContact, unaddContact, reportPerson, reportMessage } from "../../../utils/moderation";
 import type { ChatMessage, ReportReason } from "../../../constants/chat";
+import BackButton, { BACK_TOP, BACK_LEFT } from "../../../components/BackButton";
 
 export default function ChatThreadScreen() {
   const router = useRouter();
@@ -215,12 +216,8 @@ export default function ChatThreadScreen() {
   }, [contactId]);
 
   const header = (
-    <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: t.div }]}>
-      <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+    <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
+      <BackButton inline />
       <Avatar
         uri={photo || undefined}
         initials={displayInitials}
@@ -282,7 +279,7 @@ export default function ChatThreadScreen() {
 }
 
 const styles = StyleSheet.create({
-  header:     { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
+  header:     { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12, borderBottomWidth: 1 },
   backBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 13 },
   headerName: { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },

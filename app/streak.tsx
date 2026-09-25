@@ -5,7 +5,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../components/NeuCard";
 import FlameIcon, { flameHeight, flameWidth } from "../components/FlameIcon";
@@ -18,6 +17,7 @@ import {
   MAX_TIER_DAYS,
   getTier,
 } from "../constants/streakTiers";
+import BackButton, { BACK_TOP } from "../components/BackButton";
 
 const WEEK_LABELS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
@@ -104,15 +104,7 @@ export default function StreakScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -128,7 +120,7 @@ export default function StreakScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
       >
         {/* Spacer preserves vertical position of flame after title removal */}
         <View style={{ height: 32 }} />
@@ -295,7 +287,6 @@ const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll:      { paddingHorizontal: 20 },
 
-  backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
 
   hero: { alignItems: "center", justifyContent: "center", marginBottom: HERO_GLOW_OVERHANG + HERO_GAP },
   glow: { position: "absolute", width: HERO_GLOW_SIZE, height: HERO_GLOW_SIZE, borderRadius: HERO_GLOW_SIZE / 2 },

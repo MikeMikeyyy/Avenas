@@ -8,6 +8,9 @@
 // it was — as long as the track puts it on the 3rd dot with the 2nd greyed out,
 // so a missed week is visible instead of silently closing up.
 //
+// A week where something ELSE was trained on that day (a custom workout, a
+// Change Workout Day swap) is "replaced", drawn orange, rather than missed.
+//
 // Run:  npx tsx scripts/verify-session-track.ts
 // Exits non-zero if any assertion fails.
 
@@ -134,6 +137,39 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
   eq(t.missed, [1], "and week 1 is still the missed one");
 }
 
+// ─── something else trained in its place ─────────────────────────────────────
+// A custom workout (or another day via Change Workout Day) done on Upper's date
+// instead of Upper. That occurrence is REPLACED, drawn orange, not missed: the
+// user trained that day. Only the scheduled date itself counts.
+{
+  const replacedTrack = (history: CompletedWorkout[], trained: string[], todayYMD = MON_W3, p: SavedProgram = program) =>
+    buildSessionTrack({ program: p, dayId: "d0", history, todayYMD, trainedDates: new Set(trained) });
+
+  const t = replacedTrack([session("w1", MON_W1), session("w3", MON_W3)], [MON_W1, MON_W2, MON_W3]);
+  eq(t.replaced, [2], "an occurrence with another session on its date is replaced");
+  eq(t.missed, [], "and not also missed");
+  eq(t.numberById["w3"], 3, "the replaced week still costs its number");
+
+  const later = replacedTrack([session("w1", MON_W1), session("w3", MON_W3)], [MON_W1, "2026-09-16", MON_W3]);
+  eq([later.missed, later.replaced], [[2], []], "a custom workout on ANOTHER day of the week didn't replace it");
+
+  // Today: something else logged IS today's session (the Workout tab treats the
+  // day as done), so it's replaced now; with nothing logged, it's just not yet.
+  const todayOther = replacedTrack([session("w1", MON_W1), session("w2", MON_W2)], [MON_W1, MON_W2, MON_W3]);
+  eq([todayOther.missed, todayOther.replaced], [[], [3]], "a custom workout today replaces today's occurrence");
+  const todayNothing = replacedTrack([session("w1", MON_W1), session("w2", MON_W2)], [MON_W1, MON_W2]);
+  eq([todayNothing.missed, todayNothing.replaced], [[], []], "nothing logged today is neither missed nor replaced");
+
+  const doneLate = replacedTrack([session("w1", MON_W1), session("late", "2026-09-15")], [MON_W1, MON_W2, "2026-09-15"]);
+  eq([doneLate.missed, doneLate.replaced], [[], []], "custom workout Monday, Upper on Tuesday: Upper was done, nothing to mark");
+
+  const restThenCustom = replacedTrack([session("w1", MON_W1), session("w3", MON_W3)], [MON_W1, MON_W2, MON_W3], MON_W3, skipDate(program, MON_W2));
+  eq(restThenCustom.replaced, [2], "made a rest day, then trained anyway: replaced");
+
+  const none = replacedTrack([session("w1", MON_W1), session("w3", MON_W3)], [MON_W1, MON_W3]);
+  eq([none.missed, none.replaced], [[2], []], "nothing trained that day stays grey");
+}
+
 // ─── the slot was edited into a Rest day ─────────────────────────────────────
 {
   const nowRest: SavedProgram = { ...program, cyclePattern: ["Rest", "Lower", "Rest", "Upper 2", "Legs", "Rest", "Rest"] };
@@ -216,6 +252,53 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
   eq(tracks.numberById["free"], 1, "a free workout still gets a number");
   eq(tracks.positionById["free"], 1, "its dot sits where the count says");
   eq(tracks.missedById["free"], undefined, "but never a missed dot");
+}
+
+// The reported flow, through what the screens call: week 2's Upper was swapped
+// for a custom workout added to the program (programId set, no dayId). Next
+// week's Upper card shows week 2 in orange, and the custom workout is its own
+// session with no track of its own to mark.
+{
+  const custom: CompletedWorkout = {
+    id: "custom", date: MON_W2, completedAt: `${MON_W2}T18:00:00.000Z`, workoutName: "Custom Workout",
+    durationSeconds: 2400, exercises: [], programId: "P",
+  };
+  const tracks = buildSessionTracks([session("w1", MON_W1), custom, session("w3", MON_W3)], [program], MON_W3);
+  eq(tracks.replacedById["w3"], [2], "the swapped week is orange on next week's card");
+  eq(tracks.missedById["w3"], [], "not grey");
+  eq([tracks.numberById["w3"], tracks.positionById["w3"]], [2, 3], "2nd Upper done, on the 3rd dot");
+  eq(tracks.numberById["custom"], 1, "the custom workout is its own 1st session");
+  eq(tracks.replacedById["custom"], undefined, "and marks nothing on a track of its own");
+  eq(tracks.insteadOfById["custom"], "Upper", "its card says it was done instead of Upper");
+  eq([tracks.insteadOfById["w1"], tracks.insteadOfById["w3"]], [undefined, undefined], "Upper's own sessions stood in for nothing");
+
+  // Not added to the program (programId ""): it still stood in for Upper.
+  const free = { ...custom, programId: "" };
+  const freeTracks = buildSessionTracks([session("w1", MON_W1), free, session("w3", MON_W3)], [program], MON_W3);
+  eq(freeTracks.replacedById["w3"], [2], "a custom workout not added to the program replaces the day too");
+  eq(freeTracks.insteadOfById["custom"], "Upper", "and says so, read against the active program");
+
+  // Change Workout Day: Lower (d1) done on Upper's Monday.
+  const swapped: CompletedWorkout = { ...session("lower", MON_W2, "d1"), workoutName: "Lower" };
+  const swapTracks = buildSessionTracks([session("w1", MON_W1), swapped, session("w3", MON_W3)], [program], MON_W3);
+  eq(swapTracks.replacedById["w3"], [2], "another program day swapped in replaces it as well");
+  eq(swapTracks.insteadOfById["lower"], "Upper", "and the swapped-in day says what it replaced");
+
+  // Upper done late (Tuesday) after the custom workout: Upper wasn't replaced
+  // after all, so the custom workout no longer claims it.
+  const lateUpper = session("late", "2026-09-15");
+  const lateTracks = buildSessionTracks([session("w1", MON_W1), custom, lateUpper], [program], MON_W3);
+  eq(lateTracks.insteadOfById["custom"], undefined, "Upper done later that week: the custom workout replaced nothing");
+
+  // A custom workout on a rest day displaced nothing.
+  const onRest: CompletedWorkout = { ...custom, id: "rest", date: "2026-09-16" }; // Wed, a Rest slot
+  eq(buildSessionTracks([onRest], [program], MON_W3).insteadOfById["rest"], undefined, "a rest-day custom workout replaced nothing");
+
+  // Today: the line is there as soon as the custom workout is saved.
+  const today = { ...custom, id: "today", date: MON_W3 };
+  const todayTracks = buildSessionTracks([session("w1", MON_W1), session("w2", MON_W2), today], [program], MON_W3);
+  eq(todayTracks.insteadOfById["today"], "Upper", "today's custom workout says it replaced today's Upper");
+  eq(todayTracks.replacedById["w2"], [3], "and last week's Upper card shows today in orange");
 }
 
 // Two programs whose slots are both positional "d0": one program's sessions must

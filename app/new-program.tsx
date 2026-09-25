@@ -24,7 +24,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
@@ -41,12 +41,15 @@ import DumbbellIcon from "../components/DumbbellIcon";
 import PenIcon from "../components/PenIcon";
 import ExerciseImage from "../components/ExerciseImage";
 import { useTheme } from "../contexts/ThemeContext";
-import { useUnit } from "../contexts/UnitContext";
-import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
+import { UnitLens, useUnit } from "../contexts/UnitContext";
+import { formatWeightForDisplay, parseWeightToKg, stampWeightUnits, unitLabel, unitOf, type WeightUnit } from "../utils/units";
+import { fetchPeopleUnits } from "../lib/clientTraining";
 import { formatStoredDate } from "../utils/dates";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { musclesForExercise } from "../utils/muscleGroups";
 import { canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, reorderCycleSlots, trainingDayKeys } from "../utils/programDays";
+import { alertMessage } from "../utils/errors";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -469,7 +472,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           }
           activeOpacity={0.7}
         >
-          <TrashIcon size={16} color="#FF4D4F" />
+          <TrashIcon size={16} color={DANGER_BRIGHT} />
         </TouchableOpacity>
       </View>
 
@@ -594,7 +597,9 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
                   placeholderColor={t.ts}
                   valueKg={set.weightKg}
                   isKg={isKg}
-                  onCommitKg={kg => fillDown(idx, { weightKg: kg })}
+                  // With the unit it was typed in, so it reads as typed for
+                  // whoever sees the program (fill-down carries it too).
+                  onCommitKg={kg => fillDown(idx, { weightKg: kg, weightUnit: unitOf(isKg) })}
                   onFocus={() => {
                     const next = () => repsRefs.current[idx]?.focus();
                     const prev = idx > 0
@@ -897,6 +902,7 @@ function Step1({
   totalWeeks, setTotalWeeks,
   cycleDays, onCycleDaysChange,
   cyclePattern, isTrainingDay, onToggleDay, onSetDayName,
+  onInputFocus,
   isDark,
 }: {
   name: string; setName: (v: string) => void;
@@ -904,11 +910,47 @@ function Step1({
   cycleDays: number; onCycleDaysChange: (v: number) => void;
   cyclePattern: string[]; isTrainingDay: boolean[];
   onToggleDay: (i: number) => void; onSetDayName: (i: number, t: string) => void;
+  /** The floating keyboard bar's back / forward arrows (see handleInputFocus). */
+  onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   isDark: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+  const nameInputRef = useRef<TextInput | null>(null);
   const dayInputRefs = useRef<Array<TextInput | null>>([]);
+
+  /**
+   * The keyboard bar's arrows step through the WORKOUT days' names, top to
+   * bottom, with the program name above the first. A rest day has no name
+   * field, so it's skipped: the nearest day that has one in that direction is
+   * where the arrow goes. They used to sit greyed out on this step, since only
+   * Step 2's set fields told the bar where to go.
+   *
+   * Looked up from the refs when pressed, not when focused, so toggling a day
+   * to Rest or back while typing can't leave an arrow pointing at a field
+   * that's gone.
+   */
+  const dayAfter = useCallback((from: number, step: 1 | -1): number | null => {
+    const refs = dayInputRefs.current;
+    for (let j = from + step; j >= 0 && j < refs.length; j += step) {
+      if (refs[j]) return j;
+    }
+    return null;
+  }, []);
+  const focusDayAfter = useCallback((from: number, step: 1 | -1) => {
+    const j = dayAfter(from, step);
+    if (j !== null) dayInputRefs.current[j]?.focus();
+    else if (step === -1) nameInputRef.current?.focus();
+  }, [dayAfter]);
+  const registerDayNav = useCallback((i: number) => {
+    onInputFocus(
+      dayAfter(i, 1) !== null ? () => focusDayAfter(i, 1) : null,
+      () => focusDayAfter(i, -1),
+    );
+  }, [onInputFocus, dayAfter, focusDayAfter]);
+  const registerNameNav = useCallback(() => {
+    onInputFocus(dayAfter(-1, 1) !== null ? () => focusDayAfter(-1, 1) : null, null);
+  }, [onInputFocus, dayAfter, focusDayAfter]);
   const hasRendered = useRef(false);
   useEffect(() => { hasRendered.current = true; }, []);
   const prevCycleDays = useRef(cycleDays);
@@ -939,11 +981,13 @@ function Step1({
       <Text style={[styles.sectionHeading, { color: t.tp }]}>Program Name</Text>
       <NeuCard dark={isDark} radius={16} style={styles.inputCard}>
         <TextInput
+          ref={nameInputRef}
           style={[styles.textInput, { color: t.tp }]}
           placeholder="e.g. Push Pull Legs (PPL)"
           placeholderTextColor={t.ts}
           value={name}
           onChangeText={setName}
+          onFocus={registerNameNav}
           returnKeyType="done"
           autoCapitalize="words"
         />
@@ -1002,6 +1046,7 @@ function Step1({
                         style={[styles.dayNameInput, { color: t.tp }]}
                         value={day}
                         onChangeText={(text) => onSetDayName(i, text)}
+                        onFocus={() => registerDayNav(i)}
                         placeholder="Workout"
                         placeholderTextColor={t.ts}
                         returnKeyType={trainingIndices.at(-1) === i ? "done" : "next"}
@@ -1222,7 +1267,7 @@ function DraggableExerciseList({
               }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <TrashIcon size={18} color="#ef4444" />
+              <TrashIcon size={18} color={DANGER_BRIGHT} />
             </TouchableOpacity>
           </Animated.View>
         );
@@ -1911,6 +1956,27 @@ export default function NewProgramScreen() {
   const isReviewMode = !!reviewId && !editId;
   const isSharedEditMode = !!sharedId && !editId && !reviewId;
 
+  // ── Units ──────────────────────────────────────────────────────────────────
+  // Every weight typed here records the unit it was typed in, and reads in that
+  // unit for whoever sees the program (utils/units.ts, prescribedWeight). You
+  // type in your own unit unless you switch this program to the other person's.
+  const { isKg: ownIsKg } = useUnit();
+  const [entryIsKg, setEntryIsKg] = useState<boolean | null>(null);
+  const builderIsKg = entryIsKg ?? ownIsKg;
+  // The unit of whoever is on the other end: the person whose program you're
+  // reviewing, or the one you sent this to. Unknown for your own programs, a
+  // group send, or a server without migration 0036.
+  const [otherUnit, setOtherUnit] = useState<WeightUnit | undefined>(undefined);
+  // What an untagged weight (from before units were recorded) is stamped with
+  // on save: the unit it was being READ in by the person it belongs to, so it
+  // keeps reading the same way. A review's weights are the client's, so they
+  // wait for the client's unit rather than guess.
+  const stampUnit: WeightUnit | undefined = isReviewMode ? otherUnit : unitOf(ownIsKg);
+  const stampForSave = useCallback(
+    (w: WorkoutMap): WorkoutMap => (stampUnit ? stampWeightUnits(w, stampUnit) : w),
+    [stampUnit],
+  );
+
   /**
    * The review being edited, found the way the screen that opened us found it.
    *
@@ -1926,6 +1992,25 @@ export default function NewProgramScreen() {
     const list = groupId ? await loadGroupReviewPrograms(groupId) : await loadSentPrograms();
     return list.find(s => s.id === reviewId);
   }, [reviewId, groupId]);
+
+  // Look up the other person's unit, for the banner and for stamping a review.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let personId: string | undefined;
+      if (isReviewMode) {
+        personId = (await loadReviewEntry())?.senderId;
+      } else if (isSharedEditMode && sharedId) {
+        // One person only: a group send or a broadcast has no single unit.
+        const share = (await loadSharedPrograms()).find(s => s.id === sharedId);
+        if (share && !share.groupId && share.clientId !== "all") personId = share.clientId;
+      }
+      if (!personId) return;
+      const units = await fetchPeopleUnits([personId]);
+      if (!cancelled) setOtherUnit(units[personId]);
+    })().catch(() => {});
+    return () => { cancelled = true; };
+  }, [isReviewMode, isSharedEditMode, sharedId, loadReviewEntry]);
 
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState("");
@@ -2347,7 +2432,7 @@ export default function NewProgramScreen() {
                 const savedDayIds = normalizeDayIds(dayIds, savedCyclePattern.length);
                 // Same re-key as handleFinish — this path can fire from Step 1,
                 // where a typed rename hasn't been folded into the keys yet.
-                const savedWorkouts = canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay);
+                const savedWorkouts = stampForSave(canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay));
                 const trainingDays = isTrainingDay.filter(Boolean).length;
                 try {
                   const target = await loadReviewEntry();
@@ -2380,7 +2465,7 @@ export default function NewProgramScreen() {
       );
     });
     return unsubscribe;
-  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern, dayIds, loadReviewEntry]);
+  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern, dayIds, loadReviewEntry, stampForSave]);
 
   const handleCycleDaysChange = useCallback((next: number) => {
     const clamped = clamp(next, 2, 14);
@@ -2594,8 +2679,10 @@ export default function NewProgramScreen() {
     // Re-key onto the names being saved. Step 2 already produces this form, but
     // Update is reachable from Step 1 — a rename typed there would otherwise be
     // written with the day labelled one thing and its exercises filed under the
-    // old label, which reads to every other screen as an empty day.
-    const savedWorkouts = canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay);
+    // old label, which reads to every other screen as an empty day. Weights
+    // from before units were recorded are stamped with the unit they were being
+    // read in, so they read the same on the other end.
+    const savedWorkouts = stampForSave(canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay));
     // A day that was BOTH renamed and re-stocked is a different workout now, so
     // it gets a new id and its logged sessions stay with the old one — which the
     // Progress page then shows as a historical day beside the new one. Renaming
@@ -2647,7 +2734,7 @@ export default function NewProgramScreen() {
             acceptedAtISO: undefined,
           });
         } catch (e) {
-          Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
+          Alert.alert("Save failed", alertMessage(e, "Please try again."));
           return;
         }
         isLeavingIntentionally.current = true;
@@ -2683,7 +2770,7 @@ export default function NewProgramScreen() {
           };
           await updateSentProgram(reviewId, { programSnapshot: updatedSnap, programName, lastEditedAtISO: new Date().toISOString() });
         } catch (e) {
-          Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
+          Alert.alert("Save failed", alertMessage(e, "Please try again."));
           return;
         }
         isLeavingIntentionally.current = true;
@@ -2714,7 +2801,7 @@ export default function NewProgramScreen() {
           await AsyncStorage.removeItem(DRAFT_KEY);
           scheduleCloudPush();
         } catch (e) {
-          Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
+          Alert.alert("Save failed", alertMessage(e, "Please try again."));
           return;
         }
         isLeavingIntentionally.current = true;
@@ -2778,7 +2865,7 @@ export default function NewProgramScreen() {
         const done = finished as { program: SavedProgram; week: number } | null;
         if (done) void awardProgramAchievement(done.program, done.week);
       } catch (e) {
-        Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
+        Alert.alert("Save failed", alertMessage(e, "Please try again."));
         return;
       }
       isLeavingIntentionally.current = true;
@@ -2796,7 +2883,7 @@ export default function NewProgramScreen() {
         { text: "Cancel", style: "cancel" },
       ]
     );
-  }, [name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId, loadReviewEntry]);
+  }, [name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId, loadReviewEntry, stampForSave]);
 
   const handleBack = () => { if (step === 2) setStep(1); else router.back(); };
 
@@ -2818,7 +2905,7 @@ export default function NewProgramScreen() {
   const dayOffsets = useRef<Record<string, number>>({});
   const [, bumpOffsets] = useState(0);
   const daysOrder = useMemo(() => Object.keys(workouts), [workouts]);
-  const PIN_TOP = insets.top + 16;   // screen-Y where a day docks (aligns with back button)
+  const PIN_TOP = insets.top + BACK_TOP;   // screen-Y where a day docks (aligns with back button)
   const PIN_H = 40;                  // one title row's height / roll distance
   // Coalesced to one re-render per frame: a CollapsibleCard's height animation
   // re-lays-out every day below it on every frame, so a bump per changed day
@@ -2901,21 +2988,11 @@ export default function NewProgramScreen() {
       <AuroraBackdrop dark={isDark} tint={isEditMode || isReviewMode || isSharedEditMode ? "aqua" : "green"} />
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={handleBack}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel={step === 2 ? "Back to setup" : "Go back"}
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton onPress={handleBack} accessibilityLabel={step === 2 ? "Back to setup" : "Go back"} />
 
 
       {(isEditMode || isReviewMode || isSharedEditMode) && (
-        <Reanimated.View style={[{ position: "absolute", top: insets.top + 16, right: 20, zIndex: 10 }, updateBtnStyle]} pointerEvents={hasChanges ? "box-none" : "none"}>
+        <Reanimated.View style={[{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }, updateBtnStyle]} pointerEvents={hasChanges ? "box-none" : "none"}>
           <BounceButton onPress={handleFinish} accessibilityLabel="Save changes" accessibilityRole="button">
             <View style={[styles.updateBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
               <Text style={[styles.updateBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Update</Text>
@@ -2978,7 +3055,7 @@ export default function NewProgramScreen() {
         // keeps its longer-standing 120 because its content runs much further.
         // Padding on the CONTENT, not a fixed height, so adding cycle days or
         // exercises keeps the same gap rather than eating into it.
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + (step === 2 ? 120 : 90) }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + (step === 2 ? 120 : 90) }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -3000,9 +3077,44 @@ export default function NewProgramScreen() {
             cycleDays={cycleDays} onCycleDaysChange={handleCycleDaysChange}
             cyclePattern={cyclePattern} isTrainingDay={isTrainingDay}
             onToggleDay={toggleDay} onSetDayName={setDayName}
+            onInputFocus={handleInputFocus}
             isDark={isDark}
           />
         ) : (
+          <>
+          {/* The person on the other end logs in the other unit. Weights read
+              for them in the unit they're typed in, so say which one that is,
+              and let this program be written in theirs instead. */}
+          {otherUnit && otherUnit !== unitOf(ownIsKg) && (() => {
+            const inTheirs = unitOf(builderIsKg) === otherUnit;
+            const who = isReviewMode ? "the person who sent this" : "the person you sent this to";
+            return (
+              <NeuCard dark={isDark} radius={16} style={styles.unitBanner}>
+                <View style={styles.unitBannerRow}>
+                  <Ionicons name="alert-circle-outline" size={20} color={PAUSED_ORANGE} />
+                  <Text style={[styles.unitBannerText, { color: t.tp }]}>
+                    {inTheirs
+                      ? `Entering weights in ${unitLabel(otherUnit)}, the unit ${who} logs in.`
+                      : `${who[0].toUpperCase()}${who.slice(1)} logs in ${unitLabel(otherUnit)}. You're entering weights in ${unitLabel(unitOf(builderIsKg))}, and that's how they'll see them.`}
+                  </Text>
+                </View>
+                <BounceButton
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setEntryIsKg(inTheirs ? null : otherUnit === "kg");
+                  }}
+                  accessibilityRole="button"
+                >
+                  <View style={[styles.unitBannerBtn, { backgroundColor: t.ctrl }]}>
+                    <Text style={[styles.unitBannerBtnText, { color: t.tp }]}>
+                      Enter in {unitLabel(inTheirs ? unitOf(ownIsKg) : otherUnit)}
+                    </Text>
+                  </View>
+                </BounceButton>
+              </NeuCard>
+            );
+          })()}
+          <UnitLens isKg={builderIsKg}>
           <Step2
             workouts={workouts}
             onOpenPicker={openPickerForDay}
@@ -3019,6 +3131,8 @@ export default function NewProgramScreen() {
             onMeasureDay={onMeasureDay}
             onOpenReorder={openReorderForDay}
           />
+          </UnitLens>
+          </>
         )}
       </Animated.ScrollView>
 
@@ -3168,10 +3282,10 @@ export default function NewProgramScreen() {
             }
             setPickerState(null);
           }}
-          onCreateCustom={() => {
+          onCreateCustom={query => {
             pendingPickerDay.current = pickerState?.day ?? null;
             setPickerState(null);
-            router.navigate("/create-custom-exercise");
+            router.navigate({ pathname: "/create-custom-exercise", params: { name: query } });
           }}
           onEditCustom={name => {
             pendingPickerDay.current = pickerState?.day ?? null;
@@ -3302,9 +3416,13 @@ const styles = StyleSheet.create({
   root:             { flex: 1 },
   kbFloatBtn:       { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
   topGradient:      { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn:          { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  header:           { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 20 },
+  header:           { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 20 },
   screenTitle:      { fontFamily: FontFamily.bold, fontSize: 20, letterSpacing: 1.5, textAlign: "center", flex: 1 },
+  unitBanner:       { marginBottom: 20 },
+  unitBannerRow:    { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
+  unitBannerText:   { flex: 1, fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 20 },
+  unitBannerBtn:    { ...pill(36), alignSelf: "flex-start", marginLeft: 46, marginBottom: 14, paddingHorizontal: 16, ...PILL_SHADOW },
+  unitBannerBtnText: { fontFamily: FontFamily.semibold, fontSize: 14 },
 
   // Step indicator
   stepIndicatorWrap: { marginBottom: 28, position: "relative" },

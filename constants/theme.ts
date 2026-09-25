@@ -66,17 +66,18 @@ export const ACCT = "#1deca0";
 export const ACCT_DEEP = "#0c9f6e";
 
 // ─── Danger ───────────────────────────────────────────────────────────────────
-// Destructive actions (block, delete). Import this, never hardcode a red literal.
+// Two reds, split by job. Import them, never hardcode a red literal.
+//
+// DANGER: warnings and moderation. An error state ("Couldn't back up"), a
+// warning hint, the block/report steps.
 export const DANGER = "#E5484D";
 
-// The brighter red the app uses for destructive BUTTONS — removing a set from
-// an exercise, deleting a sent program. Distinct from DANGER above, which is
-// the flatter red for block/report actions and destructive text. Pair it with
-// haloGlow() (constants/buttons.ts) rather than a drop shadow; the centred glow
-// is what makes these read as one family.
-//
-// Still hardcoded as "#FF4D4F" in a dozen places across the workout screens —
-// new code should use this token so those can be migrated in one pass.
+// DANGER_BRIGHT: anything that deletes, removes or discards. The filled
+// buttons (remove a set, delete a sent program, a danger SheetPill) and the
+// trash icons and red "Delete" / "Remove" / "Discard" labels, so a delete looks
+// the same on every screen. Fills pair with haloGlow() (constants/buttons.ts)
+// rather than a drop shadow; the centred glow is what makes them one family.
+// There were three reds for this before (#FF4D4F, #E53935, #ef4444).
 export const DANGER_BRIGHT = "#FF4D4F";
 
 // ─── Favourites ───────────────────────────────────────────────────────────────
@@ -116,6 +117,14 @@ export const PAUSED_ORANGE = "#FF9500";
 // so a request still waiting on a trainer didn't stand out from one that
 // wasn't.
 export const AWAITING_ORANGE = PAUSED_ORANGE;
+
+// ─── Replaced session ─────────────────────────────────────────────────────────
+// A dot on a workout card's session track (components/SessionTrack.tsx) whose
+// day came round and was trained with something ELSE: a custom workout, or
+// another day picked with Change Workout Day. Grey is kept for a day with nothing
+// logged at all. Orange because it's the app's "not quite done" colour: the
+// user trained, just not this workout.
+export const REPLACED_ORANGE = PAUSED_ORANGE;
 
 // ─── Aurora (soft pastel gradient system) ─────────────────────────────────────
 // Bubbly pastel accents built around the brand green, with an aqua and a blush

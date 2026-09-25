@@ -9,7 +9,7 @@
 // (the toggles still persist, so choices apply as soon as permission returns).
 
 import { useState } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Platform, Alert, Linking } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Alert, Linking } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -26,6 +26,8 @@ import { useNotificationPrefs } from "../contexts/NotificationPrefsContext";
 import { NOTIFICATION_SECTIONS, type ReminderTime } from "../constants/notifications";
 import { ensureNotificationPermissions } from "../utils/notificationScheduler";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import AppSwitch from "../components/AppSwitch";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const TP = APP_LIGHT.tp;
 
@@ -83,17 +85,7 @@ export default function NotificationsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -109,7 +101,7 @@ export default function NotificationsScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
       >
         <View style={styles.header}>
           <View style={{ width: 40 }} />
@@ -129,11 +121,9 @@ export default function NotificationsScreen() {
                 </Text>
               </View>
             </View>
-            <Switch
+            <AppSwitch
               value={prefs.master}
               onValueChange={toggleMaster}
-              trackColor={{ false: t.div, true: ACCT }}
-              thumbColor="#fff"
             />
           </View>
         </NeuCard>
@@ -156,12 +146,10 @@ export default function NotificationsScreen() {
                         <Text style={[styles.rowDesc, { color: t.ts }]}>{item.description}</Text>
                       </View>
                     </View>
-                    <Switch
+                    <AppSwitch
                       value={prefs.master && prefs.categories[item.key]}
                       onValueChange={(val) => toggleCategory(item.key, val)}
                       disabled={!prefs.master}
-                      trackColor={{ false: t.div, true: ACCT }}
-                      thumbColor="#fff"
                     />
                   </View>
                   {item.key === "workoutReminders" && prefs.master && prefs.categories.workoutReminders && (
@@ -217,8 +205,7 @@ const styles = StyleSheet.create({
   root:         { flex: 1 },
   topGradient:  { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll:       { paddingHorizontal: 20 },
-  header:       { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16, height: 40 },
-  backBtn:      { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  header:       { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16, height: BACK_SIZE },
   title:        { fontFamily: FontFamily.bold, fontSize: 18, color: TP, textAlign: "center", flex: 1 },
   masterCard:   { borderRadius: 18, marginBottom: 24 },
   section:      { marginBottom: 24 },

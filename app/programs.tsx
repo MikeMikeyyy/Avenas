@@ -14,7 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardProgramAchievement } from "../utils/achievementStore";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE, DANGER_BRIGHT } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS } from "../constants/buttons";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
@@ -33,6 +33,12 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import { appendSentProgram, loadAssignedPT, removeSharedProgramByLocalId, type AssignedPT, type SentProgram } from "../utils/trainerStore";
+import { alertMessage } from "../utils/errors";
+import { archiveProgram } from "../utils/programArchive";
+import { askArchiveOrDelete } from "../utils/archiveChoice";
+import { programStatus } from "../utils/programStatus";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
+import ArchiveButton from "../components/ArchiveButton";
 
 // Warmup-set accent (matches the orange used for warmup sets across the app).
 const WARMUP_ORANGE = "#ffbf0f";
@@ -320,21 +326,6 @@ interface ProgramCardProps {
   onOpenActions: () => void;
 }
 
-/** Badge colour + wording for a program. Shared by the full and compact cards so
- *  the two can't drift apart. Takes the secondary text colour rather than the
- *  whole theme: the palettes are `as const`, so a `typeof APP_LIGHT` parameter
- *  would reject APP_DARK on its literal types.
- *
- *  A HELD program keeps status "active", so pausedAt has to be checked first or
- *  it would show as Active. */
-function statusStyle(program: SavedProgram, mutedColor: string): { color: string; label: string } {
-  if (program.pausedAt)              return { color: PAUSED_ORANGE, label: "Paused" };
-  if (program.status === "active")    return { color: ACCT,          label: "Active" };
-  if (program.status === "paused")    return { color: PAUSED_ORANGE, label: "Paused" };
-  if (program.status === "completed") return { color: ACCT,          label: "Completed" };
-  return { color: mutedColor, label: "Not Started" };
-}
-
 // Collapsing does NOT swap in a different component. The header row (name,
 // status badge, ellipsis) stays mounted either way, so it physically cannot
 // shift position — only the detail beneath it is added and removed. An earlier
@@ -345,7 +336,9 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
 
   const computedWeek = getCurrentWeek(program);
   const filledWeeks = program.status === "completed" ? program.currentWeek : computedWeek;
-  const { color: statusColor, label: statusLabel } = statusStyle(program, t.ts);
+  // Shared with the archive's cards (utils/programStatus.ts), so a program
+  // reads the same on both sides of an archive.
+  const { color: statusColor, label: statusLabel } = programStatus(program, t.ts);
   const weekText =
     program.status === "completed" ? `Completed ${program.currentWeek} of ${program.totalWeeks} weeks` :
     program.status === "created"   ? `${program.totalWeeks} weeks planned` :
@@ -685,6 +678,7 @@ export default function ProgramsScreen() {
       startDate: todayStr,
       cycleOffset: undefined,
       completedDate: undefined,
+      archivedAt: undefined,
       // A copy is a brand-new program; the original's hold doesn't come with it,
       // and neither do the days the user rested, pushed or spent during it —
       // those are dated before this copy exists and would all count as drift.
@@ -700,27 +694,30 @@ export default function ProgramsScreen() {
     Alert.alert("Program Duplicated", `"${program.name}" has been duplicated. Find it in your program list to start or edit.`);
   };
 
-  const handleDeleteProgram = (program: SavedProgram) => {
-    Alert.alert(
-      "Delete Program",
-      `Are you sure you want to delete "${program.name}"? This cannot be undone.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            const updated = programs.filter(p => p.id !== program.id);
-            setPrograms(updated);
-            await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
-            scheduleCloudPush();
-            // Clear any SharedProgram entries that pointed at this local program
-            // so the gym user's My Trainer page doesn't keep stale "received" cards.
-            await removeSharedProgramByLocalId(program.id);
-          },
-        },
-      ]
-    );
+  // Remove offers Archive beside Delete (utils/archiveChoice.ts), the same
+  // choice a trainer gets on their program cards. Archive keeps the program
+  // (and its status) and takes it off this list until it's restored from the
+  // archive button in the header; Delete is for good.
+  const handleRemoveProgram = (program: SavedProgram) => {
+    askArchiveOrDelete({
+      title: "Remove Program",
+      body: `Archive "${program.name}" to take it off your list until you restore it, or delete it for good. Deleting can't be undone.`,
+      onArchive: async () => {
+        const updated = archiveProgram(programs, program.id);
+        setPrograms(updated);
+        await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+        scheduleCloudPush();
+      },
+      onDelete: async () => {
+        const updated = programs.filter(p => p.id !== program.id);
+        setPrograms(updated);
+        await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+        scheduleCloudPush();
+        // Clear any SharedProgram entries that pointed at this local program
+        // so the gym user's My Trainer page doesn't keep stale "received" cards.
+        await removeSharedProgramByLocalId(program.id);
+      },
+    });
   };
 
   const handleSetWorkoutDay = async (targetDayIndex: number): Promise<boolean> => {
@@ -790,7 +787,16 @@ export default function ProgramsScreen() {
     if (!focus || typeof focus !== "string") return;
     if (focusHandled.current === focus) return;
     if (programs.length === 0) return;
-    if (!programs.some(p => p.id === focus)) return;
+    const target = programs.find(p => p.id === focus);
+    if (!target) return;
+    // An archived program has no card here to scroll to: the View buttons
+    // that link here (an accepted program, a trainer's changes applied) would
+    // land on a list without it. Open the archive, where it is, instead.
+    if (target.archivedAt) {
+      focusHandled.current = focus;
+      router.navigate({ pathname: "/program-archive", params: { scope: "programs" } });
+      return;
+    }
 
     let cancelled = false;
     const tryScroll = (attempt: number) => {
@@ -808,7 +814,7 @@ export default function ProgramsScreen() {
     };
     const t = setTimeout(() => tryScroll(0), 80);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [focus, programs, insets.top]);
+  }, [focus, programs, insets.top, router]);
 
   useFocusEffect(useCallback(() => {
     loadAssignedPT().then(setAssignedPT).catch(() => {});
@@ -823,9 +829,12 @@ export default function ProgramsScreen() {
 
   const activeProgram = programs.find((p) => p.status === "active") ?? null;
   // Everything under the All Programs heading — the active one has its own
-  // section above. Derived once: the list, its empty state and the heading's
-  // accessibility label all need the same count.
-  const otherPrograms = programs.filter((p) => p.status !== "active");
+  // section above, and archived ones are in the archive. Derived once: the
+  // list, its empty state and the heading's accessibility label all need the
+  // same count. The stats card still counts archived programs: they're still
+  // programs you ran.
+  const otherPrograms = programs.filter((p) => p.status !== "active" && !p.archivedAt);
+  const hasArchived = programs.some(p => !!p.archivedAt);
   const canSendToPT = accountType === "gym_user" && assignedPT !== null;
 
   const handleSendToPT = (program: SavedProgram) => {
@@ -850,7 +859,7 @@ export default function ProgramsScreen() {
               // Real trainers (uuid id) receive through the cloud; mock stays local.
               await appendSentProgram(entry, assignedPT.id);
             } catch (e) {
-              Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+              Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
               return;
             }
             Alert.alert("Sent", `"${program.name}" was sent to ${assignedPT.name}.`);
@@ -869,7 +878,7 @@ export default function ProgramsScreen() {
   const buildActions = (program: SavedProgram): ProgramAction[] => {
     const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: c => <SquarePenIcon size={16} color={c} />, onPress: () => router.navigate({ pathname: "/new-program", params: { id: program.id } }) };
     const duplicateAction: ProgramAction = { key: "duplicate", label: "Duplicate Program", icon: "copy-outline", onPress: () => handleDuplicateProgram(program) };
-    const deleteAction: ProgramAction = { key: "delete", label: "Delete", icon: "trash-outline", destructive: true, onPress: () => handleDeleteProgram(program) };
+    const deleteAction: ProgramAction = { key: "remove", label: "Remove", icon: "trash-outline", destructive: true, onPress: () => handleRemoveProgram(program) };
     const sendAction: ProgramAction | null = canSendToPT ? { key: "send", label: "Send to Trainer", icon: "paper-plane-outline", tint: ACCT, onPress: () => handleSendToPT(program) } : null;
 
     let list: ProgramAction[];
@@ -918,17 +927,10 @@ export default function ProgramsScreen() {
       {/* Pastel glow matching the aqua My Programs orb on Home */}
       <AuroraBackdrop dark={isDark} tint="aqua" />
 
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
+      {/* Pinned top right, across from the back button, so the archive is
+          reachable wherever the list is scrolled to. */}
+      <ArchiveButton floating onPress={() => router.navigate({ pathname: "/program-archive", params: { scope: "programs" } })} />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -945,7 +947,7 @@ export default function ProgramsScreen() {
       <ScrollView
         ref={scrollRef}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -1009,8 +1011,14 @@ export default function ProgramsScreen() {
           <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 12 }}>
             <View style={{ padding: 32, alignItems: "center", gap: 8 }}>
               <Ionicons name="barbell-outline" size={32} color={t.ts} />
-              <Text style={{ fontFamily: FontFamily.semibold, fontSize: 15, color: t.tp, textAlign: "center" }}>No programs yet</Text>
-              <Text style={{ fontFamily: FontFamily.regular, fontSize: 13, color: t.ts, textAlign: "center" }}>Tap New to create your first program</Text>
+              {/* "No programs yet" would be wrong once everything has been
+                  archived, so say where they went. */}
+              <Text style={{ fontFamily: FontFamily.semibold, fontSize: 15, color: t.tp, textAlign: "center" }}>
+                {hasArchived ? "Nothing else in your list" : "No programs yet"}
+              </Text>
+              <Text style={{ fontFamily: FontFamily.regular, fontSize: 13, color: t.ts, textAlign: "center" }}>
+                {hasArchived ? "Archived programs are in the archive, top right" : "Tap New to create your first program"}
+              </Text>
             </View>
           </NeuCard>
         ) : (
@@ -1063,8 +1071,7 @@ export default function ProgramsScreen() {
 const styles = StyleSheet.create({
   root:               { flex: 1 },
   topGradient:        { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn:            { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  header:             { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
+  header:             { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
   screenTitle:        { fontFamily: FontFamily.bold, fontSize: 20, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1 },
 
   statsCard:          { marginBottom: 24, borderRadius: 20 },
@@ -1112,7 +1119,7 @@ const styles = StyleSheet.create({
   programCardDetail:  { gap: 10 },
   newProgramBtnText:  { fontFamily: FontFamily.semibold, fontSize: 12, color: "#fff" },
   cardActions:        { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 0 },
-  deleteBtnText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#E53935", letterSpacing: 0.2 },
+  deleteBtnText:      { fontFamily: FontFamily.bold, fontSize: 14, color: DANGER_BRIGHT, letterSpacing: 0.2 },
 
   cycleGrid:          { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   cycleChip:          { alignItems: "center", paddingVertical: 6, paddingHorizontal: 8, borderRadius: 8, minWidth: 60 },

@@ -68,3 +68,47 @@ export function removeShareConfirm({ programName, recipients, total, accepted }:
     confirm: "Remove",
   };
 }
+
+/**
+ * The same decision where Remove also offers Archive (utils/archiveChoice.ts):
+ * the hub's Programs Sent, a group's Group Programs, and the program view. The
+ * one-client page keeps the plain confirm above, because it removes one
+ * person's copy and an archive holds whole sends.
+ *
+ * Both choices take the program away from anyone who hasn't accepted it
+ * (Archive until it's restored), so the pending warning stays in the title, and
+ * accepted copies are untouched by either, which the body says once.
+ */
+export function archiveShareChoice({ programName, recipients, total, accepted }: {
+  programName: string;
+  /** Who it went to, already worded for the sentence: "5 clients", "this
+   *  group", "them". */
+  recipients: string;
+  total: number;
+  accepted: number;
+}): { title: string; body: string } {
+  const pending = Math.max(0, total - accepted);
+  const choice = `Archive "${programName}" to take it off your list and hide it from ${recipients} until you restore it, or delete it for good.`;
+
+  if (pending === 0) {
+    return {
+      title: "Remove Program",
+      body: total === 1
+        ? `${choice} They've accepted it, so their copy stays in their library either way.`
+        : `${choice} They've all accepted it, so their copies stay in their libraries either way.`,
+    };
+  }
+
+  const who = pending === total
+    ? (total === 1 ? "They haven't accepted it" : "Nobody has accepted it")
+    : `${pending} of ${total} ${pending === 1 ? "hasn't" : "haven't"} accepted it`;
+  const kept = accepted === 0
+    ? ""
+    : accepted === 1
+      ? " The one who did keeps their copy either way."
+      : ` The ${accepted} who did keep their copies either way.`;
+  return {
+    title: total === 1 ? "They haven't accepted yet" : "Not everyone has accepted",
+    body: `${choice} ${who} yet.${kept}`,
+  };
+}

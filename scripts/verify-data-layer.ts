@@ -25,7 +25,7 @@ import {
 import { parseStoredDate, formatStoredDate, todayYMD } from "../utils/dates";
 import {
   formatWeightForDisplay, parseWeightToKg, migrateWeightLbToKg, trimNumber,
-  KG_PER_LB,
+  KG_PER_LB, prescribedWeight, prescribedPlaceholder, stampWeightUnits,
 } from "../utils/units";
 import { migrateHistoryWeights, migrateProgramWeights } from "../utils/weightMigration";
 import { assignProgramDayIds, backfillHistoryDayIds, resolveHistoricDayId } from "../utils/dayIdMigration";
@@ -685,6 +685,41 @@ for (const bw of ["BW", "", "—"]) {
   const migrated = migrateWeightLbToKg("225");
   eq(migrated, trimNumber(225 * KG_PER_LB, 3), "migrate: 225 (lb) -> kg");
   eq(formatWeightForDisplay(migrated, false), "225", "migrate then display in lb: unchanged to the user");
+}
+
+// ── prescribed weights read in the unit they were entered in ────────────────────
+{
+  const lbTyped = parseWeightToKg("225", false); // an lb trainer's 225
+  // The author's number and unit, whatever the viewer's own unit is.
+  eq(prescribedWeight(lbTyped, "lb", true), { text: "225", unit: "lb" }, "prescribed: an lb weight reads 225 lbs to a kg viewer");
+  eq(prescribedWeight(lbTyped, "lb", false), { text: "225", unit: "lb" }, "prescribed: ...and to an lb viewer");
+  eq(prescribedWeight("100", "kg", false), { text: "100", unit: "kg" }, "prescribed: a kg weight reads 100 kg to an lb viewer");
+  eq(prescribedWeight("102.5", "kg", true), { text: "102.5", unit: "kg" }, "prescribed: kg decimals kept as typed");
+  // Untagged (older) weights follow the viewer, as they always did.
+  eq(prescribedWeight("100", undefined, false), { text: "220.5", unit: "lb" }, "prescribed: an untagged weight follows the viewer");
+  eq(prescribedWeight("100", undefined, true), { text: "100", unit: "kg" }, "prescribed: ...in either unit");
+  // A logging field's placeholder carries its unit only when it isn't the logger's.
+  eq(prescribedPlaceholder("100", "kg", true), "100", "placeholder: same unit, just the number");
+  eq(prescribedPlaceholder("100", "kg", false), "100 kg", "placeholder: the other unit says so");
+  eq(prescribedPlaceholder(lbTyped, "lb", true), "225 lb", "placeholder: an lb prescription in a kg field");
+  eq(prescribedPlaceholder("BW", "kg", false), "BW", "placeholder: a non-load passes through");
+
+  // Stamping touches only untagged loads, never mutates, and hands back the
+  // same object when there's nothing to do.
+  const w: WorkoutMap = { "0:Push": [
+    { id: "a", name: "Bench", sets: [
+      { type: "working", weightKg: "100" },
+      { type: "working", weightKg: lbTyped, weightUnit: "lb" },
+      { type: "working" },
+      { type: "working", weightKg: "BW" },
+    ] },
+    { id: "b", name: "Dips", sets: [{ type: "working", reps: "10" }] },
+  ] };
+  const stamped = stampWeightUnits(w, "kg");
+  eq(stamped["0:Push"][0].sets.map(s => s.weightUnit), ["kg", "lb", undefined, undefined], "stamp: untagged loads only, tagged kept");
+  check(stamped["0:Push"][1] === w["0:Push"][1], "stamp: an exercise with nothing to stamp is kept by identity");
+  check(stampWeightUnits(stamped, "lb") === stamped, "stamp: nothing untagged left, same object back");
+  check(w["0:Push"][0].sets[0].weightUnit === undefined, "stamp: never mutates its input");
 }
 
 // ── weight migration transformers (lb → kg) ────────────────────────────────────

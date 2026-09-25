@@ -136,7 +136,7 @@ export default function DayExerciseList({ days, workouts, selectedExercise, onSe
               <BounceButton
                 onPress={() => setExpandedDay(prev => (prev === day.key ? null : day.key))}
                 accessibilityRole="button"
-                accessibilityLabel={`${day.label}${qualifier ? `, ${qualifier}` : ""} — ${c} session${c === 1 ? "" : "s"} logged`}
+                accessibilityLabel={`${day.label}${qualifier ? `, ${qualifier}` : ""}, ${c} session${c === 1 ? "" : "s"} logged`}
               >
                 <View style={styles.dayRow}>
                   <View style={styles.dayNameCol}>

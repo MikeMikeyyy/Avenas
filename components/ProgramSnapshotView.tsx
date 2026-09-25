@@ -22,7 +22,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "./NeuCard";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
 import { useUnit } from "../contexts/UnitContext";
-import { formatWeightForDisplay } from "../utils/units";
+import { prescribedWeight, unitLabel } from "../utils/units";
 import { workoutKey } from "../utils/programDays";
 import { normaliseSets, type Exercise, type ProgramSet, type SavedProgram } from "../constants/programs";
 
@@ -193,6 +193,8 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
                             return sets.map((set, si) => {
                               const isWarmup = set.type === "warmup";
                               const weight = set.weightKg?.trim();
+                              // In the unit it was written in, for everyone.
+                              const shown = weight ? prescribedWeight(weight, set.weightUnit, isKg) : null;
                               return (
                                 <View key={si} style={styles.setRow}>
                                   <View style={[styles.setBadge, isWarmup
@@ -204,7 +206,7 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
                                     </Text>
                                   </View>
                                   <Text style={[styles.setText, { color: t.tp }]} numberOfLines={1}>
-                                    {weight ? `${formatWeightForDisplay(weight, isKg)} ${isKg ? "kg" : "lbs"} · ` : ""}{setsSummary(set)}
+                                    {shown ? `${shown.text} ${unitLabel(shown.unit)} · ` : ""}{setsSummary(set)}
                                   </Text>
                                 </View>
                               );

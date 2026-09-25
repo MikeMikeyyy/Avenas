@@ -11,12 +11,11 @@ import {
   Keyboard,
   Linking,
   Platform,
-  Switch,
 } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
-import Svg, { Path } from "react-native-svg";
+import Svg, { Circle, Path } from "react-native-svg";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -35,8 +34,15 @@ import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import { useTheme } from "../contexts/ThemeContext";
+import AppSwitch from "../components/AppSwitch";
+import { alertMessage } from "../utils/errors";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const SELECTABLE = MUSCLE_GROUPS.filter(g => g !== "All") as SelectableMuscle[];
+
+/** The picker's search box doesn't auto-capitalise, so a search arrives as
+ *  "handstand". Capitalise each word's first letter only, so "RDL" survives. */
+const titleCaseWords = (s: string) => s.trim().replace(/\S+/g, w => w[0].toUpperCase() + w.slice(1));
 
 function KeyboardDismissIcon({ color }: { color: string }) {
   return (
@@ -48,15 +54,48 @@ function KeyboardDismissIcon({ color }: { color: string }) {
   );
 }
 
+const RING = 46;
+const RING_STROKE = 4;
+const RING_R = (RING - RING_STROKE) / 2;
+const RING_C = 2 * Math.PI * RING_R;
+
+/** How many custom exercise slots are taken, as a ring with "3/10" in it.
+ *  Same ring as a week on the program history page. */
+function SlotRing({ used, isDark }: { used: number; isDark: boolean }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const pct = Math.min(1, used / MAX_CUSTOM);
+  return (
+    <View style={styles.ring}>
+      <Svg width={RING} height={RING} style={styles.ringSvg}>
+        <Circle cx={RING / 2} cy={RING / 2} r={RING_R} stroke={t.ts} strokeWidth={RING_STROKE} fill="none" opacity={0.18} />
+        {pct > 0 && (
+          <Circle
+            cx={RING / 2} cy={RING / 2} r={RING_R}
+            stroke={ACCT} strokeWidth={RING_STROKE} fill="none"
+            strokeDasharray={RING_C}
+            strokeDashoffset={RING_C * (1 - pct)}
+            strokeLinecap="round"
+          />
+        )}
+      </Svg>
+      <Text style={[styles.ringText, { color: t.tp }]}>{used}/{MAX_CUSTOM}</Text>
+    </View>
+  );
+}
+
 export default function CreateCustomExerciseScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { edit: editName } = useLocalSearchParams<{ edit?: string }>();
+  // `name` is what the user was searching for in the exercise picker when they
+  // tapped Create Custom Exercise, so they don't have to type it twice.
+  const { edit: editName, name: searchedName } = useLocalSearchParams<{ edit?: string; name?: string }>();
   const isEditMode = !!editName;
 
-  const [exerciseName, setExerciseName] = useState("");
+  const [exerciseName, setExerciseName] = useState(() =>
+    !isEditMode && typeof searchedName === "string" ? titleCaseWords(searchedName) : ""
+  );
   const [selectedMuscles, setSelectedMuscles] = useState<SelectableMuscle[]>([]);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [videoUri, setVideoUri] = useState<string | null>(null);
@@ -157,7 +196,7 @@ export default function CreateCustomExerciseScreen() {
         setImageUri(dest);
       }
     } catch (e) {
-      Alert.alert("Error", e instanceof Error ? e.message : String(e));
+      Alert.alert("Couldn't add photo", alertMessage(e, "Please try again."));
     }
   };
 
@@ -176,7 +215,7 @@ export default function CreateCustomExerciseScreen() {
         setVideoUri(dest);
       }
     } catch (e) {
-      Alert.alert("Error", e instanceof Error ? e.message : String(e));
+      Alert.alert("Couldn't add video", alertMessage(e, "Please try again."));
     }
   };
 
@@ -218,7 +257,7 @@ export default function CreateCustomExerciseScreen() {
         }
       } else {
         if (current.length >= MAX_CUSTOM) {
-          Alert.alert("Limit reached", "You have used all 5 custom exercise slots.");
+          Alert.alert("Limit reached", `You have used all ${MAX_CUSTOM} custom exercise slots.`);
           setSaving(false);
           return;
         }
@@ -227,27 +266,18 @@ export default function CreateCustomExerciseScreen() {
       scheduleCloudPush(); // custom exercises (and cascaded program renames) are synced
       router.back();
     } catch (e) {
-      Alert.alert("Save failed", e instanceof Error ? e.message : String(e));
+      Alert.alert("Save failed", alertMessage(e, "Please try again."));
       setSaving(false);
     }
   };
 
   const canSave = exerciseName.trim().length > 0 && selectedMuscles.length > 0;
+  const slotsLeft = Math.max(0, MAX_CUSTOM - slotCount);
 
   return (
     <KeyboardAvoidingView style={[styles.root, { backgroundColor: t.bg }]} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -267,7 +297,7 @@ export default function CreateCustomExerciseScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingTop: insets.top + 16,
+          paddingTop: insets.top + BACK_TOP,
           paddingBottom: insets.bottom + 32,
         }}
       >
@@ -276,12 +306,30 @@ export default function CreateCustomExerciseScreen() {
           <View style={{ width: 66 }} />
           <View style={{ flex: 1, alignItems: "center" }}>
             <Text style={[styles.screenTitle, { color: t.tp }]}>{isEditMode ? "EDIT EXERCISE" : "CREATE EXERCISE"}</Text>
-            <Text style={[styles.slotBadge, { color: t.ts }]}>
-              {slotCount} / {MAX_CUSTOM} slots used
-            </Text>
           </View>
           <View style={{ width: 66 }} />
         </View>
+
+        {/* Slots — only while creating, since editing doesn't take one. */}
+        {!isEditMode && (
+          <NeuCard dark={isDark} radius={16} style={styles.slotCard}>
+            <View
+              style={styles.slotRow}
+              accessible
+              accessibilityLabel={`${slotCount} of ${MAX_CUSTOM} custom exercise slots used, ${slotsLeft} left`}
+            >
+              <SlotRing used={slotCount} isDark={isDark} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={[styles.slotTitle, { color: t.tp }]}>Custom exercise slots</Text>
+                <Text style={[styles.slotSub, { color: t.ts }]}>
+                  {slotsLeft > 0
+                    ? `${slotCount} of ${MAX_CUSTOM} used, ${slotsLeft} left`
+                    : `All ${MAX_CUSTOM} used. Delete one to add more.`}
+                </Text>
+              </View>
+            </View>
+          </NeuCard>
+        )}
 
         {/* Name */}
         <Text style={[styles.fieldLabel, { color: t.ts }]}>EXERCISE NAME</Text>
@@ -299,7 +347,7 @@ export default function CreateCustomExerciseScreen() {
 
         {/* Muscles */}
         <Text style={[styles.fieldLabel, { color: t.ts }]}>
-          TARGET MUSCLES <Text style={{ color: t.ts, fontFamily: FontFamily.regular }}>— select at least one</Text>
+          TARGET MUSCLES <Text style={{ color: t.ts, fontFamily: FontFamily.regular }}>(select at least one)</Text>
         </Text>
         <View style={styles.muscleGrid}>
           {SELECTABLE.map(muscle => {
@@ -332,7 +380,7 @@ export default function CreateCustomExerciseScreen() {
         </View>
 
         {/* Icon Photo */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>ICON PHOTO <Text style={{ fontFamily: FontFamily.regular }}>— optional</Text></Text>
+        <Text style={[styles.fieldLabel, { color: t.ts }]}>ICON PHOTO <Text style={{ fontFamily: FontFamily.regular }}>(optional)</Text></Text>
         <NeuCard dark={isDark} style={styles.mediaCard}>
           {imageUri ? (
             <View style={styles.mediaPreviewRow}>
@@ -353,7 +401,7 @@ export default function CreateCustomExerciseScreen() {
         </NeuCard>
 
         {/* Video Demo */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>VIDEO DEMO <Text style={{ fontFamily: FontFamily.regular }}>— optional</Text></Text>
+        <Text style={[styles.fieldLabel, { color: t.ts }]}>VIDEO DEMO <Text style={{ fontFamily: FontFamily.regular }}>(optional)</Text></Text>
         <NeuCard dark={isDark} style={styles.mediaCard}>
           {videoUri ? (
             <>
@@ -377,12 +425,9 @@ export default function CreateCustomExerciseScreen() {
                   />
                   <Text style={[styles.muteLabel, { color: t.tp }]}>Mute audio</Text>
                 </View>
-                <Switch
+                <AppSwitch
                   value={muted}
                   onValueChange={setMuted}
-                  trackColor={{ true: ACCT, false: t.div }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={t.div}
                 />
               </View>
             </>
@@ -396,7 +441,7 @@ export default function CreateCustomExerciseScreen() {
 
         {/* Steps — numbered how-to, added one at a time. Renders as green
             numbered circles on the exercise summary, like bundled exercises. */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>STEPS <Text style={{ fontFamily: FontFamily.regular }}>— optional</Text></Text>
+        <Text style={[styles.fieldLabel, { color: t.ts }]}>STEPS <Text style={{ fontFamily: FontFamily.regular }}>(optional)</Text></Text>
         {steps.map((step, i) => (
           <NeuCard key={i} dark={isDark} style={styles.stepCard}>
             <View style={styles.stepEditorRow}>
@@ -478,10 +523,16 @@ export default function CreateCustomExerciseScreen() {
 const styles = StyleSheet.create({
   root:            { flex: 1 },
   topGradient:     { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn:         { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  header:          { flexDirection: "row", alignItems: "center", marginBottom: 28, marginTop: 4 },
+  header:          { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 28 },
   screenTitle:     { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5 },
-  slotBadge:       { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
+  slotCard:        { marginBottom: 24 },
+  slotRow:         { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
+  slotTitle:       { fontFamily: FontFamily.semibold, fontSize: 15 },
+  slotSub:         { fontFamily: FontFamily.regular, fontSize: 13 },
+  ring:            { width: RING, height: RING, alignItems: "center", justifyContent: "center" },
+  // Starts the arc at 12 o'clock.
+  ringSvg:         { position: "absolute", transform: [{ rotate: "-90deg" }] },
+  ringText:        { fontFamily: FontFamily.bold, fontSize: 12 },
   fieldLabel:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 10, marginTop: 4 },
   inputCard:       { marginBottom: 20, borderRadius: 16 },
   textInput:       { fontFamily: FontFamily.regular, fontSize: 16, paddingHorizontal: 18, paddingVertical: 16 },

@@ -76,8 +76,11 @@ function MonthSection({
   const cellBg = (state: CellState): object => {
     if (!state) return {};
     if (state === "workout") return { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 4, elevation: 3 };
-    if (state === "future")  return { backgroundColor: lightCell };
-    // rest / missed / todayWorkout — all use dark fill
+    // A MISSED day takes the faded fill, the same as a day still to come: it
+    // came and went with nothing in it. Rest and missed used to share the dark
+    // fill, so the two couldn't be told apart.
+    if (state === "future" || state === "missed") return { backgroundColor: lightCell };
+    // rest: the dark fill, a day meant to be empty.
     return { backgroundColor: darkCell };
   };
 

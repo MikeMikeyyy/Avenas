@@ -29,6 +29,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { getJSON, setJSON } from "../utils/storage";
 import { isFavourite as isFav, toggleFavourite } from "../utils/exerciseFavourites";
 import { exerciseByName, exerciseIdByName } from "../utils/exerciseLookup";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // "middle back" → "Middle Back". Catalogue secondary muscles are free-text
 // lowercase; title-case them so they read as labels alongside the primary chip.
@@ -122,24 +123,14 @@ export default function ExerciseSummaryScreen() {
       </View>
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       {/* Favourite toggle — mirrors the back button on the other side, so the
           star reads as a control rather than decoration. Same gold and the same
           storage key as the picker's star, so the two always agree. */}
       <TouchableOpacity
         onPress={toggleStar}
-        style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
+        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
         activeOpacity={0.8}
         accessibilityLabel={starred ? `Remove ${name} from favourites` : `Add ${name} to favourites`}
         accessibilityRole="button"
@@ -154,9 +145,9 @@ export default function ExerciseSummaryScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          // Back button spans insets.top+14 → insets.top+54 (40px tall); start the
-          // hero image a little below it so the button never sits on the photo.
-          paddingTop: insets.top + 66,
+          // Start the hero image a little below the back button so the button
+          // never sits on the photo.
+          paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12,
           paddingBottom: insets.bottom + 40,
           alignItems: "center",
         }}

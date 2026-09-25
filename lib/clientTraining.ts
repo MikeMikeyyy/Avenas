@@ -14,6 +14,7 @@ import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./da
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 import type { CustomExercise } from "../constants/exercises";
+import type { WeightUnit } from "../utils/units";
 
 export type ClientTraining = {
   workoutHistory: CompletedWorkout[];
@@ -22,6 +23,8 @@ export type ClientTraining = {
   customExercises: CustomExercise[];
   /** When their phone last backed up (ISO), or undefined if it never has. */
   backedUpAt?: string;
+  /** The unit they log in (0036). Absent from a server without it. */
+  unit?: WeightUnit;
 };
 
 type ClientTrainingPayload = {
@@ -30,7 +33,10 @@ type ClientTrainingPayload = {
   journal: JournalRow[];
   custom: CustomExerciseRow[];
   backed_up_at?: string | null;
+  unit?: string | null;
 };
+
+const asUnit = (u: unknown): WeightUnit | undefined => (u === "kg" || u === "lb" ? u : undefined);
 
 /**
  * Everything one person has backed up, read in a single statement so the
@@ -52,7 +58,29 @@ export async function fetchClientTraining(clientId: string): Promise<ClientTrain
     journal: (payload.journal ?? []).map(journalFromRow),
     customExercises: (payload.custom ?? []).map(customFromRow),
     backedUpAt: payload.backed_up_at ?? undefined,
+    unit: asUnit(payload.unit),
   };
+}
+
+/**
+ * The unit each person logs in, for the warnings where a trainer writes or
+ * sends for someone (0036). Only people you're connected to or share a group
+ * with come back. Fails soft to "unknown" (an empty map), including on a server
+ * without 0036: a missing warning is better than a broken send sheet.
+ */
+export async function fetchPeopleUnits(ids: string[]): Promise<Record<string, WeightUnit>> {
+  if (ids.length === 0) return {};
+  const { data, error } = await supabase.rpc("get_people_units", { p_ids: ids });
+  if (error) {
+    if (__DEV__) console.warn("[avenas] load people units", error.message);
+    return {};
+  }
+  const out: Record<string, WeightUnit> = {};
+  for (const r of (data as { user_id: string; unit: string }[] | null) ?? []) {
+    const u = asUnit(r.unit);
+    if (u) out[r.user_id] = u;
+  }
+  return out;
 }
 
 /** Each person's active program name, by id. Anyone the server won't let you

@@ -20,6 +20,7 @@
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import {
   ACHIEVEMENT_CARD_DAYS,
+  EMPTY_ACHIEVEMENTS,
   isStreakMilestone,
   WORKOUT_MILESTONES,
   type Achievement,
@@ -68,6 +69,23 @@ export function detectWorkoutAchievements(
   }
 
   return out;
+}
+
+/**
+ * What `workout` earned when it was saved: its PRs, and the workout milestone
+ * if it was one. Measured against every session completed BEFORE it, which is
+ * what a workout finished live was compared against (the rebuild
+ * utils/clientAchievements.ts does), so a session keeps showing what it earned
+ * at the time rather than what it would earn against today's history. The
+ * workout detail screen and the program page both read it. `history` may
+ * include `workout` itself; it's left out. An unreadable completedAt earns
+ * nothing rather than throwing.
+ */
+export function achievementsForWorkout(workout: CompletedWorkout, history: CompletedWorkout[]): Achievement[] {
+  const at = Date.parse(workout.completedAt);
+  if (!Number.isFinite(at)) return [];
+  const prior = history.filter(w => w.id !== workout.id && Date.parse(w.completedAt) < at);
+  return detectWorkoutAchievements(workout, prior, EMPTY_ACHIEVEMENTS, new Date(at));
 }
 
 /**

@@ -72,6 +72,29 @@ export type GroupInvite = {
  *  mirrors can_coach_in_group(), which is what the database actually enforces. */
 export const canCoachGroup = (role: GroupRole): boolean => role === "owner" || role === "trainer";
 
+/**
+ * How many groups one account can be in, counting the groups it created (an
+ * owner is an accepted member of their own group). Pending invites don't count.
+ * The database enforces the same number (migration 0035, keep the two in step);
+ * the app checks first so the prompt comes before a form is filled in. Never
+ * shown as a count: the limit only ever surfaces as the prompt below.
+ */
+export const MAX_GROUPS = 5;
+
+/** The prompt at the limit. */
+export const GROUP_LIMIT_TITLE = "Group limit reached";
+
+/** The prompt's body, for creating a group or accepting an invite. Someone who
+ *  runs a group is told those count and can be deleted; nobody else is, since
+ *  a gym user has nothing to delete. */
+export function groupLimitMessage(action: "create" | "join", ownsAGroup: boolean): string {
+  const limit = `You can be in up to ${MAX_GROUPS} groups at a time${ownsAGroup ? ", including groups you've created" : ""}.`;
+  const fix = ownsAGroup ? "Leave or delete a group" : "Leave a group";
+  return action === "create"
+    ? `${limit} ${fix} to create a new one.`
+    : `${limit} ${fix} to accept this invite. It'll wait here until then.`;
+}
+
 /** A message in a group thread. Extends the 1:1 ChatMessage shape with author
  *  identity, which a group needs and a 1:1 thread does not. */
 export type GroupMessage = {

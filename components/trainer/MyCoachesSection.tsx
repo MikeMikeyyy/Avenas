@@ -26,7 +26,7 @@ import RecipientPickerSheet from "./RecipientPickerSheet";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import SimpleSheet from "./SimpleSheet";
 import SheetPill from "../SheetPill";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
@@ -48,9 +48,7 @@ import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
-
-// Destructive red, matching the inline value used in PTHome / program-view.
-const REMOVE_RED = "#E53935";
+import { alertMessage } from "../../utils/errors";
 
 function fmtAgo(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -184,7 +182,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     try {
       await appendSharedPrograms([entry]);
     } catch (e) {
-      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     Alert.alert("Program Sent", `"${program.name}" was sent to ${target.name}.`);
@@ -332,7 +330,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     try {
       await appendSharedPrograms(entries);
     } catch (e) {
-      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     const count = recipients === "all" ? clients.length : recipients.length;
@@ -491,7 +489,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                             </BounceButton>
                             <BounceButton onPress={() => handleRemove(r)} accessibilityLabel={`Remove ${r.programName}`}>
                               <NeuCard dark={isDark} radius={12} innerStyle={styles.removeIconBtnInner}>
-                                <TrashIcon size={16} color={REMOVE_RED} />
+                                <TrashIcon size={16} color={DANGER_BRIGHT} />
                               </NeuCard>
                             </BounceButton>
                           </View>
@@ -504,8 +502,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                               </View>
                             </BounceButton>
                             <BounceButton style={{ flex: 1 }} onPress={() => handleRemove(r)} accessibilityLabel={`Remove ${r.programName}`}>
-                              <View style={[styles.removeBtn, { borderColor: REMOVE_RED }]}>
-                                <Text style={[styles.removeBtnText, { color: REMOVE_RED }]}>Remove</Text>
+                              <View style={[styles.removeBtn, { borderColor: DANGER_BRIGHT }]}>
+                                <Text style={[styles.removeBtnText, { color: DANGER_BRIGHT }]}>Remove</Text>
                               </View>
                             </BounceButton>
                           </View>

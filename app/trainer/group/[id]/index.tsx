@@ -29,22 +29,27 @@ import ChevronToggle from "../../../../components/ChevronToggle";
 import ExpandReveal, { useReveal } from "../../../../components/ExpandReveal";
 import TrashIcon from "../../../../components/TrashIcon";
 import KeyboardDismissButton from "../../../../components/KeyboardDismissButton";
-import ChatIcon from "../../../../components/icons/ChatIcon";
+import GroupChatIcon from "../../../../components/icons/GroupChatIcon";
+import UserPlusIcon from "../../../../components/icons/UserPlusIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
+import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "../../../../components/trainer/ReviewStatusPill";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../../../constants/cards";
 import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
 import SheetPill from "../../../../components/SheetPill";
 import { useTheme } from "../../../../contexts/ThemeContext";
+import { useUnit } from "../../../../contexts/UnitContext";
+import { fetchPeopleUnits } from "../../../../lib/clientTraining";
+import { unitLabel, unitOf } from "../../../../utils/units";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
 import { useAuth } from "../../../../contexts/AuthContext";
 import { deleteGroup, leaveGroup, setGroupMemberRole, subscribeToGroup } from "../../../../lib/groups";
 import { getMyUid } from "../../../../lib/chat";
 import { scheduleCloudPush } from "../../../../lib/syncManager";
 import { loadGroupUnread, sortByFavourite, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
-import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, batchKeyOf, dismissSharedBatch, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, setGroupReviewDone, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
+import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, applyReturnedProgram, batchKeyOf, dismissSharedBatch, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, returnedKeyOf, setGroupReviewDone, setReviewArchived, setSendBatchArchived, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
 import {
   dropGroupPage,
   EMPTY_GROUP_PAGE,
@@ -57,9 +62,13 @@ import {
 } from "../../../../utils/groupPage";
 import { getJSON } from "../../../../utils/storage";
 import { fmtAgo } from "../../../../utils/dates";
-import { removeShareConfirm } from "../../../../utils/removeShare";
+import { archiveShareChoice, removeShareConfirm } from "../../../../utils/removeShare";
+import { askArchiveOrDelete } from "../../../../utils/archiveChoice";
+import ArchiveButton from "../../../../components/ArchiveButton";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../../constants/programs";
 import { canCoachGroup, type GroupMember, type GroupRole } from "../../../../constants/groups";
+import { alertMessage } from "../../../../utils/errors";
+import BackButton, { BACK_TOP, BACK_LEFT } from "../../../../components/BackButton";
 
 /** How many member avatars the banner stacks before collapsing to "+N". */
 const AVATAR_STACK = 4;
@@ -282,23 +291,32 @@ function SentBatchCard({ batch, open, myUid, iCoachGroup, isDark, senderName, na
  * One program a member posted here for a coach to look at — the receiving half
  * of the group's program traffic, and deliberately the same card as the trainer
  * hub's "Programs Received": name, who it came from and when, a status pill,
- * and the review behind a tap.
+ * and the actions behind a tap.
  *
- * Shown to the SENDER too, without the actions. A gym user tracks their request
- * on their own trainer page, but a TRAINER who is a plain member of someone
- * else's group has no such page — their own hub only lists reviews addressed to
- * them — so without this their request vanished the moment they sent it.
+ * Shown to the SENDER too. A gym user tracks their request on their own
+ * trainer page as well, but a TRAINER who is a plain member of someone else's
+ * group has no such page — their own hub only lists reviews addressed to them —
+ * so this is where theirs lives. Once it's been sent back it carries the trainer
+ * page's View · Accept · Remove. It used to be a status line with no actions, so
+ * a trainer who asked could never accept the changes, and a coach's Remove took
+ * even the status line away (loadGroupReviewPrograms now keeps it for them).
  */
-function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOpen, onDone }: {
+function GroupReviewCard({ review, from, open, mode, isDark, onToggle, onOpen, onAccept, onRemove }: {
   review: SentProgram;
   /** Who asked, resolved against the roster. */
   from: string;
   open: boolean;
-  canReview: boolean;
+  /** "coach": someone else's request, mine to review. "mine": my own request. */
+  mode: "coach" | "mine";
   isDark: boolean;
   onToggle: () => void;
+  /** A coach opens the review screen; the person who asked views what came back. */
   onOpen: () => void;
-  onDone: () => void;
+  /** Mine, once it's back and not yet accepted: take the changes. */
+  onAccept: () => void;
+  /** A coach clears it from the group's queue, for every coach. Mine: takes it
+   *  off my own list, and nobody else's. */
+  onRemove: () => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const reveal = useReveal();
@@ -306,6 +324,8 @@ function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOp
 
   const returned = review.status === "returned";
   const cycle = review.programSnapshot?.cyclePattern ?? [];
+  // My own request has nothing on it to act on until it's back.
+  const hasActions = mode === "coach" || returned;
 
   const row = (
     <View style={styles.cardInner}>
@@ -316,13 +336,9 @@ function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOp
             {from} · Sent {fmtAgo(review.sentAtISO)}
           </Text>
         </View>
-        {/* Green once it's gone back; orange while it's still waiting on a
-            trainer (AWAITING_ORANGE), as on the trainer hub. */}
-        <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
-          <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
-            {returned ? "Returned" : "Awaiting review"}
-          </Text>
-        </View>
+        {/* The trainer hub's pill: orange while it waits on a trainer, green
+            once it's gone back, solid green once it's been accepted. */}
+        <ReviewStatusPill review={review} />
       </View>
       {/* The shape of the programming, before you open anything: the same strip
           the hub's cards carry, and often enough to answer "is this the block I
@@ -351,32 +367,59 @@ function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOp
       )}
       {/* Same shape as the sent card: the reveal lives inside the padded body,
           above the chevron that opens it, and takes no space while closed. */}
-      {canReview && (
+      {hasActions && (
         <>
-          {/* The trainer hub's Programs Received card, exactly: a white Review
-              and a red Remove, the same width. Review opens the review screen,
-              where the edit and the Send Back live (it was labelled "Edit &
-              Send Back", then "View Review" once sent). Remove is what Mark
-              Done was: it clears the item from this group's queue for every
-              coach, and the member keeps their copy and any feedback. */}
           <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} bleed={REVEAL_BLEED} contentStyle={styles.revealColumn}>
-            <View style={styles.sentActionRow}>
-              <BounceButton
-                style={{ flex: 1 }}
-                onPress={onOpen}
-                accessibilityLabel={returned ? `Review ${review.programName}, already sent back` : `Review ${review.programName}`}
-              >
-                <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
-                  <Text style={[styles.sentActionText, { color: t.tp }]}>Review</Text>
-                </View>
-              </BounceButton>
-              <BounceButton style={{ flex: 1 }} onPress={onDone} accessibilityLabel={`Remove ${review.programName}`}>
-                <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
-                  <TrashIcon size={15} color="#fff" />
-                  <Text style={[styles.sentActionText, { color: "#fff" }]}>Remove</Text>
-                </View>
-              </BounceButton>
-            </View>
+            {mode === "coach" ? (
+              /* The trainer hub's Programs Received card, exactly: a white
+                 Review and a red Remove, the same width. Review opens the
+                 review screen, where the edit and the Send Back live (it was
+                 labelled "Edit & Send Back", then "View Review" once sent).
+                 Remove is what Mark Done was: it clears the item from this
+                 group's queue for every coach, and the member keeps their copy
+                 and can still accept what was sent back. */
+              <View style={styles.sentActionRow}>
+                <BounceButton
+                  style={{ flex: 1 }}
+                  onPress={onOpen}
+                  accessibilityLabel={returned ? `Review ${review.programName}, already sent back` : `Review ${review.programName}`}
+                >
+                  <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
+                    <Text style={[styles.sentActionText, { color: t.tp }]}>Review</Text>
+                  </View>
+                </BounceButton>
+                <BounceButton style={{ flex: 1 }} onPress={onRemove} accessibilityLabel={`Remove ${review.programName}`}>
+                  <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                    <TrashIcon size={15} color="#fff" />
+                    <Text style={[styles.sentActionText, { color: "#fff" }]}>Remove</Text>
+                  </View>
+                </BounceButton>
+              </View>
+            ) : (
+              /* My own request, back from a trainer: the gym user trainer
+                 page's returned card, in this page's order (as the sent card
+                 above): View, Accept while it's still waiting, Remove. */
+              <View style={styles.sentActionRow}>
+                <BounceButton style={styles.sentActionFlex} onPress={onOpen} accessibilityLabel={`View ${review.programName}`}>
+                  <View style={[styles.sentActionBtn, { backgroundColor: t.ctrl }]}>
+                    <Text style={[styles.sentActionText, { color: t.tp }]}>View</Text>
+                  </View>
+                </BounceButton>
+                {!review.appliedAtISO && (
+                  <BounceButton style={styles.sentActionFlex} onPress={onAccept} accessibilityLabel={`Accept the trainer's changes to ${review.programName}`}>
+                    <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                      <Text style={[styles.sentActionText, { color: "#fff" }]}>Accept</Text>
+                    </View>
+                  </BounceButton>
+                )}
+                <BounceButton onPress={onRemove} accessibilityLabel={`Remove ${review.programName} from your list`}>
+                  <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                    <TrashIcon size={15} color="#fff" />
+                    <Text style={[styles.sentActionText, { color: "#fff" }]}>Remove</Text>
+                  </View>
+                </BounceButton>
+              </View>
+            )}
           </ExpandReveal>
           <View style={styles.chevronRow}>
             <ChevronToggle expanded={open} color={t.ts} upDown />
@@ -386,9 +429,9 @@ function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOp
     </View>
   );
 
-  // Nothing behind the tap for a member, so it isn't a tap: the card states
-  // where their request stands and stops there.
-  if (!canReview) return <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>{row}</NeuCard>;
+  // Nothing behind the tap while my own request is still waiting, so it isn't
+  // a tap: the card states where it stands and stops there.
+  if (!hasActions) return <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>{row}</NeuCard>;
 
   return (
     <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
@@ -397,7 +440,7 @@ function GroupReviewCard({ review, from, open, canReview, isDark, onToggle, onOp
           onPress={onToggle}
           accessibilityRole="button"
           accessibilityState={{ expanded: open }}
-          accessibilityLabel={`${review.programName} from ${from}, ${returned ? "returned" : "awaiting review"}, ${open ? "collapse" : "expand"}`}
+          accessibilityLabel={`${review.programName} from ${from}, ${REVIEW_STAGE_LABEL[reviewStage(review)].toLowerCase()}, ${open ? "collapse" : "expand"}`}
         >
           {row}
         </Pressable>
@@ -537,31 +580,36 @@ export default function GroupPageScreen() {
     }
   }, [groupId]);
 
-  /** Clear a review out of the group's queue. Coach-only at the database, so
-   *  this button never renders for anyone else. */
+  /** Take a review out of the group's queue, for every coach: Archive (back
+   *  from the group's archive, in the header) or Delete (completed_at, what
+   *  Mark Done was). Coach-only at the database, so this button never renders
+   *  for anyone else. */
   // Worded as the trainer hub's Remove on the same item, since a coach can
   // clear it from either place and should be told the same thing in both.
   const handleCompleteReview = useCallback((entry: SentProgram) => {
-    Alert.alert(
-      "Remove Program",
-      `Remove "${entry.programName}" from the group's review list?${entry.returnedAtISO ? " They keep the feedback you sent back." : " You haven't sent it back yet, so they'll still be waiting on a review."}`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await setGroupReviewDone(entry.id, true);
-            } catch (e) {
-              Alert.alert("Couldn't update", e instanceof Error ? e.message : "Check your connection and try again.");
-              return;
-            }
-            setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
-          },
-        },
-      ],
-    );
+    const drop = () => setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
+    askArchiveOrDelete({
+      title: "Remove Program",
+      body: `Archive "${entry.programName}" to take it off the group's review list until you restore it, or delete it. ${removeReviewNote(entry)}`,
+      onArchive: async () => {
+        try {
+          await setReviewArchived(entry.id, true);
+        } catch (e) {
+          Alert.alert("Couldn't archive it", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
+        drop();
+      },
+      onDelete: async () => {
+        try {
+          await setGroupReviewDone(entry.id, true);
+        } catch (e) {
+          Alert.alert("Couldn't update", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
+        drop();
+      },
+    });
   }, []);
 
   /** Post one of my programs to this group for whichever coach picks it up. */
@@ -586,7 +634,7 @@ export default function GroupPageScreen() {
     try {
       await appendSentProgram(entry, ownerId);
     } catch (e) {
-      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     // Put it in the section on this tick: the request now has a card of its own
@@ -623,7 +671,45 @@ export default function GroupPageScreen() {
     );
   }, [myUid, refreshGroupShares]);
 
+  /**
+   * Take a send out of the group, for everyone. A trainer of the group gets
+   * Archive beside Delete (back from the group's archive, in the header). A
+   * sender who has since lost the trainer role can still take their own send
+   * back, but has no archive here to restore from, so they get the plain
+   * confirm.
+   */
   const handleRemoveBatch = useCallback((batch: SentBatch) => {
+    const removeForGood = async () => {
+      try {
+        await removeGroupSharedProgramBatch(groupId, batch.key);
+      } catch (e) {
+        // A refused or failed remove used to look like a dead button.
+        Alert.alert("Couldn't remove program", alertMessage(e, "Check your connection and try again."));
+      }
+      await refreshGroupShares();
+    };
+    if (iCoachGroup) {
+      const choice = archiveShareChoice({
+        programName: batch.programName,
+        recipients: "this group",
+        total: batch.entries.length,
+        accepted: batch.acceptedCount,
+      });
+      askArchiveOrDelete({
+        title: choice.title,
+        body: choice.body,
+        onArchive: async () => {
+          try {
+            await setSendBatchArchived(batch.key, true, groupId);
+          } catch (e) {
+            Alert.alert("Couldn't archive it", alertMessage(e, "Check your connection and try again."));
+          }
+          await refreshGroupShares();
+        },
+        onDelete: removeForGood,
+      });
+      return;
+    }
     const prompt = removeShareConfirm({
       programName: batch.programName,
       recipients: "this group",
@@ -635,22 +721,10 @@ export default function GroupPageScreen() {
       prompt.body,
       [
         { text: prompt.cancel, style: "cancel" },
-        {
-          text: prompt.confirm,
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await removeGroupSharedProgramBatch(groupId, batch.key);
-            } catch (e) {
-              // A refused or failed remove used to look like a dead button.
-              Alert.alert("Couldn't remove program", e instanceof Error ? e.message : "Check your connection and try again.");
-            }
-            await refreshGroupShares();
-          },
-        },
+        { text: prompt.confirm, style: "destructive", onPress: removeForGood },
       ],
     );
-  }, [refreshGroupShares, groupId]);
+  }, [refreshGroupShares, groupId, iCoachGroup]);
 
   const handleAcceptBatch = useCallback(async (batchKey: string, programName: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -707,6 +781,53 @@ export default function GroupPageScreen() {
     () => getJSON<SavedProgram[]>(PROGRAMS_KEY, []).then(progs => (Array.isArray(progs) ? progs : [])),
     [],
   );
+
+  /** Take a trainer's changes to my own request: they go over my original
+   *  program, as from my trainer page. Here too because a trainer who asked a
+   *  group has no trainer page to do it from. */
+  const handleAcceptReturned = useCallback(async (entry: SentProgram) => {
+    if (entry.appliedAtISO) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await applyReturnedProgram(entry.id);
+    scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
+    const appliedAt = new Date().toISOString();
+    setPage(p => p && { ...p, groupReviews: p.groupReviews.map(r => (r.id === entry.id ? { ...r, appliedAtISO: appliedAt } : r)) });
+    setMyPrograms(await loadMyPrograms());
+    Alert.alert("Program Updated", `"${entry.programName}" in your programs was updated with your trainer's edits.`);
+  }, [loadMyPrograms]);
+
+  /** Take my own returned request off this page. The trainer page's Remove on
+   *  the same item, and the same hide (returnedKeyOf): this version only, so an
+   *  update from the trainer brings it back. The group's queue is the coaches'
+   *  and is untouched. */
+  const handleRemoveReturned = useCallback((entry: SentProgram) => {
+    Alert.alert(
+      "Remove Program",
+      entry.appliedAtISO
+        ? `Remove "${entry.programName}" from this list? The changes stay in your programs.`
+        : `Remove "${entry.programName}" without accepting the changes? Your program stays as it was.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            await dismissSharedBatch(returnedKeyOf(entry));
+            setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
+          },
+        },
+      ],
+    );
+  }, []);
+
+  /** What came back on my own request: my program, once the changes are in it;
+   *  the returned version until then, looked up through this group because a
+   *  trainer's own sent list doesn't hold it. */
+  const viewReturned = useCallback((r: SentProgram) => {
+    router.navigate(r.appliedAtISO
+      ? { pathname: "/programs", params: { focus: r.programId } }
+      : { pathname: "/program-view", params: { sentId: r.id, groupId } });
+  }, [router, groupId]);
 
   /**
    * Arriving brings the page up to date: behind the saved copy it opened on,
@@ -889,13 +1010,29 @@ export default function GroupPageScreen() {
           : `${m.name} can no longer send programs to this group.`,
       );
     } catch (e) {
-      Alert.alert("Couldn't change role", e instanceof Error ? e.message : "Check your connection and try again.");
+      Alert.alert("Couldn't change role", alertMessage(e, "Check your connection and try again."));
     }
   }, [groupId]);
 
   // Everyone in the group except me. A trainer never sends a program to
   // themselves, and only real connections can receive one.
   const recipientIds = members.filter(m => m.id !== myUid).map(m => m.id);
+
+  // How many of them log in the other unit, for the send sheet: a program's
+  // weights read in the unit they were entered in, so say who'll see yours in
+  // a unit they don't use. Looked up when the sheet opens (0036; unknown
+  // counts as the same unit, so a missing server only drops the note).
+  const { isKg: ownIsKg } = useUnit();
+  const [otherUnitCount, setOtherUnitCount] = useState(0);
+  const recipientKey = recipientIds.join(",");
+  useEffect(() => {
+    if (picker !== "send") return;
+    let cancelled = false;
+    fetchPeopleUnits(recipientKey.split(",").filter(Boolean))
+      .then(u => { if (!cancelled) setOtherUnitCount(Object.values(u).filter(x => x !== unitOf(ownIsKg)).length); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [picker, recipientKey, ownIsKg]);
 
   /** My own standing in this group, which decides whether I can send programs. */
   const myRole: GroupRole = members.find(m => m.id === myUid)?.role ?? "member";
@@ -986,7 +1123,7 @@ export default function GroupPageScreen() {
     try {
       await appendSharedPrograms(entries);
     } catch (e) {
-      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     // Re-read so the Group Programs section updates on this tick. The page loads
@@ -1010,7 +1147,7 @@ export default function GroupPageScreen() {
             dropGroupPage(groupId);
             router.back();
           } catch (e) {
-            Alert.alert("Couldn't leave", e instanceof Error ? e.message : "Check your connection and try again.");
+            Alert.alert("Couldn't leave", alertMessage(e, "Check your connection and try again."));
           }
         } },
       ],
@@ -1030,7 +1167,7 @@ export default function GroupPageScreen() {
             dropGroupPage(groupId);
             router.back();
           } catch (e) {
-            Alert.alert("Couldn't delete group", e instanceof Error ? e.message : "Check your connection and try again.");
+            Alert.alert("Couldn't delete group", alertMessage(e, "Check your connection and try again."));
           }
         } },
       ],
@@ -1085,10 +1222,13 @@ export default function GroupPageScreen() {
       can ASK for a review as well as review (they're given both buttons):
         receivedReviews   other people's requests. A coach reviews these,
                           under "Programs Received", the hub's name for them.
-        myReviewRequests  my own, as a status line with no actions, under
-                          "Sent to Trainer" like the gym user's trainer page.
-                          All a plain member ever has (RLS gives a group's
-                          other reviews to its coaches only).
+        myReviewRequests  my own, under "Sent to Trainer" like the gym user's
+                          trainer page: a status line while it waits, then
+                          View · Accept · Remove once it's back, kept after a
+                          coach clears the queue until I remove it myself
+                          (loadGroupReviewPrograms). All a plain member ever
+                          has (RLS gives a group's other reviews to its
+                          coaches only).
       Nobody reviews their own request, so a trainer's own ask is never in
       their Programs Received with Review on it. */
   const receivedReviews = iCoachGroup ? groupReviews.filter(r => r.senderId !== myUid) : [];
@@ -1117,28 +1257,26 @@ export default function GroupPageScreen() {
       {collapsed ? (
         <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
           {list.map((r, i) => {
-            const returned = r.status === "returned";
+            // A coach opens the review; I open what came back on mine, once
+            // there's something to open.
+            const onPress = asCoach
+              ? () => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id, groupId } })
+              : r.status === "returned" ? () => viewReturned(r) : undefined;
             return (
               <TouchableOpacity
                 key={r.id}
-                onPress={asCoach
-                  ? () => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id, groupId } })
-                  : undefined}
-                disabled={!asCoach}
+                onPress={onPress}
+                disabled={!onPress}
                 activeOpacity={0.7}
-                accessibilityRole={asCoach ? "button" : "text"}
-                accessibilityLabel={asCoach ? `Open review for ${r.programName}` : r.programName}
+                accessibilityRole={onPress ? "button" : "text"}
+                accessibilityLabel={asCoach ? `Open review for ${r.programName}` : onPress ? `View ${r.programName}` : r.programName}
                 style={[
                   styles.summaryRow,
                   { borderBottomColor: t.div, borderBottomWidth: i === list.length - 1 ? 0 : 1 },
                 ]}
               >
                 <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                <View style={[styles.statusPill, { backgroundColor: `${returned ? ACCT : AWAITING_ORANGE}22` }]}>
-                  <Text style={[styles.statusText, { color: returned ? ACCT : AWAITING_ORANGE }]}>
-                    {returned ? "Returned" : "Awaiting review"}
-                  </Text>
-                </View>
+                <ReviewStatusPill review={r} />
               </TouchableOpacity>
             );
           })}
@@ -1150,11 +1288,14 @@ export default function GroupPageScreen() {
             review={r}
             from={reviewFrom(r)}
             open={expandedReviews.has(r.id)}
-            canReview={asCoach}
+            mode={asCoach ? "coach" : "mine"}
             isDark={isDark}
             onToggle={() => toggleReview(r.id)}
-            onOpen={() => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id, groupId } })}
-            onDone={() => handleCompleteReview(r)}
+            onOpen={asCoach
+              ? () => router.navigate({ pathname: "/trainer/review/[id]", params: { id: r.id, groupId } })
+              : () => viewReturned(r)}
+            onAccept={() => handleAcceptReturned(r)}
+            onRemove={asCoach ? () => handleCompleteReview(r) : () => handleRemoveReturned(r)}
           />
         ))
       )}
@@ -1245,12 +1386,8 @@ export default function GroupPageScreen() {
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
-      <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: t.div }]}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-          <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        </TouchableOpacity>
+      <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
+        <BackButton inline />
         {/* The group's photo, on the left beside its name, the way a chat
             header or a contact card shows who it is. The owner can tap it to
             change the photo (it opens Manage, where the picker lives); for
@@ -1263,11 +1400,17 @@ export default function GroupPageScreen() {
             accessibilityRole={group?.isOwner ? "button" : "image"}
             accessibilityLabel={group?.isOwner ? "Change group photo" : `${displayName} photo`}
           >
-            <GroupAvatar uri={group?.photoUri} size={32} isDark={isDark} />
+            <GroupAvatar uri={group?.photoUri} size={40} isDark={isDark} />
           </TouchableOpacity>
           {isFavourite && <FavouriteStar size={16} />}
           <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
         </View>
+        {/* The group's archive, for the people who can archive here: its
+            trainers. A member's Remove is a hide on their own device, with
+            nothing to restore. */}
+        {iCoachGroup && (
+          <ArchiveButton onPress={() => router.navigate({ pathname: "/program-archive", params: { scope: "group", groupId, groupName: displayName } })} />
+        )}
         <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Group options" accessibilityRole="button">
           <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
             <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
@@ -1335,7 +1478,7 @@ export default function GroupPageScreen() {
               <View style={styles.actionRow}>
                 <BounceButton style={{ flex: 1 }} onPress={openChat} accessibilityLabel={`Open ${displayName} chat`}>
                   <View style={[styles.actionBtn, styles.actionChrome, { backgroundColor: t.ctrl }]}>
-                    <ChatIcon size={17} color={t.tp} />
+                    <GroupChatIcon size={17} color={t.tp} />
                     <Text style={[styles.actionText, { color: t.tp }]}>Group Chat</Text>
                     <UnreadBadge count={unread} style={styles.actionBadge} />
                   </View>
@@ -1438,7 +1581,7 @@ export default function GroupPageScreen() {
                 accessibilityLabel="Add members"
               >
                 <View style={[styles.searchBtn, { backgroundColor: t.ctrl }]}>
-                  <Ionicons name="person-add-outline" size={16} color={t.tp} />
+                  <UserPlusIcon size={17} color={t.tp} />
                 </View>
               </TouchableOpacity>
             )}
@@ -1634,7 +1777,9 @@ export default function GroupPageScreen() {
         title={picker === "review" ? "Ask for a Review" : `Send to ${displayName}`}
         subtitle={picker === "review"
           ? `A trainer in ${displayName} will look at it and send it back with their notes.`
-          : `Everyone in this group receives it (${recipientIds.length} member${recipientIds.length === 1 ? "" : "s"}).`}
+          : `Everyone in this group receives it (${recipientIds.length} member${recipientIds.length === 1 ? "" : "s"}).${otherUnitCount > 0
+            ? ` ${otherUnitCount === 1 ? "1 member logs" : `${otherUnitCount} members log`} in ${unitLabel(ownIsKg ? "lb" : "kg")}, and will see your weights in the unit you entered them in.`
+            : ""}`}
         programs={myPrograms}
         onPick={picker === "review" ? handleAskForReview : handleSendProgram}
         onClose={() => setPicker(null)}
@@ -1649,7 +1794,7 @@ export default function GroupPageScreen() {
 }
 
 const styles = StyleSheet.create({
-  header:       { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
+  header:       { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12, borderBottomWidth: 1 },
   iconBtn:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   // Photo, star (when favourited), name. 10 rather than the old 6: a 32pt
   // photo pressed against the title read as one crowded glyph.

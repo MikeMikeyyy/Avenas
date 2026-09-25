@@ -92,6 +92,21 @@ eq(
   undefined,
   "a 1:1 review has no group to badge",
 );
+eq(
+  count({ reviews: [review({ status: "returned", returnedAtISO: "2026-09-03T10:00:00.000Z" })] })[G],
+  undefined,
+  "a review I've sent back is waiting on them, not me",
+);
+eq(
+  count({ reviews: [review({ status: "returned", returnedAtISO: "2026-09-03T10:00:00.000Z", appliedAtISO: "2026-09-04T10:00:00.000Z" })] })[G],
+  undefined,
+  "...and so is one they've accepted",
+);
+eq(
+  count({ reviews: [review(), review({ status: "returned", returnedAtISO: "2026-09-03T10:00:00.000Z" })] })[G],
+  1,
+  "one waiting and one sent back counts one",
+);
 
 // ─── the three add up, per group ─────────────────────────────────────────────
 eq(

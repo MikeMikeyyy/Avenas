@@ -1,4 +1,4 @@
-import { View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { StyleProp, ViewStyle } from "react-native";
 import { NEU_BG, NEU_BG_DARK } from "../constants/theme";
 
@@ -37,6 +37,13 @@ export default function NeuCard({
   const sm = shadowSize === "sm";
 
   const fillStyle = fill ? { flex: 1 } : undefined;
+
+  // A borderRadius in `style` wins over `radius`. `style` only reaches the
+  // outer layer, so it used to round the card's outside while the two layers
+  // inside kept `radius`: the white edge traced a 20px curve inside a 16px card.
+  // Reading it here gives all three layers the shape the caller asked for.
+  const styleRadius = StyleSheet.flatten(style)?.borderRadius;
+  const r = typeof styleRadius === "number" ? styleRadius : radius;
 
   // Both modes MUST render the same 3-level view tree. A live theme toggle
   // reconciles the existing native views in place; if the tree depth differed
@@ -77,7 +84,7 @@ export default function NeuCard({
     // Outer shadow wrapper
     <View
       style={[
-        { borderRadius: radius, backgroundColor: resolvedBg },
+        { borderRadius: r, backgroundColor: resolvedBg },
         outerShadow,
         fillStyle,
         style,
@@ -86,7 +93,7 @@ export default function NeuCard({
       {/* Highlight shadow wrapper (inert in dark mode, but kept for tree-shape stability) */}
       <View
         style={[
-          { borderRadius: radius, backgroundColor: resolvedBg },
+          { borderRadius: r, backgroundColor: resolvedBg },
           midShadow,
           fillStyle,
         ]}
@@ -95,7 +102,7 @@ export default function NeuCard({
         <View
           style={[
             {
-              borderRadius: radius,
+              borderRadius: r,
               backgroundColor: resolvedBg,
               overflow: "hidden",
               borderWidth: 1,

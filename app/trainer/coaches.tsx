@@ -17,6 +17,7 @@ import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { resolveTrainerRoster } from "../../utils/roster";
 import type { Client } from "../../utils/trainerStore";
+import BackButton, { BACK_SIZE, BACK_TOP } from "../../components/BackButton";
 
 export default function CoachesScreen() {
   const router = useRouter();
@@ -55,21 +56,11 @@ export default function CoachesScreen() {
         </MaskedView>
       </View>
 
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <TouchableOpacity
         onPress={() => sectionRef.current?.openMenu()}
-        style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
+        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
         activeOpacity={0.8}
         accessibilityLabel="Add or remove a trainer"
         accessibilityRole="button"
@@ -83,7 +74,7 @@ export default function CoachesScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingTop: insets.top + 16,
+          paddingTop: insets.top + BACK_TOP,
           paddingBottom: insets.bottom + 40,
         }}
       >
@@ -101,10 +92,6 @@ export default function CoachesScreen() {
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: "center", justifyContent: "center", overflow: "hidden",
-  },
   plusBtn: {
     width: 40, height: 40, borderRadius: 20,
     alignItems: "center", justifyContent: "center", overflow: "hidden",
@@ -112,6 +99,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
+    height: BACK_SIZE,
     marginBottom: 32,
   },
   screenTitle: {

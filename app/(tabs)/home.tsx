@@ -29,15 +29,12 @@ import {
   getTier,
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek, programFinishDate } from "../../constants/programs";
-import { fmtDuration, MONTH_NAMES } from "../../utils/dates";
+import { MONTH_NAMES } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
 import { buildWeekSchedule, weekStartFor, type WeekDayPlan } from "../../utils/weekSchedule";
 import { applyRestDay, clearRestDay } from "../../utils/restDay";
-import { dayIdAt } from "../../utils/programDays";
-import { buildSessionTracks } from "../../utils/sessionTrack";
-import { ordinal } from "../../utils/workoutSummary";
-import SessionTrack from "../../components/SessionTrack";
+import JournalWorkoutCard, { useJournalWorkoutInfo } from "../../components/journal/JournalWorkoutCard";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import ActivityCalendar from "../../components/ActivityCalendar";
 import AchievementCard from "../../components/AchievementCard";
@@ -195,21 +192,6 @@ const QUICK_ACTIONS: QuickAction[] = [
   ) },
 ];
 
-const MONTH_SHORT_J = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const DAY_FULL_J    = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-
-function formatWorkoutDate(completedIso: string, durationSeconds: number): string {
-  const d = new Date(completedIso);
-  const dateStr = `${DAY_FULL_J[d.getDay()]} ${d.getDate()} ${MONTH_SHORT_J[d.getMonth()]}`;
-  const endTime = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
-  if (durationSeconds > 0) {
-    const startTime = new Date(d.getTime() - durationSeconds * 1000)
-      .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
-    return `${dateStr}  ·  ${startTime} – ${endTime}  ·  ${fmtDuration(durationSeconds)}`;
-  }
-  return `${dateStr}  ·  ${endTime}`;
-}
-
 function fmtElapsed(secs: number): string {
   if (secs >= 3600) {
     const h = Math.floor(secs / 3600);
@@ -338,37 +320,6 @@ export default function HomeScreen() {
     return REST_DAY_QUOTES[seed % REST_DAY_QUOTES.length];
   }, []);
 
-  // Lookup for a workout card's "<program> · session N of M" line, keyed BOTH
-  // by slot id ("id:<dayId>") and by day name ("name:<label>"). A session that
-  // recorded its slot resolves by id, so a renamed day keeps its progress track
-  // instead of falling off the name index; everything else still resolves by
-  // name. Active program wins a name collision (`sorted`).
-  const programLookup = useMemo(() => {
-    const map: Record<string, { programName: string; totalSessions: number }> = {};
-    const sorted = [...programs].sort((a, b) => a.status === "active" ? -1 : b.status === "active" ? 1 : 0);
-    for (const prog of sorted) {
-      const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
-      prog.cyclePattern.forEach((name, i) => {
-        if (!name || name.toLowerCase() === "rest") return;
-        // One slot = one session per cycle. The name key keeps the old
-        // behaviour of counting every slot that shares the name.
-        const byId = `id:${dayIdAt(prog, i)}`;
-        if (!map[byId]) map[byId] = { programName: prog.name, totalSessions: totalCycles };
-        const byName = `name:${name}`;
-        if (!map[byName]) {
-          const perCycle = prog.cyclePattern.filter(n => n === name).length;
-          map[byName] = { programName: prog.name, totalSessions: perCycle * totalCycles };
-        }
-      });
-      for (const name of (prog.extraWorkouts ?? [])) {
-        const k = `name:${name}`;
-        if (map[k]) continue;
-        map[k] = { programName: prog.name, totalSessions: 0 };
-      }
-    }
-    return map;
-  }, [programs]);
-
   // Achievement cards: a week long, one per category, and a card a workout
   // earned disappears if that workout is deleted (utils/achievements.ts).
   const achievementCards = useMemo(
@@ -396,28 +347,13 @@ export default function HomeScreen() {
 
   const effectiveToday = getEffectiveToday(activeProgram, workoutHistory);
 
-  /**
-   * "3rd session" on a workout card, and which dots on its track are greyed.
-   *
-   * The number is which SCHEDULED occurrence of that day the session was, not a
-   * rank among the ones completed (utils/sessionTrack.ts). Ranking completions
-   * let a missed week vanish: miss two of four sessions while ill, train the next
-   * week, and those two days came back as the "2nd session" while the two you
-   * never missed were on their "3rd".
-   *
-   * Grouped by (program, day): a day id only means anything inside its program,
-   * and a session is attributed with `workoutBelongsToProgram` — the same rule
-   * the Progress page and the Journal use, which also places legacy records that
-   * carry no programId.
-   *
-   * Anything the schedule can't place — a free workout, a session with no slot, a
-   * program whose start has moved (a resumed hold) — keeps the old rank-among-
-   * completed number and no grey dots, rather than a number that would be wrong.
-   */
-  const sessionTracks = useMemo(
-    () => buildSessionTracks(workoutHistory, programs, effectiveToday),
-    [workoutHistory, programs, effectiveToday],
-  );
+  // Recent Activity draws the Journal's own card from the Journal's own maths
+  // (program row, "2nd session", the track with its grey and orange dots). Home
+  // used to carry a copy that attributed sessions by NAME: once a "Custom
+  // Workout" had been added to a program, every later free one of that name
+  // showed under the program here and nowhere else, and a free workout sharing
+  // a day's name got that day's track.
+  const workoutInfoOf = useJournalWorkoutInfo(workoutHistory, programs);
 
   const isTodayCompleted = useMemo(
     () => workoutHistory.some(w => w.date === effectiveToday),
@@ -856,46 +792,15 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {recentWorkouts.map((w) => {
-          const progInfo   = (w.dayId ? programLookup[`id:${w.dayId}`] : undefined)
-            ?? programLookup[`name:${w.workoutName}`] ?? null;
-          const sessionNum = sessionTracks.numberById[w.id] ?? 1;
-          return (
-            <BounceButton key={w.id} style={{ marginBottom: 12 }} onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}>
-              <NeuCard dark={isDark} style={[styles.activityCard, { marginBottom: 0 }]}>
-                <View style={styles.workoutCardInner}>
-                  <View style={styles.workoutTopRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.activityName, { color: t.tp }]}>{w.workoutName}</Text>
-                      <Text style={[styles.activitySub, { color: t.ts }]}>{formatWorkoutDate(w.completedAt, w.durationSeconds)}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                  </View>
-                  {progInfo && (
-                    <View style={styles.workoutProgRow}>
-                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
-                        <Text style={[styles.workoutProgName, { color: t.tp }]}>{progInfo.programName.toUpperCase()}</Text>
-                        <Text style={[styles.workoutProgSession, { color: t.tp }]}>{ordinal(sessionNum)} session</Text>
-                      </View>
-                      {progInfo.totalSessions > 0 && (
-                        <SessionTrack
-                          // The dot is where this sits in the PROGRAM, which is
-                          // past the session count whenever a week was missed.
-                          current={sessionTracks.positionById[w.id] ?? sessionNum}
-                          total={progInfo.totalSessions}
-                          missed={sessionTracks.missedById[w.id]}
-                          accent={ACCT}
-                          track={t.div}
-                          missedColor={t.ts}
-                        />
-                      )}
-                    </View>
-                  )}
-                </View>
-              </NeuCard>
-            </BounceButton>
-          );
-        })}
+        {recentWorkouts.map((w) => (
+          <JournalWorkoutCard
+            key={w.id}
+            workout={w}
+            info={workoutInfoOf(w)}
+            isDark={isDark}
+            onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}
+          />
+        ))}
       </Animated.ScrollView>
 
       {/* AV logo — fixed in top bar */}
@@ -1031,16 +936,9 @@ const styles = StyleSheet.create({
   recentHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
   seeAllRow: { flexDirection: "row", alignItems: "center", gap: 3 },
   seeAll: { fontFamily: FontFamily.semibold, fontSize: 14, color: ICON },
-  activityCard: { marginBottom: 12, borderRadius: 18 },
   // Cards carry their own 8pt gap; this tops the last one up to the 12pt the
   // workout cards below are spaced by.
   achievementList: { marginBottom: 4 },
-  activityName: { fontFamily: FontFamily.bold, fontSize: 16, color: TP, marginBottom: 2 },
-  activitySub:  { fontFamily: FontFamily.regular, fontSize: 12, color: TS },
-  workoutTopRow:     { flexDirection: "row", alignItems: "center", gap: 12 },
-  workoutProgRow:    { paddingTop: 10 },
-  workoutProgName:   { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.9 },
-  workoutProgSession:{ fontFamily: FontFamily.semibold, fontSize: 12 },
   programCard: { marginBottom: 20, borderRadius: 20 },
   programCardInner: { padding: 20, gap: 14 },
   programHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },

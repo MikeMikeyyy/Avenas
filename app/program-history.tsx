@@ -21,6 +21,7 @@ import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
+import ActiveBadge from "../components/ActiveBadge";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
 import {
   PROGRAMS_KEY,
@@ -28,6 +29,7 @@ import {
   type SavedProgram,
 } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 
 function statusLabel(status: SavedProgram["status"]): string {
@@ -130,22 +132,12 @@ export default function ProgramHistoryScreen() {
       </View>
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       {/* Search toggle — mirrors the trainer hub's search affordance */}
       <TouchableOpacity
         onPress={toggleSearch}
-        style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10 }}
+        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
         activeOpacity={0.8}
         accessibilityLabel={searchOpen ? "Close search" : "Search programs"}
         accessibilityRole="button"
@@ -160,7 +152,7 @@ export default function ProgramHistoryScreen() {
         // The keyboard would otherwise eat the first tap on the clear button and
         // on any program card while the search field is focused.
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
       >
         {/* Page header */}
         <View style={styles.header}>
@@ -234,9 +226,16 @@ export default function ProgramHistoryScreen() {
                     <View style={{ flex: 1 }}>
                       <View style={styles.cardNameRow}>
                         <Text style={[styles.progName, { color: t.tp, flex: 1 }]} numberOfLines={1}>{prog.name}</Text>
-                        <View style={[styles.badge, { backgroundColor: isDark ? `${sColor}22` : `${sColor}18` }]}>
-                          <Text style={[styles.badgeText, { color: sColor }]}>{statusLabel(prog.status)}</Text>
-                        </View>
+                        {/* The active one wears the pulsing pill the Journal and
+                            My Programs give it, so it's the same program in all
+                            three places; the rest keep their quiet status tag. */}
+                        {prog.status === "active" ? (
+                          <ActiveBadge />
+                        ) : (
+                          <View style={[styles.badge, { backgroundColor: isDark ? `${sColor}22` : `${sColor}18` }]}>
+                            <Text style={[styles.badgeText, { color: sColor }]}>{statusLabel(prog.status)}</Text>
+                          </View>
+                        )}
                         <Ionicons name="chevron-forward" size={16} color={t.ts} style={{ marginLeft: 6 }} />
                       </View>
                       <Text style={[styles.progSub, { color: t.ts }]}>
@@ -285,7 +284,7 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   scroll: { paddingHorizontal: 20 },
 
-  header: { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
+  header: { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
   searchBox: { flexDirection: "row", alignItems: "center", gap: 8, height: 44, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, marginBottom: 16 },
   searchInput: { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, paddingVertical: 0 },
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textAlign: "center", flex: 1, color: TP },

@@ -34,6 +34,7 @@ import { pill, pillGlow } from "../constants/buttons";
 import { MONTH_NAMES } from "../utils/dates";
 import { cloudCounts, type SyncCounts } from "../lib/cloud";
 import { backUpNow, getBackupStatus, subscribeBackupStatus, type BackupStatus } from "../lib/syncManager";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const TP = APP_LIGHT.tp;
 
@@ -134,17 +135,7 @@ export default function DataSyncScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -160,7 +151,7 @@ export default function DataSyncScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
       >
         <View style={styles.header}>
           <View style={{ width: 40 }} />
@@ -262,8 +253,7 @@ const styles = StyleSheet.create({
   root:         { flex: 1 },
   topGradient:  { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll:       { paddingHorizontal: 20 },
-  header:       { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16, height: 40 },
-  backBtn:      { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  header:       { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16, height: BACK_SIZE },
   title:        { fontFamily: FontFamily.bold, fontSize: 18, color: TP, textAlign: "center", flex: 1 },
   // Same section label as Settings.
   sectionLabel: { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 10, marginLeft: 4 },

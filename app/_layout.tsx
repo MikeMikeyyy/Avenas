@@ -1,4 +1,4 @@
-import { Stack, useRouter, type Href } from "expo-router";
+import { Stack, useRouter, type Href, DarkTheme, DefaultTheme, ThemeProvider as NavThemeProvider, type Theme } from "expo-router";
 import * as Notifications from "expo-notifications";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
@@ -16,11 +16,11 @@ import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileCont
 import { NotificationPrefsProvider } from "../contexts/NotificationPrefsContext";
 import { AuthProvider, useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { APP_DARK, APP_LIGHT } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
 import ForceUpdateGate from "../components/ForceUpdateGate";
 import { flushCloudPush } from "../lib/syncManager";
-import { reconcileAccountType } from "../lib/cloud";
+import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
 import { runDayIdMigrationIfNeeded } from "../utils/dayIdMigration";
@@ -39,6 +39,22 @@ const HEARTBEAT_MS = 120000;
 // native-stack runtime option but isn't in Expo Router's option types yet; a
 // named (non-fresh) const sidesteps the excess-property check without `any`.
 const INSIGHTS_MODAL_OPTIONS = { presentation: "modal" as const, detachPreviousScreen: false };
+
+// The navigators' own theme, in the app's colours. The native stack paints its
+// NATIVE container (the view behind every pushed screen) with `colors.background`,
+// and with no theme given that's the library default, near-white rgb(242,242,242)
+// in both modes. iOS rounds a screen's corners while it slides in or out, so in
+// dark mode that container showed as white corners on every push (My Programs,
+// Journal). The Stack's contentStyle and the system root colour sit on other
+// views and can't reach it.
+const NAV_LIGHT: Theme = {
+  ...DefaultTheme,
+  colors: { ...DefaultTheme.colors, background: APP_LIGHT.bg, card: NEU_BG, text: APP_LIGHT.tp, border: APP_LIGHT.div },
+};
+const NAV_DARK: Theme = {
+  ...DarkTheme,
+  colors: { ...DarkTheme.colors, background: APP_DARK.bg, card: NEU_BG_DARK, text: APP_DARK.tp, border: APP_DARK.div },
+};
 
 function AppShell() {
   const { isDark } = useTheme();
@@ -76,6 +92,11 @@ function AppShell() {
   // it matches, connected accounts see this user under the wrong role. No-ops
   // when signed out or already in sync.
   useEffect(() => { void reconcileAccountType(); }, []);
+
+  // Same repair for kg/lb, which a trainer now reads to show this person's
+  // numbers in their unit (0036). The Settings toggle never reached the cloud
+  // before this build, so the server may still hold the sign-up choice.
+  useEffect(() => { void reconcileUnit(); }, []);
 
   // A full week with nothing logged puts the active program on hold by itself,
   // so it isn't silently marching through weeks you didn't train. No-ops once
@@ -127,12 +148,14 @@ function AppShell() {
             {/* Wraps the navigator, so a blocked build can't reach ANY screen —
                 including via a deep link or a notification tap. */}
             <ForceUpdateGate>
-              <View style={{ flex: 1, backgroundColor: navBg }}>
-                <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
-                  <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
-                </Stack>
-                <WorkoutActiveBar />
-              </View>
+              <NavThemeProvider value={isDark ? NAV_DARK : NAV_LIGHT}>
+                <View style={{ flex: 1, backgroundColor: navBg }}>
+                  <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
+                    <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
+                  </Stack>
+                  <WorkoutActiveBar />
+                </View>
+              </NavThemeProvider>
             </ForceUpdateGate>
           </RestTimerProvider>
         </WorkoutTimerProvider>

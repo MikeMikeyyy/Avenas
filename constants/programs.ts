@@ -1,4 +1,5 @@
 import { cycleDrift } from "../utils/cycleDrift";
+import type { WeightUnit } from "../utils/units";
 
 export const PROGRAMS_KEY = "@avenas/programs";
 export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
@@ -97,6 +98,14 @@ export type CompletedWorkout = {
 export type ProgramSet = {
   type: "warmup" | "working";
   weightKg?: string;
+  /** The unit the weight was TYPED in. Storage stays canonical kg; this says
+   *  how to show it: a prescribed weight reads in the unit it was written in,
+   *  for everyone, so what a trainer wrote is what the client sees ("225 lbs",
+   *  never "102.06 kg"). Stamped by the builder on entry, and on save / send
+   *  for weights from before it existed (see stampWeightUnits). Absent = an
+   *  older weight nobody has saved since: it follows the viewer's unit, as
+   *  before. Rides in the workouts jsonb, so it syncs with no column. */
+  weightUnit?: WeightUnit;
   repMode?: "target" | "range"; // defaults to "target"
   reps?: string;                // repMode === "target", e.g. "8"
   repsMin?: string;             // repMode === "range", e.g. "8"
@@ -221,6 +230,15 @@ export type SavedProgram = {
    *  remaining weeks and lands the cycle back on the paused day — see
    *  utils/programPause.ts. */
   pausedAt?: string;
+  /**
+   * "YYYY-MM-DD" the program was archived from My Programs; absent means it's
+   * in the list. Archiving hides it from My Programs, the send / review
+   * pickers and Change Workout Day's other programs, and nothing else: its
+   * sessions stay in the Journal and program history, and `status` is left as
+   * it was so a restore puts it back exactly where it stood. The active program
+   * is never archived (utils/programArchive.ts). Synced (migration 0037).
+   */
+  archivedAt?: string;
   trainingDays: number;
   cycleDays: number;
   cyclePattern: string[];

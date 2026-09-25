@@ -31,7 +31,7 @@ import SquarePenIcon from "../components/SquarePenIcon";
 import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
 import { pill, PILL_H_SM } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
@@ -44,35 +44,46 @@ import {
   applyReturnedProgram,
   batchKeyOf,
   loadClients,
+  loadGroupReviewPrograms,
   loadGroupSharedPrograms,
   loadCachedClientData,
   loadSentPrograms,
   loadSharedPrograms,
   removeGroupSharedProgramBatch,
   removeSharedProgram,
+  setSendBatchArchived,
   type Client,
   type SentProgram,
   type SharedProgram,
 } from "../utils/trainerStore";
 import { getJSON } from "../utils/storage";
-import { removeShareConfirm } from "../utils/removeShare";
+import { archiveShareChoice, removeShareConfirm } from "../utils/removeShare";
+import { askArchiveOrDelete } from "../utils/archiveChoice";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
+import { alertMessage } from "../utils/errors";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
+import { UnitLens } from "../contexts/UnitContext";
+import { useClientUnit } from "../hooks/useClientUnit";
 
 export default function ProgramViewScreen() {
   const router = useRouter();
-  const { sharedId, sentId, clientId, programId } = useLocalSearchParams<{
-    sharedId?: string; sentId?: string; clientId?: string; programId?: string;
+  const { sharedId, sentId, groupId, clientId, programId } = useLocalSearchParams<{
+    sharedId?: string; sentId?: string; groupId?: string; clientId?: string; programId?: string;
   }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { accountType } = useAccountType();
   const insets = useSafeAreaInsets();
+  const clientIsKg = useClientUnit(clientId);
 
   // The viewer supports two record types:
   //  - `share`: a SharedProgram (sent by a trainer/coach to this user, or sent
   //    by this trainer to a client). Reached via ?sharedId=...
   //  - `sent`:  a SentProgram (sent by THIS gym user to their trainer for
-  //    review; may have been returned with edits). Reached via ?sentId=...
+  //    review; may have been returned with edits). Reached via ?sentId=...,
+  //    plus &groupId=... for one asked of a group from that group's page: a
+  //    TRAINER's own sent list doesn't hold their requests, so it's found
+  //    through the group's reviews instead, as the review screen does.
   //  - `client`: one of a client's own programs, read-only. Reached via
   //    ?clientId=...&programId=... and read from the copy the client page just
   //    loaded (loadCachedClientData), because every backup the client makes
@@ -99,7 +110,7 @@ export default function ProgramViewScreen() {
     }
     const [shares, sents, cs, uid] = await Promise.all([
       loadSharedPrograms(),
-      loadSentPrograms(),
+      sentId && groupId ? loadGroupReviewPrograms(groupId) : loadSentPrograms(),
       loadClients(),
       // Who I am, so "did I send this" is a comparison rather than a guess.
       getMyUid().catch(() => null),
@@ -109,7 +120,7 @@ export default function ProgramViewScreen() {
     setSent(sentId ? sents.find(s => s.id === sentId) ?? null : null);
     setClients(cs);
     setLoaded(true);
-  }, [sharedId, sentId, clientId, programId]);
+  }, [sharedId, sentId, groupId, clientId, programId]);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -234,59 +245,73 @@ export default function ProgramViewScreen() {
     // trainer's send was treated as a recipient and only hid their own copy (so
     // nothing visibly happened), and the sender removed one member's copy out of
     // many. canDelete already limits the bin to the sender or a group coach.
+    // Archive sits beside Delete for whoever has an archive to restore it
+    // from: a trainer of the group (the group page's), or the sender of a
+    // direct send (the Trainer tab's). Archiving is of the whole send, as on
+    // those pages' cards.
+    const archiveThenBack = async (groupId?: string) => {
+      try {
+        await setSendBatchArchived(batchKeyOf(share), true, groupId);
+      } catch (e) {
+        Alert.alert("Couldn't archive it", alertMessage(e, "Check your connection and try again."));
+        return;
+      }
+      router.back();
+    };
+
     if (share.groupId) {
       const groupId = share.groupId;
       const key = batchKeyOf(share);
       const batch = (await loadGroupSharedPrograms(groupId).catch(() => [] as SharedProgram[]))
         .filter(s => batchKeyOf(s) === key);
-      const prompt = removeShareConfirm({
+      const counts = {
         programName: share.programName,
         recipients: "this group",
         total: batch.length || 1,
         accepted: batch.length ? batch.filter(s => s.acceptedAtISO).length : (share.acceptedAtISO ? 1 : 0),
-      });
+      };
+      const removeForGood = async () => {
+        try {
+          await removeGroupSharedProgramBatch(groupId, key);
+        } catch (e) {
+          Alert.alert("Couldn't remove program", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
+        router.back();
+      };
+      if (groupRole && canCoachGroup(groupRole)) {
+        const choice = archiveShareChoice(counts);
+        askArchiveOrDelete({ title: choice.title, body: choice.body, onArchive: () => void archiveThenBack(groupId), onDelete: removeForGood });
+        return;
+      }
+      // The sender without the trainer role any more: no archive here for
+      // them to restore from, so it's the plain confirm.
+      const prompt = removeShareConfirm(counts);
       Alert.alert(prompt.title, prompt.body, [
         { text: prompt.cancel, style: "cancel" },
-        {
-          text: prompt.confirm,
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await removeGroupSharedProgramBatch(groupId, key);
-            } catch (e) {
-              Alert.alert("Couldn't remove program", e instanceof Error ? e.message : "Check your connection and try again.");
-              return;
-            }
-            router.back();
-          },
-        },
+        { text: prompt.confirm, style: "destructive", onPress: removeForGood },
       ]);
       return;
     }
 
-    // A direct send: this screen shows ONE row, so it's one recipient.
-    const prompt = removeShareConfirm({
+    // A direct send: this screen shows ONE row, so Delete is one recipient's
+    // copy; Archive is the whole send, as the Trainer tab's card does it.
+    const choice = archiveShareChoice({
       programName: share.programName,
       recipients: "them",
       total: 1,
       accepted: share.acceptedAtISO ? 1 : 0,
     });
-    Alert.alert(
-      prompt.title,
-      prompt.body,
-      [
-        { text: prompt.cancel, style: "cancel" },
-        {
-          text: prompt.confirm,
-          style: "destructive",
-          onPress: async () => {
-            await removeSharedProgram(share.id);
-            router.back();
-          },
-        },
-      ]
-    );
-  }, [share, router]);
+    askArchiveOrDelete({
+      title: choice.title,
+      body: choice.body,
+      onArchive: () => void archiveThenBack(),
+      onDelete: async () => {
+        await removeSharedProgram(share.id);
+        router.back();
+      },
+    });
+  }, [share, router, groupRole]);
 
   const handleOpenPassDown = useCallback(async () => {
     if (!share?.acceptedProgramId) return;
@@ -347,17 +372,7 @@ export default function ProgramViewScreen() {
         </MaskedView>
       </View>
 
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       {/* Edit + Delete pinned top-right so they stay visible through a long
           program. EDIT is the sender's alone — editing a shared snapshot
@@ -365,7 +380,7 @@ export default function ProgramViewScreen() {
           sender, plus anyone who coaches the group it went to, so a program can
           be pulled out of a group by whoever runs it. Members get neither. */}
       {canDelete && (
-        <View style={[styles.topActions, { top: insets.top + 16 }]}>
+        <View style={[styles.topActions, { top: insets.top + BACK_TOP }]}>
           {isOutgoing && (
           <TouchableOpacity
             onPress={handleEdit}
@@ -385,7 +400,7 @@ export default function ProgramViewScreen() {
             accessibilityRole="button"
           >
             <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-              <TrashIcon size={20} color="#E53935" />
+              <TrashIcon size={20} color={DANGER_BRIGHT} />
             </View>
           </TouchableOpacity>
         </View>
@@ -395,7 +410,7 @@ export default function ProgramViewScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingTop: insets.top + 16,
+          paddingTop: insets.top + BACK_TOP,
           // Clears whichever floats above it: the Builder/Summary pills always,
           // plus the Accept CTA below them when that's showing.
           paddingBottom: insets.bottom + (showFloatingAccept ? 170 : 100),
@@ -430,7 +445,9 @@ export default function ProgramViewScreen() {
               <View style={styles.programBody}>
                 {/* The program itself, drawn by the same component the trainer's
                     review screen uses — the two are the same program seen from the
-                    two ends of one flow, and must read identically. */}
+                    two ends of one flow, and must read identically. A client's
+                    own program reads in their unit, as on their phone. */}
+                <UnitLens isKg={clientIsKg}>
                 <ProgramSnapshotView
                   snapshot={snapshot}
                   isDark={isDark}
@@ -448,6 +465,7 @@ export default function ProgramViewScreen() {
                     ) : null
                   }
                 />
+                </UnitLens>
 
                 {/* Action row — contextual to which record (shared vs sent) and
                     its current state. Skipped for outgoing shares (Edit + Delete
@@ -581,7 +599,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    height: 40,
+    height: BACK_SIZE,
     marginBottom: 24,
   },
   screenTitle: {

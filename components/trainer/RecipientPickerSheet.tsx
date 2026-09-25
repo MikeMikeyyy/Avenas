@@ -16,9 +16,13 @@ import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import GroupAvatar from "./GroupAvatar";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, PAUSED_ORANGE } from "../../constants/theme";
 import { pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useUnit } from "../../contexts/UnitContext";
+import { fetchPeopleUnits } from "../../lib/clientTraining";
+import { isCloudContactId } from "../../lib/chat";
+import { unitLabel, unitOf, type WeightUnit } from "../../utils/units";
 import type { Client } from "../../utils/trainerStore";
 
 /** A group offered as a one-tap way to tick all its members. */
@@ -48,6 +52,26 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
       setSendToAll(false);
     }
   }, [visible]);
+
+  // Who logs in the other unit. A program's weights read in the unit they were
+  // entered in, so those people will see yours as you typed them: say so
+  // beside their names before the program goes (0036; unknown = no tag).
+  const { isKg } = useUnit();
+  const myUnit = unitOf(isKg);
+  const [units, setUnits] = useState<Record<string, WeightUnit>>({});
+  const clientIdsKey = clients.map(c => c.id).join(",");
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    const ids = clientIdsKey.split(",").filter(id => id && isCloudContactId(id));
+    fetchPeopleUnits(ids).then(u => { if (!cancelled) setUnits(u); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [visible, clientIdsKey]);
+  const otherUnitIds = useMemo(
+    () => new Set(Object.entries(units).filter(([, u]) => u !== myUnit).map(([id]) => id)),
+    [units, myUnit],
+  );
+  const otherUnit: WeightUnit = myUnit === "kg" ? "lb" : "kg";
 
   const toggleClient = (id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -112,6 +136,11 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
       <View style={styles.header}>
         <Text style={[styles.title, { color: t.tp }]}>Send "{programName}"</Text>
         <Text style={[styles.subtitle, { color: t.ts }]}>Pick which clients should receive this program.</Text>
+        {otherUnitIds.size > 0 && (
+          <Text style={[styles.subtitle, { color: t.ts }]}>
+            Anyone marked <Text style={{ color: PAUSED_ORANGE, fontFamily: FontFamily.semibold }}>{`logs in ${unitLabel(otherUnit)}`}</Text> will see your weights in the unit you entered them in.
+          </Text>
+        )}
       </View>
 
       <View style={styles.allWrap}>
@@ -201,6 +230,11 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                         {c.isTrainer && (
                           <View style={[styles.trainerTag, { backgroundColor: `${ACCT}22` }]}>
                             <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
+                          </View>
+                        )}
+                        {otherUnitIds.has(c.id) && (
+                          <View style={[styles.trainerTag, { backgroundColor: `${PAUSED_ORANGE}22` }]}>
+                            <Text style={[styles.trainerTagText, { color: PAUSED_ORANGE }]}>{`LOGS IN ${unitLabel(otherUnit).toUpperCase()}`}</Text>
                           </View>
                         )}
                       </View>

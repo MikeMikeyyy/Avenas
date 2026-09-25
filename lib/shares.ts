@@ -112,11 +112,21 @@ export async function updateShareRow(
   id: string,
   patch: Partial<Pick<SharedProgramRow,
     "snapshot" | "program_name" | "last_edited_at" | "accepted_at" |
-    "deleted_by_recipient_at" | "returned_at" | "trainer_comments" | "returned_snapshot"
+    "deleted_by_recipient_at" | "trainer_comments" | "draft_snapshot"
   >>,
 ): Promise<void> {
   const { error } = await supabase.from("shared_programs").update(patch).eq("id", id);
   if (error) throw new Error(`update share: ${error.message}`);
+}
+
+/** Send a review back, or send an update to one already sent back: copies the
+ *  trainer's draft into what the client sees, stamps returned_at and clears
+ *  accepted_at so the client can accept again (migration 0034). Raises for the
+ *  sender and for anyone who isn't the review's trainer. returned_at and
+ *  returned_snapshot are written only here, never as a column patch. */
+export async function returnSharedReview(id: string): Promise<void> {
+  const { error } = await supabase.rpc("return_shared_review", { p_share: id });
+  if (error) throw new Error(error.message);
 }
 
 /** Mark a group review dealt with, or reopen it. Coach-only — the RPC checks
@@ -125,6 +135,17 @@ export async function updateShareRow(
 export async function setGroupReviewCompleted(id: string, done: boolean): Promise<void> {
   const { error } = await supabase.rpc("set_group_review_completed", { p_share: id, p_done: done });
   if (error) throw new Error(error.message);
+}
+
+/** Archive rows, or restore them (migration 0037). Returns how many moved: the
+ *  RPC skips rows the caller may not archive rather than raising, so 0 for a
+ *  non-empty list means "not yours to archive". A whole send goes in one call,
+ *  so it's never half archived. */
+export async function setShareArchived(ids: string[], archived: boolean): Promise<number> {
+  if (ids.length === 0) return 0;
+  const { data, error } = await supabase.rpc("set_share_archived", { p_shares: ids, p_archived: archived });
+  if (error) throw new Error(error.message);
+  return typeof data === "number" ? data : 0;
 }
 
 /** Sender-only (RLS): unsend a share/review entirely. */

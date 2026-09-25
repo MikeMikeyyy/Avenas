@@ -11,7 +11,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import NeuCard from "../components/NeuCard";
@@ -35,10 +34,12 @@ import {
 } from "../constants/progress";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
+import { useClientUnit } from "../hooks/useClientUnit";
 import { getJSON } from "../utils/storage";
 import { loadCachedClientData } from "../utils/trainerStore";
 import { MONTH_NAMES } from "../utils/dates";
 import { programIncludes } from "../utils/progressStats";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // Day-of-week strings — local format, not from a library to avoid extra deps.
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -81,7 +82,10 @@ export default function ExerciseHistoryScreen() {
   const { exerciseName, dayName, dayId, clientId } = useLocalSearchParams<{ exerciseName: string; dayName?: string; dayId?: string; clientId?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { isKg } = useUnit();
+  const { isKg: ownIsKg } = useUnit();
+  // A client's sessions read in the unit THEY log in (0036), as on their phone.
+  const clientIsKg = useClientUnit(clientId);
+  const isKg = clientIsKg ?? ownIsKg;
   const unit = isKg ? "kg" : "lbs";
   const insets = useSafeAreaInsets();
 
@@ -194,23 +198,13 @@ export default function ExerciseHistoryScreen() {
       </View>
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingTop: insets.top + 14,
+          paddingTop: insets.top + BACK_TOP,
           paddingBottom: insets.bottom + 40,
         }}
       >
@@ -230,6 +224,11 @@ export default function ExerciseHistoryScreen() {
           </View>
           <View style={{ width: 44 }} />
         </View>
+        {clientIsKg !== undefined && clientIsKg !== ownIsKg && (
+          <Text style={[styles.unitNote, { color: t.ts }]}>
+            Weights in {unit}, the unit this client logs in
+          </Text>
+        )}
 
         {/* Time-range dropdown — identical button + sheet as the ones on the
             Progress page chart cards. The session count is the SAME pill as
@@ -343,10 +342,6 @@ function SessionCard({
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: "center", justifyContent: "center", overflow: "hidden",
-  },
 
   // Centered page title — bold and prominent so it reads like a section
   // header on its own page (the left/right spacer Views keep the title
@@ -356,10 +351,10 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    // Match the back button's 40px box (pinned at insets.top + 14) so the
+    // The back button's box (BackButton, from insets.top + BACK_TOP) so the
     // centered title lines up vertically with the back chevron rather than
     // sitting a few px above it.
-    minHeight: 40,
+    minHeight: BACK_SIZE,
     marginBottom: 18,
   },
   // Title + optional day subtitle live in a flex:1 column between the two
@@ -368,6 +363,13 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.bold,
     fontSize: 22,
     textAlign: "center",
+  },
+  unitNote: {
+    fontFamily: FontFamily.regular,
+    fontSize: 12,
+    textAlign: "center",
+    marginTop: -8,
+    marginBottom: 16,
   },
   screenDay: {
     fontFamily: FontFamily.semibold,

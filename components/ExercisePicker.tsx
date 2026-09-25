@@ -7,8 +7,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, GOLD, GOLD_DARK, NEU_BG, NEU_BG_DARK } from "../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT, GOLD, GOLD_DARK, NEU_BG, NEU_BG_DARK } from "../constants/theme";
+import { haloGlow, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { DEFAULT_SET_COUNT_KEY } from "../constants/programs";
 import { getJSON, setJSON } from "../utils/storage";
 import {
@@ -20,6 +20,7 @@ import { isFavourite as isFav, sortByMuscleThenName, toggleFavourite } from "../
 import ExerciseImage from "./ExerciseImage";
 import FavouriteStar from "./FavouriteStar";
 import TrashIcon from "./TrashIcon";
+import SquarePenIcon from "./SquarePenIcon";
 import BounceButton from "./BounceButton";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -44,7 +45,9 @@ export interface ExercisePickerProps {
   withSetCount?: boolean;
   onDeleteCustom: (name: string) => void;
   onEditCustom: (name: string) => void;
-  onCreateCustom: () => void;
+  /** `query` is what's in the search box (trimmed, possibly empty): the name
+   *  the user was looking for, which the create screen starts from. */
+  onCreateCustom: (query: string) => void;
   onClose: () => void;
   isDark: boolean;
 }
@@ -200,10 +203,12 @@ export default function ExercisePicker({
   // FlatList's getItemLayout is O(1) and the scrollbar is accurate immediately.
   //
   // Starred exercises are HOISTED to a FAVOURITES block at the top, ordered by
-  // muscle group then name, and removed from the section they came from — the
-  // same exercise appearing twice in one sheet reads as a bug. Search and the
-  // muscle chips filter favourites exactly like everything else, so a filtered
-  // view never shows a favourite that doesn't match.
+  // muscle group then name. A starred CATALOGUE exercise leaves EXERCISES, but a
+  // starred custom one stays under CUSTOM as well: that section is the user's
+  // own inventory (its slots, edit and delete), and a starred exercise vanishing
+  // from it read as lost. Search and the muscle chips filter favourites exactly
+  // like everything else, so a filtered view never shows a favourite that
+  // doesn't match.
   const { listData, layout } = useMemo(() => {
     const q = search.trim().toLowerCase();
     const muscleOk = (m: SelectableMuscle) => selectedMuscles.size === 0 || selectedMuscles.has(m);
@@ -222,7 +227,7 @@ export default function ExercisePicker({
     const favMatched = matched.filter(e => isFav(favourites, e.name));
     // The Favourites chip is a second filter axis, ANDed with the muscle chips:
     // Favourites + Chest means starred chest exercises, not one or the other.
-    const restCustoms = favouritesOnly ? [] : customs.filter(e => !isFav(favourites, e.name));
+    const customSection = favouritesOnly ? [] : customs;
     const restMatched = favouritesOnly ? [] : matched.filter(e => !isFav(favourites, e.name));
 
     const rows: Row[] = [];
@@ -244,9 +249,9 @@ export default function ExercisePicker({
       ).forEach(r => rows.push(r));
     }
 
-    if (restCustoms.length) {
+    if (customSection.length) {
       rows.push({ type: "header", key: "h:custom", label: "CUSTOM" });
-      restCustoms.forEach(e => rows.push({ type: "custom", key: `custom:${e.name}`, exercise: e }));
+      customSection.forEach(e => rows.push({ type: "custom", key: `custom:${e.name}`, exercise: e }));
     }
     if (restMatched.length && (rows.length > 0)) {
       rows.push({ type: "header", key: "h:ex", label: "EXERCISES" });
@@ -356,30 +361,39 @@ export default function ExercisePicker({
               {e.muscles.join(", ") || "Custom"}
             </Text>
           </View>
-          <TouchableOpacity
-            onPress={ev => { ev.stopPropagation(); onEditCustom(e.name); }}
-            style={styles.pickerDeleteBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="create-outline" size={16} color={t.ts} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={ev => {
-              ev.stopPropagation();
-              Alert.alert(
-                "Delete Exercise",
-                `Are you sure you want to delete "${e.name}"? This will free up a slot.`,
-                [
-                  { text: "Cancel", style: "cancel" },
-                  { text: "Delete", style: "destructive", onPress: () => onDeleteCustom(e.name) },
-                ]
-              );
-            }}
-            style={styles.pickerDeleteBtn}
-            activeOpacity={0.7}
-          >
-            <TrashIcon size={16} color="#FF4D4F" />
-          </TouchableOpacity>
+          {/* Edit and delete as round buttons the size of the add badge, in
+              the app's white (control surface) and red (DANGER_BRIGHT + halo)
+              button treatments. The inner touchable claims the tap, so the
+              row's pick doesn't also fire. */}
+          <View style={styles.customActions}>
+            <BounceButton
+              onPress={() => onEditCustom(e.name)}
+              accessibilityLabel={`Edit ${e.name}`}
+              accessibilityRole="button"
+            >
+              <View style={[styles.circleBtn, { backgroundColor: t.ctrl, ...PILL_SHADOW }]}>
+                <SquarePenIcon size={15} color={t.tp} />
+              </View>
+            </BounceButton>
+            <BounceButton
+              onPress={() => {
+                Alert.alert(
+                  "Delete Exercise",
+                  `Are you sure you want to delete "${e.name}"? This will free up a slot.`,
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Delete", style: "destructive", onPress: () => onDeleteCustom(e.name) },
+                  ]
+                );
+              }}
+              accessibilityLabel={`Delete ${e.name}`}
+              accessibilityRole="button"
+            >
+              <View style={[styles.circleBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+                <TrashIcon size={16} color="#fff" />
+              </View>
+            </BounceButton>
+          </View>
           {renderPickBadge(e.name)}
         </TouchableOpacity>
       );
@@ -624,7 +638,7 @@ export default function ExercisePicker({
                 </BounceButton>
               </View>
             ) : canAddCustom ? (
-              <BounceButton onPress={onCreateCustom} accessibilityLabel="Create custom exercise" accessibilityRole="button">
+              <BounceButton onPress={() => onCreateCustom(search.trim())} accessibilityLabel="Create custom exercise" accessibilityRole="button">
                 <View style={styles.createCustomBtnWrap}>
                   <View style={styles.createCustomBtn}>
                     <Ionicons name="add-circle-outline" size={18} color="#fff" />
@@ -634,7 +648,7 @@ export default function ExercisePicker({
               </BounceButton>
             ) : (
               <Text style={[styles.customSlots, { color: t.ts, textAlign: "center" }]}>
-                Custom exercise limit reached (5/5). Delete one to add more.
+                Custom exercise limit reached ({MAX_CUSTOM}/{MAX_CUSTOM}). Delete one to add more.
               </Text>
             )}
           </View>
@@ -679,7 +693,8 @@ const styles = StyleSheet.create({
   pickerRow:           { height: ROW_H, flexDirection: "row", alignItems: "center", paddingHorizontal: 16, borderBottomWidth: 1, gap: 12 },
   pickerExName:        { fontFamily: FontFamily.semibold, fontSize: 15 },
   pickerExMeta:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  pickerDeleteBtn:     { padding: 4 },
+  customActions:       { flexDirection: "row", alignItems: "center", gap: 8 },
+  circleBtn:           { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   pickerAddBtn:        { width: 32, height: 32, borderRadius: 16, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   pickerAddNum:        { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
   pickerEmpty:         { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 40 },

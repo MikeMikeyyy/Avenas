@@ -13,7 +13,7 @@ import type { Session } from "@supabase/supabase-js";
 import FadeScreen from "../components/FadeScreen";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { supabase } from "../lib/supabase";
 import { cloudCounts, pullAllFromCloud, pushAllLocalDataToCloud, syncOnLogin, type SyncCounts } from "../lib/cloud";
@@ -234,7 +234,7 @@ function CloudTestInner() {
                 </BounceButton>
                 <BounceButton style={{ flex: 1 }} onPress={busy ? undefined : signOut}>
                   <NeuCard dark={isDark} radius={12} innerStyle={styles.btnNeu}>
-                    <Text style={[styles.btnTextDark, { color: "#E53935" }]}>Sign out</Text>
+                    <Text style={[styles.btnTextDark, { color: DANGER_BRIGHT }]}>Sign out</Text>
                   </NeuCard>
                 </BounceButton>
               </View>

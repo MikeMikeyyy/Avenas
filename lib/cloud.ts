@@ -23,6 +23,7 @@ import {
 } from "./mappers";
 import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./database.types";
 import { ACCOUNT_TYPE_KEY, type AccountType } from "../contexts/AccountTypeContext";
+import { UNIT_KEY } from "../utils/units";
 import {
   CLIENTS_KEY, CLIENT_DATA_PREFIX, PT_SEEDED_KEY, SHARED_PROGRAMS_KEY, TRAINER_CLIENTS_KEY,
   clearTrainerData,
@@ -392,6 +393,44 @@ export async function pushAccountType(userId: string, accountType: AccountType):
     .update({ account_type: toDbAccountType(accountType) })
     .eq("id", userId);
   if (error) throw new Error(`save account type: ${error.message}`);
+}
+
+/** Write this account's kg/lb preference (profiles.unit), which a trainer reads
+ *  to show a client's numbers in the client's unit (migration 0036). Called on
+ *  every Settings toggle. No-op when signed out; fails soft, since the next
+ *  launch's reconcileUnit tries again. */
+export async function pushUnit(unit: "kg" | "lb"): Promise<void> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const uid = session?.user.id;
+    if (!uid) return;
+    const { error } = await supabase.from("profiles").update({ unit }).eq("id", uid);
+    if (error) throw new Error(error.message);
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] pushUnit", e);
+  }
+}
+
+/**
+ * Make the server's unit match the one this device uses. Before this build the
+ * Settings toggle never reached the cloud, so a trainer would read whatever was
+ * chosen at sign-up. Only a unit the person actually CHOSE is pushed: with
+ * nothing saved the app is on its kg default, and pushing that from a fresh
+ * install would overwrite someone's "lb".
+ */
+export async function reconcileUnit(): Promise<void> {
+  try {
+    const saved = await AsyncStorage.getItem(UNIT_KEY);
+    if (saved !== "kg" && saved !== "lbs") return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const local = saved === "kg" ? "kg" : "lb";
+    const profile = await pullProfile(user.id);
+    if (!profile || profile.unit === local) return;
+    await pushUnit(local);
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] reconcileUnit", e);
+  }
 }
 
 /**

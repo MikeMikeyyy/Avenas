@@ -22,13 +22,14 @@ import BounceButton from "../../components/BounceButton";
 import SheetPill, { SheetToggle } from "../../components/SheetPill";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
-import ExerciseNotesField, { ReuseNoteChip, prevNotePlaceholder } from "../../components/ExerciseNotesField";
+import ExerciseNotesField, { PrevNoteTag, ReuseNoteChip, prevNotePlaceholder } from "../../components/ExerciseNotesField";
 import DumbbellIcon from "../../components/DumbbellIcon";
+import StopwatchIcon from "../../components/StopwatchIcon";
 import SquarePenIcon from "../../components/SquarePenIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { computeDurationMins, completedAtISO } from "../../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
@@ -42,7 +43,7 @@ import { todayYMD } from "../../utils/dates";
 import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type DayOverride } from "../../utils/workout";
 import { resumeWithPrompt } from "../../utils/programPause";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
-import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit } from "../../utils/units";
+import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { awardWorkoutAchievements } from "../../utils/achievementStore";
 import { useDayRollover } from "../../hooks/useDayRollover";
@@ -324,7 +325,7 @@ function WorkoutDraggableList({ exercises, isDark, t, onReorderExercises, onRemo
               }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <TrashIcon size={18} color="#ef4444" />
+              <TrashIcon size={18} color={DANGER_BRIGHT} />
             </TouchableOpacity>
           </Animated.View>
         );
@@ -579,7 +580,9 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
   // made the second one unreachable (and resolved a tap onto the first).
   const workoutDays = useMemo(() => programDays(activeProgram), [activeProgram]);
 
-  const otherPrograms = useMemo(() => programs.filter(p => p.id !== activeProgram.id), [programs, activeProgram]);
+  // Archived programs stay out of the way here as on My Programs
+  // (utils/programArchive.ts).
+  const otherPrograms = useMemo(() => programs.filter(p => p.id !== activeProgram.id && !p.archivedAt), [programs, activeProgram]);
 
   const headerTitle = step === "menu" ? "Change Workout Day" : step === "others" ? "Other Programs" : (focusedProgram?.name ?? "");
   const headerSubtitle = step === "menu" ? activeProgram.name : null;
@@ -1136,7 +1139,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     ref={r => { weightRefs.current[flatIdx] = r; }}
                     style={[styles.inputBoxText, { color: isDark ? "#ffffff" : t.tp }]}
                     keyboardType="decimal-pad"
-                    placeholder={set.programSet?.weightKg ? formatWeightForDisplay(set.programSet.weightKg, isKg) : "—"}
+                    placeholder={set.programSet?.weightKg ? prescribedPlaceholder(set.programSet.weightKg, set.programSet.weightUnit, isKg) : "—"}
                     placeholderTextColor={`${t.tp}66`}
                     value={set.weight}
                     editable={!isLocked}
@@ -1287,9 +1290,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     `Remove "${exercise.name}" from today's workout?`,
                     [{ text: "Cancel", style: "cancel" }, { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(exercise.id) }]
                   ); },
-                  icon: <TrashIcon size={13} color="#FF4D4F" />,
+                  icon: <TrashIcon size={13} color={DANGER_BRIGHT} />,
                   label: "Remove",
-                  color: "#FF4D4F",
+                  color: DANGER_BRIGHT,
                 },
               ].map(({ onPress, icon, label, color }) => (
                 // One flat pill on the white control surface. This was three
@@ -1309,8 +1312,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
         {/* ── Exercise notes ── */}
         <View style={[styles.exNotesRow, { borderTopColor: divider }]}>
-          {/* Last time's note shows as the empty box's "Previous: …" with a
-              Reuse chip, and Undo once reused (components/ExerciseNotesField).
+          {/* Last time's note shows as the empty box's placeholder, "Previous"
+              beside the heading, with a Reuse chip, and Undo once reused
+              (components/ExerciseNotesField).
               Shared with log-workout so the two can't drift. */}
           <ExerciseNotesField
             value={exNotes}
@@ -2648,7 +2652,7 @@ export default function WorkoutScreen() {
             {/* Rest days keep the timer/stopwatch available (top-right), same as an active workout. */}
             <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
               <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                <Ionicons name="timer-outline" size={22} color={t.tp} />
+                <StopwatchIcon size={26} color={t.tp} />
               </View>
             </TouchableOpacity>
           </View>
@@ -2800,8 +2804,8 @@ export default function WorkoutScreen() {
                 {/* t.ctrl is the same white the timer pill and the +/back
                     circles sit on, so the row reads as one control family. */}
                 <View style={[styles.completedActionBtn, { backgroundColor: t.ctrl }]}>
-                  <TrashIcon size={15} color="#ef4444" />
-                  <Text style={[styles.completedActionText, { color: "#ef4444" }]} numberOfLines={1}>Discard Workout</Text>
+                  <TrashIcon size={15} color={DANGER_BRIGHT} />
+                  <Text style={[styles.completedActionText, { color: DANGER_BRIGHT }]} numberOfLines={1}>Discard Workout</Text>
                 </View>
               </BounceButton>
             </View>
@@ -2944,7 +2948,12 @@ export default function WorkoutScreen() {
             ]}
           >
             <View style={styles.notesHeader}>
-              <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
+              {/* "Previous" beside the title while the empty box shows last
+                  time's note, as the exercise notes do. */}
+              <View style={styles.notesTitleRow}>
+                <Text style={{ fontFamily: FontFamily.bold, fontSize: 16, color: t.tp }}>Session Notes</Text>
+                <PrevNoteTag value={notes} prevNote={prevSessionNote} isDark={isDark} />
+              </View>
               <View style={styles.notesHeaderActions}>
                 {/* Last time's session note, offered as the exercise notes
                     offer theirs: the empty box's placeholder, never its value. */}
@@ -3071,7 +3080,7 @@ export default function WorkoutScreen() {
         </View>
         <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
           <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-            <Ionicons name="timer-outline" size={22} color={t.tp} />
+            <StopwatchIcon size={26} color={t.tp} />
           </View>
         </TouchableOpacity>
       </View>
@@ -3088,10 +3097,10 @@ export default function WorkoutScreen() {
           customExercises={customExercises}
           onSelectMultiple={names => { changeExercise(changingExId, names[0]); setChangingExId(null); }}
           onDeleteCustom={deleteCustomExercise}
-          onCreateCustom={() => {
+          onCreateCustom={query => {
             pendingChangingExId.current = changingExId;
             setChangingExId(null);
-            router.navigate("/create-custom-exercise");
+            router.navigate({ pathname: "/create-custom-exercise", params: { name: query } });
           }}
           onEditCustom={name => {
             pendingChangingExId.current = changingExId;
@@ -3116,9 +3125,9 @@ export default function WorkoutScreen() {
             setAddingExercise(false);
           }}
           onDeleteCustom={deleteCustomExercise}
-          onCreateCustom={() => {
+          onCreateCustom={query => {
             setAddingExercise(false);
-            router.navigate("/create-custom-exercise");
+            router.navigate({ pathname: "/create-custom-exercise", params: { name: query } });
           }}
           onEditCustom={name => {
             setAddingExercise(false);
@@ -3314,7 +3323,7 @@ const styles = StyleSheet.create({
   inputBoxText:  { fontFamily: FontFamily.bold, fontSize: 15, textAlign: "center", flex: 1, paddingVertical: 0 },
 
   // Remove set
-  removeSetBtn:  { width: 24, height: 24, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  removeSetBtn:  { width: 24, height: 24, borderRadius: 13, backgroundColor: DANGER_BRIGHT, alignItems: "center", justifyContent: "center", shadowColor: DANGER_BRIGHT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 
   // Edit actions
   editMoveRow:   { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
@@ -3329,6 +3338,7 @@ const styles = StyleSheet.create({
   notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
   notesHeader:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
   notesHeaderActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  notesTitleRow:  { flexDirection: "row", alignItems: "baseline", gap: 6, flexShrink: 1 },
   notesFloatCard: { position: "absolute", left: 20, right: 20, borderRadius: 16, padding: 16, zIndex: 21, transformOrigin: "left bottom", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 18 },
   notesTickBtn:   { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
 

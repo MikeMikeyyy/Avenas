@@ -9,11 +9,16 @@
 //
 //   unread chat       messages since my last read stamp
 //   a program for me  shared into the group and not yet accepted
-//   a review to do    posted to the group, open, and I coach there
+//   a review to do    posted to the group, open, not yet sent back, and I
+//                     coach there
 //
 // A program I SENT is not waiting on me, and neither is a review I posted, so
 // neither counts: the badge would then never clear for the person who did the
-// sending.
+// sending. Nor is a review once it's been SENT BACK: it's waiting on the person
+// who asked, to accept it. It stays in the queue (and on the hub, with its
+// Returned / Accepted pill) until a coach removes it, but it used to keep
+// badging the group all that time, so the badge read "work to do" after the
+// work was done.
 //
 // Pure: no RN imports, so `scripts/verify-group-alerts.ts` can run it.
 
@@ -57,7 +62,9 @@ export function groupAlertCounts({ unreadByGroup, shares, reviews, myUid }: Grou
       if (s.groupId && isPendingForMe(s, s.groupId, myUid)) add(s.groupId, 1);
     }
   }
-  for (const r of reviews) add(r.groupId, 1);
+  for (const r of reviews) {
+    if (r.status !== "returned") add(r.groupId, 1);
+  }
 
   return out;
 }

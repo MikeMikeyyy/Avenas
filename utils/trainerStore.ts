@@ -19,6 +19,7 @@ import { forkChangedDayIds, normalizeDayIds } from "./programDays";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 import type { CustomExercise } from "../constants/exercises";
+import { UNIT_KEY, stampWeightUnits, type WeightUnit } from "./units";
 import { GROUP_FAVOURITES_KEY } from "../constants/groups";
 import { ACCOUNT_TYPE_KEY } from "../contexts/AccountTypeContext";
 import { isCloudContactId } from "../lib/chat";
@@ -31,7 +32,9 @@ import {
   fetchShareRow,
   getMyUid,
   insertShareRows,
+  returnSharedReview,
   setGroupReviewCompleted,
+  setShareArchived,
   updateShareRow,
   type NewShareRow,
   type SharedProgramRow,
@@ -59,7 +62,9 @@ export const SENT_PROGRAMS_KEY = "@avenas/gym/sent_programs";
 // page's "From Your Trainer", a group's "Programs Sent", a trainer's My
 // Trainers page) — batchKeyOf() keys,
 // so one entry covers every row of that send. A review I sent that's come BACK
-// is in the same list under sentKeyOf(), since it shows among received ones. A recipient can't delete a share
+// is in the same list under returnedKeyOf(), since it shows among received
+// ones; that key carries the send-back time, so a trainer's update shows
+// again (older entries are a bare sentKeyOf(), see isReturnedDismissed). A recipient can't delete a share
 // row (the database allows only the sender or a group coach), and
 // deleted_by_recipient_at already means something else (you deleted your
 // accepted copy; the trainer sees "Removed"), so this is a hide on the
@@ -110,6 +115,10 @@ export type ClientData = {
    *  so a trainer knows how current this is. Absent for mock clients and for
    *  someone with nothing backed up. */
   backedUpAt?: string;
+  /** The unit they log in, so their numbers are shown in it (0036). Absent
+   *  for mock clients and from a server without it: the trainer's own unit
+   *  is used then, as before. */
+  unit?: WeightUnit;
 };
 
 export type SharedProgram = {
@@ -157,6 +166,15 @@ export type SharedProgram = {
    * entries, where the roster heuristic is still the only option.
    */
   senderId?: string;
+  /**
+   * The sender (or a trainer of its group) archived this send (migration
+   * 0037). Every load leaves archived rows out, for the people it was sent to
+   * as much as for the sender, so it's only ever set on what the archive page
+   * reads (loadTrainerArchive / loadGroupArchive). Restoring clears it, and the
+   * send is back on every list it was on, except for a recipient who removed it
+   * themselves (DISMISSED_SHARES_KEY), which is theirs and outlives a restore.
+   */
+  archivedAtISO?: string;
 };
 
 export type AssignedPT = {
@@ -175,7 +193,9 @@ export type SentProgram = {
   programName: string;
   sentAtISO: string;
   status: SentProgramStatus;
-  /** Full program snapshot the gym user sent — the trainer reviews this copy. */
+  /** The program, as THIS viewer should see it (see rowToSent): to the person
+   *  who asked, what they sent until it's sent back, then what came back; to
+   *  the trainer, their working copy. */
   programSnapshot?: SavedProgram;
   returnedAtISO?: string;
   trainerComments?: string;
@@ -183,6 +203,10 @@ export type SentProgram = {
   appliedAtISO?: string;
   /** Stamped whenever the trainer saves edits in the program builder during review. Used to detect unsent updates after a Send Back. */
   lastEditedAtISO?: string;
+  /** The trainer has builder edits the client hasn't been sent yet (a cloud
+   *  row's draft_snapshot, migration 0034). Absent on local entries, which
+   *  compare lastEditedAtISO with returnedAtISO instead. */
+  unsentEdits?: boolean;
   /** Set when this was posted to a GROUP for review rather than sent to one
    *  trainer (migration 0028). Any coach of that group can review it, and it
    *  appears in that group's queue — a direct send to a trainer has no groupId
@@ -197,6 +221,11 @@ export type SentProgram = {
    *  sender keeps it on their own page regardless: it's their record of having
    *  asked, not the coaches' to-do item. */
   completedAtISO?: string;
+  /** The trainer (or, for a group review, a trainer of the group) archived it
+   *  off Programs Received (migration 0037). The person who asked never sees
+   *  this: it leaves the trainers' lists only, and the loads that serve the
+   *  person who asked ignore it. */
+  archivedAtISO?: string;
 };
 
 export const clientDataKey = (clientId: string) => `${CLIENT_DATA_PREFIX}${clientId}`;
@@ -243,27 +272,42 @@ function rowToShared(row: SharedProgramRow, uid: string, isPT: boolean, meta: Cl
     deletedByRecipientAtISO: row.deleted_by_recipient_at ?? undefined,
     groupId: row.group_id ?? undefined,
     senderId: row.sender_id,
+    archivedAtISO: row.archived_at ?? undefined,
   };
 }
 
 /** Map a cloud 'review' row into the SentProgram shape. Serves both sides:
  *  the gym user (sender) sees their sent list, the trainer (recipient) their
- *  reviews inbox. The trainer's working copy lives in returned_snapshot. */
-function rowToSent(row: SharedProgramRow): SentProgram {
+ *  reviews inbox.
+ *
+ *  Which copy of the program each side sees (migration 0034): the person who
+ *  asked sees what they sent until it's sent back, then what was sent back —
+ *  never the trainer's edits in progress. The trainer sees their working copy:
+ *  the draft, else what they last sent back, else the original. A row reviewed
+ *  before 0034 keeps its working copy in returned_snapshot, which this order
+ *  reads as the draft until it's sent back. The name follows the copy, since a
+ *  rename in the builder is an edit like any other. */
+function rowToSent(row: SharedProgramRow, uid: string): SentProgram {
+  const mine = row.sender_id === uid;
+  const snap = (mine
+    ? (row.returned_at ? row.returned_snapshot ?? row.snapshot : row.snapshot)
+    : row.draft_snapshot ?? row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram | null;
   return {
     id: row.id,
     programId: row.sender_program_id,
-    programName: row.program_name,
+    programName: snap?.name || row.program_name,
     sentAtISO: row.sent_key,
     status: row.returned_at ? "returned" : "sent",
-    programSnapshot: (row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram,
+    programSnapshot: snap ?? undefined,
     returnedAtISO: row.returned_at ?? undefined,
     trainerComments: row.trainer_comments ?? undefined,
     appliedAtISO: row.accepted_at ?? undefined,
     lastEditedAtISO: row.last_edited_at ?? undefined,
+    unsentEdits: row.draft_snapshot != null,
     groupId: row.group_id ?? undefined,
     senderId: row.sender_id,
     completedAtISO: row.completed_at ?? undefined,
+    archivedAtISO: row.archived_at ?? undefined,
   };
 }
 
@@ -326,6 +370,9 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
       // as it would if the recipient had made that edit themselves.
       dayIds: mergedDayIds(p, snap),
       workouts: snap.workouts,
+      // Accepting a trainer's new version is asking for the program, so an
+      // archived copy comes back to My Programs rather than updating unseen.
+      archivedAt: undefined,
     } : p);
     await setJSON(PROGRAMS_KEY, updated);
     return existing.id;
@@ -349,6 +396,7 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
     skippedDates: undefined,
     pushedDates: undefined,
     pulledDates: undefined,
+    archivedAt: undefined,
   };
   await setJSON(PROGRAMS_KEY, [...programs, imported]);
   return importedId;
@@ -435,14 +483,16 @@ async function loadLocalSharedPrograms(): Promise<SharedProgram[]> {
 }
 
 /** All share entries the viewer can see: local mock entries merged with cloud
- *  'share' rows (both directions), newest first. */
+ *  'share' rows (both directions), newest first. Archived sends are left out in
+ *  both directions (see SharedProgram.archivedAtISO); the archive page has its
+ *  own read. */
 export async function loadSharedPrograms(): Promise<SharedProgram[]> {
-  const local = await loadLocalSharedPrograms();
+  const local = (await loadLocalSharedPrograms()).filter(s => !s.archivedAtISO);
   const cloud = await fetchCloudRowsSafe();
   if (!cloud) return withoutDismissed(local, null);
   const [isPT, meta] = await Promise.all([viewerIsPT(), loadShareMeta()]);
   const mapped = cloud.rows
-    .filter(r => r.kind === "share")
+    .filter(r => r.kind === "share" && !r.archived_at)
     .map(r => rowToShared(r, cloud.uid, isPT, meta));
   return withoutDismissed([...mapped, ...local], cloud.uid).then(list => list.sort(
     (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
@@ -486,9 +536,11 @@ async function withoutDismissed(list: SharedProgram[], myUid: string | null): Pr
  *  what a delete has to remove. RLS returns just my own row to a plain member,
  *  so the same call serves both and the UI doesn't have to ask which I am.
  *
- *  Local mock entries are merged in the same way, matched on `groupId`. */
+ *  Local mock entries are merged in the same way, matched on `groupId`.
+ *  Archived sends are left out for everyone, coaches included: they're in the
+ *  group's archive (loadGroupArchive). */
 export async function loadGroupSharedPrograms(groupId: string): Promise<SharedProgram[]> {
-  const local = (await loadLocalSharedPrograms()).filter(s => s.groupId === groupId);
+  const local = (await loadLocalSharedPrograms()).filter(s => s.groupId === groupId && !s.archivedAtISO);
   const uid = await getMyUid().catch(() => null);
   if (!uid) return withoutDismissed(local, null);
   let rows: SharedProgramRow[];
@@ -500,11 +552,29 @@ export async function loadGroupSharedPrograms(groupId: string): Promise<SharedPr
   }
   const [isPT, meta] = await Promise.all([viewerIsPT(), loadShareMeta()]);
   const mapped = rows
-    .filter(r => r.kind === "share")
+    .filter(r => r.kind === "share" && !r.archived_at)
     .map(r => rowToShared(r, uid, isPT, meta));
   return withoutDismissed([...mapped, ...local], uid).then(list => list.sort(
     (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
   ));
+}
+
+/** The unit this device's person reads weights in: the sender, for a send. */
+async function senderUnit(): Promise<WeightUnit> {
+  const saved = await AsyncStorage.getItem(UNIT_KEY).catch(() => null);
+  return saved === "lbs" ? "lb" : "kg";
+}
+
+/**
+ * A program on its way out, with every weight from before units were recorded
+ * stamped in the sender's unit, which is how they were reading it, so the
+ * recipient reads the same numbers (a prescribed weight shows in the unit it
+ * was entered in: utils/units.ts prescribedWeight). Weights the builder
+ * already tagged are left alone.
+ */
+function withSenderUnits(snapshot: SavedProgram, unit: WeightUnit): SavedProgram {
+  const workouts = stampWeightUnits(snapshot.workouts ?? {}, unit);
+  return workouts === snapshot.workouts ? snapshot : { ...snapshot, workouts };
 }
 
 /** Send program shares. Entries addressed to REAL accounts (uuid clientId) go
@@ -512,8 +582,11 @@ export async function loadGroupSharedPrograms(groupId: string): Promise<SharedPr
  *  connected), so callers can tell the user instead of faking success. Mock
  *  roster entries keep the local path. */
 export async function appendSharedPrograms(entries: SharedProgram[]): Promise<void> {
+  const unit = await senderUnit();
   const cloudEntries = entries.filter(e => e.clientId !== "all" && isCloudContactId(e.clientId));
-  const localEntries = entries.filter(e => !cloudEntries.includes(e));
+  const localEntries = entries
+    .filter(e => !cloudEntries.includes(e))
+    .map(e => (e.programSnapshot ? { ...e, programSnapshot: withSenderUnits(e.programSnapshot, unit) } : e));
   if (cloudEntries.length > 0) {
     const uid = await getMyUid();
     if (!uid) throw new Error("Sign in to send programs to connected accounts.");
@@ -526,7 +599,7 @@ export async function appendSharedPrograms(entries: SharedProgram[]): Promise<vo
         kind: "share",
         senderProgramId: e.programId,
         programName: e.programName,
-        snapshot,
+        snapshot: withSenderUnits(snapshot, unit),
         sentKey: e.sentAtISO,
         groupId: e.groupId,
       };
@@ -544,11 +617,30 @@ export function batchKeyOf(s: SharedProgram): string {
   return `${s.programId}|${s.sentAtISO}`;
 }
 
-/** The same key for a review I sent, once it's come back and sits in my
- *  received list — so removing it there goes into the same dismissed list
- *  (DISMISSED_SHARES_KEY) as a program a trainer sent me. */
+/** A review I sent, by the same programId|sentAtISO form as batchKeyOf. */
 export function sentKeyOf(s: SentProgram): string {
   return `${s.programId}|${s.sentAtISO}`;
+}
+
+/**
+ * The key that removing a review that's come back to me writes into the
+ * dismissed list (DISMISSED_SHARES_KEY), the same list as a program a trainer
+ * sent me.
+ *
+ * It carries the send-back time, so it hides THAT version: when the trainer
+ * sends an update, returnedAtISO moves and the card comes back with Accept on
+ * it. Keyed on sentKeyOf alone, a removed review stayed hidden through every
+ * update, so the update never reached anyone who'd tidied their list.
+ */
+export function returnedKeyOf(s: SentProgram): string {
+  return `${sentKeyOf(s)}|${s.returnedAtISO ?? ""}`;
+}
+
+/** Whether I've removed this returned review from my lists. A bare sentKeyOf
+ *  still counts: that's how a removal was recorded before returnedKeyOf, and
+ *  showing all of those again would undo what the user tidied away. */
+export function isReturnedDismissed(s: SentProgram, dismissed: Set<string>): boolean {
+  return dismissed.has(returnedKeyOf(s)) || dismissed.has(sentKeyOf(s));
 }
 
 /** Expand legacy `clientId: "all"` entries into one entry per current client.
@@ -827,18 +919,19 @@ async function loadLocalSentPrograms(): Promise<SentProgram[]> {
  *  nobody else's. `loadMyGroupReviews` is the one that gathers them for a
  *  coach, through the group policy rather than through the address. The
  *  SENDER's side is unfiltered — a program they posted to a group is still a
- *  program they sent, and belongs on their own page. */
+ *  program they sent, and belongs on their own page. That includes one their
+ *  trainer archived: archiving tidies the trainer's inbox, never the asker's. */
 export async function loadSentPrograms(): Promise<SentProgram[]> {
-  const local = await loadLocalSentPrograms();
+  const isPT = await viewerIsPT();
+  const local = (await loadLocalSentPrograms()).filter(s => !(isPT && s.archivedAtISO));
   const cloud = await fetchCloudRowsSafe();
   if (!cloud) return local;
-  const isPT = await viewerIsPT();
   const mapped = cloud.rows
     .filter(r => r.kind === "review")
     .filter(r => (isPT
-      ? r.recipient_id === cloud.uid && !r.deleted_by_recipient_at && !r.group_id
+      ? r.recipient_id === cloud.uid && !r.deleted_by_recipient_at && !r.group_id && !r.archived_at
       : r.sender_id === cloud.uid))
-    .map(rowToSent);
+    .map(r => rowToSent(r, cloud.uid));
   return [...mapped, ...local].sort(
     (a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0),
   );
@@ -850,23 +943,41 @@ export async function loadSentPrograms(): Promise<SentProgram[]> {
  * A group review is a single row addressed to the group's owner, so
  * `loadSentPrograms` would only ever surface it to that one person. Every coach
  * of the group is entitled to it (migration 0028), and RLS is what decides
- * that, so the same call serves a trainer and returns nothing to a member.
+ * that, so the same call serves a trainer and, to a member, only their own.
  *
- * Completed reviews are dropped: the queue is what's still to do.
+ * Other people's completed reviews are dropped: the queue is what's still to
+ * do. MY OWN request is different, because it's mine rather than the queue's:
+ * once it's been sent back it stays until I remove it myself (the same
+ * dismissed list as my trainer page, applied here so the group page, its
+ * lookups and the program view all agree), even after a coach clears it from
+ * the queue. For a trainer who asked a group they're a plain member of, this
+ * is the only place it ever shows, and a coach's Remove used to take it away
+ * before they'd accepted it. One never sent back leaves with the queue:
+ * there's nothing on it to act on.
+ *
+ * Someone else's review a trainer ARCHIVED is out of the queue too (it's in the
+ * group's archive, loadGroupArchive). My own request never is: archiving is the
+ * trainers tidying their list, and the person who asked doesn't see it.
  */
 export async function loadGroupReviewPrograms(groupId: string): Promise<SentProgram[]> {
   const uid = await getMyUid().catch(() => null);
   if (!uid) return [];
   let rows: SharedProgramRow[];
+  let dismissed: Set<string>;
   try {
-    rows = await fetchGroupShareRows(groupId);
+    [rows, dismissed] = await Promise.all([fetchGroupShareRows(groupId), loadDismissedShareKeys()]);
   } catch (e) {
     warnShares("loadGroupReviews", e);
     return [];
   }
   return rows
-    .filter(r => r.kind === "review" && !r.completed_at)
-    .map(rowToSent);
+    .filter(r => r.kind === "review")
+    .map(r => rowToSent(r, uid))
+    .filter(s => {
+      if (s.senderId === uid && s.status === "returned") return !isReturnedDismissed(s, dismissed);
+      if (s.completedAtISO) return false;
+      return s.senderId === uid || !s.archivedAtISO;
+    });
 }
 
 /**
@@ -880,6 +991,8 @@ export async function loadGroupReviewPrograms(groupId: string): Promise<SentProg
  * Reviews I SENT are dropped: RLS hands me my own rows as the sender, but a
  * program I asked someone else to look at is not one of my review jobs. It
  * stays visible to me in its group's queue, which is where I posted it.
+ *
+ * Archived ones are dropped as well: they're in the Trainer tab's archive.
  */
 export async function loadMyGroupReviews(): Promise<SentProgram[]> {
   const uid = await getMyUid().catch(() => null);
@@ -891,13 +1004,160 @@ export async function loadMyGroupReviews(): Promise<SentProgram[]> {
     warnShares("loadMyGroupReviews", e);
     return [];
   }
-  return rows.filter(r => r.sender_id !== uid).map(rowToSent);
+  return rows.filter(r => r.sender_id !== uid && !r.archived_at).map(r => rowToSent(r, uid));
 }
 
 /** Mark a group review dealt with (or reopen it). Coach-only — the RPC raises
  *  for anyone else rather than silently no-opping. */
 export async function setGroupReviewDone(id: string, done: boolean): Promise<void> {
   await setGroupReviewCompleted(id, done);
+}
+
+// ─── archive (migration 0037) ─────────────────────────────────────────────────
+//
+// The other choice beside Remove on a trainer's program cards: off the list,
+// into the page's archive, and back again with Restore. What it reaches is the
+// column's comment in 0037: an archived SEND is hidden from the people it went
+// to as well; an archived REVIEW only leaves the trainers' lists. Every load
+// above leaves archived rows out, and the archive page reads them here.
+
+/** What an archive page lists: the sends and the reviews archived there. */
+export type ProgramArchive = { sends: SharedProgram[]; reviews: SentProgram[] };
+
+const rowBatchKey = (r: SharedProgramRow) => `${r.sender_program_id}|${r.sent_key}`;
+
+/** Most recently archived first. */
+function byArchivedDesc<T extends { archivedAtISO?: string }>(list: T[]): T[] {
+  return [...list].sort((a, b) => {
+    const x = a.archivedAtISO ?? "";
+    const y = b.archivedAtISO ?? "";
+    return x < y ? 1 : x > y ? -1 : 0;
+  });
+}
+
+/**
+ * Archive a whole send, or restore it: every row of the batch in one call, so
+ * it leaves (and comes back to) every recipient's list at once.
+ *
+ * `groupId` for a group send: its rows are resolved from the GROUP, so a
+ * trainer of it can archive a send another trainer made (the database decides,
+ * as it does for Remove: the sender, or a trainer of the group). Without it,
+ * my own sends.
+ *
+ * THROWS when it didn't happen (offline, not allowed, or a server without
+ * 0037) so the screen can say so, rather than show a card that comes back on
+ * the next load.
+ */
+export async function setSendBatchArchived(batchKey: string, archived: boolean, groupId?: string): Promise<void> {
+  const stamp = archived ? new Date().toISOString() : undefined;
+  const local = await loadLocalSharedPrograms();
+  const inBatch = (s: SharedProgram) => batchKeyOf(s) === batchKey && (!groupId || s.groupId === groupId);
+  const localHit = local.some(inBatch);
+  if (localHit) await setJSON(SHARED_PROGRAMS_KEY, local.map(s => (inBatch(s) ? { ...s, archivedAtISO: stamp } : s)));
+
+  const uid = await getMyUid().catch(() => null);
+  if (!uid) {
+    if (localHit) return;
+    throw new Error("Sign in to archive programs.");
+  }
+  let rows: SharedProgramRow[];
+  try {
+    rows = groupId ? await fetchGroupShareRows(groupId) : await fetchMyShareRows(uid);
+  } catch (e) {
+    warnShares("archiveBatch", e);
+    // A mock-roster send lives on the device and is already done.
+    if (localHit) return;
+    throw new Error("Couldn't reach the server.");
+  }
+  const ids = rows
+    .filter(r => r.kind === "share" && rowBatchKey(r) === batchKey && (groupId ? true : r.sender_id === uid))
+    .map(r => r.id);
+  if (ids.length === 0) return;
+  if ((await setShareArchived(ids, archived)) === 0) {
+    throw new Error("Only the trainer who sent it, or a trainer of its group, can do that.");
+  }
+}
+
+/**
+ * Archive a review off Programs Received, or restore it. A group review goes
+ * for every trainer of the group, as Remove does; a 1:1 one is mine alone.
+ * Either way the person who asked sees no change. THROWS when it didn't happen.
+ */
+export async function setReviewArchived(id: string, archived: boolean): Promise<void> {
+  if (isCloudShareId(id)) {
+    if ((await setShareArchived([id], archived)) === 0) {
+      throw new Error("Only the trainer it was sent to can do that.");
+    }
+    return;
+  }
+  const stamp = archived ? new Date().toISOString() : undefined;
+  const existing = await loadLocalSentPrograms();
+  await setJSON(SENT_PROGRAMS_KEY, existing.map(s => (s.id === id ? { ...s, archivedAtISO: stamp } : s)));
+}
+
+/**
+ * The Trainer tab's archive: sends I made (direct and to groups, as its
+ * Programs Sent lists them) and the reviews archived off its Programs Received
+ * (1:1 ones addressed to me, and group reviews in groups I coach).
+ *
+ * Null when the server can't be reached, so the page can say that rather than
+ * claim there's nothing archived.
+ */
+export async function loadTrainerArchive(): Promise<ProgramArchive | null> {
+  const [localSends, localReviews] = await Promise.all([loadLocalSharedPrograms(), loadLocalSentPrograms()]);
+  const local: ProgramArchive = {
+    sends: localSends.filter(s => s.archivedAtISO && !s.receivedFromCoachId),
+    reviews: localReviews.filter(s => s.archivedAtISO),
+  };
+  const uid = await getMyUid().catch(() => null);
+  if (!uid) return local;
+  try {
+    const [rows, groupRows, isPT, meta] = await Promise.all([
+      fetchMyShareRows(uid),
+      fetchMyGroupReviewRows(),
+      viewerIsPT(),
+      loadShareMeta(),
+    ]);
+    const sends = rows
+      .filter(r => r.kind === "share" && r.sender_id === uid && r.archived_at)
+      .map(r => rowToShared(r, uid, isPT, meta));
+    const reviews = [
+      ...rows.filter(r => r.kind === "review" && r.recipient_id === uid && !r.group_id && !r.deleted_by_recipient_at && r.archived_at),
+      ...groupRows.filter(r => r.sender_id !== uid && r.archived_at),
+    ].map(r => rowToSent(r, uid));
+    return {
+      sends: byArchivedDesc([...sends, ...local.sends]),
+      reviews: byArchivedDesc([...reviews, ...local.reviews]),
+    };
+  } catch (e) {
+    warnShares("loadTrainerArchive", e);
+    return null;
+  }
+}
+
+/**
+ * One group's archive, for its trainers: sends archived out of Group Programs,
+ * whoever sent them, and other people's reviews archived out of its Programs
+ * Received. A review a trainer has since Deleted (completed) isn't here: that
+ * one is gone from the group for good. Null when the server can't be reached.
+ */
+export async function loadGroupArchive(groupId: string): Promise<ProgramArchive | null> {
+  const local = (await loadLocalSharedPrograms()).filter(s => s.groupId === groupId && s.archivedAtISO);
+  const uid = await getMyUid().catch(() => null);
+  if (!uid) return { sends: local, reviews: [] };
+  try {
+    const [rows, isPT, meta] = await Promise.all([fetchGroupShareRows(groupId), viewerIsPT(), loadShareMeta()]);
+    const sends = rows
+      .filter(r => r.kind === "share" && r.archived_at)
+      .map(r => rowToShared(r, uid, isPT, meta));
+    const reviews = rows
+      .filter(r => r.kind === "review" && r.archived_at && !r.completed_at && r.sender_id !== uid)
+      .map(r => rowToSent(r, uid));
+    return { sends: byArchivedDesc([...sends, ...local]), reviews: byArchivedDesc(reviews) };
+  } catch (e) {
+    warnShares("loadGroupArchive", e);
+    return null;
+  }
 }
 
 /** Send a program for review. When the trainer is a REAL account (uuid),
@@ -919,7 +1179,8 @@ export async function appendSentProgram(entry: SentProgram, recipientId?: string
       kind: "review",
       senderProgramId: entry.programId,
       programName: entry.programName,
-      snapshot,
+      // The client's own weights reach the trainer as the client typed them.
+      snapshot: withSenderUnits(snapshot, await senderUnit()),
       sentKey: entry.sentAtISO,
       groupId: entry.groupId,
     }]);
@@ -978,17 +1239,25 @@ export async function backfillAcceptedProgramIds(): Promise<void> {
   if (mutated) await setJSON(SHARED_PROGRAMS_KEY, next);
 }
 
-export async function updateSentProgram(id: string, patch: Partial<SentProgram>): Promise<void> {
+/**
+ * Save the trainer's edits to a review. They go into the DRAFT (migration
+ * 0034) and reach the client only when the trainer sends it back
+ * (returnReview); the original the client sent is never touched.
+ *
+ * Deliberately can't send anything back: returned_at and the client's copy are
+ * written only by returnReview, together, so the client can never be shown a
+ * new send-back time on the previous version.
+ */
+export async function updateSentProgram(
+  id: string,
+  patch: Pick<Partial<SentProgram>, "programSnapshot" | "programName" | "lastEditedAtISO" | "trainerComments">,
+): Promise<void> {
   if (isCloudShareId(id)) {
-    // Trainer-side review edits/returns map onto the row's review columns; the
-    // ORIGINAL snapshot is never touched, the working copy is returned_snapshot.
     const rowPatch: Parameters<typeof updateShareRow>[1] = {};
-    if (patch.programSnapshot) rowPatch.returned_snapshot = patch.programSnapshot as unknown as Record<string, unknown>;
+    if (patch.programSnapshot) rowPatch.draft_snapshot = patch.programSnapshot as unknown as Record<string, unknown>;
     if (patch.programName) rowPatch.program_name = patch.programName;
     if (patch.lastEditedAtISO) rowPatch.last_edited_at = patch.lastEditedAtISO;
     if (patch.trainerComments !== undefined) rowPatch.trainer_comments = patch.trainerComments ?? null;
-    if (patch.status === "returned" || patch.returnedAtISO) rowPatch.returned_at = patch.returnedAtISO ?? new Date().toISOString();
-    if (patch.appliedAtISO) rowPatch.accepted_at = patch.appliedAtISO;
     if (Object.keys(rowPatch).length === 0) return;
     try {
       await updateShareRow(id, rowPatch);
@@ -1001,6 +1270,36 @@ export async function updateSentProgram(id: string, patch: Partial<SentProgram>)
   const existing = await loadLocalSentPrograms();
   const next = existing.map(s => s.id === id ? { ...s, ...patch } : s);
   await setJSON(SENT_PROGRAMS_KEY, next);
+}
+
+/**
+ * Send Back, and Send Update after it: the client gets the trainer's current
+ * version and an Accept for it, even if they accepted an earlier one.
+ *
+ * A cloud review goes through the return_shared_review RPC, which copies the
+ * draft into the client's copy, stamps the send-back time and clears their
+ * accept in one step. Clearing the accept was the part that never happened
+ * before: it was patched with `undefined`, which a column patch drops, so an
+ * update never reached anyone who'd accepted the first version. THROWS so the
+ * review screen can say it didn't go.
+ *
+ * A local (mock-roster) entry has one copy, already holding the edits.
+ */
+export async function returnReview(id: string): Promise<void> {
+  if (isCloudShareId(id)) {
+    try {
+      await returnSharedReview(id);
+    } catch (e) {
+      warnShares("returnReview", e);
+      throw e instanceof Error ? e : new Error("Couldn't send it back.");
+    }
+    return;
+  }
+  const existing = await loadLocalSentPrograms();
+  const now = new Date().toISOString();
+  await setJSON(SENT_PROGRAMS_KEY, existing.map(s => (s.id === id
+    ? { ...s, status: "returned" as const, returnedAtISO: now, appliedAtISO: undefined }
+    : s)));
 }
 
 /** Gym user accepts a returned program: overwrite the original entry in @avenas/programs with the trainer's edited snapshot. */
@@ -1054,6 +1353,8 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: st
       // as it would if the recipient had made that edit themselves.
       dayIds: mergedDayIds(p, snap),
       workouts: snap.workouts,
+      // Taking the trainer's changes brings an archived original back.
+      archivedAt: undefined,
     } : p);
   } else {
     const imported: SavedProgram = {
@@ -1064,6 +1365,7 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: st
       startDate: formatStoredDate(new Date()),
       cycleOffset: undefined,
       completedDate: undefined,
+      archivedAt: undefined,
     };
     nextPrograms = [...programs, imported];
   }

@@ -35,8 +35,9 @@ import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import TimeEditSheet from "../components/TimeEditSheet";
+import WorkoutAchievements from "../components/WorkoutAchievements";
 import { computeDurationMins, completedAtISO } from "../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT } from "../constants/theme";
 import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
   WORKOUT_HISTORY_KEY,
@@ -47,10 +48,13 @@ import {
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { useUnit } from "../contexts/UnitContext";
-import { formatWeightForDisplay, parseWeightToKg } from "../utils/units";
+import { useClientUnit } from "../hooks/useClientUnit";
+import { formatWeightForDisplay, parseWeightToKg, unitLabel, unitOf } from "../utils/units";
 import { useTheme } from "../contexts/ThemeContext";
 import { loadCachedClientData } from "../utils/trainerStore";
 import { swapOrigin } from "../utils/workout";
+import { achievementsForWorkout } from "../utils/achievements";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const WARMUP_ORANGE = "#ffbf0f";
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -434,7 +438,11 @@ export default function WorkoutDetailScreen() {
   const readOnly = !!clientId;
   const router = useRouter();
   const { isDark } = useTheme();
-  const { isKg } = useUnit();
+  const { isKg: ownIsKg } = useUnit();
+  // A client's workout reads in the unit THEY log in (0036), exactly as on
+  // their phone, rather than converted into the trainer's.
+  const clientIsKg = useClientUnit(clientId);
+  const isKg = clientIsKg ?? ownIsKg;
 
   const insets = useSafeAreaInsets();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -448,6 +456,9 @@ export default function WorkoutDetailScreen() {
     exs.map(ex => ({ ...ex, sets: ex.sets.map(s => ({ ...s, weight: parseWeightToKg(s.weight, isKg) })) }));
 
   const [workout, setWorkout]               = useState<CompletedWorkout | null>(null);
+  // The whole history this workout was read from: what it earned is measured
+  // against the sessions completed before it.
+  const [history, setHistory]               = useState<CompletedWorkout[]>([]);
   const [isEditing, setIsEditing]           = useState(false);
   const [editedExercises, setEditedExercises] = useState<CompletedExercise[]>([]);
   const [editedIsIsometric, setEditedIsIsometric] = useState<boolean[]>([]);
@@ -504,12 +515,21 @@ export default function WorkoutDetailScreen() {
 
   const divider = isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)";
 
+  // Its PRs and any milestone, as they were when it was saved: measured against
+  // the sessions before it, so a heavier one since doesn't take them away. The
+  // saved copy, not the edit buffer, so it follows a save and not a keystroke.
+  const earned = useMemo(
+    () => (workout ? achievementsForWorkout(workout, history) : []),
+    [workout, history],
+  );
+
   useEffect(() => {
     const loadHistory: Promise<CompletedWorkout[]> = clientId
       ? loadCachedClientData(clientId).then(d => d.workoutHistory)
       : AsyncStorage.getItem(WORKOUT_HISTORY_KEY).then(raw => (raw ? JSON.parse(raw) : []));
     loadHistory.then(history => {
       const found = history.find(w => w.id === id) ?? null;
+      setHistory(history);
       setWorkout(found);
       if (found) {
         setEditedExercises(exToDisplay(found.exercises));
@@ -769,20 +789,10 @@ export default function WorkoutDetailScreen() {
       </View>
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       {/* Action buttons (none on a client's workout: a trainer only reads it) */}
-      <View style={{ position: "absolute", top: insets.top + 14, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", gap: 10 }}>
+      <View style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", gap: 10 }}>
         {readOnly ? null : isEditing ? (
           <>
             <TouchableOpacity onPress={handleCancel} activeOpacity={0.8}>
@@ -805,7 +815,7 @@ export default function WorkoutDetailScreen() {
             </TouchableOpacity>
             <TouchableOpacity onPress={handleDelete} activeOpacity={0.8}>
               <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-                <TrashIcon size={18} color={t.tp} />
+                <TrashIcon size={18} color={DANGER_BRIGHT} />
               </View>
             </TouchableOpacity>
           </>
@@ -815,7 +825,7 @@ export default function WorkoutDetailScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + (isEditing ? 100 : 40), paddingHorizontal: 20 }}
+        contentContainerStyle={{ paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + (isEditing ? 100 : 40), paddingHorizontal: 20 }}
       >
         {/* Nav title — scrolls with content */}
         <View style={styles.scrollTitleRow}>
@@ -840,7 +850,16 @@ export default function WorkoutDetailScreen() {
               ) : (
                 <WorkoutMetaRow completedIso={workout.completedAt} durationSeconds={workout.durationSeconds} isDark={isDark} />
               )}
+              {clientIsKg !== undefined && clientIsKg !== ownIsKg && (
+                <Text style={[styles.unitNote, { color: t.ts }]}>
+                  Weights in {unitLabel(unitOf(clientIsKg))}, the unit this client logs in
+                </Text>
+              )}
             </View>
+
+            {/* What this session earned, first thing under its name. Not while
+                editing: the numbers it's about are the ones being changed. */}
+            {!isEditing && <WorkoutAchievements achievements={earned} isDark={isDark} isKg={isKg} />}
 
             {/* Session Notes — workout-level, same button style as the live workout
                 page. On a client's workout: their notes if they wrote any, not
@@ -888,9 +907,11 @@ export default function WorkoutDetailScreen() {
                 <BounceButton onPress={openSessionNotes} accessibilityLabel="Add session notes">
                   <View style={styles.sessionNotesAddRow}>
                     <View style={styles.notesToggleBtn}>
-                      <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+                      {/* The Workout tab's button: a flat white circle, not a
+                          raised NeuCard, with the green + pinned to its corner. */}
+                      <View style={[styles.notesIconBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}>
                         <Ionicons name="document-text-outline" size={20} color={t.tp} />
-                      </NeuCard>
+                      </View>
                       <View style={styles.notesTogglePlus}>
                         <Text style={styles.notesTogglePlusText}>+</Text>
                       </View>
@@ -1134,9 +1155,9 @@ export default function WorkoutDetailScreen() {
                                   ]
                                 );
                               },
-                              icon: <TrashIcon size={13} color="#FF4D4F" />,
+                              icon: <TrashIcon size={13} color={DANGER_BRIGHT} />,
                               label: "Remove",
-                              color: "#FF4D4F",
+                              color: DANGER_BRIGHT,
                             },
                           ].map(({ onPress, icon, label, color }) => (
                             <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
@@ -1257,6 +1278,7 @@ const styles = StyleSheet.create({
   navBtn:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
 
   title: { fontFamily: FontFamily.bold, fontSize: 26, marginBottom: 4 },
+  unitNote: { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 6 },
   metaRow:      { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 10 },
   metaChip:     { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
   metaEditChip: { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
@@ -1281,7 +1303,7 @@ const styles = StyleSheet.create({
   dataText:     { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center" },
   inputCell:    { flex: 1, alignItems: "center", justifyContent: "center" },
   checkCol:     { width: 32, alignItems: "center", justifyContent: "center" },
-  removeSetBtn: { width: 24, height: 24, borderRadius: 13, backgroundColor: "#FF4D4F", alignItems: "center", justifyContent: "center", shadowColor: "#FF4D4F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
+  removeSetBtn: { width: 24, height: 24, borderRadius: 13, backgroundColor: DANGER_BRIGHT, alignItems: "center", justifyContent: "center", shadowColor: DANGER_BRIGHT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
   addRoundWrap: { borderRadius: 24, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
   addRoundBtn:  { width: 44, height: 44, borderRadius: 22, backgroundColor: ACCT, alignItems: "center", justifyContent: "center" },
 
@@ -1300,7 +1322,7 @@ const styles = StyleSheet.create({
   editChip:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, paddingHorizontal: 8, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
   editChipText: { fontFamily: FontFamily.semibold, fontSize: 12 },
 
-  scrollTitleRow: { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 16 },
+  scrollTitleRow: { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 16 },
   navTitle:       { flex: 1, textAlign: "center", fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase" },
 
   woReorderBackdrop:   { flex: 1, justifyContent: "flex-end" },
@@ -1323,6 +1345,8 @@ const styles = StyleSheet.create({
 
   // Session notes — button + card styling mirrors the live workout page.
   notesToggleBtn:      { width: 40, height: 40 },
+  // The workout page's topIconBtn: the circle the button draws in t.ctrl.
+  notesIconBtn:        { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   // Same green save-tick as the live workout page's notes card.
   notesTickBtn:        { width: 32, height: 32, borderRadius: 16, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
   notesTogglePlus:     { position: "absolute", top: -4, right: -6, backgroundColor: ACCT, borderRadius: 7, width: 14, height: 14, alignItems: "center", justifyContent: "center" },

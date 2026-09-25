@@ -12,6 +12,7 @@ import PrimaryButton from "../components/PrimaryButton";
 import { setJSON } from "../utils/storage";
 import { TERMS_ACCEPTED_KEY, TERMS_VERSION } from "../constants/onboarding";
 import { APP_DARK, APP_LIGHT, ACCT, FontFamily } from "../constants/theme";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // A summary of the Terms of Service and Privacy Policy, so it must never promise
 // something they don't. It used to say workout data stays on the device (it backs
@@ -44,19 +45,11 @@ export default function AcceptTermsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-      >
-        <Ionicons name="chevron-back" size={22} color={t.tp} />
-      </TouchableOpacity>
+      <BackButton />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 64, paddingBottom: 24 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: 24 }]}
       >
         <View style={[styles.iconWrap, { backgroundColor: ACCT + "1A" }]}>
           <Ionicons name="shield-checkmark-outline" size={30} color={ACCT} />
@@ -129,7 +122,6 @@ export default function AcceptTermsScreen() {
 
 const styles = StyleSheet.create({
   root:      { flex: 1 },
-  backBtn:   { position: "absolute", left: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:    { paddingHorizontal: 28 },
   iconWrap:  { alignSelf: "center", width: 60, height: 60, borderRadius: 30, alignItems: "center", justifyContent: "center", marginBottom: 16 },
   title:     { fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },

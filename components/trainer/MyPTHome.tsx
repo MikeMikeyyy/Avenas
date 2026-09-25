@@ -15,6 +15,7 @@ import BounceButton from "../BounceButton";
 import ChevronToggle from "../ChevronToggle";
 import ExpandReveal, { useReveal } from "../ExpandReveal";
 import ChatIcon from "../icons/ChatIcon";
+import UserRoundPlusIcon from "../icons/UserRoundPlusIcon";
 import PeopleIcon from "../icons/PeopleIcon";
 import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
@@ -24,10 +25,10 @@ import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import GroupInviteCard from "./GroupInviteCard";
 import GroupAvatar from "./GroupAvatar";
-import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites } from "../../lib/groups";
+import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites, isGroupLimitError } from "../../lib/groups";
 import { loadGroupRows } from "../../utils/groupStore";
 import { groupAlertCounts } from "../../utils/groupAlerts";
-import type { GroupInvite } from "../../constants/groups";
+import { GROUP_LIMIT_TITLE, MAX_GROUPS, groupLimitMessage, type GroupInvite } from "../../constants/groups";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
 import { haloGlow, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PAD, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
@@ -39,6 +40,8 @@ import {
   applyReturnedProgram,
   batchKeyOf,
   dismissSharedBatch,
+  isReturnedDismissed,
+  returnedKeyOf,
   sentKeyOf,
   loadSentPrograms,
   removeSentProgram,
@@ -52,6 +55,7 @@ import Avatar from "../Avatar";
 import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
+import { alertMessage } from "../../utils/errors";
 
 function fmtAgo(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -398,16 +402,26 @@ export default function MyPTHome() {
     [groups, shares, groupReviewsToDo, myUid],
   );
 
+  // The group limit is checked against this list before anything is sent; the
+  // database refuses a 6th too (0035), which covers a list that's out of date.
+  // At the limit the invite stays where it is, to accept after leaving a group.
+  const atGroupLimit = groups.length >= MAX_GROUPS;
+  const ownsAGroup = groups.some(r => r.group.isOwner);
   const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {
+    if (atGroupLimit) {
+      Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("join", ownsAGroup));
+      return;
+    }
     try {
       await acceptGroupInvite(invite.groupId);
     } catch (e) {
-      Alert.alert("Couldn't join group", e instanceof Error ? e.message : "Check your connection and try again.");
+      if (isGroupLimitError(e)) Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("join", ownsAGroup));
+      else Alert.alert("Couldn't join group", alertMessage(e, "Check your connection and try again."));
       return;
     }
     const [groupRows, invites] = await Promise.all([loadGroupRows(), fetchMyGroupInvites()]);
     setHub(h => h && { ...h, groups: groupRows, groupInvites: invites });
-  }, []);
+  }, [atGroupLimit, ownsAGroup]);
 
   const handleDeclineInvite = useCallback((invite: GroupInvite) => {
     Alert.alert(
@@ -422,7 +436,7 @@ export default function MyPTHome() {
             try {
               await declineGroupInvite(invite.groupId);
             } catch (e) {
-              Alert.alert("Couldn't decline", e instanceof Error ? e.message : "Check your connection and try again.");
+              Alert.alert("Couldn't decline", alertMessage(e, "Check your connection and try again."));
               return;
             }
             setHub(h => h && { ...h, groupInvites: h.groupInvites.filter(i => i.groupId !== invite.groupId) });
@@ -484,13 +498,14 @@ export default function MyPTHome() {
   // handed me. One place each, never both.
   const pendingSent = useMemo(() => sent.filter(s => s.status !== "returned"), [sent]);
   const returnedToMe = useMemo(
-    () => sent.filter(s => s.status === "returned" && !dismissedKeys.has(sentKeyOf(s))),
+    () => sent.filter(s => s.status === "returned" && !isReturnedDismissed(s, dismissedKeys)),
     [sent, dismissedKeys],
   );
 
   /** Take a returned review off "From Your Trainer". A hide on this device, like
    *  removing a received program. It never undoes applied changes, and if they
-   *  weren't applied your program just stays as it was. */
+   *  weren't applied your program just stays as it was. It hides THIS version
+   *  (returnedKeyOf): if the trainer sends an update, it's back with Accept. */
   const handleRemoveReturned = useCallback((entry: SentProgram) => {
     const applied = !!entry.appliedAtISO;
     Alert.alert(
@@ -504,7 +519,7 @@ export default function MyPTHome() {
           text: "Remove",
           style: "destructive",
           onPress: async () => {
-            const key = sentKeyOf(entry);
+            const key = returnedKeyOf(entry);
             await dismissSharedBatch(key);
             setHub(h => h && (h.dismissedKeys.includes(key) ? h : { ...h, dismissedKeys: [...h.dismissedKeys, key] }));
           },
@@ -555,7 +570,7 @@ export default function MyPTHome() {
       // Real trainers (uuid id) receive through the cloud; mock stays local.
       await appendSentProgram(entry, pt.id);
     } catch (e) {
-      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     // Re-read rather than prepend `entry`: its `sent_…` id is only a local
@@ -638,7 +653,7 @@ export default function MyPTHome() {
           <BounceButton onPress={() => router.navigate("/connect")} accessibilityLabel="Connect with someone">
             <View>
               <View style={[styles.circleBtn, { backgroundColor: t.ctrl }]}>
-                <Ionicons name="add" size={24} color={t.tp} />
+                <UserRoundPlusIcon size={20} color={t.tp} />
               </View>
               <UnreadBadge count={pendingIncoming} style={styles.msgBadge} />
             </View>
@@ -774,7 +789,7 @@ export default function MyPTHome() {
                   >
                     <NeuCard dark={isDark} radius={16}>
                       <View style={styles.summaryRow}>
-                        <GroupAvatar uri={g.group.photoUri} size={30} isDark={isDark} />
+                        <GroupAvatar uri={g.group.photoUri} size={38} isDark={isDark} />
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.summaryName, { color: t.tp }]} numberOfLines={1}>{g.group.name}</Text>
                           <Text style={[styles.groupMeta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>

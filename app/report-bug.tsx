@@ -13,6 +13,7 @@ import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const TP = APP_LIGHT.tp;
 
@@ -37,17 +38,7 @@ export default function ReportBugScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -69,7 +60,7 @@ export default function ReportBugScreen() {
           <ScrollView
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
+            contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
           >
             <View style={styles.header}>
               <View style={{ width: 40 }} />
@@ -161,8 +152,7 @@ const styles = StyleSheet.create({
   root:                 { flex: 1 },
   topGradient:          { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll:               { paddingHorizontal: 20 },
-  header:               { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12, height: 40 },
-  backBtn:              { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  header:               { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12, height: BACK_SIZE },
   title:                { fontFamily: FontFamily.bold, fontSize: 18, color: TP },
   intro:                { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", marginBottom: 24, paddingHorizontal: 24, lineHeight: 20 },
   fieldLabel:           { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4 },

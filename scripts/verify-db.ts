@@ -19,6 +19,14 @@
 //      connection; never a gym user, never someone unconnected or pending, and
 //      not after the connection goes. What they read is the same data, with
 //      each workout still pointing at its program.
+//   4. SENDING A REVIEW BACK (0034): the builder's edits stay a draft until
+//      the trainer sends it back; Send Update hands over the new version and
+//      reopens Accept for a client who took the last one; only the review's
+//      trainer (or an accepted trainer of its group) can do it.
+//   5-6. The group limit (0035) and people's units (0036).
+//   7. ARCHIVING (0037): a send is archived by its sender or a trainer of its
+//      group, a review by its trainer(s), and never by the person on the
+//      other end; a whole send moves in one call, and restoring clears it.
 //
 // Supabase-only pieces are stood in for by SUPABASE_STANDINS below (the auth
 // and storage schemas, pg_net, the API roles). Login is simulated: auth.uid()
@@ -139,6 +147,7 @@ const fullProgram: Required<SavedProgram> = {
   completedDate: "20 Oct 2026",
   cycleOffset: 2,
   pausedAt: "2026-09-18",
+  archivedAt: "2026-09-20",
   trainingDays: 3,
   cycleDays: 4,
   cyclePattern: ["Push", "Pull", "Legs", "Rest"],
@@ -149,7 +158,7 @@ const fullProgram: Required<SavedProgram> = {
   workouts: {
     "0:Push": [{
       id: "e1", name: "Bench Press", isIsometric: false, restSeconds: 120, programNotes: "Pause on the chest",
-      sets: [{ type: "warmup", weightKg: "40", reps: "10" }, { type: "working", weightKg: "80", repMode: "range", repsMin: "6", repsMax: "8" }],
+      sets: [{ type: "warmup", weightKg: "40", reps: "10" }, { type: "working", weightKg: "80", weightUnit: "lb", repMode: "range", repsMin: "6", repsMax: "8" }],
     }],
     "1:Pull": [{ id: "e2", name: "Row", sets: [{ type: "working", weightKg: "60", repMode: "target", reps: "10" }] }],
   },
@@ -413,6 +422,197 @@ async function main() {
   await connect(CLIENT, TRAINER);
   await db.query(`update public.profiles set account_type = 'user' where id = $1`, [TRAINER]);
   eq(await training(CLIENT), null, "access: a trainer who switches to gym user loses it");
+
+  // ─── 4. Sending a review back (0034) ──────────────────────────────────────
+  // Rows written straight in, as the app writes them through the API: the
+  // request, then the builder's saves (a draft_snapshot patch), then the RPC.
+  const askForReview = async (sender: string, recipient: string, groupId: string | null = null) =>
+    (await db.query<{ id: string }>(
+      `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key, group_id)
+       values ($1, $2, 'review', 'program_1', 'Original', '{"name":"Original"}'::jsonb, 'k', $3) returning id`,
+      [sender, recipient, groupId])).rows[0].id;
+  const saveDraft = (id: string, name: string) =>
+    db.query(`update public.shared_programs set draft_snapshot = $2::jsonb where id = $1`, [id, JSON.stringify({ name })]);
+  type ReviewState = { draft: string | null; returned: string | null; isReturned: boolean; isAccepted: boolean };
+  const stateOf = async (id: string): Promise<ReviewState> => (await db.query<ReviewState>(
+    `select draft_snapshot->>'name' as draft, returned_snapshot->>'name' as returned,
+            returned_at is not null as "isReturned", accepted_at is not null as "isAccepted"
+       from public.shared_programs where id = $1`, [id])).rows[0];
+  const sendBack = async (as_: string | null, id: string): Promise<boolean> => {
+    await as(as_);
+    try { await db.query(`select public.return_shared_review($1)`, [id]); return true; } catch { return false; }
+  };
+  const accept = (id: string) => db.query(`update public.shared_programs set accepted_at = now() where id = $1`, [id]);
+
+  // 1:1: CLIENT asks TRAINER.
+  const direct = await askForReview(CLIENT, TRAINER);
+  await saveDraft(direct, "Draft 1");
+  eq(await stateOf(direct), { draft: "Draft 1", returned: null, isReturned: false, isAccepted: false },
+    "review: a builder save is a draft, not something the client can see");
+  eq(await sendBack(TRAINER, direct), true, "review: the trainer can send it back");
+  eq(await stateOf(direct), { draft: null, returned: "Draft 1", isReturned: true, isAccepted: false },
+    "review: Send Back hands over the draft and clears it");
+  await accept(direct);
+  await saveDraft(direct, "Draft 2");
+  eq((await stateOf(direct)).returned, "Draft 1", "review: an edit after sending back doesn't reach the client until it's sent");
+  eq(await sendBack(TRAINER, direct), true, "review: the trainer can send an update");
+  eq(await stateOf(direct), { draft: null, returned: "Draft 2", isReturned: true, isAccepted: false },
+    "review: Send Update hands over the new version and reopens Accept");
+  eq(await sendBack(TRAINER, direct), true, "review: sending again with no new edits is allowed");
+  eq((await stateOf(direct)).returned, "Draft 2", "review: ...and keeps what was sent, rather than blanking it");
+  eq(await sendBack(CLIENT, direct), false, "review: the person who asked can't send their own request back");
+  eq(await sendBack(STRANGER, direct), false, "review: nobody else can send it back");
+  eq(await sendBack(null, direct), false, "review: signed out can't send it back");
+
+  // A group review: GYM_USER asks the group STRANGER owns. It's addressed to
+  // the owner, but any accepted trainer of the group may send it back.
+  const gid = (await db.query<{ id: string }>(
+    `insert into public.groups (owner_id, name) values ($1, 'Gym') returning id`, [STRANGER])).rows[0].id;
+  await db.query(
+    `insert into public.group_members (group_id, user_id, role, accepted_at) values
+       ($1, $2, 'member', now()), ($1, $3, 'trainer', now()), ($1, $4, 'trainer', null)`,
+    [gid, GYM_USER, COACHED_PT, PENDING_PT]);
+  const inGroup = await askForReview(GYM_USER, STRANGER, gid);
+  await saveDraft(inGroup, "Coach's edit");
+  eq(await sendBack(PENDING_PT, inGroup), false, "review: a trainer who hasn't accepted the group's invite can't send it back");
+  eq(await sendBack(GYM_USER, inGroup), false, "review: the member who asked can't send it back");
+  eq(await sendBack(TRAINER, inGroup), false, "review: a trainer outside the group can't send it back");
+  eq(await sendBack(COACHED_PT, inGroup), true, "review: a trainer of the group who isn't its owner can send it back");
+  eq((await stateOf(inGroup)).returned, "Coach's edit", "review: ...handing over that trainer's edits");
+
+  // ─── 5. The group limit (0035) ────────────────────────────────────────────
+  // Five groups per account, the ones it created included. Only ACCEPTING
+  // counts, so an invite can still be sent to someone at the limit.
+  const LIMITED = "ffffffff-0000-4000-8000-000000000007"; // runs groups and joins others'
+  const INVITER = "ffffffff-0000-4000-8000-000000000008"; // invites LIMITED
+  for (const id of [LIMITED, INVITER]) {
+    await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+    await db.query(`update public.profiles set account_type = 'pt' where id = $1`, [id]);
+  }
+  await connect(INVITER, LIMITED);
+  const newGroup = async (owner: string, name: string, members: string[] = []) => {
+    await as(owner);
+    return (await db.query<{ id: string }>(`select public.create_group($1, $2::uuid[]) as id`, [name, members])).rows[0].id;
+  };
+  const joinGroup = async (uid: string, groupId: string) => {
+    await as(uid);
+    await db.query(`select public.accept_group_invite($1)`, [groupId]);
+  };
+  /** The refusal's message, or null when it went through. */
+  const refusal = async (run: () => Promise<unknown>): Promise<string | null> => {
+    try { await run(); return null; } catch (e) { return (e as Error).message; }
+  };
+  const groupsOf = async (uid: string) => (await db.query<{ n: number }>(
+    `select count(*)::int as n from public.group_members where user_id = $1 and accepted_at is not null`, [uid])).rows[0].n;
+  const isPending = async (groupId: string, uid: string) => (await db.query<{ p: boolean }>(
+    `select accepted_at is null as p from public.group_members where group_id = $1 and user_id = $2`, [groupId, uid])).rows[0]?.p;
+
+  const inviteA = await newGroup(INVITER, "Invite A", [LIMITED]);
+  const inviteB = await newGroup(INVITER, "Invite B", [LIMITED]);
+  const own: string[] = [];
+  for (let i = 1; i <= 4; i++) own.push(await newGroup(LIMITED, `Own ${i}`));
+  eq(await groupsOf(LIMITED), 4, "group limit: pending invites don't count");
+  eq(await refusal(() => joinGroup(LIMITED, inviteA)), null, "group limit: joining a 5th group goes through");
+  eq(await groupsOf(LIMITED), 5, "group limit: ...and a joined group counts alongside the ones you created");
+
+  eq(await refusal(() => newGroup(LIMITED, "Own 5")), "group_limit_reached", "group limit: creating a 6th is refused");
+  eq((await db.query(`select 1 from public.groups where name = 'Own 5'`)).rows.length, 0,
+    "group limit: ...and leaves no ownerless group behind");
+  eq(await refusal(() => joinGroup(LIMITED, inviteB)), "group_limit_reached", "group limit: accepting a 6th is refused");
+  eq(await isPending(inviteB, LIMITED), true, "group limit: ...and the invite is still there to accept later");
+
+  let inviteC = "";
+  eq(await refusal(async () => { inviteC = await newGroup(INVITER, "Invite C", [LIMITED]); }), null,
+    "group limit: someone at the limit can still be invited");
+  eq(inviteC ? await isPending(inviteC, LIMITED) : undefined, true, "group limit: ...as a pending invite");
+  await db.query(`update public.group_members set role = 'trainer' where group_id = $1 and user_id = $2`, [inviteA, LIMITED]);
+  eq(await groupsOf(LIMITED), 5, "group limit: a role change at the limit isn't refused");
+
+  await db.query(`delete from public.group_members where group_id = $1 and user_id = $2`, [inviteA, LIMITED]);
+  eq(await refusal(() => joinGroup(LIMITED, inviteB)), null, "group limit: leaving a group makes room to accept");
+  await db.query(`delete from public.groups where id = $1`, [own[0]]);
+  eq(await refusal(() => newGroup(LIMITED, "Own 5")), null, "group limit: deleting one of your groups makes room to create");
+  eq(await groupsOf(LIMITED), 5, "group limit: back at five");
+
+  // ─── 6. Units (0036) ──────────────────────────────────────────────────────
+  // A trainer reads a client's unit with their training, and the send /
+  // review warnings read the unit of anyone they're connected to or share a
+  // group with. Nobody else's comes back.
+  const setUnit = async (uid: string, unit: "kg" | "lb") => {
+    await as(uid); // the owner writes their own, as lib/cloud.ts pushUnit does
+    await db.query(`update public.profiles set unit = $1 where id = auth.uid()`, [unit]);
+  };
+  await db.query(`update public.profiles set account_type = 'pt' where id = $1`, [TRAINER]);
+  await setUnit(CLIENT, "lb");
+  await setUnit(GYM_USER, "lb");
+  await as(TRAINER);
+  eq((await training(CLIENT))?.unit, "lb", "units: a client's training carries the unit they log in");
+  await setUnit(CLIENT, "kg");
+  await as(TRAINER);
+  eq((await training(CLIENT))?.unit, "kg", "units: ...and follows a change to it");
+
+  const unitsFor = async (viewer: string, ids: string[]) => {
+    await as(viewer);
+    const rows = (await db.query<{ user_id: string; unit: string }>(
+      `select * from public.get_people_units($1::uuid[])`, [ids])).rows;
+    return Object.fromEntries(rows.map(r => [r.user_id, r.unit]));
+  };
+  eq(await unitsFor(TRAINER, [CLIENT, STRANGER]), { [CLIENT]: "kg" }, "units: a connection's unit, and nobody unconnected");
+  eq(await unitsFor(PENDING_PT, [CLIENT]), {}, "units: a pending connection gets nothing");
+  eq(await unitsFor(COACHED_PT, [GYM_USER]), { [GYM_USER]: "lb" }, "units: someone you share a group with (not a connection)");
+  eq(await unitsFor(PENDING_PT, [GYM_USER]), {}, "units: an invite you haven't accepted shares nothing");
+  eq(await unitsFor(CLIENT, [CLIENT]), {}, "units: never your own, which the phone already knows");
+
+  // ─── 7. Archiving (0037) ──────────────────────────────────────────────────
+  // An archived SEND is hidden from the people it went to as well, so only
+  // the sender or a trainer of its group may do it; an archived REVIEW only
+  // tidies the trainers' list, so only they may, never the person who asked.
+  // Rows the caller may not touch are skipped, and the count says so.
+  const sendShare = async (sender: string, recipient: string, key: string, groupId: string | null = null) =>
+    (await db.query<{ id: string }>(
+      `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key, group_id)
+       values ($1, $2, 'share', 'program_9', 'Block', '{"name":"Block"}'::jsonb, $3, $4) returning id`,
+      [sender, recipient, key, groupId])).rows[0].id;
+  /** How many rows moved, or null when the call raised. */
+  const setArchived = async (as_: string | null, ids: string[], archived = true): Promise<number | null> => {
+    await as(as_);
+    try {
+      return (await db.query<{ n: number }>(`select public.set_share_archived($1::uuid[], $2) as n`, [ids, archived])).rows[0].n;
+    } catch {
+      return null;
+    }
+  };
+  const archivedCount = async (ids: string[]) => (await db.query<{ n: number }>(
+    `select count(*)::int as n from public.shared_programs where id = any($1::uuid[]) and archived_at is not null`, [ids])).rows[0].n;
+
+  const direct1 = await sendShare(TRAINER, CLIENT, "send-1");
+  eq(await setArchived(CLIENT, [direct1]), 0, "archive: the person a program was sent to can't archive the send");
+  eq(await setArchived(STRANGER, [direct1]), 0, "archive: nor can anyone else");
+  eq(await setArchived(TRAINER, [direct1]), 1, "archive: the sender can");
+  eq(await archivedCount([direct1]), 1, "archive: ...and it's archived");
+  eq(await setArchived(TRAINER, [direct1], false), 1, "archive: the sender can restore it");
+  eq(await archivedCount([direct1]), 0, "archive: ...which clears it");
+
+  // A group send: one row per member, sent by the owner. A trainer of the
+  // group who didn't send it can archive it too, as they can remove it.
+  const groupSend = [await sendShare(STRANGER, GYM_USER, "send-2", gid), await sendShare(STRANGER, COACHED_PT, "send-2", gid)];
+  eq(await setArchived(GYM_USER, groupSend), 0, "archive: a member can't archive a group's send");
+  eq(await setArchived(PENDING_PT, groupSend), 0, "archive: a trainer who hasn't accepted the invite can't");
+  eq(await setArchived(TRAINER, groupSend), 0, "archive: a trainer outside the group can't");
+  eq(await setArchived(COACHED_PT, groupSend), 2, "archive: a trainer of the group can, the whole send in one call");
+  eq(await setArchived(STRANGER, groupSend, false), 2, "archive: the owner restores it, every row");
+  eq(await setArchived(TRAINER, [direct1, ...groupSend]), 1, "archive: only the rows the caller may archive move");
+  await setArchived(TRAINER, [direct1], false);
+
+  // Reviews: `direct` is CLIENT asking TRAINER, `inGroup` GYM_USER asking the group.
+  eq(await setArchived(CLIENT, [direct]), 0, "archive: the person who asked can't archive their own request");
+  eq(await setArchived(TRAINER, [direct]), 1, "archive: the review's trainer can");
+  eq(await setArchived(TRAINER, [direct], false), 1, "archive: ...and restore it");
+  eq(await setArchived(GYM_USER, [inGroup]), 0, "archive: a member can't archive their own group review");
+  eq(await setArchived(TRAINER, [inGroup]), 0, "archive: a trainer outside the group can't archive its review");
+  eq(await setArchived(COACHED_PT, [inGroup]), 1, "archive: a trainer of the group can archive its review");
+  eq(await setArchived(STRANGER, [inGroup], false), 1, "archive: another trainer of it can restore it");
+  eq(await setArchived(null, [direct1]), null, "archive: signed out is an error");
 
   return finish(db);
 }

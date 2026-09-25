@@ -21,9 +21,8 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
-import { migrateWeightLbToKg } from "./units";
+import { UNIT_KEY, migrateWeightLbToKg } from "./units";
 
-const UNIT_KEY = "@avenas/unit";
 export const WEIGHT_KG_MIGRATION_KEY = "@avenas/weight_kg_migration_done";
 
 /** Convert every stored set weight in completed history from lb to kg. Pure. */

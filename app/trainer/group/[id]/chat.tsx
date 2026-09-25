@@ -50,6 +50,7 @@ import { getMyUid } from "../../../../lib/chat";
 import { loadHiddenMessageIds, loadBlockedIds, blockContact, reportPerson, reportMessage } from "../../../../utils/moderation";
 import type { Group, GroupMember, GroupMessage } from "../../../../constants/groups";
 import type { ReportReason } from "../../../../constants/chat";
+import BackButton, { BACK_TOP, BACK_LEFT } from "../../../../components/BackButton";
 
 export default function GroupThreadScreen() {
   const router = useRouter();
@@ -274,12 +275,8 @@ export default function GroupThreadScreen() {
   }, [group, members]);
 
   const header = (
-    <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: t.div }]}>
-      <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+    <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
+      <BackButton inline />
       {/* The photo and name open the group, the way tapping a thread's title
           does everywhere else. The menu used to be the only route there, and
           it's moderation-only now — without this, arriving from Messages (where
@@ -408,7 +405,7 @@ export default function GroupThreadScreen() {
 }
 
 const styles = StyleSheet.create({
-  header:      { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
+  header:      { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12, borderBottomWidth: 1 },
   backBtn:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   headerTitle: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
   // The group's circle is GroupAvatar's own, at the 38pt this header used.

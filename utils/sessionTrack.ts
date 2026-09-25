@@ -11,8 +11,13 @@
 //
 // Counting occurrences instead means a missed week still costs you a number: the
 // day you skipped in week 2 is on its 3rd session in week 3, same as every other
-// day. The occurrence nobody trained is reported in `missed`, which is what draws
-// the grey dot on the track.
+// day. An occurrence nobody trained is reported in `missed`, which is what draws
+// the grey dot on the track, UNLESS something else was trained on its date (a
+// custom workout, or another day picked with Change Workout Day). That one is
+// `replaced` and draws orange: "you trained that day, just not this" and "you
+// didn't train" are different things, and grey said the second for both. The
+// session that did the replacing says so on its own card ("Instead of Push",
+// `insteadOfById`), read off the same track so the two ends always agree.
 //
 // Pure and RN-free (verified by scripts/verify-session-track.ts).
 
@@ -20,7 +25,7 @@ import { addDaysYMD, parseStoredDate, toYMD } from "./dates";
 import { cycleIndexForDate } from "./workout";
 import { isDatePushed } from "./skippedDates";
 import { workoutBelongsToProgram } from "./progressStats";
-import { indexOfDayId, normalizeDayName } from "./programDays";
+import { dayIdAt, indexOfDayId, normalizeDayName } from "./programDays";
 import { programFinishDate, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 
 /** A program can't run forever; this bounds the walk if a finish date can't be
@@ -79,8 +84,15 @@ export type SessionTrackInfo = {
    *  falls outside every occurrence window is absent, and the caller keeps its
    *  old number. */
   numberById: Record<string, number>;
-  /** Occurrence numbers already past with nothing logged against them. */
+  /** Occurrence numbers already past with nothing logged against them, and
+   *  nothing else trained on their date either. */
   missed: number[];
+  /** Occurrences this day never got, but whose date had ANOTHER session logged:
+   *  the day was trained, with something else in its place. Never also in
+   *  `missed`. */
+  replaced: number[];
+  /** The scheduled dates of `replaced`, in the same order. */
+  replacedDates: string[];
   /** How many occurrences have come round up to and including today. */
   occurrences: number;
 };
@@ -97,19 +109,32 @@ export type SessionTrackInfo = {
  *
  * `history` must already be narrowed to this slot — the caller knows whether that
  * is by dayId or, for legacy records, by name (workoutMatchesDay).
+ *
+ * `trainedDates` is every date with ANY session logged, this slot's or not. An
+ * unfilled occurrence whose own date is in it was replaced rather than missed.
+ * Only the scheduled date itself counts: a custom workout two days later, in the
+ * same window, didn't stand in for this day. Omitted, nothing reads as replaced.
+ *
+ * Today's occurrence can be replaced but never missed. Nothing logged yet is
+ * just "not yet"; something else logged IS the day's session, since the Workout
+ * tab treats the day as done once anything is logged on it. Should this day be
+ * logged after all, the occurrence fills and the orange goes on the next read.
  */
-export function buildSessionTrack({ program, dayId, history, todayYMD }: {
+export function buildSessionTrack({ program, dayId, history, todayYMD, trainedDates }: {
   program: SavedProgram;
   dayId: string;
   history: CompletedWorkout[];
   todayYMD: string;
+  trainedDates?: ReadonlySet<string>;
 }): SessionTrackInfo {
   const occurrences = occurrencesOfDay(program, dayId, todayYMD);
   const numberById: Record<string, number> = {};
-  if (occurrences.length === 0) return { numberById, missed: [], occurrences: 0 };
+  if (occurrences.length === 0) return { numberById, missed: [], replaced: [], replacedDates: [], occurrences: 0 };
 
   const sessions = [...history].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const missed: number[] = [];
+  const replaced: number[] = [];
+  const replacedDates: string[] = [];
   let next = 0; // index into `sessions`
 
   occurrences.forEach((occYMD, i) => {
@@ -123,11 +148,17 @@ export function buildSessionTrack({ program, dayId, history, todayYMD }: {
       filled = true;
       next++;
     }
-    // Today's occurrence isn't missed until the day is over.
-    if (!filled && occYMD < todayYMD) missed.push(i + 1);
+    if (filled) return;
+    if (trainedDates?.has(occYMD)) {
+      replaced.push(i + 1);
+      replacedDates.push(occYMD);
+    } else if (occYMD < todayYMD) {
+      // Today's occurrence isn't missed until the day is over.
+      missed.push(i + 1);
+    }
   });
 
-  return { numberById, missed, occurrences: occurrences.length };
+  return { numberById, missed, replaced, replacedDates, occurrences: occurrences.length };
 }
 
 /**
@@ -146,6 +177,11 @@ export type SessionTracks = {
   numberById: Record<string, number>;
   positionById: Record<string, number>;
   missedById: Record<string, number[]>;
+  /** Occurrences trained with something else on their date (orange dots). */
+  replacedById: Record<string, number[]>;
+  /** Workout id → the scheduled day it stood in for, by the day's current
+   *  label: the other end of an orange dot ("Instead of Push" on its card). */
+  insteadOfById: Record<string, string>;
 };
 
 /**
@@ -172,6 +208,12 @@ export function buildSessionTracks(
   const numberById: Record<string, number> = {};
   const positionById: Record<string, number> = {};
   const missedById: Record<string, number[]> = {};
+  const replacedById: Record<string, number[]> = {};
+
+  // Every date anything was trained on, whichever program (if any) owns it: a
+  // free custom workout on a Push day stood in for Push just as much as one
+  // added to the program did.
+  const trainedDates = new Set(history.map(w => w.date));
 
   const activeFirst = [...programs].sort((a, b) =>
     a.status === "active" ? -1 : b.status === "active" ? 1 : 0
@@ -205,13 +247,28 @@ export function buildSessionTracks(
     entry.sessions.push(w);
     byTrack.set(key, entry);
   }
+  // One track per (program, day), built once: the dots below and the "Instead
+  // of" line after them both read it, so a card and the orange dot it explains
+  // can't disagree. A day nobody has logged yet still gets one (empty history).
+  const trackCache = new Map<string, SessionTrackInfo>();
+  const trackFor = (program: SavedProgram, dayId: string): SessionTrackInfo => {
+    const key = `${program.id}:${dayId}`;
+    let track = trackCache.get(key);
+    if (!track) {
+      track = buildSessionTrack({ program, dayId, history: byTrack.get(key)?.sessions ?? [], todayYMD, trainedDates });
+      trackCache.set(key, track);
+    }
+    return track;
+  };
+
   for (const { program, dayId, sessions } of byTrack.values()) {
-    const track = buildSessionTrack({ program, dayId, history: sessions, todayYMD });
+    const track = trackFor(program, dayId);
     for (const w of sessions) {
       const occurrence = track.numberById[w.id];
       if (occurrence === undefined) continue;
       positionById[w.id] = occurrence;
       missedById[w.id] = track.missed;
+      replacedById[w.id] = track.replaced;
     }
   }
 
@@ -222,7 +279,27 @@ export function buildSessionTracks(
     if (positionById[w.id] === undefined) positionById[w.id] = numberById[w.id];
   }
 
-  return { numberById, positionById, missedById };
+  // What each session stood in for: the day its program scheduled on that
+  // date, when that occurrence came out REPLACED. A session no program owns (a
+  // custom workout not added) is read against the active program, whose day
+  // it displaced all the same. A session OF that day fills the occurrence, so
+  // it never reads as standing in for itself.
+  const insteadOfById: Record<string, string> = {};
+  const active = activeFirst.find(p => p.status === "active") ?? null;
+  for (const w of history) {
+    const program = ownerById.get(w.id) ?? active;
+    if (!program) continue;
+    const slot = cycleIndexForDate(program, w.date);
+    if (slot === null) continue;
+    const label = program.cyclePattern[slot];
+    if (!label || normalizeDayName(label) === "rest") continue;
+    // A pushed or held date isn't an occurrence, so it can't be in here.
+    if (trackFor(program, dayIdAt(program, slot)).replacedDates.includes(w.date)) {
+      insteadOfById[w.id] = label;
+    }
+  }
+
+  return { numberById, positionById, missedById, replacedById, insteadOfById };
 }
 
 /** The program's start as "YYYY-MM-DD", or null when it can't be parsed — which

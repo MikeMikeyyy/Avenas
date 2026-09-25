@@ -1,7 +1,7 @@
 // Trainer review screen for a SentProgram (gym user → trainer).
-// Shows the program snapshot, lets the trainer leave overall comments
-// and "Send Back" the program. Send Back stamps returnedAtISO + comments,
-// flipping status to "returned" so the gym user sees the feedback.
+// Shows the trainer's working copy and "Send Back"s it. Edits made in the
+// builder are a draft until then (migration 0034): Send Back, and Send Update
+// after it, are what hand the client that version with an Accept on it.
 
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -21,7 +21,9 @@ import ProgramSummarySheet from "../../../components/ProgramSummarySheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
 import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
-import { loadGroupReviewPrograms, loadSentPrograms, updateSentProgram, type SentProgram } from "../../../utils/trainerStore";
+import { loadGroupReviewPrograms, loadSentPrograms, returnReview, type SentProgram } from "../../../utils/trainerStore";
+import { alertMessage } from "../../../utils/errors";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../../../components/BackButton";
 
 // Matches the floating dismiss button used in workout.tsx / log-workout.tsx /
 // new-program.tsx — single canonical SVG kept local to each screen.
@@ -69,48 +71,38 @@ export default function ReviewScreen() {
     return () => { cancelled = true; };
   }, [id, groupId]));
 
-  const handleSendBack = useCallback(() => {
+  /** Send Back and Send Update are the same step (returnReview): the client
+   *  gets this version and an Accept for it. Only the prompt differs. */
+  const confirmReturn = useCallback((title: string, message: string) => {
     if (!entry) return;
-    Alert.alert(
-      "Send Back",
-      "Are you sure all changes have been made?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Send Back",
-          onPress: async () => {
-            await updateSentProgram(entry.id, {
-              status: "returned",
-              returnedAtISO: new Date().toISOString(),
-              appliedAtISO: undefined,
-            });
-            router.back();
-          },
+    Alert.alert(title, message, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: title,
+        onPress: async () => {
+          try {
+            await returnReview(entry.id);
+          } catch (e) {
+            Alert.alert("Couldn't send it", alertMessage(e, "Check your connection and try again."));
+            return;
+          }
+          router.back();
         },
-      ]
-    );
+      },
+    ]);
   }, [entry, router]);
+
+  const handleSendBack = useCallback(() => {
+    confirmReturn("Send Back", "Are you sure all changes have been made?");
+  }, [confirmReturn]);
 
   const handleSendUpdate = useCallback(() => {
     if (!entry) return;
-    Alert.alert(
+    confirmReturn(
       "Send Update",
       `Send the latest edits to the ${entry.groupId ? "member" : "client"}? They'll get a tick to accept the new version into their programs.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Send Update",
-          onPress: async () => {
-            await updateSentProgram(entry.id, {
-              returnedAtISO: new Date().toISOString(),
-              appliedAtISO: undefined,
-            });
-            router.back();
-          },
-        },
-      ]
     );
-  }, [entry, router]);
+  }, [entry, confirmReturn]);
 
   if (!loaded) {
     return <View style={{ flex: 1, backgroundColor: t.bg }} />;
@@ -137,24 +129,19 @@ export default function ReviewScreen() {
   const Who = entry.groupId ? "Member" : "Client";
   // Trainer made edits in the program builder AFTER the last Send Back —
   // surface a "Send Update to Client" CTA so they can push the new version.
-  const hasUnsentEdits =
-    isReturned &&
+  // A cloud review knows exactly (it has a draft); a local one compares times.
+  const hasUnsentEdits = isReturned && (entry.unsentEdits ?? (
     !!entry.lastEditedAtISO &&
-    (!entry.returnedAtISO || entry.lastEditedAtISO > entry.returnedAtISO);
+    (!entry.returnedAtISO || entry.lastEditedAtISO > entry.returnedAtISO)
+  ));
+  // Where the version they were sent stands: still theirs to accept, or taken.
+  const returnedLine = entry.appliedAtISO
+    ? `Sent back. The ${who} has accepted your changes.`
+    : `Sent back. Waiting for the ${who} to accept it.`;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -171,7 +158,7 @@ export default function ReviewScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 120 }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 120 }}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.titleRow}>
@@ -199,9 +186,7 @@ export default function ReviewScreen() {
             <>
               <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
                 <Ionicons name="checkmark-circle" size={18} color={ACCT} />
-                <Text style={[styles.returnedText, { color: ACCT }]}>
-                  {`Already sent back to the ${who}.`}
-                </Text>
+                <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
               </View>
               <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} accessibilityLabel={`Send your latest edits to the ${who}`}>
                 <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
@@ -213,9 +198,7 @@ export default function ReviewScreen() {
           ) : (
             <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
               <Ionicons name="checkmark-circle" size={18} color={ACCT} />
-              <Text style={[styles.returnedText, { color: ACCT }]}>
-                {`Already sent back to the ${who}.`}
-              </Text>
+              <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
             </View>
           )}
 
@@ -277,7 +260,7 @@ export default function ReviewScreen() {
 const styles = StyleSheet.create({
   topGradient:    { position: "absolute", left: 0, right: 0, zIndex: 5 },
   iconBtn:        { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  titleRow:       { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
+  titleRow:       { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
   screenTitle:    { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1 },
   // The name card is components/ProgramHeaderCard.tsx, and the cycle strip and
   // the day-by-day breakdown are components/ProgramSnapshotView.tsx; each owns

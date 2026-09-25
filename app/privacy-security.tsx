@@ -4,7 +4,7 @@
 // no password here, so they get an explanation instead of the form.
 
 import { useEffect, useState } from "react";
-import { Alert, View, Text, StyleSheet, Switch, TextInput, TouchableOpacity } from "react-native";
+import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -15,9 +15,11 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
-import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { changePassword } from "../lib/cloud";
 import { getShareActivity, setShareActivity } from "../lib/connections";
+import AppSwitch from "../components/AppSwitch";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const MIN_PASSWORD = 8;
 
@@ -95,21 +97,13 @@ export default function PrivacySecurityScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-      >
-        <Ionicons name="chevron-back" size={22} color={t.tp} />
-      </TouchableOpacity>
+      <BackButton />
 
       <KeyboardAwareScrollView
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 64, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: insets.bottom + 32 }]}
       >
         <Text style={[styles.title, { color: t.tp }]}>Privacy & Security</Text>
 
@@ -122,12 +116,10 @@ export default function PrivacySecurityScreen() {
                 People you&apos;re connected with can see when you were last active on Avenas. When this is off, they see nothing at all.
               </Text>
             </View>
-            <Switch
+            <AppSwitch
               value={shareActivity}
               onValueChange={onToggleShareActivity}
               disabled={!shareLoaded}
-              trackColor={{ false: t.div, true: ACCT }}
-              thumbColor="#fff"
             />
           </View>
         </NeuCard>
@@ -217,7 +209,6 @@ export default function PrivacySecurityScreen() {
 
 const styles = StyleSheet.create({
   root:        { flex: 1 },
-  backBtn:     { position: "absolute", left: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:      { paddingHorizontal: 28 },
   title:       { fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
   intro:       { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", marginTop: 10, marginBottom: 8 },

@@ -162,6 +162,9 @@ export type ProgramRow = {
    *  running. Unrelated to status = 'paused', which means not active at all
    *  (migration 0019). */
   paused_at: string | null;
+  /** Archived from My Programs on this date ("YYYY-MM-DD"), or null when it's
+   *  in the list (migration 0037). See SavedProgram.archivedAt. */
+  archived_at: string | null;
   training_days: number;
   cycle_days: number;
   cycle_pattern: string[];
@@ -257,12 +260,25 @@ export type SharedProgramRow = {
   deleted_by_recipient_at: string | null;
   returned_at: string | null;
   trainer_comments: string | null;
+  /** What the client was SENT BACK: the copy they view and accept. Written only
+   *  by the return_shared_review RPC (migration 0034). Rows reviewed before 0034
+   *  and not yet sent back hold the trainer's working copy here instead. */
   returned_snapshot: Record<string, unknown> | null;
+  /** A review's working copy: the trainer's builder edits not yet sent back
+   *  (migration 0034). Null once sent, and absent from the row until 0034 is
+   *  applied. */
+  draft_snapshot?: Record<string, unknown> | null;
   /** A group coach marked this review dealt with (migration 0028). Null = still
    *  in the group's queue. Only meaningful with a group_id; written through the
    *  set_group_review_completed RPC, never as a column patch, so the sender
    *  can't close their own review. */
   completed_at: string | null;
+  /** Taken off the list of whoever the row is work for (migration 0037): a
+   *  share by its sender or a group trainer, which hides it from its
+   *  recipients too; a review by its trainer(s), which the person who asked
+   *  never sees. Written only through the set_share_archived RPC, and absent
+   *  from the row until 0037 is applied. */
+  archived_at?: string | null;
 };
 
 // ── push tokens (server-sent notifications; migration 0012) ───────────────────

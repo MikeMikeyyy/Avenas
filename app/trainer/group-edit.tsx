@@ -34,13 +34,15 @@ import PeopleIcon from "../../components/icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
-import { createGroup, fetchGroup, fetchGroupMembers, renameGroup, setGroupAvatar, setGroupMembers, uploadGroupAvatar } from "../../lib/groups";
+import { createGroup, fetchGroup, fetchGroupMembers, isGroupLimitError, renameGroup, setGroupAvatar, setGroupMembers, uploadGroupAvatar } from "../../lib/groups";
 import { getMyUid, isCloudContactId } from "../../lib/chat";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { loadBlockedIds, reportPerson } from "../../utils/moderation";
 import type { Client } from "../../utils/trainerStore";
-import type { GroupMember } from "../../constants/groups";
+import { GROUP_LIMIT_TITLE, groupLimitMessage, type GroupMember } from "../../constants/groups";
 import type { ReportReason } from "../../constants/chat";
+import { alertMessage } from "../../utils/errors";
+import BackButton, { BACK_TOP, BACK_LEFT } from "../../components/BackButton";
 
 export default function GroupEditScreen() {
   const router = useRouter();
@@ -223,7 +225,7 @@ export default function GroupEditScreen() {
         try {
           await commitPhoto(newId);
         } catch (e) {
-          Alert.alert("Group created", `The photo didn't upload: ${e instanceof Error ? e.message : "try again from the group's settings."}`);
+          Alert.alert("Group created", `The photo didn't upload. ${alertMessage(e, "Try again from the group's settings.")}`);
         }
         router.replace({ pathname: "/trainer/group/[id]", params: { id: newId, name: trimmed } });
         return;
@@ -233,7 +235,11 @@ export default function GroupEditScreen() {
       await commitPhoto(groupId);
       router.back();
     } catch (e) {
-      Alert.alert("Couldn't save group", e instanceof Error ? e.message : "Check your connection and try again.");
+      // The hub checks the limit before opening this screen; this is the
+      // database refusing a list that was out of date (0035). Whether they run
+      // a group isn't known here, so the prompt offers both ways out.
+      if (isGroupLimitError(e)) Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("create", true));
+      else Alert.alert("Couldn't save group", alertMessage(e, "Check your connection and try again."));
     } finally {
       setBusy(false);
     }
@@ -241,12 +247,8 @@ export default function GroupEditScreen() {
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
-      <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: t.div }]}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-          <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        </TouchableOpacity>
+      <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
+        <BackButton inline />
         <Text style={[styles.headerTitle, { color: t.tp }]} numberOfLines={1}>
           {isNew ? "New Group" : isOwner ? "Manage Group" : "Group Members"}
         </Text>
@@ -427,8 +429,7 @@ export default function GroupEditScreen() {
 }
 
 const styles = StyleSheet.create({
-  header:       { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
-  backBtn:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  header:       { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12, borderBottomWidth: 1 },
   headerTitle:  { flex: 1, fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center" },
   loading:      { flex: 1, alignItems: "center", justifyContent: "center" },
 

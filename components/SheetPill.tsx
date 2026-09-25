@@ -10,13 +10,14 @@
 // An on/off SETTING in a sheet is a SheetToggle (below), not one of these.
 
 import type { ReactNode } from "react";
-import { View, Text, StyleSheet, Switch, type StyleProp, type ViewStyle, type AccessibilityRole, type AccessibilityState } from "react-native";
+import { View, Text, StyleSheet, type StyleProp, type ViewStyle, type AccessibilityRole, type AccessibilityState } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import BounceButton from "./BounceButton";
-import { APP_DARK, APP_LIGHT, ACCT, ACCT_DEEP, DANGER_BRIGHT, FontFamily, SWITCH_TRACK_LIGHT } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, ACCT, ACCT_DEEP, DANGER_BRIGHT, FontFamily } from "../constants/theme";
 import { haloGlow, pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
+import AppSwitch from "./AppSwitch";
 
 export type SheetPillVariant = "default" | "primary" | "danger" | "quiet";
 
@@ -99,9 +100,9 @@ export default function SheetPill({
  *
  * Light mode is what shaped it. The pill keeps the solid control fill and shadow
  * when off (an outline alone on the pale sheet was fainter than the white
- * buttons it sat under). The switch is the Settings page's: iOS's own at full
- * size, off track SWITCH_TRACK_LIGHT in light mode, and live, so touching it
- * gets the same glass knob.
+ * buttons it sat under). The switch is the Settings page's (AppSwitch): iOS's
+ * own at full size, off track SWITCH_TRACK_LIGHT in light mode, and live, so
+ * touching it gets the same glass knob.
  */
 export function SheetToggle({ label, icon, value, onChange }: {
   label: string;
@@ -140,14 +141,12 @@ export function SheetToggle({ label, icon, value, onChange }: {
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
         >
-          <Switch
+          <AppSwitch
             value={value}
             onValueChange={next => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               onChange(next);
             }}
-            trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
-            thumbColor="#fff"
           />
         </View>
       </View>

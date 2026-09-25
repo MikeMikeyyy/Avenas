@@ -43,6 +43,8 @@ import {
   type Connection,
   type RequestResult,
 } from "../lib/connections";
+import { alertMessage } from "../utils/errors";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 /** Build the deep link encoded in the QR (also works from the system camera). */
 const linkForCode = (code: string) => `avenas://connect?code=${code}`;
@@ -197,7 +199,7 @@ export default function ConnectScreen() {
         if (nowAccepted) offerToCoach(nowAccepted);
       }
     } catch (e) {
-      Alert.alert("Couldn't connect", e instanceof Error ? e.message : "Please try again.");
+      Alert.alert("Couldn't connect", alertMessage(e, "Please try again."));
     } finally {
       setBusy(false);
     }
@@ -227,7 +229,7 @@ export default function ConnectScreen() {
       await refresh();
       if (accept) offerToCoach(c);
     } catch (e) {
-      Alert.alert("Something went wrong", e instanceof Error ? e.message : "Please try again.");
+      Alert.alert("Something went wrong", alertMessage(e, "Please try again."));
     }
   };
 
@@ -238,7 +240,7 @@ export default function ConnectScreen() {
         text: "Withdraw", style: "destructive",
         onPress: async () => {
           try { await disconnect(c.connectionId); await refresh(); }
-          catch (e) { Alert.alert("Something went wrong", e instanceof Error ? e.message : "Please try again."); }
+          catch (e) { Alert.alert("Something went wrong", alertMessage(e, "Please try again.")); }
         },
       },
     ]);
@@ -254,7 +256,7 @@ export default function ConnectScreen() {
   const onShare = async () => {
     if (!myCode) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await Share.share({ message: `Connect with me on Avenas — use code ${myCode} or open ${linkForCode(myCode)}` });
+    await Share.share({ message: `Connect with me on Avenas. Use code ${myCode} or open ${linkForCode(myCode)}` });
   };
 
   const removeAccepted = (c: Connection) => {
@@ -264,7 +266,7 @@ export default function ConnectScreen() {
         text: "Remove", style: "destructive",
         onPress: async () => {
           try { await disconnect(c.connectionId); await refresh(); }
-          catch (e) { Alert.alert("Something went wrong", e instanceof Error ? e.message : "Please try again."); }
+          catch (e) { Alert.alert("Something went wrong", alertMessage(e, "Please try again.")); }
         },
       },
     ]);
@@ -340,21 +342,13 @@ export default function ConnectScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-      >
-        <Ionicons name="chevron-back" size={22} color={t.tp} />
-      </TouchableOpacity>
+      <BackButton />
 
       <KeyboardAwareScrollView
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 32 }]}
       >
         <View style={styles.header}>
           <View style={{ width: 40 }} />
@@ -515,9 +509,8 @@ export default function ConnectScreen() {
 
 const styles = StyleSheet.create({
   root:        { flex: 1 },
-  backBtn:     { position: "absolute", left: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:      { paddingHorizontal: 24 },
-  header:      { flexDirection: "row", alignItems: "center", height: 40 },
+  header:      { flexDirection: "row", alignItems: "center", height: BACK_SIZE },
   title:       { flex: 1, fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
   subtitle:    { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", marginTop: 24, lineHeight: 20, paddingHorizontal: 8 },
   label:       { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4, marginTop: 24 },

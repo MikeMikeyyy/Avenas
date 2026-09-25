@@ -1,4 +1,4 @@
-import { Alert, Linking, Platform, View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from "react-native";
+import { Alert, Linking, Platform, View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -21,7 +21,10 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import NeuCard from "../components/NeuCard";
-import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BUBBLE_LIGHT, SWITCH_TRACK_LIGHT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, Colors, BUBBLE_LIGHT } from "../constants/theme";
+import AppSwitch from "../components/AppSwitch";
+import { alertMessage } from "../utils/errors";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // ─── Settings item types ──────────────────────────────────────────────────────
 type BaseItem     = { icon: string; label: string; renderIcon?: (c: string) => React.ReactNode };
@@ -229,7 +232,7 @@ export default function SettingsScreen() {
               resetOnboarding();
               router.replace("/onboarding");
             } catch (e) {
-              Alert.alert("Couldn't delete account", e instanceof Error ? e.message : "Please try again.");
+              Alert.alert("Couldn't delete account", alertMessage(e, "Please try again."));
             }
           },
         },
@@ -259,17 +262,7 @@ export default function SettingsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 16, left: 26, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
         <MaskedView style={StyleSheet.absoluteFill} maskElement={
@@ -285,7 +278,7 @@ export default function SettingsScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -368,11 +361,9 @@ export default function SettingsScreen() {
                           : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
-                      <Switch
+                      <AppSwitch
                         value={focusView}
                         onValueChange={toggleFocusView}
-                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
-                        thumbColor="#fff"
                       />
                     </View>
                   ) : "autofillToggle" in item ? (
@@ -383,11 +374,9 @@ export default function SettingsScreen() {
                           : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
-                      <Switch
+                      <AppSwitch
                         value={autofillSets}
                         onValueChange={toggleAutofillSets}
-                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
-                        thumbColor="#fff"
                       />
                     </View>
                   ) : "liveActivityToggle" in item ? (
@@ -398,11 +387,9 @@ export default function SettingsScreen() {
                           : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
-                      <Switch
+                      <AppSwitch
                         value={liveActivity}
                         onValueChange={toggleLiveActivity}
-                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
-                        thumbColor="#fff"
                       />
                     </View>
                   ) : "toggle" in item ? (
@@ -413,11 +400,9 @@ export default function SettingsScreen() {
                           : <Ionicons name={item.icon as any} size={20} color={t.icon} />}
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                       </View>
-                      <Switch
+                      <AppSwitch
                         value={isDark}
                         onValueChange={toggleDark}
-                        trackColor={{ false: isDark ? t.div : SWITCH_TRACK_LIGHT, true: ACCT }}
-                        thumbColor="#fff"
                       />
                     </View>
                   ) : (
@@ -494,8 +479,7 @@ const styles = StyleSheet.create({
   root:              { flex: 1 },
   topGradient:       { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll:            { paddingHorizontal: 20 },
-  header:            { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 32, height: 40 },
-  backBtn:           { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  header:            { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 32, height: BACK_SIZE },
   title:             { fontFamily: FontFamily.bold, fontSize: 18, color: TP },
   avatarSection:     { alignItems: "center", marginBottom: 36, gap: 8 },
   avatar:            { width: 80, height: 80, borderRadius: 40 },

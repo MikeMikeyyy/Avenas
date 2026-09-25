@@ -45,6 +45,7 @@ import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { buildJournalFeed } from "../utils/journalFeed";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { useTheme } from "../contexts/ThemeContext";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // Dev-only warning helper. Compiled out of release builds via `__DEV__`.
 function warnStorage(op: string, key: string, err: unknown) {
@@ -570,22 +571,12 @@ export default function JournalScreen() {
       </View>
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
       >
         {/* Page header */}
         <View style={styles.header}>
@@ -762,10 +753,9 @@ export default function JournalScreen() {
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   scroll: { paddingHorizontal: 20 },
 
-  header:      { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 24 },
+  header:      { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1, color: TP },
 
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18, color: TP, marginTop: 24, marginBottom: 12 },

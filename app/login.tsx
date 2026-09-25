@@ -16,6 +16,7 @@ import { pill, PILL_H, PILL_SHADOW } from "../constants/buttons";
 import { AppleSignInCancelled, isAppleSignInAvailable, oauthOnlyProvidersForEmail, signInWithApple, signInWithEmail, signInWithProvider, signOut } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { pullProfile } from "../lib/cloud";
+import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -119,7 +120,7 @@ export default function LoginScreen() {
         // Cancelling must sign out the half-created session so the user isn't stuck signed in.
         Alert.alert(
           "New here?",
-          "There's no Avenas account for that Google account yet — let's get you set up.",
+          "There's no Avenas account for that Google account yet. Let's get you set up.",
           [
             { text: "Cancel", style: "cancel", onPress: () => { void signOut({ force: true }); } },
             { text: "Continue", onPress: afterAuth },
@@ -154,21 +155,13 @@ export default function LoginScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={[styles.backBtn, { top: insets.top + 12, backgroundColor: t.ctrl }]}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-      >
-        <Ionicons name="chevron-back" size={22} color={t.tp} />
-      </TouchableOpacity>
+      <BackButton />
 
       <KeyboardAwareScrollView
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 90, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 38, paddingBottom: insets.bottom + 32 }]}
       >
         <Text style={[styles.title, { color: t.tp }]}>Welcome back</Text>
         <Text style={[styles.subtitle, { color: t.ts }]}>Log in to pick up where you left off.</Text>
@@ -261,7 +254,6 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   root:          { flex: 1 },
-  backBtn:       { position: "absolute", left: 22, zIndex: 10, width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scroll:        { paddingHorizontal: 28 },
   title:         { fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
   subtitle:      { fontFamily: FontFamily.regular, fontSize: 15, textAlign: "center", marginTop: 8, marginBottom: 16 },

@@ -22,10 +22,12 @@ import ChatIcon from "../../../components/icons/ChatIcon";
 import SendIcon from "../../../components/icons/SendIcon";
 import TrashIcon from "../../../components/TrashIcon";
 import SheetPill from "../../../components/SheetPill";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../../constants/theme";
 import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
+import { UnitLens, useUnit } from "../../../contexts/UnitContext";
+import { unitLabel, unitOf } from "../../../utils/units";
 import type { ReportReason } from "../../../constants/chat";
 import {
   appendSharedPrograms,
@@ -47,6 +49,8 @@ import { loadHiddenMessageIds, blockContact, unaddContact, reportUser } from "..
 import { getJSON } from "../../../utils/storage";
 import { removeShareConfirm } from "../../../utils/removeShare";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
+import { alertMessage } from "../../../utils/errors";
+import BackButton, { BACK_TOP, BACK_LEFT } from "../../../components/BackButton";
 
 type Tab = "progress" | "journal" | "programs";
 
@@ -109,6 +113,7 @@ export default function ClientDetailScreen() {
   const insets = useSafeAreaInsets();
 
   const { accountType, loaded: accountLoaded } = useAccountType();
+  const { isKg: ownIsKg } = useUnit();
 
   const [client, setClient] = useState<Client | null>(null);
   const [data, setData] = useState<ClientData>({ workoutHistory: [], programs: [], journal: [] });
@@ -274,7 +279,7 @@ export default function ClientDetailScreen() {
     try {
       await appendSharedPrograms([entry]);
     } catch (e) {
-      Alert.alert("Couldn't send program", e instanceof Error ? e.message : "Check your internet and try again.");
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     // Re-read rather than prepend `entry`: its `share_…` id is a local
@@ -352,7 +357,7 @@ export default function ClientDetailScreen() {
     await reportUser(client, reason);
     Alert.alert(
       "Report received",
-      `Thanks — we review reports within 24 hours. Would you also like to block ${client.name}?`,
+      `Thanks. We review reports within 24 hours. Would you also like to block ${client.name}?`,
       [
         { text: "Not now", style: "cancel" },
         { text: "Block", style: "destructive", onPress: async () => {
@@ -386,6 +391,12 @@ export default function ClientDetailScreen() {
   }
 
   const synced = data.backedUpAt ? fmtSynced(data.backedUpAt) : null;
+  // Their numbers are shown in the unit THEY log in, so the page reads the way
+  // it does on their phone. Said under their name so a kg trainer knows the
+  // numbers below are lbs.
+  const clientIsKg = data.unit ? data.unit === "kg" : undefined;
+  const headerMeta = [synced, data.unit ? `Logs in ${unitLabel(data.unit)}` : null].filter(Boolean).join(" · ");
+  const unitsDiffer = !!data.unit && data.unit !== unitOf(ownIsKg);
 
   if (!client) {
     return (
@@ -403,12 +414,8 @@ export default function ClientDetailScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8} accessibilityLabel="Go back" accessibilityRole="button">
-          <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="chevron-back" size={22} color={t.tp} />
-          </View>
-        </TouchableOpacity>
+      <View style={[styles.header, { paddingTop: insets.top + BACK_TOP }]}>
+        <BackButton inline />
 
         <View style={styles.headerCenter}>
           <Avatar
@@ -427,8 +434,8 @@ export default function ClientDetailScreen() {
               {isFavourite && <FavouriteStar size={16} />}
               <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
             </View>
-            {synced && (
-              <Text style={[styles.synced, { color: t.ts }]} numberOfLines={1}>{synced}</Text>
+            {!!headerMeta && (
+              <Text style={[styles.synced, { color: t.ts }]} numberOfLines={1}>{headerMeta}</Text>
             )}
           </View>
         </View>
@@ -492,7 +499,8 @@ export default function ClientDetailScreen() {
         </View>
       </View>
 
-      {/* Tab content */}
+      {/* Tab content, in the client's unit */}
+      <UnitLens isKg={clientIsKg}>
       <View style={{ flex: 1 }}>
         {tab === "progress" && (
           <ProgressView
@@ -626,7 +634,7 @@ export default function ClientDetailScreen() {
                         accessibilityLabel="Remove program"
                         accessibilityRole="button"
                       >
-                        <TrashIcon size={18} color="#E53935" />
+                        <TrashIcon size={18} color={DANGER_BRIGHT} />
                       </TouchableOpacity>
                     </View>
                   </NeuCard>
@@ -636,11 +644,14 @@ export default function ClientDetailScreen() {
           </ScrollView>
         )}
       </View>
+      </UnitLens>
 
       <ProgramPickerSheet
         visible={shareOpen}
         title={`Share with ${client.name}`}
-        subtitle="Pick one of your programs to send."
+        subtitle={unitsDiffer && data.unit
+          ? `Pick one of your programs to send. ${client.name.split(" ")[0]} logs in ${unitLabel(data.unit)}, and will see your weights in the unit you entered them in (${unitLabel(unitOf(ownIsKg))}).`
+          : "Pick one of your programs to send."}
         programs={myPrograms}
         onPick={handleShare}
         onClose={() => setShareOpen(false)}
@@ -676,7 +687,7 @@ export default function ClientDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  header:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 10, gap: 12 },
+  header:        { flexDirection: "row", alignItems: "center", paddingHorizontal: BACK_LEFT, paddingBottom: 10, gap: 12 },
   headerCenter:  { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   iconBtn:       { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   chatBtn:       { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },

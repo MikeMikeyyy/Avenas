@@ -21,11 +21,11 @@ import * as Haptics from "expo-haptics";
 import FadeScreen from "../../components/FadeScreen";
 import NeuCard from "../../components/NeuCard";
 import BounceButton from "../../components/BounceButton";
-import PlusIcon from "../../components/icons/PlusIcon";
 import ChatIcon from "../../components/icons/ChatIcon";
 import GroupAvatar from "../../components/trainer/GroupAvatar";
 import MessageComposeSheet from "../../components/trainer/MessageComposeSheet";
 import Avatar from "../../components/Avatar";
+import KeyboardDismissButton from "../../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -38,6 +38,7 @@ import UnreadBadge from "../../components/UnreadBadge";
 import { loadBlockedIds, loadHiddenMessageIds } from "../../utils/moderation";
 import { groupIdFromKey, toGroupKey } from "../../constants/groups";
 import type { ChatContact, ChatThreads, ChatReads } from "../../constants/chat";
+import BackButton, { BACK_LEFT, BACK_TOP, BACK_SIZE } from "../../components/BackButton";
 
 function fmtAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -216,17 +217,7 @@ export default function MessagesScreen() {
       </View>
 
       {/* Back button */}
-      <TouchableOpacity
-        onPress={() => router.back()}
-        style={{ position: "absolute", top: insets.top + 14, left: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="chevron-back" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <BackButton />
 
       {/* New message (broadcast to many) is a trainer feature — gym users only
           message their trainers 1:1, so they don't get the plus button. */}
@@ -234,10 +225,14 @@ export default function MessagesScreen() {
         <BounceButton
           onPress={() => setComposeOpen(true)}
           accessibilityLabel="New message"
-          style={{ position: "absolute", top: insets.top + 16, right: 20, zIndex: 10 }}
+          // The back button's size and top, mirrored on the right.
+          style={{ position: "absolute", top: insets.top + BACK_TOP, right: BACK_LEFT, zIndex: 10 }}
         >
-          <View style={[styles.newBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-            <PlusIcon size={16} color="#fff" />
+          {/* The Trainer tab's white + (Connect), not an accent circle: the
+              same control surface and dark plus as the round buttons beside
+              it there. */}
+          <View style={[styles.newBtn, { backgroundColor: t.ctrl }]}>
+            <Ionicons name="add" size={24} color={t.tp} />
           </View>
         </BounceButton>
       )}
@@ -247,7 +242,7 @@ export default function MessagesScreen() {
         // Lets a tap on a result row fire on the first touch while the search
         // field is focused, instead of being swallowed to dismiss the keyboard.
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 14, paddingBottom: insets.bottom + 40 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }}
       >
         <View style={styles.titleRow}>
           <View style={{ width: 44 }} />
@@ -329,6 +324,10 @@ export default function MessagesScreen() {
         )}
       </ScrollView>
 
+      {/* The keyboard's down button, for the name search. It only lowers the
+          keyboard: the search stays, with what you typed still filtering. */}
+      <KeyboardDismissButton />
+
       <MessageComposeSheet
         visible={composeOpen}
         contacts={contacts}
@@ -341,13 +340,12 @@ export default function MessagesScreen() {
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
 
-  // height 40 + paddingTop insets.top+14 puts the title on the back/plus buttons'
-  // centerline (both centre at insets.top+34); marginBottom is the gap to the list.
-  titleRow:    { flexDirection: "row", alignItems: "center", height: 40, marginBottom: 30 },
+  // BACK_SIZE tall from insets.top + BACK_TOP puts the title on the back/plus
+  // buttons' centre line; marginBottom is the gap to the list.
+  titleRow:    { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 30 },
   title:       { flex: 1, fontFamily: FontFamily.bold, fontSize: 22, textAlign: "center" },
-  newBtn:      { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  newBtn:      { width: BACK_SIZE, height: BACK_SIZE, borderRadius: BACK_SIZE / 2, alignItems: "center", justifyContent: "center", ...PILL_SHADOW },
 
   searchBox:   { flexDirection: "row", alignItems: "center", gap: 9, height: 42, borderWidth: 1, borderRadius: PILL_RADIUS, paddingHorizontal: 14, marginBottom: 16, ...PILL_SHADOW },
   searchInput: { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, paddingVertical: 0 },

@@ -1,5 +1,6 @@
 // Shared sheet: pick one of the PT's saved programs to share.
 
+import { useMemo } from "react";
 import { View, Text, StyleSheet, ScrollView } from "react-native";
 import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
@@ -8,6 +9,7 @@ import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { SavedProgram } from "../../constants/programs";
+import { unarchivedPrograms } from "../../utils/programArchive";
 
 interface Props {
   visible: boolean;
@@ -18,9 +20,13 @@ interface Props {
   onClose: () => void;
 }
 
-export default function ProgramPickerSheet({ visible, title, subtitle, programs, onPick, onClose }: Props) {
+export default function ProgramPickerSheet({ visible, title, subtitle, programs: all, onPick, onClose }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  // Archived programs are out of the way everywhere a program is picked, not
+  // just on My Programs (utils/programArchive.ts). Here rather than at each of
+  // the five callers, so none of them can forget.
+  const programs = useMemo(() => unarchivedPrograms(all), [all]);
 
   return (
     <SimpleSheet visible={visible} onClose={onClose}>
