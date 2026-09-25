@@ -7,6 +7,7 @@ import * as Haptics from "expo-haptics";
 
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
+import { pill, PILL_H } from "../constants/buttons";
 import { WELCOME, FEATURE_SLIDES, type FeatureSlideId } from "../constants/onboarding";
 import BounceButton from "../components/BounceButton";
 import FeatureSlide from "../components/onboarding/FeatureSlide";
@@ -145,7 +146,7 @@ const styles = StyleSheet.create({
   scroll:   { flex: 1 },
   footer:   { paddingHorizontal: 28, paddingTop: 8, gap: 24 },
   ctaWrap:  { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  cta:      { borderRadius: 28, paddingVertical: 17, alignItems: "center", justifyContent: "center" },
+  cta:      { ...pill(PILL_H) },
   ctaText:  { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 0.3 },
   loginText:{ fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center" },
 });

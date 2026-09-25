@@ -25,6 +25,7 @@ import SendIcon from "../icons/SendIcon";
 import RecipientPickerSheet from "./RecipientPickerSheet";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import SimpleSheet from "./SimpleSheet";
+import SheetPill from "../SheetPill";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -533,20 +534,14 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
       <SimpleSheet visible={menuFor !== null} onClose={() => setMenuFor(null)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{menuFor?.name || "Trainer"}</Text>
         <View style={styles.menu}>
-          <TouchableOpacity
-            style={styles.menuRow}
-            activeOpacity={0.8}
+          <SheetPill
+            label="Send a program"
+            icon={c => <SendIcon size={18} color={c} />}
             onPress={() => menuFor && openSendProgram(menuFor)}
-            accessibilityRole="button"
-            accessibilityLabel={`Send a program to ${menuFor?.name ?? "this trainer"}`}
-          >
-            <SendIcon size={19} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Send a program</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity
-            style={styles.menuRow}
-            activeOpacity={0.8}
+          />
+          <SheetPill
+            label="Message"
+            icon={c => <Ionicons name="chatbubble-outline" size={18} color={c} />}
             // Close before navigating: the sheet is a Modal, so leaving it open
             // parks it on top of the chat screen you just pushed.
             onPress={() => {
@@ -554,40 +549,18 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
               setMenuFor(null);
               if (c) router.navigate({ pathname: "/trainer/chat/[id]", params: { id: c.id, name: c.name, initials: c.initials, photo: c.photoUri ?? "" } });
             }}
-            accessibilityRole="button"
-            accessibilityLabel={`Message ${menuFor?.name ?? "this trainer"}`}
-          >
-            <Ionicons name="chatbubble-outline" size={19} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Message</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity
-            style={styles.menuRow}
-            activeOpacity={0.8}
+          />
+          <SheetPill
+            label={menuFor && trainerClientIds.has(menuFor.id) ? "Remove from my clients" : "Add as my client"}
+            icon={c => <Ionicons name={menuFor && trainerClientIds.has(menuFor.id) ? "person-remove-outline" : "person-add-outline"} size={18} color={c} />}
             onPress={() => menuFor && toggleAsClient(menuFor)}
-            accessibilityRole="button"
-            accessibilityLabel={menuFor && trainerClientIds.has(menuFor.id) ? "Remove from my clients" : "Add as my client"}
-          >
-            <Ionicons
-              name={menuFor && trainerClientIds.has(menuFor.id) ? "person-remove-outline" : "person-add-outline"}
-              size={19}
-              color={t.tp}
-            />
-            <Text style={[styles.menuText, { color: t.tp }]}>
-              {menuFor && trainerClientIds.has(menuFor.id) ? "Remove from my clients" : "Add as my client"}
-            </Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity
-            style={styles.menuRow}
-            activeOpacity={0.8}
+          />
+          <SheetPill
+            label="Remove trainer"
+            variant="danger"
+            icon={c => <Ionicons name="close-circle-outline" size={18} color={c} />}
             onPress={() => { const c = menuFor; setMenuFor(null); if (c) handleRemoveTrainer(c); }}
-            accessibilityRole="button"
-            accessibilityLabel={`Remove ${menuFor?.name ?? "this trainer"}`}
-          >
-            <Ionicons name="close-circle-outline" size={19} color={REMOVE_RED} />
-            <Text style={[styles.menuText, { color: REMOVE_RED }]}>Remove trainer</Text>
-          </TouchableOpacity>
+          />
         </View>
       </SimpleSheet>
 
@@ -626,10 +599,7 @@ const styles = StyleSheet.create({
   clientTagText:{ fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
 
   menuName:     { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
-  menu:         { paddingHorizontal: 16, paddingTop: 4 },
-  menuRow:      { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
-  menuDivider:  { height: 1, marginHorizontal: 8 },
-  menuText:     { fontFamily: FontFamily.semibold, fontSize: 16 },
+  menu:         { paddingHorizontal: 20, paddingTop: 10, gap: 12 },
   coachName:    { fontFamily: FontFamily.bold, fontSize: 16, marginTop: 2 },
   presenceRow:  { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   presenceDot:  { width: 6, height: 6, borderRadius: 3 },

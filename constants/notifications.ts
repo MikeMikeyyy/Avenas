@@ -17,6 +17,7 @@
 
 import type { ComponentProps } from "react";
 import type { Ionicons } from "@expo/vector-icons";
+import { TROPHY_ICON } from "./icons";
 
 type IoniconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -72,10 +73,11 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
 };
 
 /** Render catalog for the page: grouped sections with copy + icon per category.
- *  Domain data (not presentation logic), so it lives beside the type it indexes. */
+ *  Domain data (not presentation logic), so it lives beside the type it indexes.
+ *  An icon is an Ionicons name, or a full-colour image from constants/icons. */
 export const NOTIFICATION_SECTIONS: {
   title: string;
-  items: { key: NotificationCategory; label: string; description: string; icon: IoniconName }[];
+  items: { key: NotificationCategory; label: string; description: string; icon: IoniconName | number }[];
 }[] = [
   {
     title: "Messages",
@@ -135,7 +137,7 @@ export const NOTIFICATION_SECTIONS: {
         key: "achievements",
         label: "Achievements & milestones",
         description: "New personal records, workout milestones, finished programs and streaks.",
-        icon: "trophy-outline",
+        icon: TROPHY_ICON,
       },
       {
         key: "weeklySummary",

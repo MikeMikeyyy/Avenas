@@ -3,18 +3,17 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   TouchableWithoutFeedback,
   Modal,
   Animated,
   Easing,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
-import { ACCT, APP_DARK, APP_LIGHT, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
+import SheetPill from "./SheetPill";
+import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import { pill, PILL_H_CHIP, PILL_SHADOW } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 
 interface Option<T extends string> {
@@ -32,7 +31,7 @@ interface Props<T extends string> {
   /** Title shown at the top of the sheet (e.g. "Time range"). */
   sheetTitle?: string;
   /**
-   * When set, the trigger renders as an icon-only NeuCard button using this
+   * When set, the trigger renders as an icon-only round button using this
    * Ionicons name (no current-value text). Used by the Strength card's compact
    * top-right toggle.
    */
@@ -113,27 +112,19 @@ export default function DropdownPicker<T extends string>({
         accessibilityRole="button"
         accessibilityLabel={`${sheetTitle}: ${current.label}. Tap to change.`}
       >
-        {/* Bubble-pill trigger — a floating white pill in BOTH modes (matching
-            the SegmentedControl thumb and the Settings unit toggle), so every
-            small chart control on the Progress page reads as one family. Content
-            is always the on-white (light-palette) text/icon colours. */}
-        <View
-          style={[
-            triggerIcon ? styles.iconBtn : styles.btn,
-            {
-              backgroundColor: BUBBLE_LIGHT,
-              shadowOpacity: isDark ? 0.3 : 0.12,
-            },
-          ]}
-        >
+        {/* The app's pill button (constants/buttons.ts), the same white pill on
+            the control surface as the buttons in its sheet (SheetPill), so the
+            button and the popup it opens read as one family. The icon-only
+            trigger is that pill at equal width and height: a round button. */}
+        <View style={[triggerIcon ? styles.iconBtn : styles.btn, { backgroundColor: t.ctrl }]}>
           {triggerIcon ? (
-            <Ionicons name={triggerIcon} size={18} color={APP_LIGHT.ts} />
+            <Ionicons name={triggerIcon} size={16} color={t.tp} />
           ) : (
             <>
-              <Text style={[styles.btnText, { color: APP_LIGHT.tp }]} numberOfLines={1}>
+              <Text style={[styles.btnText, { color: t.tp }]} numberOfLines={1}>
                 {current.shortLabel ?? current.label}
               </Text>
-              <Ionicons name="chevron-down" size={14} color={APP_LIGHT.ts} />
+              <Ionicons name="chevron-down" size={13} color={t.ts} />
             </>
           )}
         </View>
@@ -166,52 +157,26 @@ export default function DropdownPicker<T extends string>({
               </View>
               <Text style={[styles.sheetTitle, { color: t.tp }]}>{sheetTitle}</Text>
 
-              {options.map(opt => {
-                const selected = opt.key === value;
-                return (
-                  <TouchableOpacity
-                    key={opt.key}
-                    activeOpacity={0.85}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setOpen(false);
-                      if (opt.key !== value) onChange(opt.key);
-                    }}
-                    style={styles.rowOuter}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                  >
-                    <NeuCard
-                      dark={isDark}
-                      radius={14}
-                      shadowSize="sm"
-                      innerStyle={selected ? { borderWidth: 0 } : undefined}
-                    >
-                      <View style={styles.rowInner}>
-                        {renderOptionIcon ? (
-                          <View style={styles.rowIcon}>{renderOptionIcon(opt.key)}</View>
-                        ) : null}
-                        <Text style={[styles.rowLabel, { color: t.tp }]} numberOfLines={1}>
-                          {opt.label}
-                        </Text>
-                        {selected ? <Ionicons name="checkmark" size={20} color={ACCT} /> : null}
-                      </View>
-                    </NeuCard>
-                    {selected ? (
-                      <View
-                        pointerEvents="none"
-                        style={{
-                          position: "absolute",
-                          top: 0, left: 0, right: 0, bottom: 0,
-                          borderRadius: 14,
-                          borderWidth: 1.5,
-                          borderColor: ACCT,
-                        }}
-                      />
-                    ) : null}
-                  </TouchableOpacity>
-                );
-              })}
+              <View style={styles.list}>
+                {options.map(opt => {
+                  const selected = opt.key === value;
+                  return (
+                    <SheetPill
+                      key={opt.key}
+                      label={opt.label}
+                      selected={selected}
+                      // The caller's own icon for this value (the Strength card's
+                      // per-metric icons), in its own colours.
+                      icon={renderOptionIcon ? () => renderOptionIcon(opt.key) : undefined}
+                      onPress={() => {
+                        setOpen(false);
+                        if (opt.key !== value) onChange(opt.key);
+                      }}
+                      accessibilityState={{ selected }}
+                    />
+                  );
+                })}
+              </View>
             </Animated.View>
           </View>
         </View>
@@ -222,31 +187,21 @@ export default function DropdownPicker<T extends string>({
 
 const styles = StyleSheet.create({
   btn: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 6,
-    borderRadius: 999,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 3,
+    ...pill(PILL_H_CHIP),
+    gap: 5,
+    paddingHorizontal: 13,
+    ...PILL_SHADOW,
   },
   btnText: {
-    fontFamily: FontFamily.semibold,
-    fontSize: 12,
+    fontFamily: FontFamily.bold,
+    fontSize: 13,
+    letterSpacing: 0.2,
   },
   iconBtn: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 3,
+    ...pill(PILL_H_CHIP),
+    width: PILL_H_CHIP,
+    paddingHorizontal: 0,
+    ...PILL_SHADOW,
   },
 
   sheetWrap: {
@@ -276,25 +231,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     marginLeft: 4,
   },
-  rowOuter: {
-    marginBottom: 10,
-  },
-  rowInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-  },
-  // Fixed-width leading icon slot so row labels stay aligned even when the
-  // icons themselves differ by a pixel or two (mixed icon sets).
-  rowIcon: {
-    width: 24,
-    alignItems: "center",
-    marginRight: 10,
-  },
-  rowLabel: {
-    fontFamily: FontFamily.semibold,
-    fontSize: 16,
-    flex: 1,
+  list: {
+    gap: 12,
   },
 });

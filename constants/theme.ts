@@ -147,11 +147,20 @@ export const ORB_GRADS = {
 
 
 // ─── Bubble pill ──────────────────────────────────────────────────────────────
-// Small floating pill controls that sit on cards (SegmentedControl thumb,
-// DropdownPicker triggers): white with a soft drop shadow in light mode, a
-// lifted navy one step above NEU_BG_DARK in dark mode.
+// Small floating pill controls that sit on cards (the SegmentedControl thumb):
+// white with a soft drop shadow in light mode, a lifted navy one step above
+// NEU_BG_DARK in dark mode. DropdownPicker's buttons used this too; they're now
+// the app's pill button on `ctrl`, matching the sheet they open.
 export const BUBBLE_LIGHT = "#FFFFFF";
 export const BUBBLE_DARK  = "#363C5E";
+
+// ─── Switch ───────────────────────────────────────────────────────────────────
+// Off-state track for the iOS Switches in LIGHT mode (Settings, the Workout
+// tab's Focus Mode). APP_LIGHT.div (#D8DCE0) is too pale against a white card
+// to read as a control; this is a clearly darker grey. Dark mode uses t.div
+// (already visible). Pass it as `trackColor.false` and nothing else, so the
+// switch keeps iOS's own look.
+export const SWITCH_TRACK_LIGHT = "#C4CAD3";
 
 // ─── Slate button ─────────────────────────────────────────────────────────────
 // Dark slate-black for primary non-accent buttons (light mode bg).

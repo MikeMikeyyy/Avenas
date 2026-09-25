@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect } from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
 import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, Easing as ReEasing } from "react-native-reanimated";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
 import DumbbellIcon from "./DumbbellIcon";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import SheetPill from "./SheetPill";
+import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { collectLoggedExercisesForDay, sessionCountForDay } from "../utils/progressStats";
 import type { CompletedWorkout, ProgramDayRef } from "../constants/programs";
@@ -159,7 +159,6 @@ export default function DayExerciseList({ days, workouts, selectedExercise, onSe
                   day={day}
                   selectedExercise={selectedExercise}
                   onSelectExercise={onSelectExercise}
-                  textPrimary={t.tp}
                   textSecondary={t.ts}
                   divider={t.div}
                   isDark={isDark}
@@ -178,7 +177,6 @@ function ExpandedExercises({
   day,
   selectedExercise,
   onSelectExercise,
-  textPrimary,
   textSecondary,
   divider,
   isDark,
@@ -187,7 +185,6 @@ function ExpandedExercises({
   day: ProgramDayRef;
   selectedExercise: ExerciseSelection | null;
   onSelectExercise: (day: ProgramDayRef, name: string) => void;
-  textPrimary: string;
   textSecondary: string;
   divider: string;
   isDark: boolean;
@@ -215,29 +212,24 @@ function ExpandedExercises({
       ? norm(selectedExercise.name)
       : "";
 
+  // Each exercise is a pill, the white control-surface button the Trainer page
+  // puts inside its cards; the one being charted is `selected` (accent ring +
+  // tick).
   return (
     <View style={[styles.expandedBody, { borderTopColor: divider }]}>
       {rows.map((r, i) => {
         const k = norm(r.name);
         const selected = k === selKey;
         return (
-          <TouchableOpacity
+          <SheetPill
             key={`${k}-${i}`}
-            activeOpacity={0.7}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onSelectExercise(day, r.name);
-            }}
-            style={[styles.exRow, i > 0 && { marginTop: 2 }]}
-            accessibilityRole="button"
+            compact
+            label={r.name}
+            selected={selected}
+            onPress={() => onSelectExercise(day, r.name)}
             accessibilityLabel={r.inProgram ? r.name : `${r.name}, swapped out of this day`}
             accessibilityState={{ selected }}
-          >
-            {selected ? <View style={styles.exAccent} /> : null}
-            <Text style={[styles.exName, { color: selected ? ACCT : textPrimary, flexShrink: 1 }]} numberOfLines={1}>
-              {r.name}
-            </Text>
-            {r.inProgram ? null : (
+            badge={r.inProgram ? null : (
               // Logged on this day, but the program doesn't prescribe it any
               // more. Shown so a trend that stops mid-run reads as a change to
               // the programming rather than as someone quietly dropping the
@@ -249,9 +241,7 @@ function ExpandedExercises({
                 <Text style={[styles.swappedText, { color: textSecondary }]}>Swapped out</Text>
               </View>
             )}
-            <View style={{ flex: 1 }} />
-            <Ionicons name="chevron-forward" size={14} color={selected ? ACCT : textSecondary} />
-          </TouchableOpacity>
+          />
         );
       })}
     </View>
@@ -273,30 +263,15 @@ const styles = StyleSheet.create({
   dayQualifier: { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 1 },
   daySub: { fontFamily: FontFamily.regular, fontSize: 12 },
 
+  // Padding on all sides leaves the pills' shadows room inside the panel's
+  // clipped height.
   expandedBody: {
     borderTopWidth: 1,
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 10,
+    paddingTop: 12,
+    paddingBottom: 14,
+    gap: 10,
   },
-  exRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 8,
-    paddingLeft: 10,
-    gap: 8,
-  },
-  // Selected exercise indicator: 3px ACCT bar pinned to the row's left edge.
-  exAccent: {
-    position: "absolute",
-    left: 0,
-    top: 5,
-    bottom: 5,
-    width: 3,
-    borderRadius: 2,
-    backgroundColor: ACCT,
-  },
-  exName: { fontFamily: FontFamily.semibold, fontSize: 14 },
   swappedChip: {
     flexDirection: "row",
     alignItems: "center",

@@ -5,7 +5,7 @@ import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
   Alert, Animated, AppState, Keyboard, Modal,
-  PanResponder, Easing, Switch, useWindowDimensions,
+  PanResponder, Easing, useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -19,10 +19,12 @@ import NeuCard, { NEU_BG, NEU_BG_DARK } from "../../components/NeuCard";
 import CollapsibleCard from "../../components/CollapsibleCard";
 import FadeScreen from "../../components/FadeScreen";
 import BounceButton from "../../components/BounceButton";
+import SheetPill, { SheetToggle } from "../../components/SheetPill";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
 import ExerciseNotesField, { ReuseNoteChip, prevNotePlaceholder } from "../../components/ExerciseNotesField";
 import DumbbellIcon from "../../components/DumbbellIcon";
+import SquarePenIcon from "../../components/SquarePenIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { computeDurationMins, completedAtISO } from "../../components/TimeWheelPicker";
@@ -419,17 +421,7 @@ function WorkoutReorderSheet({ visible, workoutName, exercises, isDark, t, onReo
             />
           </View>
           <View style={styles.woReorderDoneRow}>
-            <BounceButton
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}
-              accessibilityLabel="Done"
-              accessibilityRole="button"
-            >
-              <View style={styles.woReorderDoneWrap}>
-                <View style={styles.woReorderDoneBtn}>
-                  <Text style={styles.woReorderDone}>Done</Text>
-                </View>
-              </View>
-            </BounceButton>
+            <SheetPill label="Done" variant="primary" onPress={closeSheet} />
           </View>
         </Animated.View>
       </View>
@@ -498,43 +490,24 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
             <View style={styles.woReorderHandle} />
           </View>
           <Text style={[styles.woPickerTitle, { color: t.tp }]}>Workout Options</Text>
-          <View style={styles.woPickerContent}>
-            <BounceButton style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChangeDay(); }}>
-              <NeuCard dark={isDark} radius={14}>
-                <View style={styles.woPickerOptionInner}>
-                  <Ionicons name="swap-horizontal-outline" size={18} color={t.tp} />
-                  <Text style={[styles.woPickerOptionText, { color: t.tp }]}>Change Workout Day</Text>
-                  <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                </View>
-              </NeuCard>
-            </BounceButton>
-            <BounceButton style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onStartCustom(); }}>
-              <NeuCard dark={isDark} radius={14}>
-                <View style={styles.woPickerOptionInner}>
-                  <Ionicons name="pencil-outline" size={18} color={t.tp} />
-                  <Text style={[styles.woPickerOptionText, { color: t.tp }]}>Custom Workout</Text>
-                  <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                </View>
-              </NeuCard>
-            </BounceButton>
-            <NeuCard dark={isDark} radius={14} style={{ marginBottom: 16 }}>
-              <View style={styles.woPickerOptionInner}>
-                <Ionicons name="eye-outline" size={18} color={t.tp} />
-                <Text style={[styles.woPickerOptionText, { color: t.tp, flex: 1 }]}>Focus Mode</Text>
-                <Switch
-                  value={focusMode}
-                  onValueChange={(v) => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggleFocusMode(v); }}
-                  trackColor={{ false: t.div, true: ACCT }}
-                  thumbColor="#fff"
-                  style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }], marginVertical: -6 }}
-                />
-              </View>
-            </NeuCard>
-            <BounceButton onPress={closeSheet}>
-              <View style={[styles.woPickerCancelBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
-                <Text style={[styles.woPickerCancelText, { color: t.tp }]}>Cancel</Text>
-              </View>
-            </BounceButton>
+          <View style={[styles.woPickerContent, styles.woPickerList]}>
+            <SheetPill
+              label="Change Workout Day"
+              icon={c => <Ionicons name="swap-horizontal-outline" size={18} color={c} />}
+              onPress={onChangeDay}
+            />
+            <SheetPill
+              label="Custom Workout"
+              icon={c => <SquarePenIcon size={18} color={c} />}
+              onPress={onStartCustom}
+            />
+            <SheetToggle
+              label="Focus Mode"
+              icon={c => <Ionicons name="eye-outline" size={18} color={c} />}
+              value={focusMode}
+              onChange={onToggleFocusMode}
+            />
+            <SheetPill label="Cancel" variant="quiet" onPress={closeSheet} />
           </View>
         </Animated.View>
       </View>
@@ -616,22 +589,9 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
     else setStep("others");
   };
 
-  const renderOptionCard = (key: string, label: string, icon: React.ReactNode, isActive: boolean, onPress: () => void) => (
-    <BounceButton key={key} style={{ marginBottom: 16 }} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); animateOut(onPress); }}>
-      <NeuCard dark={isDark} radius={14}>
-        <View style={styles.woPickerOptionInner}>
-          {icon}
-          <Text style={[styles.woPickerOptionText, { color: isActive ? ACCT : t.tp }]}>{label}</Text>
-          {isActive ? (
-            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 }}>
-              <Ionicons name="checkmark" size={14} color="#fff" />
-            </View>
-          ) : (
-            <Ionicons name="chevron-forward" size={16} color={t.ts} />
-          )}
-        </View>
-      </NeuCard>
-    </BounceButton>
+  // The day loaded now is `selected`: accent ring and a tick, same pill.
+  const renderOptionCard = (key: string, label: string, icon: (color: string) => React.ReactNode, isActive: boolean, onPress: () => void) => (
+    <SheetPill key={key} label={label} icon={icon} selected={isActive} onPress={() => animateOut(onPress)} />
   );
 
   const renderDayCard = (day: ProgramDayRef, prog: SavedProgram) => {
@@ -646,7 +606,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
       // Only qualify a name that appears twice in this program, so the common
       // case stays a plain "Push".
       day.duplicateLabel ? `${day.label} · day ${day.index + 1}` : day.label,
-      <DumbbellIcon size={18} color={isActive ? ACCT : t.tp} />,
+      c => <DumbbellIcon size={18} color={c} />,
       isActive,
       () => onSelectDay(day, prog.id !== activeProgram.id ? prog : undefined),
     );
@@ -657,7 +617,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
     const isActive = currentWorkoutName === "Rest";
     return renderOptionCard(
       "Rest", "Rest Day",
-      <Ionicons name="moon-outline" size={18} color={isActive ? ACCT : t.tp} />,
+      c => <Ionicons name="moon-outline" size={18} color={c} />,
       isActive,
       () => onSelectDay("Rest"),
     );
@@ -682,40 +642,29 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
             </View>
             <View style={styles.woStepBackBtn} />
           </View>
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.woPickerContent}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.woPickerContent, styles.woPickerList]}>
             {step === "menu" && (
               <>
                 {workoutDays.map(day => renderDayCard(day, activeProgram))}
                 {renderRestCard()}
                 {otherPrograms.length > 0 && (
-                  <BounceButton style={{ marginBottom: 16 }} onPress={() => setStep("others")}>
-                    <NeuCard dark={isDark} radius={14}>
-                      <View style={styles.woPickerOptionInner}>
-                        <Ionicons name="albums-outline" size={18} color={t.tp} />
-                        <Text style={[styles.woPickerOptionText, { color: t.tp }]}>Other Programs</Text>
-                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                      </View>
-                    </NeuCard>
-                  </BounceButton>
+                  <SheetPill
+                    label="Other Programs"
+                    icon={c => <Ionicons name="albums-outline" size={18} color={c} />}
+                    onPress={() => setStep("others")}
+                  />
                 )}
               </>
             )}
             {step === "others" && otherPrograms.map(prog => (
-              <BounceButton key={prog.id} style={{ marginBottom: 16 }} onPress={() => { setFocusedProgram(prog); setStep("program"); }}>
-                <NeuCard dark={isDark} radius={14}>
-                  <View style={styles.woPickerOptionInner}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.woPickerOptionText, { color: t.tp }]}>{prog.name}</Text>
-                      <Text style={[styles.woPickerOptionSub, { color: t.ts }]}>
-                        {/* Summary line only — deduped so a cycle that repeats a
-                            day doesn't read "Push · Pull · Push · Pull". */}
-                        {[...new Set(prog.cyclePattern.filter(n => n && n !== "Rest"))].join(" · ")}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                  </View>
-                </NeuCard>
-              </BounceButton>
+              <SheetPill
+                key={prog.id}
+                label={prog.name}
+                // Summary line only — deduped so a cycle that repeats a day
+                // doesn't read "Push · Pull · Push · Pull".
+                sub={[...new Set(prog.cyclePattern.filter(n => n && n !== "Rest"))].join(" · ")}
+                onPress={() => { setFocusedProgram(prog); setStep("program"); }}
+              />
             ))}
             {step === "program" && focusedProgram && (
               <>
@@ -845,18 +794,13 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
             </TouchableOpacity>
           )}
 
-          <View style={[styles.woReorderDoneRow, { opacity: canStart ? 1 : 0.35 }]}>
-            <BounceButton
-              onPress={() => { if (canStart) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); animateOut(() => onStart(nameInput.trim(), addToProgram)); } }}
-              accessibilityLabel="Start workout"
-              accessibilityRole="button"
-            >
-              <View style={styles.woReorderDoneWrap}>
-                <View style={styles.woReorderDoneBtn}>
-                  <Text style={styles.woReorderDone}>Custom Workout</Text>
-                </View>
-              </View>
-            </BounceButton>
+          <View style={styles.woReorderDoneRow}>
+            <SheetPill
+              label="Custom Workout"
+              variant="primary"
+              disabled={!canStart}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); animateOut(() => onStart(nameInput.trim(), addToProgram)); }}
+            />
           </View>
           <View style={{ height: 12 }} />
         </Animated.View>
@@ -1728,7 +1672,14 @@ export default function WorkoutScreen() {
       dismissRestTimer();
       setIsFreeWorkout(false);
       setFreeWorkoutAddToProgram(false);
+      // The discarded session's sets and note go too. loadData only rebuilds
+      // the log when the day has a workout, so a discard landing on a rest day
+      // (Set Workout Date can do that) kept the old log, which still read as a
+      // session in progress; and a leftover note re-saved itself as a draft.
+      setLog({});
+      setNotes("");
       draftLockedRef.current = false;
+      isWorkoutActiveRef.current = false;
       loadData(true);
     }
   }, [discardCount, dismissRestTimer, loadData]);
@@ -3039,10 +2990,12 @@ export default function WorkoutScreen() {
           <View pointerEvents="box-none" style={{ position: "absolute", left: 20, right: 20, bottom: safeBottom + 80, zIndex: 5 }}>
             <View style={{ flexDirection: "row", gap: 16, alignItems: "center", justifyContent: isLast ? "flex-start" : "center" }}>
               <BounceButton onPress={isFirst ? undefined : goPrev} accessibilityLabel="Previous exercise">
-                <View style={[styles.focusBackWrap, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? "#000" : "#a3afc0", shadowOpacity: isDark ? 0.35 : 0.5, opacity: isFirst ? 0.4 : 1 }]}>
-                  <View style={[styles.focusBackBtn, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, borderColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)", shadowColor: isDark ? "transparent" : "#FFFFFF" }]}>
-                    <Ionicons name="chevron-back" size={22} color={t.tp} />
-                  </View>
+                {/* The app's white control button (the pills' surface + soft
+                    shadow), not the grey neumorphic circle it was. Dark stays
+                    solid: it floats over the exercise cards, and the translucent
+                    `ctrl` would let them show through. */}
+                <View style={[styles.focusPrevBtn, { backgroundColor: isDark ? NEU_BG_DARK : t.ctrl, opacity: isFirst ? 0.4 : 1 }]}>
+                  <Ionicons name="chevron-back" size={22} color={t.tp} />
                 </View>
               </BounceButton>
               {isLast ? (
@@ -3284,7 +3237,10 @@ export default function WorkoutScreen() {
           </>
         )}
         <TouchableOpacity
-          onPress={() => Keyboard.dismiss()}
+          // Typing session notes, this is the card's tick: put the keyboard
+          // away AND close the card. Dismissing alone left it open over the
+          // workout with nothing left to type into.
+          onPress={() => (showNotes && sessionNotesInputRef.current?.isFocused() ? closeNotes() : Keyboard.dismiss())}
           activeOpacity={0.75}
           style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}
         >
@@ -3406,7 +3362,9 @@ const styles = StyleSheet.create({
   completedActionBtn: { ...pill(PILL_H_SM), gap: 7, paddingHorizontal: 12, ...PILL_SHADOW },
   completedActionText: { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.3, flexShrink: 1 },
 
-  // Focus mode compact Back button (icon-only circle, matches finish button height)
+  // Focus mode Previous button: icon-only circle at the finish button's height.
+  focusPrevBtn:     { width: 56, height: 56, borderRadius: PILL_RADIUS, alignItems: "center", justifyContent: "center", ...PILL_SHADOW },
+  // Focus mode Next button (icon-only circle, matches finish button height)
   focusBackWrap:    { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowRadius: 8 },
   focusBackBtn:     { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", borderWidth: 1, shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4 },
 
@@ -3431,10 +3389,7 @@ const styles = StyleSheet.create({
   woReorderTitle:     { fontFamily: FontFamily.bold, fontSize: 16 },
   woReorderSubtitle:  { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
   woReorderListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
-  woReorderDoneRow:   { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
-  woReorderDoneWrap:  { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 10 },
-  woReorderDoneBtn:   { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
-  woReorderDone:      { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
+  woReorderDoneRow:   { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
 
   // Shared step-header (matches journal pickerStepHeader style)
   woStepHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 10 },
@@ -3444,11 +3399,7 @@ const styles = StyleSheet.create({
   // WorkoutOptionsSheet card-style picker
   woPickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, textAlign: "center", paddingHorizontal: 24, paddingTop: 4, paddingBottom: 16 },
   woPickerContent:     { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 },
-  woPickerOptionInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
-  woPickerOptionText:  { fontFamily: FontFamily.semibold, fontSize: 15, flex: 1 },
-  woPickerOptionSub:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  woPickerCancelBtn:   { ...pill(PILL_H_SM) },
-  woPickerCancelText:  { fontFamily: FontFamily.bold, fontSize: 16 },
+  woPickerList:        { gap: 12 },
 
   // Custom workout naming sheet
   cnNameInputWrap: { borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 4, marginBottom: 4 },

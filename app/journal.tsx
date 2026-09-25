@@ -31,13 +31,16 @@ import ActiveBadge from "../components/ActiveBadge";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../components/journal/JournalWorkoutCard";
+import SheetPill from "../components/SheetPill";
+import SquarePenIcon from "../components/SquarePenIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   getCurrentWeek, type SavedProgram, type CompletedWorkout, type ProgramDayRef,
 } from "../constants/programs";
 import { programDays } from "../utils/programDays";
+import { getEffectiveToday, getWorkoutForDate } from "../utils/workout";
+import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../utils/restDay";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { buildJournalFeed } from "../utils/journalFeed";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -152,14 +155,8 @@ function DeleteSheet({ visible, isDark, entryTitle, onConfirm, onClose, title = 
           </Text>
         </View>
         <View style={{ paddingHorizontal: 20, gap: 10 }}>
-          <BounceButton onPress={() => { onConfirm(); dismiss(); }}>
-            <View style={styles.deleteBtn}><Text style={styles.deleteBtnText}>Delete</Text></View>
-          </BounceButton>
-          <BounceButton onPress={dismiss}>
-            <View style={[styles.cancelBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
-              <Text style={[styles.cancelBtnText, { color: t.tp }]}>Cancel</Text>
-            </View>
-          </BounceButton>
+          <SheetPill label="Delete" variant="danger" onPress={() => { onConfirm(); dismiss(); }} />
+          <SheetPill label="Cancel" variant="quiet" onPress={dismiss} />
         </View>
       </Animated.View>
     </Modal>
@@ -169,13 +166,34 @@ function DeleteSheet({ visible, isDark, entryTitle, onConfirm, onClose, title = 
 // ─── Workout picker sheet (multi-step) ────────────────────────────────────────
 
 type PickerStep = "menu" | "active" | "others" | "program" | "custom";
+type RestAction = "rest" | "undo" | null;
 
-function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect, onClose }: {
+/**
+ * What the picker's Rest Day row does for a tapped day, by the same rules as
+ * Home's week strip (utils/weekSchedule.ts `editable`): a planned workout can be
+ * made a rest day, a marked-off one put back. A past MOVE stays locked, because
+ * undoing it re-labels days already lived through. The picker only opens on a
+ * day with no session, so there's never a trained day to empty here.
+ */
+function restActionFor(program: SavedProgram | null, ymd: string, history: CompletedWorkout[]): RestAction {
+  if (!program) return null;
+  if (isDateSkipped(program, ymd)) {
+    const isPast = ymd < getEffectiveToday(program, history);
+    return isPast && isDatePushed(program, ymd) ? null : "undo";
+  }
+  return getWorkoutForDate(program, ymd) ? "rest" : null;
+}
+
+function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restAction, onSelect, onRestDay, onClose }: {
   visible: boolean; isDark: boolean;
   activeProgram: SavedProgram | null; programs: SavedProgram[];
+  /** What the Rest Day row does for the tapped date: "rest" marks a planned
+   *  workout off, "undo" puts a marked-off one back, null offers neither. */
+  restAction: RestAction;
   /** `day` is the picked program slot (identity, not just a name) — undefined
    *  for the free-workout step, which has no slot to point at. */
   onSelect: (name: string, addToProgramId?: string, fromProgramId?: string, dayId?: string) => void;
+  onRestDay: () => void;
   onClose: () => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -261,20 +279,14 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
   }
 
   // ── Workout row ──
-  function WorkoutRow({ day, accent }: { day: ProgramDayRef; accent?: boolean }) {
+  function WorkoutRow({ day }: { day: ProgramDayRef }) {
     return (
-      <BounceButton style={{ marginBottom: 16 }} onPress={() => pick(day)}>
-        <NeuCard dark={isDark} radius={14}>
-          <View style={styles.pickerOptionInner}>
-            <WorkoutIcon size={18} color={accent ? ACCT : t.ts} />
-            <Text style={[styles.pickerOptionText, { color: t.tp }]}>
-              {/* Only qualified when the name repeats in this program. */}
-              {day.duplicateLabel ? `${day.label} · day ${day.index + 1}` : day.label}
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color={t.ts} />
-          </View>
-        </NeuCard>
-      </BounceButton>
+      <SheetPill
+        icon={c => <WorkoutIcon size={18} color={c} />}
+        // Only qualified when the name repeats in this program.
+        label={day.duplicateLabel ? `${day.label} · day ${day.index + 1}` : day.label}
+        onPress={() => pick(day)}
+      />
     );
   }
 
@@ -284,43 +296,24 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
       return (
         <View style={styles.pickerMenuContent}>
           <Text style={[styles.pickerTitle, { color: t.tp }]}>Log a Workout</Text>
-          <View style={{ gap: 16 }}>
+          <View style={styles.pickerList}>
             {activeProgram && (
-              <BounceButton onPress={() => setStep("active")}>
-                <NeuCard dark={isDark} radius={14}>
-                  <View style={styles.pickerOptionInner}>
-                    <WorkoutIcon size={18} color={t.tp} />
-                    <Text style={[styles.pickerOptionText, { color: t.tp }]}>Active Program</Text>
-                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                  </View>
-                </NeuCard>
-              </BounceButton>
+              <SheetPill icon={c => <WorkoutIcon size={18} color={c} />} label="Active Program" onPress={() => setStep("active")} />
             )}
             {otherPrograms.length > 0 && (
-              <BounceButton onPress={() => setStep("others")}>
-                <NeuCard dark={isDark} radius={14}>
-                  <View style={styles.pickerOptionInner}>
-                    <Ionicons name="albums-outline" size={18} color={t.tp} />
-                    <Text style={[styles.pickerOptionText, { color: t.tp }]}>Other Programs</Text>
-                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                  </View>
-                </NeuCard>
-              </BounceButton>
+              <SheetPill icon={c => <Ionicons name="albums-outline" size={18} color={c} />} label="Other Programs" onPress={() => setStep("others")} />
             )}
-            <BounceButton onPress={() => setStep("custom")}>
-              <NeuCard dark={isDark} radius={14}>
-                <View style={styles.pickerOptionInner}>
-                  <Ionicons name="pencil-outline" size={18} color={t.tp} />
-                  <Text style={[styles.pickerOptionText, { color: t.tp }]}>Custom Workout</Text>
-                  <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                </View>
-              </NeuCard>
-            </BounceButton>
-            <BounceButton onPress={dismiss}>
-              <View style={[styles.cancelBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
-                <Text style={[styles.cancelBtnText, { color: t.tp }]}>Cancel</Text>
-              </View>
-            </BounceButton>
+            <SheetPill icon={c => <SquarePenIcon size={18} color={c} />} label="Custom Workout" onPress={() => setStep("custom")} />
+            {restAction && (
+              // Acts straight away: the calendar redraws the day grey, or back
+              // to a missed workout for an undo.
+              <SheetPill
+                icon={c => <Ionicons name={restAction === "undo" ? "arrow-undo-outline" : "moon-outline"} size={18} color={c} />}
+                label={restAction === "undo" ? "Undo Rest Day" : "Rest Day"}
+                onPress={() => { dismiss(); onRestDay(); }}
+              />
+            )}
+            <SheetPill label="Cancel" variant="quiet" onPress={dismiss} />
           </View>
         </View>
       );
@@ -330,7 +323,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
       return (
         <>
           <StepHeader title="Active Program" onBack={() => setStep("menu")} />
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.pickerContent, styles.pickerList]}>
             <Text style={[styles.pickerSection, { color: t.tp }]}>{activeProgram?.name.toUpperCase()}</Text>
             {activeWorkouts.map(day => <WorkoutRow key={day.key} day={day} />)}
           </ScrollView>
@@ -342,21 +335,14 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
       return (
         <>
           <StepHeader title="Other Programs" onBack={() => setStep("menu")} />
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.pickerContent, styles.pickerList]}>
             {otherPrograms.map(prog => (
-              <BounceButton key={prog.id} style={{ marginBottom: 16 }} onPress={() => { setFocusedProgram(prog); setStep("program"); }}>
-                <NeuCard dark={isDark} radius={14}>
-                  <View style={styles.pickerOptionInner}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.pickerOptionText, { color: t.tp }]}>{prog.name}</Text>
-                      <Text style={[styles.pickerOptionSub, { color: t.ts }]}>
-                        {[...new Set(prog.cyclePattern.filter(n => n && n !== "Rest"))].join(" · ")}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                  </View>
-                </NeuCard>
-              </BounceButton>
+              <SheetPill
+                key={prog.id}
+                label={prog.name}
+                sub={[...new Set(prog.cyclePattern.filter(n => n && n !== "Rest"))].join(" · ")}
+                onPress={() => { setFocusedProgram(prog); setStep("program"); }}
+              />
             ))}
           </ScrollView>
         </>
@@ -367,7 +353,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
       return (
         <>
           <StepHeader title={focusedProgram.name} onBack={() => setStep("others")} />
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pickerContent}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.pickerContent, styles.pickerList]}>
             {programDays(focusedProgram).map(day => <WorkoutRow key={day.key} day={day} />)}
           </ScrollView>
         </>
@@ -408,12 +394,13 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, onSelect
               </TouchableOpacity>
             )}
           </View>
-          <View style={[styles.confirmRow, !customName.trim() && { opacity: 0.35 }]}>
-            <BounceButton onPress={() => { if (customName.trim()) { dismiss(); onSelect(customName.trim(), assocProgramId ?? undefined, undefined); } }}>
-              <View style={styles.confirmBtn}>
-                <Text style={styles.confirmBtnText}>Custom Workout</Text>
-              </View>
-            </BounceButton>
+          <View style={styles.confirmRow}>
+            <SheetPill
+              label="Custom Workout"
+              variant="primary"
+              disabled={!customName.trim()}
+              onPress={() => { dismiss(); onSelect(customName.trim(), assocProgramId ?? undefined, undefined); }}
+            />
           </View>
         </>
       );
@@ -457,6 +444,18 @@ export default function JournalScreen() {
   const [deleteTarget, setDeleteTarget] = useState<JournalEntry | null>(null);
   const [workoutPickerVisible, setWorkoutPickerVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState("");
+  const [restAction, setRestAction] = useState<RestAction>(null);
+
+  const loadPrograms = useCallback(() =>
+    AsyncStorage.getItem(PROGRAMS_KEY)
+      .then(raw => {
+        if (!raw) return;
+        const progs: SavedProgram[] = JSON.parse(raw);
+        setPrograms(progs);
+        setActiveProgram(progs.find(p => p.status === "active") ?? null);
+      })
+      .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e)),
+  []);
 
   useFocusEffect(
     useCallback(() => {
@@ -469,15 +468,8 @@ export default function JournalScreen() {
       AsyncStorage.getItem(WORKOUT_DATES_KEY)
         .then(raw => { if (raw) setWorkoutDates(JSON.parse(raw)); })
         .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
-      AsyncStorage.getItem(PROGRAMS_KEY)
-        .then(raw => {
-          if (!raw) return;
-          const progs: SavedProgram[] = JSON.parse(raw);
-          setPrograms(progs);
-          setActiveProgram(progs.find(p => p.status === "active") ?? null);
-        })
-        .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
-    }, [])
+      loadPrograms();
+    }, [loadPrograms])
   );
 
   // Optimistic UI update with rollback on storage failure — keeps the list
@@ -506,9 +498,12 @@ export default function JournalScreen() {
       router.navigate({ pathname: "/workout-detail", params: { id: workoutId } });
     } else {
       setSelectedDate(date);
+      // Decided once, on open: the write lands while the sheet is still sliding
+      // away, and a live value would flip the row to "Undo" on its way out.
+      setRestAction(restActionFor(activeProgram, date, workoutHistory));
       setWorkoutPickerVisible(true);
     }
-  }, [router]);
+  }, [router, activeProgram, workoutHistory]);
 
   const handleWorkoutSelect = useCallback((
     workoutName: string,
@@ -529,6 +524,16 @@ export default function JournalScreen() {
       },
     });
   }, [router, selectedDate]);
+
+  // A plain "Make Rest Day": only that date changes. Moving it isn't offered,
+  // since every day here is today or already gone by.
+  const handleRestDay = useCallback(() => {
+    if (!activeProgram || !selectedDate || !restAction) return;
+    const action = restAction === "undo"
+      ? clearRestDay(activeProgram.id, selectedDate)
+      : applyRestDay(activeProgram.id, selectedDate, "skip");
+    void action.then(() => loadPrograms());
+  }, [activeProgram, selectedDate, restAction, loadPrograms]);
 
   // The program row under each workout card (program, which session, the
   // track). Shared with the trainer's view of a client's journal, which draws
@@ -745,7 +750,9 @@ export default function JournalScreen() {
         isDark={isDark}
         activeProgram={activeProgram}
         programs={programs}
+        restAction={restAction}
         onSelect={handleWorkoutSelect}
+        onRestDay={handleRestDay}
         onClose={() => setWorkoutPickerVisible(false)}
       />
 
@@ -809,27 +816,19 @@ const styles = StyleSheet.create({
   deleteSheet:    { position: "absolute", bottom: 0, left: 0, right: 0, borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   deleteTitle:    { fontFamily: FontFamily.bold, fontSize: 20, color: TP },
   deleteSubtitle: { fontFamily: FontFamily.regular, fontSize: 14, color: TS, lineHeight: 20 },
-  deleteBtn:      { ...pill(PILL_H_SM), backgroundColor: "#FF3B30", ...pillGlow("#FF3B30", 0.35) },
-  deleteBtnText:  { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff" },
-  cancelBtn:      { ...pill(PILL_H_SM) },
-  cancelBtnText:  { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
 
   // Workout picker sheet
   pickerSheet:       { borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   pickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, color: TP, paddingHorizontal: 24, paddingBottom: 12, textAlign: "center" },
   pickerContent:     { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 },
-  pickerSection:     { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.8, color: TS, marginTop: 8, marginBottom: 12 },
-  pickerOptionInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
-  pickerOptionText:  { fontFamily: FontFamily.semibold, fontSize: 15, color: TP, flex: 1 },
-  pickerOptionSub:   { fontFamily: FontFamily.regular, fontSize: 12, color: TS, marginTop: 2 },
+  pickerSection:     { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.8, color: TS, marginTop: 8, marginBottom: 4 },
+  pickerList:        { gap: 12 },
   pickerMenuContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 20 },
   pickerStepHeader:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 10 },
   pickerBackBtn:     { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 18 },
   pickerStepTitle:   { fontFamily: FontFamily.bold, fontSize: 17, color: TP, textAlign: "center", flex: 1 },
   customInput:       { fontFamily: FontFamily.regular, fontSize: 16, borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 13, marginBottom: 4 },
-  confirmRow:        { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
-  confirmBtn:        { borderRadius: 50, paddingVertical: 13, paddingHorizontal: 40, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 10 },
-  confirmBtnText:    { fontFamily: FontFamily.semibold, fontSize: 16, color: "#fff" },
+  confirmRow:        { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
   cnToggleRow:       { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 4, paddingVertical: 16, marginTop: 12, borderTopWidth: 1, borderBottomWidth: 1 },
   cnToggleTitle:     { fontFamily: FontFamily.semibold, fontSize: 15 },
   cnToggleSub:       { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },

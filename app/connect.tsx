@@ -28,7 +28,8 @@ import Scanner from "../components/connect/Scanner";
 import SimpleSheet from "../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
-import { ACCT, APP_DARK, APP_LIGHT, DANGER, FontFamily } from "../constants/theme";
+import SheetPill from "../components/SheetPill";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
 import { addTrainerAsClient } from "../utils/trainerStore";
@@ -496,20 +497,9 @@ export default function ConnectScreen() {
       <SimpleSheet visible={menuFor !== null} onClose={() => setMenuFor(null)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{menuFor?.name || "User"}</Text>
         <View style={styles.menu}>
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onReportConn} accessibilityRole="button" accessibilityLabel={`Report ${menuFor?.name || "user"}`}>
-            <Ionicons name="flag-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onBlockConn} accessibilityRole="button" accessibilityLabel={`Block ${menuFor?.name || "user"}`}>
-            <Ionicons name="ban-outline" size={20} color={DANGER} />
-            <Text style={[styles.menuText, { color: DANGER }]}>Block</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onRemoveConn} accessibilityRole="button" accessibilityLabel={`Remove ${menuFor?.name || "user"}`}>
-            <Ionicons name="person-remove-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Remove connection</Text>
-          </TouchableOpacity>
+          <SheetPill label="Report" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={onReportConn} />
+          <SheetPill label="Block" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={onBlockConn} />
+          <SheetPill label="Remove connection" icon={c => <Ionicons name="person-remove-outline" size={18} color={c} />} onPress={onRemoveConn} />
         </View>
       </SimpleSheet>
 
@@ -553,8 +543,5 @@ const styles = StyleSheet.create({
   reqSub:      { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 1 },
   iconBtn:     { width: 38, height: 38, borderRadius: 19, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   menuName:    { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
-  menu:        { paddingHorizontal: 16, paddingTop: 4 },
-  menuRow:     { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
-  menuDivider: { height: 1, marginHorizontal: 8 },
-  menuText:    { fontFamily: FontFamily.semibold, fontSize: 16 },
+  menu:        { paddingHorizontal: 20, paddingTop: 10, gap: 12 },
 });

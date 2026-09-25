@@ -28,6 +28,7 @@ import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import SheetPill from "../components/SheetPill";
 import CollapsibleCard from "../components/CollapsibleCard";
 import ExercisePicker from "../components/ExercisePicker";
 import FadeScreen from "../components/FadeScreen";
@@ -403,13 +404,7 @@ function DetailReorderSheet({ visible, exercises, isDark, t, onReorder, onClose 
             />
           </View>
           <View style={styles.woReorderDoneRow}>
-            <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}>
-              <View style={styles.woReorderDoneWrap}>
-                <View style={styles.woReorderDoneBtn}>
-                  <Text style={styles.woReorderDone}>Done</Text>
-                </View>
-              </View>
-            </BounceButton>
+            <SheetPill label="Done" variant="primary" onPress={closeSheet} />
           </View>
         </Animated.View>
       </View>
@@ -456,6 +451,17 @@ export default function WorkoutDetailScreen() {
   const [isEditing, setIsEditing]           = useState(false);
   const [editedExercises, setEditedExercises] = useState<CompletedExercise[]>([]);
   const [editedIsIsometric, setEditedIsIsometric] = useState<boolean[]>([]);
+  // A stable key per exercise, index-aligned with editedExercises like the
+  // isometric flags, so each card (and the notes box in it) moves WITH its
+  // exercise. Cards were keyed by position, so a reorder handed the first
+  // card's notes box, still sized for a five-line note, an empty one: a
+  // multiline TextInput doesn't shrink when its text is replaced rather than
+  // typed. `savedKeys` are the saved order's keys, which Cancel restores, so
+  // leaving edit mode never remounts a card and its edit panel still animates.
+  const [editedKeys, setEditedKeys] = useState<string[]>([]);
+  const savedKeys = useRef<string[]>([]);
+  const keySeq = useRef(0);
+  const newKeys = (n: number) => Array.from({ length: n }, () => `ex${keySeq.current++}`);
   // Editable session time (start = completedAt - duration; end = completedAt).
   const [editedCompletedAt, setEditedCompletedAt] = useState("");
   const [editedDurationSeconds, setEditedDurationSeconds] = useState(0);
@@ -508,6 +514,9 @@ export default function WorkoutDetailScreen() {
       if (found) {
         setEditedExercises(exToDisplay(found.exercises));
         setEditedIsIsometric(found.exercises.map(() => false));
+        const keys = newKeys(found.exercises.length);
+        setEditedKeys(keys);
+        savedKeys.current = keys;
         setEditedCompletedAt(found.completedAt);
         setEditedDurationSeconds(found.durationSeconds);
         setEditedSessionNotes(found.sessionNotes ?? "");
@@ -550,6 +559,8 @@ export default function WorkoutDetailScreen() {
       })),
     ]);
     setEditedIsIsometric(prev => [...prev, ...names.map(() => false)]);
+    const added = newKeys(names.length);
+    setEditedKeys(prev => [...prev, ...added]);
   };
 
   // The three writers below all target THIS account's history, so each refuses
@@ -580,6 +591,7 @@ export default function WorkoutDetailScreen() {
     );
     scheduleCloudPush();
     setWorkout(updated);
+    savedKeys.current = editedKeys;
     setIsEditing(false);
   };
 
@@ -587,6 +599,7 @@ export default function WorkoutDetailScreen() {
     if (workout) {
       setEditedExercises(exToDisplay(workout.exercises));
       setEditedIsIsometric(workout.exercises.map(() => false));
+      setEditedKeys(savedKeys.current);
       setEditedCompletedAt(workout.completedAt);
       setEditedDurationSeconds(workout.durationSeconds);
     }
@@ -698,20 +711,40 @@ export default function WorkoutDetailScreen() {
   const removeExercise = (exIdx: number) => {
     setEditedExercises(prev => prev.filter((_, i) => i !== exIdx));
     setEditedIsIsometric(prev => prev.filter((_, i) => i !== exIdx));
+    setEditedKeys(prev => prev.filter((_, i) => i !== exIdx));
   };
 
   const toggleIsometric = (exIdx: number) => {
     setEditedIsIsometric(prev => prev.map((v, i) => i === exIdx ? !v : v));
   };
 
+  // The sheet hands back the SAME exercise objects in a new order, so where
+  // each came from is its identity, not its name (a day can list one exercise
+  // twice). Its key and Reps/Hold flag move with it.
   const handleReorder = (reordered: CompletedExercise[]) => {
-    const oldOrder = editedExercises;
+    const from = reordered.map(ex => editedExercises.indexOf(ex));
+    if (from.some(i => i < 0)) return;
     setEditedExercises(reordered);
-    setEditedIsIsometric(reordered.map(ex => {
-      const oldIdx = oldOrder.findIndex(o => o.name === ex.name);
-      return oldIdx >= 0 ? editedIsIsometric[oldIdx] : false;
-    }));
+    setEditedIsIsometric(from.map(i => editedIsIsometric[i] ?? false));
+    setEditedKeys(from.map(i => editedKeys[i]));
+    movedInSheet.current = true;
   };
+
+  // Moving an exercise finishes the edit, as moving one on the Workout tab
+  // closes its edit panel: closing the reorder sheet after a move saves, the
+  // same as the tick. Through refs, because the sheet's drag-to-dismiss handler
+  // is built once and keeps the FIRST onClose it was given; a direct call from
+  // there would save the order from before the move.
+  const movedInSheet = useRef(false);
+  const saveRef = useRef(handleSave);
+  saveRef.current = handleSave;
+  const closeReorder = useCallback(() => {
+    setReorderOpen(false);
+    if (movedInSheet.current) {
+      movedInSheet.current = false;
+      void saveRef.current();
+    }
+  }, []);
 
   const exercises = workout ? (isEditing ? editedExercises : exToDisplay(workout.exercises)) : [];
 
@@ -875,7 +908,7 @@ export default function WorkoutDetailScreen() {
               const isIsometric = editedIsIsometric[ei] ?? false;
               return (
                 <CollapsibleCard
-                  key={ei}
+                  key={editedKeys[ei] ?? ei}
                   isCollapsing={collapsingIndices.has(ei)}
                   onCollapsed={() => {
                     removeExercise(ei);
@@ -1175,7 +1208,7 @@ export default function WorkoutDetailScreen() {
         isDark={isDark}
         t={t}
         onReorder={handleReorder}
-        onClose={() => setReorderOpen(false)}
+        onClose={closeReorder}
       />
       {workout && editedCompletedAt !== "" && (
         <TimeEditSheet
@@ -1208,7 +1241,9 @@ export default function WorkoutDetailScreen() {
               </TouchableOpacity>
             </>
           )}
-          <TouchableOpacity onPress={() => Keyboard.dismiss()} activeOpacity={0.75} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}>
+          {/* Typing session notes, this is the card's tick (as on the Workout
+              tab): save them, put the keyboard away and close the card. */}
+          <TouchableOpacity onPress={() => (showSessionNotes && sessionNotesRef.current?.isFocused() ? closeSessionNotes() : Keyboard.dismiss())} activeOpacity={0.75} style={[styles.kbDismissBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}>
             <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
           </TouchableOpacity>
         </View>
@@ -1276,10 +1311,7 @@ const styles = StyleSheet.create({
   woReorderHeader:     { alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1 },
   woReorderTitle:      { fontFamily: FontFamily.bold, fontSize: 16 },
   woReorderListWrap:   { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
-  woReorderDoneRow:    { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
-  woReorderDoneWrap:   { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 10 },
-  woReorderDoneBtn:    { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
-  woReorderDone:       { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
+  woReorderDoneRow:    { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
 
   woDragRow:     { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
   woDragHandle:  { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },

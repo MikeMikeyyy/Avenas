@@ -19,6 +19,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
+import { pill, PILL_H } from "../constants/buttons";
 import { pullProfile, pushProfile } from "../lib/cloud";
 import { signOut } from "../lib/auth";
 
@@ -221,6 +222,6 @@ const styles = StyleSheet.create({
   choiceText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
   ctaWrap:       { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8 },
   ctaDisabled:   { opacity: 0.4 },
-  cta:           { borderRadius: 28, paddingVertical: 17, alignItems: "center", justifyContent: "center" },
+  cta:           { ...pill(PILL_H) },
   ctaText:       { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 0.3 },
 });

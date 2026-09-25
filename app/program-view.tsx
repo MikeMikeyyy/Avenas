@@ -27,6 +27,7 @@ import BounceButton from "../components/BounceButton";
 import ProgramHeaderCard from "../components/ProgramHeaderCard";
 import ProgramSnapshotView from "../components/ProgramSnapshotView";
 import ProgramActionFabs from "../components/ProgramActionFabs";
+import SquarePenIcon from "../components/SquarePenIcon";
 import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
@@ -373,7 +374,7 @@ export default function ProgramViewScreen() {
             accessibilityRole="button"
           >
             <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name="create-outline" size={20} color={t.tp} />
+              <SquarePenIcon size={20} color={t.tp} />
             </View>
           </TouchableOpacity>
           )}

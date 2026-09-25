@@ -26,6 +26,9 @@ export const PILL_H = 48;
 export const PILL_H_SM = 44;
 /** Compact inline controls — matches the workout top bar's 40pt controls. */
 export const PILL_H_XS = 40;
+/** The smallest pill: a control tucked into a card's header beside its title
+ *  (the Progress charts' dropdown buttons). */
+export const PILL_H_CHIP = 34;
 
 /** Pill geometry: rounded ends, centred row content, no vertical padding. */
 export function pill(minHeight: number = PILL_H): ViewStyle {

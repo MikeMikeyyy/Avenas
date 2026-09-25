@@ -2,12 +2,16 @@
   "expo": {
     "name": "avenas",
     "slug": "avenas",
-    "version": "2.8.0",
+    "version": "2.9.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/icon-transparent.png",
     "scheme": "avenas",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "icon": {
+        "light": "./assets/images/icon-light.png",
+        "dark": "./assets/images/icon-dark.png"
+      },
       "supportsTablet": false,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Avenas uses your photo library to set your profile photo and to add an image or video to your custom exercises.",
@@ -22,7 +26,7 @@
       },
       "bundleIdentifier": "com.avenas.app",
       "appleTeamId": "8X55YH783A",
-      "buildNumber": "42",
+      "buildNumber": "43",
       "usesAppleSignIn": true
     },
     "android": {
@@ -44,9 +48,13 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 300,
+          "imageWidth": 240,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "image": "./assets/images/splash-icon.png",
+            "backgroundColor": "#1B1E2C"
+          }
         }
       ],
       "expo-font",

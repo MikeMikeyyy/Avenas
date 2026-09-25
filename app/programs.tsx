@@ -11,18 +11,22 @@ import { Ionicons } from "@expo/vector-icons";
 import Reanimated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardProgramAchievement } from "../utils/achievementStore";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE } from "../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_RADIUS } from "../constants/buttons";
+import { pill, pillGlow, PILL_RADIUS } from "../constants/buttons";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import SheetPill from "../components/SheetPill";
+import SquarePenIcon from "../components/SquarePenIcon";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ActiveBadge from "../components/ActiveBadge";
-import { formatStoredDate, todayYMD } from "../utils/dates";
-import { cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
+import { formatStoredDate } from "../utils/dates";
+import { getJSON } from "../utils/storage";
+import { dayIdAt } from "../utils/programDays";
+import { cycleIndexForDate, getEffectiveToday, normalizeDriftDates } from "../utils/workout";
 import { clearShifts } from "../utils/skippedDates";
 import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
 import { useTheme } from "../contexts/ThemeContext";
@@ -39,11 +43,28 @@ const CARD_LAYOUT = LinearTransition.duration(220);
 
 // ─── Set Workout Picker ────────────────────────────────────────────────────────
 
+/** "Set Workout Date" while a workout is under way on the Workout tab. Resolves
+ *  true to discard it and set the day, false to leave everything as it is. */
+function confirmReplaceStartedWorkout(startedName: string | null, nextLabel: string): Promise<boolean> {
+  return new Promise(resolve => {
+    Alert.alert(
+      "Replace today's workout?",
+      `You've already started ${startedName ? `'${startedName}'` : "a workout"} today. Setting today to ${nextLabel} will discard it.`,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        { text: "Discard and Set", style: "destructive", onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+}
+
 interface SetWorkoutPickerProps {
   visible: boolean;
   program: SavedProgram;
   isDark: boolean;
-  onConfirm: (dayIndex: number) => void;
+  /** Resolves true once the day is set, false if the user backed out. */
+  onConfirm: (dayIndex: number) => Promise<boolean>;
   // reopenMenu=true when dismissed via back/swipe/backdrop (return to the action
   // menu); false after a confirmed day (exit straight to the programs list).
   onClose: (reopenMenu: boolean) => void;
@@ -104,10 +125,18 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
     }
   }, [visible]);
 
-  const handleConfirm = () => {
-    if (selected === null) return;
-    onConfirm(selected);
-    dismiss(false);   // confirmed → exit to the programs list, not back to the menu
+  // The parent may have to ask first (a workout already under way on the
+  // Workout tab) and answers false when the user backs out, which keeps the
+  // picker open. The alert shows over this sheet, never mid-dismissal.
+  const confirming = useRef(false);
+  const handleConfirm = async () => {
+    if (selected === null || confirming.current) return;
+    confirming.current = true;
+    try {
+      if (await onConfirm(selected)) dismiss(false);   // confirmed → exit to the programs list, not back to the menu
+    } finally {
+      confirming.current = false;
+    }
   };
 
   return (
@@ -391,7 +420,8 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
 interface ProgramAction {
   key: string;
   label: string;
-  icon: React.ComponentProps<typeof Ionicons>["name"];
+  /** An Ionicons name, or a render for one of the app's own SVG icons. */
+  icon: React.ComponentProps<typeof Ionicons>["name"] | ((color: string) => React.ReactNode);
   onPress: () => void;
   primary?: boolean;      // filled accent button
   destructive?: boolean;  // red icon + text
@@ -476,21 +506,14 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
           </View>
           <View style={styles.paList}>
             {actions.map((a) => (
-              <BounceButton key={a.key} onPress={() => close(a.onPress)} accessibilityLabel={a.label} accessibilityRole="button">
-                {a.primary ? (
-                  <View style={[styles.activePrimaryBtnWrap, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                    <View style={[styles.activePrimaryBtn, { backgroundColor: ACCT }]}>
-                      <Ionicons name={a.icon} size={16} color="#fff" />
-                      <Text style={[styles.activePrimaryBtnText, { color: "#fff" }]}>{a.label}</Text>
-                    </View>
-                  </View>
-                ) : (
-                  <NeuCard dark={isDark} radius={14} innerStyle={styles.paRowInner}>
-                    <Ionicons name={a.icon} size={18} color={a.destructive ? "#E53935" : (a.tint ?? t.tp)} />
-                    <Text style={[styles.paRowText, { color: a.destructive ? "#E53935" : (a.tint ?? t.tp) }]}>{a.label}</Text>
-                  </NeuCard>
-                )}
-              </BounceButton>
+              <SheetPill
+                key={a.key}
+                label={a.label}
+                variant={a.primary ? "primary" : a.destructive ? "danger" : "default"}
+                tint={a.tint}
+                icon={c => typeof a.icon === "function" ? a.icon(c) : <Ionicons name={a.icon} size={16} color={c} />}
+                onPress={() => close(a.onPress)}
+              />
             ))}
           </View>
         </Animated.View>
@@ -506,7 +529,7 @@ export default function ProgramsScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const { isRunning } = useWorkoutTimer();
+  const { isRunning, isPaused, discardWorkout } = useWorkoutTimer();
   const { accountType } = useAccountType();
   const [assignedPT, setAssignedPT] = useState<AssignedPT | null>(null);
 
@@ -700,9 +723,14 @@ export default function ProgramsScreen() {
     );
   };
 
-  const handleSetWorkoutDay = async (targetDayIndex: number) => {
-    if (!activeProgram) return;
-    const today = todayYMD();
+  const handleSetWorkoutDay = async (targetDayIndex: number): Promise<boolean> => {
+    if (!activeProgram) return false;
+    const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+    // The day the Workout tab is ON, not the calendar day: before 3am it can
+    // still be yesterday (getEffectiveToday), and "today is Push" has to land on
+    // the day the user is looking at, or the tab shows the day before the one
+    // they picked.
+    const today = getEffectiveToday(activeProgram, Array.isArray(history) ? history : []);
     // A clean reset. "Today is Push" is the user saying where they are, so every
     // move that got them here is dropped FIRST — left in, they kept counting,
     // and the week looked back on plan while the finish date stayed however
@@ -712,9 +740,30 @@ export default function ProgramsScreen() {
     // Then solve against the reset program, asking the shared resolver where
     // today lands with NO offset rather than recomputing daysPassed here.
     const naturalDayIndex = cycleIndexForDate({ ...reset, cycleOffset: 0 }, today);
-    if (naturalDayIndex === null) return;
+    if (naturalDayIndex === null) return false;
     const n = reset.cycleDays;
     const cycleOffset = ((targetDayIndex - naturalDayIndex) % n + n) % n;
+
+    // A workout already under way on the Workout tab (the timer started, or
+    // anything typed or ticked) is one that tab deliberately never swaps out
+    // underneath the user, so without this the new day was written and the tab
+    // kept showing the old one: typically a day picked with Change Workout Day
+    // and then started. Ask, and discard it only on a yes. No need when it's
+    // already the day being set.
+    const draft = await getJSON<{ date?: string; workoutInfo?: { name?: string; programId?: string; dayId?: string } } | null>(WORKOUT_DRAFT_KEY, null);
+    const started = draft?.date === today ? draft.workoutInfo ?? null : null;
+    const underWay = isRunning || isPaused || started !== null;
+    const alreadyOnIt = !!started && started.programId === activeProgram.id && started.dayId === dayIdAt(activeProgram, targetDayIndex);
+    const replaceStarted = underWay && !alreadyOnIt;
+    if (replaceStarted) {
+      const targetName = activeProgram.cyclePattern[targetDayIndex];
+      const ok = await confirmReplaceStartedWorkout(
+        started?.name ?? null,
+        !targetName || targetName === "Rest" ? "a rest day" : `'${targetName}'`,
+      );
+      if (!ok) return false;
+    }
+
     const updated = programs.map(p =>
       p.id === activeProgram.id ? normalizeDriftDates({ ...reset, cycleOffset }) : p
     );
@@ -724,8 +773,14 @@ export default function ProgramsScreen() {
     // about what today should be, so a leftover same-day override has to go —
     // otherwise the Workout tab keeps honouring it (a stale "Rest", say) while
     // Home's week strip reads the re-aligned cycle, and the two disagree.
-    AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
+    // Awaited: the discard below makes the Workout tab re-read storage at once.
+    await AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
+    // The same discard as the workout bar's: clears the timer and the draft and
+    // tells the (still mounted) Workout tab to reload, which now resolves the
+    // day just set.
+    if (replaceStarted) discardWorkout();
     scheduleCloudPush();
+    return true;
   };
 
   // Honor ?focus=<programId>: expand and scroll that program into view once after
@@ -812,7 +867,7 @@ export default function ProgramsScreen() {
   // Status-appropriate action buttons for the tapped program, shown in the popup
   // sheet. Each onPress runs after the sheet closes (see ProgramActionsSheet.close).
   const buildActions = (program: SavedProgram): ProgramAction[] => {
-    const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: "create-outline", onPress: () => router.navigate({ pathname: "/new-program", params: { id: program.id } }) };
+    const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: c => <SquarePenIcon size={16} color={c} />, onPress: () => router.navigate({ pathname: "/new-program", params: { id: program.id } }) };
     const duplicateAction: ProgramAction = { key: "duplicate", label: "Duplicate Program", icon: "copy-outline", onPress: () => handleDuplicateProgram(program) };
     const deleteAction: ProgramAction = { key: "delete", label: "Delete", icon: "trash-outline", destructive: true, onPress: () => handleDeleteProgram(program) };
     const sendAction: ProgramAction | null = canSendToPT ? { key: "send", label: "Send to Trainer", icon: "paper-plane-outline", tint: ACCT, onPress: () => handleSendToPT(program) } : null;
@@ -830,15 +885,18 @@ export default function ProgramsScreen() {
           }
         } } as ProgramAction]),
         editAction,
-        { key: "complete", label: "Mark Complete", icon: "checkmark-circle-outline", tint: ACCT, onPress: handleCompleteProgram },
-        // Pause sits between Mark Complete and Make Inactive. The two are
-        // different actions: pause keeps the active slot, Make Inactive frees it
-        // so another program can take over — hence the different oranges, and
-        // why Make Inactive gives up the pause icon.
+        // Pause / Resume sits right under Edit: on a paused program, Resume is
+        // the thing you came for, so it leads rather than sitting below Mark
+        // Complete. Pause and Make Inactive are different actions: pause keeps
+        // the active slot, Make Inactive frees it so another program can take
+        // over — hence the different oranges, and why Make Inactive gives up
+        // the pause icon.
         program.pausedAt
           ? { key: "resume", label: "Resume Program", icon: "play-circle-outline", tint: ACCT, onPress: () => handleResumeProgram(program) }
           : { key: "pause", label: "Pause Program", icon: "pause-circle-outline", tint: PAUSED_ORANGE, onPress: () => handlePauseProgram(program) },
         { key: "inactive", label: "Make Inactive", icon: "remove-circle-outline", tint: WARMUP_ORANGE, onPress: () => handleMakeInactive(program) },
+        // Ending the program is the rarest choice here, so it sits at the foot.
+        { key: "complete", label: "Mark Complete", icon: "checkmark-circle-outline", tint: ACCT, onPress: handleCompleteProgram },
         duplicateAction,
       ];
     } else if (program.status === "completed") {
@@ -1026,9 +1084,6 @@ const styles = StyleSheet.create({
   activeProgramInner: { padding: 20, gap: 14 },
   activeProgramName:  { fontFamily: FontFamily.bold, fontSize: 18, flex: 1, marginRight: 8 },
   activeBtnRow:           { flexDirection: "row", gap: 10 },
-  activePrimaryBtnWrap:   { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
-  activePrimaryBtn:       { ...pill(PILL_H_SM), backgroundColor: ACCT, gap: 7 },
-  activePrimaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff", letterSpacing: 0.2 },
   activeSecondaryBtnInner: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 12 },
   activeSecondaryBtnText:  { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.2, lineHeight: 20 },
 
@@ -1068,8 +1123,6 @@ const styles = StyleSheet.create({
   paHeader:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   paTitle:            { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },
   paList:             { paddingHorizontal: 20, paddingTop: 16, gap: 10 },
-  paRowInner:         { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingHorizontal: 16 },
-  paRowText:          { fontFamily: FontFamily.bold, fontSize: 15, letterSpacing: 0.2 },
 
   // Set Workout Picker
   swBackdrop:         { flex: 1, justifyContent: "flex-end" },
@@ -1088,7 +1141,7 @@ const styles = StyleSheet.create({
   swDayName:          { fontFamily: FontFamily.semibold, fontSize: 15 },
   swRestLabel:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
   swFooter:           { paddingHorizontal: 20, paddingTop: 16, borderTopWidth: StyleSheet.hairlineWidth },
-  swConfirmWrap:      { borderRadius: 16, backgroundColor: ACCT, shadowColor: "#1a9e68", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
-  swConfirmBtn:       { borderRadius: PILL_RADIUS, backgroundColor: ACCT, paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  swConfirmWrap:      { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  swConfirmBtn:       { ...pill(), backgroundColor: ACCT, gap: 8 },
   swConfirmText:      { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.2 },
 });

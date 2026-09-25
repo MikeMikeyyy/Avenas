@@ -21,7 +21,8 @@ import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
 import ChatIcon from "../../../components/icons/ChatIcon";
 import SendIcon from "../../../components/icons/SendIcon";
 import TrashIcon from "../../../components/TrashIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constants/theme";
+import SheetPill from "../../../components/SheetPill";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
 import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
@@ -67,7 +68,11 @@ function TabDivider({ gap, pillX, segW, color }: {
     }),
     [gap, segW],
   );
-  return <Reanimated.View pointerEvents="none" style={[styles.tabDivider, { backgroundColor: color }, style]} />;
+  return (
+    <Reanimated.View pointerEvents="none" style={[styles.tabDividerBox, style]}>
+      <View style={[styles.tabDivider, { backgroundColor: color }]} />
+    </Reanimated.View>
+  );
 }
 
 function fmtAgo(iso: string): string {
@@ -415,7 +420,13 @@ export default function ClientDetailScreen() {
             textStyle={[styles.avatarText, { color: ACCT }]}
           />
           <View style={styles.nameCol}>
-            <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+            {/* Photo, star, name: the group page header's order. The star
+                shares the NAME's row, so it sits level with the name rather
+                than centred between it and the Synced line. */}
+            <View style={styles.nameRow}>
+              {isFavourite && <FavouriteStar size={16} />}
+              <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
+            </View>
             {synced && (
               <Text style={[styles.synced, { color: t.ts }]} numberOfLines={1}>{synced}</Text>
             )}
@@ -494,6 +505,7 @@ export default function ClientDetailScreen() {
             withTopInset={false}
             bottomPadding={insets.bottom + 140}
             refreshControl={refreshControl}
+            clientId={client.id}
           />
         )}
         {tab === "journal" && (
@@ -640,34 +652,16 @@ export default function ClientDetailScreen() {
       <SimpleSheet visible={menuOpen} onClose={() => setMenuOpen(false)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{client.name}</Text>
         <View style={styles.menu}>
-          <TouchableOpacity
-            style={styles.menuRow}
-            activeOpacity={0.8}
+          <SheetPill
+            label={isFavourite ? "Remove from favourites" : "Add to favourites"}
+            tint={isFavourite ? favouriteGold : undefined}
+            icon={() => <FavouriteStar size={20} filled={isFavourite} inactiveColor={t.tp} />}
             onPress={onToggleFavourite}
-            accessibilityRole="button"
             accessibilityState={{ selected: isFavourite }}
-            accessibilityLabel={isFavourite ? "Remove from favourites" : "Add to favourites"}
-          >
-            <FavouriteStar size={20} filled={isFavourite} inactiveColor={t.tp} />
-            <Text style={[styles.menuText, { color: isFavourite ? favouriteGold : t.tp }]}>
-              {isFavourite ? "Remove from favourites" : "Add to favourites"}
-            </Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onReportUser} accessibilityRole="button" accessibilityLabel={`Report ${client.name}`}>
-            <Ionicons name="flag-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onBlock} accessibilityRole="button" accessibilityLabel={`Block ${client.name}`}>
-            <Ionicons name="ban-outline" size={20} color={DANGER} />
-            <Text style={[styles.menuText, { color: DANGER }]}>Block</Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onUnadd} accessibilityRole="button" accessibilityLabel={`Remove ${client.name}`}>
-            <Ionicons name="person-remove-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>Remove connection</Text>
-          </TouchableOpacity>
+          />
+          <SheetPill label="Report" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={onReportUser} />
+          <SheetPill label="Block" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={onBlock} />
+          <SheetPill label="Remove connection" icon={c => <Ionicons name="person-remove-outline" size={18} color={c} />} onPress={onUnadd} />
         </View>
       </SimpleSheet>
 
@@ -690,16 +684,24 @@ const styles = StyleSheet.create({
   avatar:        { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   avatarText:    { fontFamily: FontFamily.bold, fontSize: 13 },
   nameCol:       { flex: 1 },
-  name:          { fontFamily: FontFamily.bold, fontSize: 18 },
+  // 10 between star and name, the group header's spacing.
+  nameRow:       { flexDirection: "row", alignItems: "center", gap: 10 },
+  name:          { flexShrink: 1, fontFamily: FontFamily.bold, fontSize: 18 },
   synced:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
   tabsWrap:      { paddingHorizontal: 20, paddingBottom: 8 },
   tabs:          { flexDirection: "row", borderRadius: 999, padding: 4, position: "relative", overflow: "hidden" },
   tab:           { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: "center", justifyContent: "center", zIndex: 1 },
   tabText:       { fontFamily: FontFamily.semibold, fontSize: 13 },
   tabPill:       { position: "absolute", top: 4, bottom: 4, left: 4, borderRadius: 999, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
-  // Hairline tab separator: 1px, vertically centered, positioned on a boundary
-  // via translateX. Rendered under the green pill so it covers any it slides over.
-  tabDivider:    { position: "absolute", top: "50%", marginTop: -8, left: 4 - 0.5, width: 1, height: 16, borderRadius: 0.5 },
+  // Hairline tab separator, positioned on a boundary via translateX and
+  // rendered under the green pill so it covers any it slides over. Its box has
+  // the pill's own insets (top/bottom 4) and centres the line in them, so it
+  // shares the pill's and the labels' middle. It was `top: "50%"` + a negative
+  // margin, but an absolute child's percentage resolves against the track's
+  // height LESS its padding while the offset starts at the padding edge, which
+  // left every line 4pt above centre.
+  tabDividerBox: { position: "absolute", top: 4, bottom: 4, left: 4 - 0.5, width: 1, justifyContent: "center" },
+  tabDivider:    { width: 1, height: 16, borderRadius: 0.5 },
   section:       { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", marginTop: 16, marginBottom: 12 },
   sectionHeading:{ fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
   programCardInner:{ padding: 14, gap: 10 },
@@ -717,8 +719,5 @@ const styles = StyleSheet.create({
   shareBtnText:  { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   // Options sheet — mirrors the chat screen's menu styles.
   menuName:      { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
-  menu:          { paddingHorizontal: 16, paddingTop: 4 },
-  menuRow:       { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
-  menuDivider:   { height: 1, marginHorizontal: 8 },
-  menuText:      { fontFamily: FontFamily.semibold, fontSize: 16 },
+  menu:          { paddingHorizontal: 20, paddingTop: 10, gap: 12 },
 });

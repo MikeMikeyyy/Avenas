@@ -32,6 +32,7 @@ import SimpleSheet from "../../../../components/trainer/SimpleSheet";
 import { ReportReasonList } from "../../../../components/trainer/ReportReasonSheet";
 import MessageActions from "../../../../components/trainer/MessageActions";
 import GroupAvatar from "../../../../components/trainer/GroupAvatar";
+import SheetPill from "../../../../components/SheetPill";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../../constants/theme";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
@@ -345,27 +346,8 @@ export default function GroupThreadScreen() {
           <>
             <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
             <View style={styles.menu}>
-              <TouchableOpacity
-                style={styles.menuRow}
-                activeOpacity={0.8}
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSheet({ step: "report" }); }}
-                accessibilityRole="button"
-                accessibilityLabel="Report someone in this group"
-              >
-                <Ionicons name="flag-outline" size={20} color={t.tp} />
-                <Text style={[styles.menuText, { color: t.tp }]}>Report someone</Text>
-              </TouchableOpacity>
-              <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-              <TouchableOpacity
-                style={styles.menuRow}
-                activeOpacity={0.8}
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSheet({ step: "block" }); }}
-                accessibilityRole="button"
-                accessibilityLabel="Block someone in this group"
-              >
-                <Ionicons name="ban-outline" size={20} color={DANGER} />
-                <Text style={[styles.menuText, { color: DANGER }]}>Block someone</Text>
-              </TouchableOpacity>
+              <SheetPill label="Report someone" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={() => setSheet({ step: "report" })} />
+              <SheetPill label="Block someone" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={() => setSheet({ step: "block" })} />
             </View>
             <Text style={[styles.menuHint, { color: t.ts }]}>
               Tap any message to delete it or report it.
@@ -395,30 +377,25 @@ export default function GroupThreadScreen() {
             ) : (
               <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
                 <View style={styles.menu}>
-                  {others.map((m, i) => (
-                    <View key={m.id}>
-                      {i > 0 && <View style={[styles.menuDivider, { backgroundColor: t.div }]} />}
-                      <TouchableOpacity
-                        style={styles.pickRow}
-                        activeOpacity={0.8}
-                        onPress={() => (sheet.step === "report" ? onPickReport(m) : onPickBlock(m))}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${sheet.step === "report" ? "Report" : "Block"} ${m.name}`}
-                      >
+                  {/* One pill per person. Block names stay red, the colour the
+                      step's own button was, without a wall of red fills. */}
+                  {others.map(m => (
+                    <SheetPill
+                      key={m.id}
+                      label={m.name}
+                      tint={sheet.step === "block" ? DANGER : undefined}
+                      icon={() => (
                         <Avatar
                           uri={m.photoUri}
                           initials={m.initials}
-                          size={34}
+                          size={30}
                           backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
                           textColor={ACCT}
                           textStyle={[styles.pickInitials, { color: ACCT }]}
                         />
-                        <Text style={[styles.menuText, { color: sheet.step === "block" ? DANGER : t.tp, flex: 1 }]} numberOfLines={1}>
-                          {m.name}
-                        </Text>
-                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                      </TouchableOpacity>
-                    </View>
+                      )}
+                      onPress={() => (sheet.step === "report" ? onPickReport(m) : onPickBlock(m))}
+                    />
                   ))}
                 </View>
               </ScrollView>
@@ -439,16 +416,13 @@ const styles = StyleSheet.create({
   headerSub:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
 
   menuName:    { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
-  menu:        { paddingHorizontal: 16, paddingTop: 4 },
-  menuRow:     { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
-  menuDivider: { height: 1, marginHorizontal: 8 },
-  menuText:    { fontFamily: FontFamily.semibold, fontSize: 16 },
+  // Room for the pills' shadows inside the person list's ScrollView too.
+  menu:        { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6, gap: 12 },
   menuHint:    { fontFamily: FontFamily.regular, fontSize: 12, textAlign: "center", paddingHorizontal: 24, paddingTop: 10 },
 
   // Step 2 — pick a person. The back chevron and the spacer opposite it are the
   // same width so the title stays centred.
   pickHeader:  { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingBottom: 6 },
   pickBack:    { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
-  pickRow:     { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, paddingHorizontal: 8 },
   pickInitials:{ fontFamily: FontFamily.bold, fontSize: 13 },
 });

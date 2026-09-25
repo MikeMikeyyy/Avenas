@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Modal, Animated, PanResponder, Easing, Touchabl
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import BounceButton from "./BounceButton";
+import SheetPill from "./SheetPill";
 import { TimeRow, computeDurationMins, fmtDurationMins, timeValFromDate, type TimeVal } from "./TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 
@@ -110,17 +110,11 @@ export default function TimeEditSheet({
           <Text style={[styles.duration, { color: t.ts }]}>Duration: {fmtDurationMins(durationMins)}</Text>
 
           <View style={styles.doneRow}>
-            <BounceButton
+            <SheetPill
+              label={confirmLabel}
+              variant="primary"
               onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); animateClose(() => onConfirm(start, end)); }}
-              accessibilityLabel={confirmLabel}
-              accessibilityRole="button"
-            >
-              <View style={styles.doneWrap}>
-                <View style={styles.doneBtn}>
-                  <Text style={styles.doneText}>{confirmLabel}</Text>
-                </View>
-              </View>
-            </BounceButton>
+            />
           </View>
         </Animated.View>
       </View>
@@ -141,8 +135,5 @@ const styles = StyleSheet.create({
   body:        { paddingHorizontal: 20, paddingVertical: 8, borderBottomWidth: 1 },
   rowDivider:  { height: 1, marginVertical: 4 },
   duration:    { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 14 },
-  doneRow:     { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
-  doneWrap:    { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 10 },
-  doneBtn:     { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
-  doneText:    { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
+  doneRow:     { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
 });

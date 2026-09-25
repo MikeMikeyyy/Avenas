@@ -19,7 +19,8 @@ import BounceButton from "../components/BounceButton";
 import DropdownPicker from "../components/DropdownPicker";
 import FadeScreen from "../components/FadeScreen";
 import DumbbellIcon from "../components/DumbbellIcon";
-import { APP_LIGHT, APP_DARK, BUBBLE_LIGHT, FontFamily } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
+import { pill, PILL_H_CHIP, PILL_SHADOW } from "../constants/buttons";
 import { formatWeightForDisplay } from "../utils/units";
 import {
   PROGRAMS_KEY,
@@ -35,6 +36,7 @@ import {
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { getJSON } from "../utils/storage";
+import { loadCachedClientData } from "../utils/trainerStore";
 import { MONTH_NAMES } from "../utils/dates";
 import { programIncludes } from "../utils/progressStats";
 
@@ -72,7 +74,11 @@ export default function ExerciseHistoryScreen() {
   // `dayName` (optional) scopes the list to one workout day — progress is
   // tracked per (day, exercise) pair, and the progression chart forwards its
   // day so this page shows the same slice the chart plotted.
-  const { exerciseName, dayName, dayId } = useLocalSearchParams<{ exerciseName: string; dayName?: string; dayId?: string }>();
+  // `clientId` makes it a TRAINER reading a client's history, opened from that
+  // client's Progress tab: it reads the copy the client page loaded (never your
+  // own storage, where none of their sessions exist) and a card opens the
+  // session read-only, exactly as tapping it on their journal does.
+  const { exerciseName, dayName, dayId, clientId } = useLocalSearchParams<{ exerciseName: string; dayName?: string; dayId?: string; clientId?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
@@ -95,10 +101,15 @@ export default function ExerciseHistoryScreen() {
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        const [h, p] = await Promise.all([
-          getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []),
-          getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-        ]);
+        // A client's copy is read from the cache, never refetched: every backup
+        // re-mints their workout ids, and the chart that opened this page drew
+        // from this copy.
+        const [h, p] = clientId
+          ? await loadCachedClientData(clientId).then(d => [d.workoutHistory, d.programs] as const)
+          : await Promise.all([
+              getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []),
+              getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+            ]);
         if (cancelled) return;
         setHistory(Array.isArray(h) ? h : []);
         setPrograms(Array.isArray(p) ? p : []);
@@ -106,7 +117,7 @@ export default function ExerciseHistoryScreen() {
       return () => {
         cancelled = true;
       };
-    }, []),
+    }, [clientId]),
   );
 
   const sessions: SessionRow[] = useMemo(() => {
@@ -161,7 +172,7 @@ export default function ExerciseHistoryScreen() {
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.navigate({ pathname: "/workout-detail", params: { id: workoutId } });
+    router.navigate({ pathname: "/workout-detail", params: { id: workoutId, ...(clientId ? { clientId } : {}) } });
   };
 
   return (
@@ -221,13 +232,12 @@ export default function ExerciseHistoryScreen() {
         </View>
 
         {/* Time-range dropdown — identical button + sheet as the ones on the
-            Progress page chart cards. The session count is the SAME white
-            bubble pill as the dropdown trigger beside it (white in both themes,
-            like the SegmentedControl thumb), so the row reads as two matching
+            Progress page chart cards. The session count is the SAME pill as
+            the dropdown button beside it, so the row reads as two matching
             controls rather than a raised card next to a floating pill. */}
         <View style={styles.rangeRow}>
-          <View style={[styles.countPill, { shadowOpacity: isDark ? 0.3 : 0.12 }]}>
-            <Text style={styles.countText} numberOfLines={1}>
+          <View style={[styles.countPill, { backgroundColor: t.ctrl }]}>
+            <Text style={[styles.countText, { color: t.tp }]} numberOfLines={1}>
               {sessions.length} session{sessions.length === 1 ? "" : "s"}
             </Text>
           </View>
@@ -377,23 +387,14 @@ const styles = StyleSheet.create({
   // Mirrors DropdownPicker's `btn` exactly — change one and change the other,
   // or the two controls in this row stop matching.
   countPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: BUBBLE_LIGHT,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 3,
+    ...pill(PILL_H_CHIP),
+    paddingHorizontal: 13,
+    ...PILL_SHADOW,
   },
   countText: {
-    fontFamily: FontFamily.semibold,
-    fontSize: 12,
-    // The pill is white in both themes, so the label is always the on-white
-    // colour rather than the active theme's.
-    color: APP_LIGHT.tp,
+    fontFamily: FontFamily.bold,
+    fontSize: 13,
+    letterSpacing: 0.2,
   },
 
   cardInner: {

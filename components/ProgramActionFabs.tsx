@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import BounceButton from "./BounceButton";
+import SquarePenIcon from "./SquarePenIcon";
 import { APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 
 export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpenSummary }: {
@@ -40,7 +41,7 @@ export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpe
           >
             <View style={[styles.slateWrap, { backgroundColor: slate }]}>
               <View style={[styles.fab, { backgroundColor: slate }]}>
-                <Ionicons name="create-outline" size={16} color={slateContent} />
+                <SquarePenIcon size={16} color={slateContent} />
                 <Text style={[styles.fabText, { color: slateContent }]}>Open in Builder</Text>
               </View>
             </View>

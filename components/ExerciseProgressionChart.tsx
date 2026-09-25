@@ -43,6 +43,10 @@ interface Props {
   prs: PRs;
   /** "kg" | "lbs" */
   unit: string;
+  /** Set when a TRAINER is viewing a client's progress: the full history and
+   *  every workout this chart opens read that client's copy, read-only. Without
+   *  it they read the viewer's own storage, where a client's ids don't exist. */
+  clientId?: string;
 }
 
 function fmtShortDate(ymd: string): string {
@@ -142,7 +146,7 @@ const GIFTED_TOP_PAD = 10;
  * - Tapping a point highlights it and shows date/weight/reps above the chart.
  * - Tapping a PR tile routes to that PR's source workout via /workout-detail.
  */
-export default function ExerciseProgressionChart({ exerciseName, dayName, dayId, history, prs, unit }: Props) {
+export default function ExerciseProgressionChart({ exerciseName, dayName, dayId, history, prs, unit, clientId }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
@@ -315,7 +319,7 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, dayId,
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.navigate({ pathname: "/workout-detail", params: { id: workoutId } });
+    router.navigate({ pathname: "/workout-detail", params: { id: workoutId, ...(clientId ? { clientId } : {}) } });
   };
 
   return (
@@ -574,7 +578,7 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, dayId,
       onPress={() => {
         router.navigate({
           pathname: "/exercise-history",
-          params: { exerciseName, ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}) },
+          params: { exerciseName, ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}), ...(clientId ? { clientId } : {}) },
         });
       }}
       accessibilityRole="button"

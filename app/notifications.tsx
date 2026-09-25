@@ -15,6 +15,7 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
@@ -147,7 +148,9 @@ export default function NotificationsScreen() {
                   {i > 0 && <View style={[styles.divider, { backgroundColor: t.div }]} />}
                   <View style={styles.row}>
                     <View style={styles.rowLeft}>
-                      <Ionicons name={item.icon} size={20} color={t.icon} />
+                      {typeof item.icon === "number"
+                        ? <Image source={item.icon} style={styles.rowImage} contentFit="contain" />
+                        : <Ionicons name={item.icon} size={20} color={t.icon} />}
                       <View style={styles.rowText}>
                         <Text style={[styles.rowLabel, { color: t.tp }]}>{item.label}</Text>
                         <Text style={[styles.rowDesc, { color: t.ts }]}>{item.description}</Text>
@@ -226,6 +229,8 @@ const styles = StyleSheet.create({
   row:          { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
   rowLeft:      { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
   rowText:      { flex: 1, gap: 2 },
+  // Same box as the 20pt Ionicons beside it, so the labels stay aligned.
+  rowImage:     { width: 20, height: 20 },
   rowLabel:     { fontFamily: FontFamily.regular, fontSize: 16 },
   rowDesc:      { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 16 },
   timeValue:    { fontFamily: FontFamily.semibold, fontSize: 16 },

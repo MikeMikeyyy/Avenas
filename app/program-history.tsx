@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -20,6 +20,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
+import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
 import {
   PROGRAMS_KEY,
@@ -63,18 +64,26 @@ export default function ProgramHistoryScreen() {
     }, [])
   );
 
+  const searchInputRef = useRef<TextInput>(null);
+  // Closing clears the query AND drops the keyboard together, so the X never
+  // leaves one of the two behind, and reopening shows no stale filter. The
+  // keyboard's down button does the same while you're typing a search.
+  const closeSearch = useCallback(() => {
+    setQuery("");
+    Keyboard.dismiss();
+    setSearchOpen(false);
+  }, []);
   const toggleSearch = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Closing clears the query AND drops the keyboard together, so the X never
-    // leaves one of the two behind. Reopening shows no stale filter.
-    setSearchOpen(open => {
-      if (open) {
-        setQuery("");
-        Keyboard.dismiss();
-      }
-      return !open;
-    });
-  }, []);
+    if (searchOpen) closeSearch();
+    else setSearchOpen(true);
+  }, [searchOpen, closeSearch]);
+  // Asked before anything is dismissed: once the keyboard drops, nothing is
+  // focused any more.
+  const onKeyboardDown = useCallback(() => {
+    if (searchInputRef.current?.isFocused()) closeSearch();
+    else Keyboard.dismiss();
+  }, [closeSearch]);
 
   const sorted = useMemo(() => {
     // Creation order comes from the array's position, not the id or startDate:
@@ -164,6 +173,7 @@ export default function ProgramHistoryScreen() {
           <View style={[styles.searchBox, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.08)" }]}>
             <Ionicons name="search" size={16} color={t.ts} />
             <TextInput
+              ref={searchInputRef}
               value={query}
               onChangeText={setQuery}
               placeholder="Search program names"
@@ -264,6 +274,8 @@ export default function ProgramHistoryScreen() {
           );
         })}
       </ScrollView>
+
+      <KeyboardDismissButton onPress={onKeyboardDown} />
     </FadeScreen>
   );
 }

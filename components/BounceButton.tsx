@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Animated, TouchableOpacity, StyleSheet, StyleProp, ViewStyle, AccessibilityRole } from "react-native";
+import { Animated, TouchableOpacity, StyleSheet, StyleProp, ViewStyle, AccessibilityRole, AccessibilityState } from "react-native";
 import * as Haptics from "expo-haptics";
 
 interface BounceButtonProps {
@@ -8,6 +8,7 @@ interface BounceButtonProps {
   children: React.ReactNode;
   accessibilityLabel?: string;
   accessibilityRole?: AccessibilityRole;
+  accessibilityState?: AccessibilityState;
 }
 
 // These props control how the button sits in its parent's layout.
@@ -21,7 +22,7 @@ const OUTER_KEYS = new Set([
 ]);
 
 export default function BounceButton({
-  onPress, style, children, accessibilityLabel, accessibilityRole,
+  onPress, style, children, accessibilityLabel, accessibilityRole, accessibilityState,
 }: BounceButtonProps) {
   const scale = useRef(new Animated.Value(1)).current;
 
@@ -52,6 +53,7 @@ export default function BounceButton({
       style={outerStyle as StyleProp<ViewStyle>}
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={accessibilityRole}
+      accessibilityState={accessibilityState}
     >
       <Animated.View style={[innerStyle as StyleProp<ViewStyle>, { transform: [{ scale }] }]}>
         {children}

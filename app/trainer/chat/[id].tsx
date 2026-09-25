@@ -24,7 +24,8 @@ import ChatThreadView from "../../../components/trainer/ChatThreadView";
 import SimpleSheet from "../../../components/trainer/SimpleSheet";
 import { ReportReasonList } from "../../../components/trainer/ReportReasonSheet";
 import MessageActions from "../../../components/trainer/MessageActions";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../constants/theme";
+import SheetPill from "../../../components/SheetPill";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
 import { loadThread, appendMessage, markThreadRead, deleteMessage } from "../../../utils/chatStore";
@@ -266,20 +267,9 @@ export default function ChatThreadScreen() {
           <>
             <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
             <View style={styles.menu}>
-              <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onReportUser} accessibilityRole="button" accessibilityLabel={`Report ${displayName}`}>
-                <Ionicons name="flag-outline" size={20} color={t.tp} />
-                <Text style={[styles.menuText, { color: t.tp }]}>Report</Text>
-              </TouchableOpacity>
-              <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-              <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onBlock} accessibilityRole="button" accessibilityLabel={`Block ${displayName}`}>
-                <Ionicons name="ban-outline" size={20} color={DANGER} />
-                <Text style={[styles.menuText, { color: DANGER }]}>Block</Text>
-              </TouchableOpacity>
-              <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-              <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onUnadd} accessibilityRole="button" accessibilityLabel={`Remove ${displayName}`}>
-                <Ionicons name="person-remove-outline" size={20} color={t.tp} />
-                <Text style={[styles.menuText, { color: t.tp }]}>Remove connection</Text>
-              </TouchableOpacity>
+              <SheetPill label="Report" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={onReportUser} />
+              <SheetPill label="Block" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={onBlock} />
+              <SheetPill label="Remove connection" icon={c => <Ionicons name="person-remove-outline" size={18} color={c} />} onPress={onUnadd} />
             </View>
             <Text style={[styles.menuHint, { color: t.ts }]}>
               Tap any message to delete it or report it.
@@ -298,10 +288,7 @@ const styles = StyleSheet.create({
   headerName: { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },
 
   menuName:   { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
-  menu:       { paddingHorizontal: 16, paddingTop: 4 },
-  menuRow:    { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
-  menuDivider:{ height: 1, marginHorizontal: 8 },
-  menuText:   { fontFamily: FontFamily.semibold, fontSize: 16 },
+  menu:       { paddingHorizontal: 20, paddingTop: 10, gap: 12 },
   // The group chat's menu hint, value for value.
   menuHint:   { fontFamily: FontFamily.regular, fontSize: 12, textAlign: "center", paddingHorizontal: 24, paddingTop: 10 },
 });

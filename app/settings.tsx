@@ -21,7 +21,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import NeuCard from "../components/NeuCard";
-import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BUBBLE_LIGHT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, Colors, ACCT, BUBBLE_LIGHT, SWITCH_TRACK_LIGHT } from "../constants/theme";
 
 // ─── Settings item types ──────────────────────────────────────────────────────
 type BaseItem     = { icon: string; label: string; renderIcon?: (c: string) => React.ReactNode };
@@ -52,10 +52,6 @@ const TP   = APP_LIGHT.tp;
 const TS   = APP_LIGHT.ts;
 const ICON = APP_LIGHT.icon;
 const DIV  = APP_LIGHT.div;
-// Off-state track for the iOS-style Switches in LIGHT mode. APP_LIGHT.div
-// (#D8DCE0) is too pale against the white card to read as a control; this is a
-// clearly darker grey. Dark mode keeps t.div (already visible).
-const SWITCH_TRACK_LIGHT = "#C4CAD3";
 
 const SECTIONS: { title: string; items: SettingsItem[] }[] = [
   {

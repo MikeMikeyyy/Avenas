@@ -20,7 +20,13 @@ function KeyboardDismissIcon({ color }: { color: string }) {
   );
 }
 
-export default function KeyboardDismissButton() {
+export default function KeyboardDismissButton({ onPress }: {
+  /** Replaces the plain Keyboard.dismiss(), for a screen that closes something
+   *  along with the keyboard (a search pill closes like its X). The handler
+   *  must dismiss the keyboard itself. It runs BEFORE anything is dismissed, so
+   *  it can still ask which field was focused. */
+  onPress?: () => void;
+} = {}) {
   const { isDark } = useTheme();
   const [kbHeight, setKbHeight] = useState(0);
 
@@ -34,7 +40,7 @@ export default function KeyboardDismissButton() {
 
   return (
     <TouchableOpacity
-      onPress={() => Keyboard.dismiss()}
+      onPress={onPress ?? (() => Keyboard.dismiss())}
       activeOpacity={0.75}
       accessibilityRole="button"
       accessibilityLabel="Dismiss keyboard"

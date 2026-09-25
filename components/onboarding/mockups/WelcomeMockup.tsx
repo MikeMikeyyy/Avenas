@@ -6,7 +6,8 @@ import Reanimated, {
 } from "react-native-reanimated";
 import NeuCard from "../../NeuCard";
 
-const logo = require("../../../assets/images/logo.png");
+// The new mint AV mark. Home's top-left logo is still assets/images/logo.png.
+const logo = require("../../../assets/images/av-clear-transparent.png");
 
 // Welcome hero visual — the logo sits on a neumorphic disc that floats gently.
 // Animation runs while the slide is active.

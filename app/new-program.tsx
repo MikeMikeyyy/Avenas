@@ -38,6 +38,7 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
 import DumbbellIcon from "../components/DumbbellIcon";
+import PenIcon from "../components/PenIcon";
 import ExerciseImage from "../components/ExerciseImage";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
@@ -1010,7 +1011,7 @@ function Step1({
                           if (nextIdx !== undefined) dayInputRefs.current[nextIdx]?.focus();
                         }}
                       />
-                      <Ionicons name="pencil-outline" size={12} color={t.ts} />
+                      <PenIcon size={12} color={t.ts} />
                       {/* Absolutely positioned — zero layout impact, text stays centred */}
                       <View style={[styles.nameUnderline, { backgroundColor: t.ts }]} />
                     </>

@@ -85,8 +85,8 @@ const SECTIONS: { title: string; items: { q: string; a: string }[] }[] = [
         a: "Tap the day in This Week's Schedule on Home, or choose Rest Day under Change Workout Day on the Workout tab. Make Rest Day skips that workout and keeps the rest of your week as planned. Move to Tomorrow pushes it back a day, and your next rest day takes up the change so your program still finishes on time. Tap the day on Home again to undo either one.",
       },
       {
-        q: "I missed a workout earlier this week. Can I make it a rest day?",
-        a: "Yes. Tap it in This Week's Schedule on Home and choose Make Rest Day. Nothing else in your week changes. Days you've already trained can't be changed.",
+        q: "I missed a workout. Can I make it a rest day?",
+        a: "Yes. Tap it in This Week's Schedule on Home and choose Make Rest Day, or, for any earlier date, tap it on the Journal calendar and choose Rest Day. Nothing else in your program changes, and tapping the day again lets you undo it. Days you've already trained can't be changed.",
       },
       {
         q: "How do I pause my program?",

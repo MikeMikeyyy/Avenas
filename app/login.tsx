@@ -12,6 +12,7 @@ import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
+import { pill, PILL_H, PILL_SHADOW } from "../constants/buttons";
 import { AppleSignInCancelled, isAppleSignInAvailable, oauthOnlyProvidersForEmail, signInWithApple, signInWithEmail, signInWithProvider, signOut } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { pullProfile } from "../lib/cloud";
@@ -24,12 +25,11 @@ function SocialButton({
   const t = dark ? APP_DARK : APP_LIGHT;
   return (
     <BounceButton onPress={onPress} accessibilityRole="button" accessibilityLabel={label}>
-      <NeuCard dark={dark} radius={28} style={styles.social}>
-        <View style={styles.socialInner}>
-          {icon}
-          <Text style={[styles.socialText, { color: t.tp }]}>{label}</Text>
-        </View>
-      </NeuCard>
+      {/* The app's white pill (a sheet's default button), not a NeuCard. */}
+      <View style={[styles.social, { backgroundColor: t.ctrl }]}>
+        {icon}
+        <Text style={[styles.socialText, { color: t.tp }]}>{label}</Text>
+      </View>
     </BounceButton>
   );
 }
@@ -274,13 +274,12 @@ const styles = StyleSheet.create({
   ctaSection:    { marginTop: 28, gap: 16 },
   ctaWrap:       { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   ctaDisabled:   { opacity: 0.4 },
-  cta:           { borderRadius: 28, paddingVertical: 17, alignItems: "center", justifyContent: "center" },
+  cta:           { ...pill(PILL_H) },
   ctaText:       { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 0.3 },
   orRow:         { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 4 },
   orLine:        { flex: 1, height: 1 },
   orText:        { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.3 },
-  social:        { borderRadius: 28 },
-  socialInner:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 15 },
+  social:        { ...pill(PILL_H), gap: 10, ...PILL_SHADOW },
   appleIcon:     { transform: [{ translateY: -1 }] },
   socialText:    { fontFamily: FontFamily.bold, fontSize: 16 },
   switchRow:     { alignItems: "center", paddingVertical: 8, marginTop: 4 },

@@ -8,7 +8,7 @@
 // filtered view of the roster rather than a separate concept, and tapping one
 // opens that client exactly as it would from the hub.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
@@ -32,10 +32,11 @@ import KeyboardDismissButton from "../../../../components/KeyboardDismissButton"
 import ChatIcon from "../../../../components/icons/ChatIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../../../constants/cards";
 import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
+import SheetPill from "../../../../components/SheetPill";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
 import { useAuth } from "../../../../contexts/AuthContext";
@@ -62,6 +63,12 @@ import { canCoachGroup, type GroupMember, type GroupRole } from "../../../../con
 
 /** How many member avatars the banner stacks before collapsing to "+N". */
 const AVATAR_STACK = 4;
+
+/** Space kept between the bottom of the member search pill and the keyboard.
+ *  Not just enough to clear it: the matches appear UNDER the pill, and the
+ *  keyboard's down button closes the search, so this leaves room for a few of
+ *  them (and clears that floating button, which sits ~55pt above the keyboard). */
+const SEARCH_KEYBOARD_GAP = 130;
 
 const ROLE_LABEL: Record<GroupRole, string> = {
   owner:   "OWNER",
@@ -802,19 +809,65 @@ export default function GroupPageScreen() {
     setCollapsedSent(v => !v);
   }, []);
 
+  const searchInputRef = useRef<TextInput>(null);
+  // Closing clears the query AND drops the keyboard in the same step, so the
+  // search row and the keyboard go together rather than leaving one behind,
+  // and reopening never shows a stale filter. The X does this, and so does the
+  // keyboard's down button while you're typing a search.
+  const closeSearch = useCallback(() => {
+    setQuery("");
+    Keyboard.dismiss();
+    setSearchOpen(false);
+  }, []);
   const toggleSearch = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Closing clears the query AND drops the keyboard in the same tap, so the X
-    // removes the search row and dismisses the keyboard together rather than
-    // leaving one behind. Reopening then never shows a stale filter.
-    setSearchOpen(open => {
-      if (open) {
-        setQuery("");
-        Keyboard.dismiss();
-      }
-      return !open;
+    if (searchOpen) closeSearch();
+    else setSearchOpen(true);
+  }, [searchOpen, closeSearch]);
+  // Asked before anything is dismissed: once the keyboard drops, nothing is
+  // focused any more.
+  const onKeyboardDown = useCallback(() => {
+    if (searchInputRef.current?.isFocused()) closeSearch();
+    else Keyboard.dismiss();
+  }, [closeSearch]);
+
+  // Members is the page's last section, so its search pill opened underneath
+  // the keyboard. While searching with the keyboard up, the page grows by the
+  // keyboard's height (the ScrollView's paddingBottom) and scrolls just far
+  // enough to lift the pill SEARCH_KEYBOARD_GAP above it. When the keyboard
+  // drops, the page goes back to where it was.
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollY = useRef(0);
+  const searchBoxRef = useRef<View>(null);
+  const [kbHeight, setKbHeight] = useState(0);
+  const kbTop = useRef(0);
+  const preSearchY = useRef<number | null>(null);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardWillShow", e => {
+      kbTop.current = e.endCoordinates.screenY;
+      setKbHeight(e.endCoordinates.height);
     });
+    const hide = Keyboard.addListener("keyboardWillHide", () => setKbHeight(0));
+    return () => { show.remove(); hide.remove(); };
   }, []);
+  useEffect(() => {
+    if (searchOpen && kbHeight > 0) {
+      // A frame after the taller page has laid out, so the scroll can reach it.
+      const frame = requestAnimationFrame(() => {
+        searchBoxRef.current?.measureInWindow((_x, y, _w, h) => {
+          const overlap = y + h - (kbTop.current - SEARCH_KEYBOARD_GAP);
+          if (overlap <= 0) return;
+          if (preSearchY.current === null) preSearchY.current = scrollY.current;
+          scrollRef.current?.scrollTo({ y: scrollY.current + overlap, animated: true });
+        });
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    if (kbHeight === 0 && preSearchY.current !== null) {
+      scrollRef.current?.scrollTo({ y: preSearchY.current, animated: true });
+      preSearchY.current = null;
+    }
+  }, [searchOpen, kbHeight]);
 
   const openMemberMenu = useCallback((m: GroupMember) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1225,12 +1278,21 @@ export default function GroupPageScreen() {
       {loading ? (
         <View style={styles.loading}><ActivityIndicator color={ACCT} /></View>
       ) : (
+        // A plain ScrollView, not react-native-keyboard-controller's
+        // KeyboardAwareScrollView: that is a Reanimated.ScrollView, which on
+        // Fabric doesn't resize for the ExpandReveal cards growing inside it.
+        // The keyboard handling for the member search is the effect above.
         <ScrollView
+          ref={scrollRef}
+          onScroll={e => { scrollY.current = e.nativeEvent.contentOffset.y; }}
+          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
           // Without this the keyboard eats the first tap on any button while
           // the search field is focused, so closing search took two taps.
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: insets.bottom + 40 }}
+          // Searching with the keyboard up adds its height below the page, so
+          // a search pill at the very bottom has room to scroll above it.
+          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: insets.bottom + 40 + (searchOpen ? kbHeight : 0) }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1388,9 +1450,10 @@ export default function GroupPageScreen() {
                   picker: a filled, fully rounded pill on t.ctrl (white on light)
                   rather than a faint tinted box, so it reads as something you
                   type into and matches every other search in the app. */}
-              <View style={[styles.searchBox, { backgroundColor: t.ctrl, borderColor: t.div }]}>
+              <View ref={searchBoxRef} style={[styles.searchBox, { backgroundColor: t.ctrl, borderColor: t.div }]}>
                 <Ionicons name="search" size={17} color={t.ts} />
                 <TextInput
+                  ref={searchInputRef}
                   value={query}
                   onChangeText={setQuery}
                   placeholder="Search members"
@@ -1496,30 +1559,22 @@ export default function GroupPageScreen() {
       <SimpleSheet visible={menuOpen} onClose={() => setMenuOpen(false)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
         <View style={styles.menu}>
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onToggleFavourite} accessibilityRole="button" accessibilityLabel={isFavourite ? "Remove from favourites" : "Add to favourites"}>
-            <FavouriteStar size={20} filled={isFavourite} inactiveColor={t.tp} />
-            <Text style={[styles.menuText, { color: isFavourite ? favouriteGold : t.tp }]}>
-              {isFavourite ? "Remove from favourites" : "Add to favourites"}
-            </Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-          <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={openManage} accessibilityRole="button" accessibilityLabel="Manage members">
-            <Ionicons name="people-outline" size={20} color={t.tp} />
-            <Text style={[styles.menuText, { color: t.tp }]}>
-              {group?.isOwner ? "Manage members" : "View members"}
-            </Text>
-          </TouchableOpacity>
-          <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
+          <SheetPill
+            label={isFavourite ? "Remove from favourites" : "Add to favourites"}
+            tint={isFavourite ? favouriteGold : undefined}
+            icon={() => <FavouriteStar size={20} filled={isFavourite} inactiveColor={t.tp} />}
+            onPress={onToggleFavourite}
+            accessibilityState={{ selected: isFavourite }}
+          />
+          <SheetPill
+            label={group?.isOwner ? "Manage members" : "View members"}
+            icon={c => <Ionicons name="people-outline" size={18} color={c} />}
+            onPress={openManage}
+          />
           {group?.isOwner ? (
-            <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onDelete} accessibilityRole="button" accessibilityLabel="Delete group">
-              <Ionicons name="trash-outline" size={20} color={DANGER} />
-              <Text style={[styles.menuText, { color: DANGER }]}>Delete group</Text>
-            </TouchableOpacity>
+            <SheetPill label="Delete group" variant="danger" icon={c => <Ionicons name="trash-outline" size={18} color={c} />} onPress={onDelete} />
           ) : (
-            <TouchableOpacity style={styles.menuRow} activeOpacity={0.8} onPress={onLeave} accessibilityRole="button" accessibilityLabel="Leave group">
-              <Ionicons name="exit-outline" size={20} color={DANGER} />
-              <Text style={[styles.menuText, { color: DANGER }]}>Leave group</Text>
-            </TouchableOpacity>
+            <SheetPill label="Leave group" variant="danger" icon={c => <Ionicons name="exit-outline" size={18} color={c} />} onPress={onLeave} />
           )}
         </View>
       </SimpleSheet>
@@ -1531,71 +1586,45 @@ export default function GroupPageScreen() {
       <SimpleSheet visible={memberMenu !== null} onClose={() => setMemberMenu(null)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{memberMenu?.name || "Member"}</Text>
         <View style={styles.menu}>
-          <TouchableOpacity
-            style={styles.menuRow}
-            activeOpacity={0.8}
-            onPress={() => {
-              const m = memberMenu;
-              setMemberMenu(null);
-              if (m) void onToggleMemberFavourite(m.id);
-            }}
-            accessibilityRole="button"
-            accessibilityState={{ selected: !!memberMenu && favouriteMembers.has(memberMenu.id) }}
-            accessibilityLabel={memberMenu && favouriteMembers.has(memberMenu.id) ? "Remove from favourites" : "Add to favourites"}
-          >
-            <FavouriteStar
-              size={20}
-              filled={!!memberMenu && favouriteMembers.has(memberMenu.id)}
-              inactiveColor={t.tp}
-            />
-            <Text style={[styles.menuText, { color: memberMenu && favouriteMembers.has(memberMenu.id) ? favouriteGold : t.tp }]}>
-              {memberMenu && favouriteMembers.has(memberMenu.id) ? "Remove from favourites" : "Add to favourites"}
-            </Text>
-          </TouchableOpacity>
+          {(() => {
+            const starred = !!memberMenu && favouriteMembers.has(memberMenu.id);
+            return (
+              <SheetPill
+                label={starred ? "Remove from favourites" : "Add to favourites"}
+                tint={starred ? favouriteGold : undefined}
+                icon={() => <FavouriteStar size={20} filled={starred} inactiveColor={t.tp} />}
+                onPress={() => {
+                  const m = memberMenu;
+                  setMemberMenu(null);
+                  if (m) void onToggleMemberFavourite(m.id);
+                }}
+                accessibilityState={{ selected: starred }}
+              />
+            );
+          })()}
           {/* Only for someone who IS my client. The client page is a trainer's
               tool that opens a person from my own roster, so offering it for
               any group member (as it was, to every coach) sent a gym user made
               a trainer, or a trainer tapping someone they aren't connected to,
               to "Client not found". */}
           {iCoachGroup && accountType === "pt" && !!memberMenu && clients.some(c => c.id === memberMenu.id) && (
-            <>
-              <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-              <TouchableOpacity
-                style={styles.menuRow}
-                activeOpacity={0.8}
-                onPress={() => {
-                  const m = memberMenu;
-                  setMemberMenu(null);
-                  if (m) router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } });
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={`Open ${memberMenu?.name ?? "member"}`}
-              >
-                <Ionicons name="person-outline" size={20} color={t.tp} />
-                <Text style={[styles.menuText, { color: t.tp }]}>Open client page</Text>
-              </TouchableOpacity>
-            </>
+            <SheetPill
+              label="Open client page"
+              icon={c => <Ionicons name="person-outline" size={18} color={c} />}
+              onPress={() => {
+                const m = memberMenu;
+                setMemberMenu(null);
+                if (m) router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } });
+              }}
+            />
           )}
           {group?.isOwner && (
-            <>
-              <View style={[styles.menuDivider, { backgroundColor: t.div }]} />
-              <TouchableOpacity
-                style={styles.menuRow}
-                activeOpacity={0.8}
-                onPress={() => memberMenu && toggleRole(memberMenu)}
-                accessibilityRole="button"
-                accessibilityLabel={memberMenu?.role === "trainer" ? "Make a member" : "Make a trainer"}
-              >
-                <Ionicons
-                  name={memberMenu?.role === "trainer" ? "arrow-down-circle-outline" : "shield-checkmark-outline"}
-                  size={20}
-                  color={memberMenu?.role === "trainer" ? t.tp : ROLE_TRAINER}
-                />
-                <Text style={[styles.menuText, { color: memberMenu?.role === "trainer" ? t.tp : ROLE_TRAINER }]}>
-                  {memberMenu?.role === "trainer" ? "Make a member" : "Make a trainer"}
-                </Text>
-              </TouchableOpacity>
-            </>
+            <SheetPill
+              label={memberMenu?.role === "trainer" ? "Make a member" : "Make a trainer"}
+              tint={memberMenu?.role === "trainer" ? undefined : ROLE_TRAINER}
+              icon={c => <Ionicons name={memberMenu?.role === "trainer" ? "arrow-down-circle-outline" : "shield-checkmark-outline"} size={18} color={c} />}
+              onPress={() => memberMenu && toggleRole(memberMenu)}
+            />
           )}
         </View>
       </SimpleSheet>
@@ -1614,7 +1643,7 @@ export default function GroupPageScreen() {
       {/* The floating keyboard-down button for the member search, the same one
           PTHome's client search and the group edit screen show. Last child so
           it sits above the scroll content; renders nothing without a keyboard. */}
-      <KeyboardDismissButton />
+      <KeyboardDismissButton onPress={onKeyboardDown} />
     </FadeScreen>
   );
 }
@@ -1709,8 +1738,5 @@ const styles = StyleSheet.create({
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },
 
   menuName:     { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
-  menu:         { paddingHorizontal: 16, paddingTop: 4 },
-  menuRow:      { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 15, paddingHorizontal: 8 },
-  menuDivider:  { height: 1, marginHorizontal: 8 },
-  menuText:     { fontFamily: FontFamily.semibold, fontSize: 16 },
+  menu:         { paddingHorizontal: 20, paddingTop: 10, gap: 12 },
 });

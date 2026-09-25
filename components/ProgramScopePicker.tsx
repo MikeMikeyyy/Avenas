@@ -4,17 +4,16 @@ import {
   Text,
   StyleSheet,
   Modal,
-  TouchableOpacity,
   TouchableWithoutFeedback,
   ScrollView,
   Animated,
   Easing,
 } from "react-native";
-import * as Haptics from "expo-haptics";
 import Svg, { Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
+import SheetPill from "./SheetPill";
+import { pill, PILL_SHADOW } from "../constants/buttons";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import type { SavedProgram } from "../constants/programs";
@@ -29,12 +28,6 @@ interface Props {
 const ChevronDown = ({ color, size = 16 }: { color: string; size?: number }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Path d="M6 9l6 6 6-6" stroke={color} strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-);
-
-const CheckIcon = ({ color, size = 16 }: { color: string; size?: number }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M5 12.5l4.5 4.5L19 7" stroke={color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
   </Svg>
 );
 
@@ -109,7 +102,6 @@ export default function ProgramScopePicker({ scope, programs, onChange }: Props)
   };
 
   const choose = (next: ProgramScope) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setOpen(false);
     if (!isSelected(next)) onChange(next);
   };
@@ -137,17 +129,16 @@ export default function ProgramScopePicker({ scope, programs, onChange }: Props)
         onPress={() => setOpen(true)}
         style={{ marginHorizontal: 20 }}
       >
-        <NeuCard dark={isDark} radius={16} shadowSize="sm">
-          <View style={styles.pillRow}>
-            <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-              <View style={[styles.dot, { backgroundColor: scope.kind === "all" ? t.ts : ACCT }]} />
-              <Text style={[styles.pillText, { color: t.tp }]} numberOfLines={1}>
-                {currentLabel}
-              </Text>
-            </View>
-            <ChevronDown color={t.ts} />
-          </View>
-        </NeuCard>
+        {/* The app's pill on the control surface (it was a squared-off NeuCard,
+            the one non-pill button on the page). Laid out as a dropdown: the
+            program name reads from the left, the chevron sits at the far end. */}
+        <View style={[styles.trigger, { backgroundColor: t.ctrl }]}>
+          <View style={[styles.dot, { backgroundColor: scope.kind === "all" ? t.ts : ACCT }]} />
+          <Text style={[styles.pillText, { color: t.tp }]} numberOfLines={1}>
+            {currentLabel}
+          </Text>
+          <ChevronDown color={t.ts} />
+        </View>
       </BounceButton>
 
       <Modal visible={mounted} transparent animationType="none" onRequestClose={() => setOpen(false)}>
@@ -186,25 +177,19 @@ export default function ProgramScopePicker({ scope, programs, onChange }: Props)
                 // (Don't add `overflow: "visible"` here — it would let scrolled
                 // cards bleed past the sheet's title at the top.)
                 style={{ maxHeight: 460, marginHorizontal: -14 }}
-                contentContainerStyle={{ paddingTop: 8, paddingBottom: 4, paddingHorizontal: 14 }}
+                contentContainerStyle={{ paddingTop: 8, paddingBottom: 8, paddingHorizontal: 14, gap: 12 }}
                 showsVerticalScrollIndicator={false}
               >
                 <ScopeCardRow
                   label="Current program"
                   sublabel={activeProgram?.name ?? "No active program"}
                   selected={scope.kind === "current"}
-                  isDark={isDark}
-                  textColor={t.tp}
-                  subColor={t.ts}
                   onPress={() => choose({ kind: "current" })}
                 />
                 <ScopeCardRow
                   label="All programs"
                   sublabel="Combined view across every program"
                   selected={scope.kind === "all"}
-                  isDark={isDark}
-                  textColor={t.tp}
-                  subColor={t.ts}
                   onPress={() => choose({ kind: "all" })}
                 />
 
@@ -231,9 +216,6 @@ export default function ProgramScopePicker({ scope, programs, onChange }: Props)
                       sublabel={sub}
                       showActiveDot={p.status === "active"}
                       selected={sel}
-                      isDark={isDark}
-                      textColor={t.tp}
-                      subColor={t.ts}
                       onPress={() => choose({ kind: "program", programId: p.id })}
                     />
                   );
@@ -251,97 +233,44 @@ function ScopeCardRow({
   label,
   sublabel,
   selected,
-  isDark,
-  textColor,
-  subColor,
   showActiveDot = false,
   onPress,
 }: {
   label: string;
   sublabel?: string;
   selected: boolean;
-  isDark: boolean;
-  textColor: string;
-  subColor: string;
   showActiveDot?: boolean;
   onPress: () => void;
 }) {
   return (
-    <TouchableOpacity
-      activeOpacity={0.85}
+    <SheetPill
+      label={label}
+      sub={sublabel}
+      selected={selected}
+      icon={showActiveDot ? () => <View style={[styles.activeDot, { backgroundColor: ACCT }]} /> : undefined}
       onPress={onPress}
-      accessibilityRole="button"
       accessibilityState={{ selected }}
-      style={styles.rowOuter}
-    >
-      <NeuCard
-        dark={isDark}
-        radius={14}
-        shadowSize="sm"
-        // Suppress NeuCard's faint default hairline border on selected so we
-        // see only the green ring overlay below — no double line.
-        innerStyle={selected ? { borderWidth: 0 } : undefined}
-      >
-        <View style={styles.rowInner}>
-          <View style={{ flex: 1, flexDirection: "row", alignItems: "center" }}>
-            {showActiveDot ? <View style={[styles.activeDot, { backgroundColor: ACCT }]} /> : null}
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowLabel, { color: textColor }]} numberOfLines={1}>
-                {label}
-              </Text>
-              {sublabel ? (
-                <Text style={[styles.rowSub, { color: subColor }]} numberOfLines={1}>
-                  {sublabel}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-          {selected ? <CheckIcon color={ACCT} size={20} /> : null}
-        </View>
-      </NeuCard>
-
-      {/*
-        Green selected-ring overlay — rendered AFTER NeuCard (and therefore
-        painted on top of everything inside it, including the inner shadow
-        layer that was previously bleeding over the border). Positioned
-        absolutely to match NeuCard's outermost edge exactly.
-        `pointerEvents="none"` keeps the TouchableOpacity press surface intact.
-      */}
-      {selected ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            borderRadius: 14,
-            borderWidth: 1.5,
-            borderColor: ACCT,
-          }}
-        />
-      ) : null}
-    </TouchableOpacity>
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  pillRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+  trigger: {
+    ...pill(),
+    gap: 10,
+    paddingHorizontal: 22,
+    ...PILL_SHADOW,
   },
   dot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginRight: 10,
   },
+  // flex: 1 takes the pill's spare width, so the name starts at the left
+  // after the dot and pushes the chevron to the right edge.
   pillText: {
     fontFamily: FontFamily.bold,
-    fontSize: 18,
+    fontSize: 17,
     flex: 1,
   },
 
@@ -373,9 +302,9 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
 
+  // The list's 12pt gap already sits above and below this.
   sectionLabelWrap: {
-    marginTop: 14,
-    marginBottom: 6,
+    marginTop: 2,
     marginLeft: 6,
   },
   sectionLabel: {
@@ -385,28 +314,9 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
 
-  rowOuter: {
-    marginBottom: 10,
-  },
-  rowInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-  },
-  rowLabel: {
-    fontFamily: FontFamily.semibold,
-    fontSize: 16,
-  },
-  rowSub: {
-    fontFamily: FontFamily.regular,
-    fontSize: 12,
-    marginTop: 2,
-  },
   activeDot: {
     width: 7,
     height: 7,
     borderRadius: 4,
-    marginRight: 10,
   },
 });

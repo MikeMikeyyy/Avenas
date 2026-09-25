@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -377,16 +377,26 @@ export default function PTHome() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCollapsedClientsSection(v => !v);
   }, []);
+  const searchInputRef = useRef<TextInput>(null);
+  // Closing clears the query and drops the keyboard in the same step, so the
+  // search row and the keyboard go together. The X does this, and so does the
+  // keyboard's down button while you're typing a search.
+  const closeSearch = useCallback(() => {
+    setSearch("");
+    Keyboard.dismiss();
+    setSearchOpen(false);
+  }, []);
   const toggleSearch = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Closing: clear the query and drop the keyboard in the same tap, so the X
-    // removes the search row and dismisses the keyboard together.
-    if (searchOpen) {
-      setSearch("");
-      Keyboard.dismiss();
-    }
-    setSearchOpen(v => !v);
-  }, [searchOpen]);
+    if (searchOpen) closeSearch();
+    else setSearchOpen(true);
+  }, [searchOpen, closeSearch]);
+  // Asked before anything is dismissed: once the keyboard drops, nothing is
+  // focused any more.
+  const onKeyboardDown = useCallback(() => {
+    if (searchInputRef.current?.isFocused()) closeSearch();
+    else Keyboard.dismiss();
+  }, [closeSearch]);
 
   const toggleShared = useCallback((id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -806,6 +816,7 @@ export default function PTHome() {
             <View style={[styles.search, { backgroundColor: t.ctrl, borderColor: t.div }]}>
               <Ionicons name="search" size={17} color={t.ts} />
               <TextInput
+                ref={searchInputRef}
                 value={search}
                 onChangeText={setSearch}
                 placeholder="Search clients"
@@ -1084,7 +1095,7 @@ export default function PTHome() {
       {kbHeight > 0 && Platform.OS === "ios" && (
         <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, zIndex: 999 }}>
           <TouchableOpacity
-            onPress={() => Keyboard.dismiss()}
+            onPress={onKeyboardDown}
             activeOpacity={0.75}
             style={[styles.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}
             accessibilityLabel="Dismiss keyboard"

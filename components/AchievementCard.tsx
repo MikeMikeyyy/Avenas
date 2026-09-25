@@ -11,6 +11,7 @@
 import { memo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import Reanimated from "react-native-reanimated";
+import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -22,6 +23,7 @@ import ExpandReveal, { useReveal, useRevealChevron } from "./ExpandReveal";
 import { APP_DARK, APP_LIGHT, ACCT, AURORA, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
 import { pill, pillGlow, PILL_H_XS } from "../constants/buttons";
 import { getTier } from "../constants/streakTiers";
+import { TROPHY_ICON } from "../constants/icons";
 import type { Achievement } from "../constants/achievements";
 import { describeAchievement, formatPRLine } from "../utils/achievements";
 import { daysBetweenYMD, todayYMD, toYMD } from "../utils/dates";
@@ -30,6 +32,11 @@ import { daysBetweenYMD, todayYMD, toYMD } from "../utils/dates";
  *  it tall and about two thirds of that wide, so 26 draws a 22pt flame with a
  *  ring of the wash around it, like the other glyphs at 17–18pt. */
 const FLAME_SIZE = 26;
+
+/** The PR trophy is full-colour artwork, so it ignores the badge colour (which
+ *  still tints the wash behind it). It fills its square edge to edge, so 20
+ *  weighs about the same as the 17–18pt glyphs on the other cards. */
+const TROPHY_SIZE = 20;
 
 /** "Today", "Yesterday", "3 days ago": calendar days, not 24-hour blocks. */
 function earnedWhen(iso: string): string {
@@ -42,7 +49,7 @@ function earnedWhen(iso: string): string {
 function badgeFor(a: Achievement, isDark: boolean, streakColor?: string): { color: string; icon: (c: string) => React.ReactNode } {
   switch (a.category) {
     case "pr":
-      return { color: isDark ? GOLD_DARK : GOLD, icon: c => <Ionicons name="trophy" size={17} color={c} /> };
+      return { color: isDark ? GOLD_DARK : GOLD, icon: () => <Image source={TROPHY_ICON} style={styles.trophy} contentFit="contain" /> };
     case "workouts":
       return { color: ACCT, icon: c => <DumbbellIcon size={18} color={c} /> };
     case "program":
@@ -170,6 +177,7 @@ const styles = StyleSheet.create({
   wrap:      { marginBottom: 8 },
   row:       { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 11 },
   badge:     { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  trophy:    { width: TROPHY_SIZE, height: TROPHY_SIZE },
   text:      { flex: 1 },
   title:     { fontFamily: FontFamily.semibold, fontSize: 14 },
   detail:    { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },

@@ -1516,7 +1516,9 @@ export default function LogWorkoutScreen() {
             </>
           )}
           <TouchableOpacity
-            onPress={() => Keyboard.dismiss()}
+            // Typing session notes, this is the card's tick (as on the Workout
+            // tab): put the keyboard away AND close the card.
+            onPress={() => (showNotes && sessionNotesInputRef.current?.isFocused() ? closeNotes() : Keyboard.dismiss())}
             activeOpacity={0.75}
             style={[s.kbFloatBtn, { backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff" }]}
           >

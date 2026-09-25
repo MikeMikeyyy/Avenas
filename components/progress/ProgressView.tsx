@@ -78,6 +78,9 @@ export interface ProgressViewProps {
   /** Pull to refresh, when the screen embedding this owns a reload (a
    *  trainer's client page). */
   refreshControl?: ReactElement<RefreshControlProps>;
+  /** A trainer viewing a client: the exercise chart's history page and PR
+   *  tiles then open that client's copy, read-only. */
+  clientId?: string;
 }
 
 export default function ProgressView({
@@ -90,6 +93,7 @@ export default function ProgressView({
   withTopInset = true,
   bottomPadding,
   refreshControl,
+  clientId,
 }: ProgressViewProps) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -426,6 +430,7 @@ export default function ProgressView({
               history={displayExerciseHistory}
               prs={displayPrs}
               unit={unit}
+              clientId={clientId}
             />
           </View>
         ) : null}

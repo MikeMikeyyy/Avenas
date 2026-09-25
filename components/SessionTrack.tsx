@@ -24,6 +24,14 @@ import { LinearGradient } from "expo-linear-gradient";
  *  becomes a bar. */
 const MAX_DOTS = 12;
 
+/** A connector touching a missed dot, measured from the MISSED end: solid grey
+ *  up to the first stop, fully the neighbour's colour by the second. The blend
+ *  is centred on 0.3, so the line reads as 30% grey and 70% the neighbour's
+ *  green. It was [0.4, 0.6], centred on the middle: an even split that still
+ *  looked like too much grey. Kept short so the logged session either side
+ *  keeps a run of its own green. */
+const MISSED_FADE = [0.2, 0.4] as const;
+
 interface Props {
   /** Which session this card is, 1-based. */
   current: number;
@@ -86,12 +94,16 @@ export default function SessionTrack({ current, total, missed, accent, track, mi
                 ) : (
                   // Between two states: fade rather than switch, so a missed dot
                   // sits in a dip in the rail instead of behind a hard joint.
-                  // The fade is held off until the last stretch (`locations`), so
-                  // it reads as the line going out AT the circle rather than the
-                  // whole segment washing halfway between two colours.
+                  // Beside a missed dot the grey is held close to it
+                  // (`MISSED_FADE`), so it reads as the line going out AT the
+                  // circle rather than the whole segment washing grey.
                   <LinearGradient
                     colors={[from, to]}
-                    locations={to === accent ? [0.45, 1] : [0, 0.55]}
+                    locations={
+                      stateAt(i - 1) === "missed" ? [MISSED_FADE[0], MISSED_FADE[1]]
+                      : state === "missed" ? [1 - MISSED_FADE[1], 1 - MISSED_FADE[0]]
+                      : [0, 0.55]
+                    }
                     start={{ x: 0, y: 0.5 }}
                     end={{ x: 1, y: 0.5 }}
                     style={{ flex: 1, height: 2 }}
