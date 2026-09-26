@@ -13,10 +13,12 @@ import { DEFAULT_SET_COUNT_KEY } from "../constants/programs";
 import { getJSON, setJSON } from "../utils/storage";
 import {
   MUSCLE_GROUPS, MAX_CUSTOM, FAVOURITE_EXERCISES_KEY,
-  type SelectableMuscle, type CustomExercise, type Exercise,
+  type SelectableMuscle, type CarriedExercise, type CustomExercise, type Exercise,
 } from "../constants/exercises";
 import { EXERCISES } from "../constants/exerciseData";
 import { isFavourite as isFav, sortByMuscleThenName, toggleFavourite } from "../utils/exerciseFavourites";
+import { sharedExercises } from "../utils/customExerciseDetails";
+import { loadCarriedExercises } from "../lib/exerciseMedia";
 import ExerciseImage from "./ExerciseImage";
 import FavouriteStar from "./FavouriteStar";
 import TrashIcon from "./TrashIcon";
@@ -57,6 +59,8 @@ export interface ExercisePickerProps {
 type Row =
   | { type: "header"; key: string; label: string }
   | { type: "custom"; key: string; exercise: CustomExercise }
+  /** Someone else's custom exercise that one of your programs carries. */
+  | { type: "shared"; key: string; exercise: CarriedExercise }
   | { type: "exercise"; key: string; exercise: Exercise };
 
 // Fixed row heights — both the row styles AND getItemLayout depend on these,
@@ -93,6 +97,9 @@ export default function ExercisePicker({
   const [setCount, setSetCount] = useState(FALLBACK_SET_COUNT);
   const [favourites, setFavourites] = useState<string[]>([]);
   const [favouritesOnly, setFavouritesOnly] = useState(false);
+  // What your programs carry, for "From your trainer". Read here rather than
+  // passed in, like the favourites: five screens mount this picker.
+  const [carried, setCarried] = useState<{ carried: CarriedExercise[]; me: string | null }>({ carried: [], me: null });
   const gold = isDark ? GOLD_DARK : GOLD;
   const noFilters = selectedMuscles.size === 0 && !favouritesOnly;
   // Height of the keyboard, and of the bottom bar it overlaps. The list needs
@@ -189,6 +196,8 @@ export default function ExercisePicker({
       getJSON<string[]>(FAVOURITE_EXERCISES_KEY, []).then(v => {
         if (Array.isArray(v)) setFavourites(v.filter((n): n is string => typeof n === "string"));
       }).catch(() => {});
+      // Re-read too: a program accepted since the last open may carry more.
+      loadCarriedExercises().then(setCarried).catch(() => {});
       slideY.setValue(600);
       backdropOpacity.setValue(0);
       Animated.parallel([
@@ -206,17 +215,28 @@ export default function ExercisePicker({
   // muscle group then name. A starred CATALOGUE exercise leaves EXERCISES, but a
   // starred custom one stays under CUSTOM as well: that section is the user's
   // own inventory (its slots, edit and delete), and a starred exercise vanishing
-  // from it read as lost. Search and the muscle chips filter favourites exactly
-  // like everything else, so a filtered view never shows a favourite that
-  // doesn't match.
+  // from it read as lost. The same goes for FROM YOUR TRAINER, which is the
+  // trainer's set. Search and the muscle chips filter favourites exactly like
+  // everything else, so a filtered view never shows a favourite that doesn't
+  // match.
+  //
+  // FROM YOUR TRAINER is someone else's custom exercises that your programs
+  // carry (utils/customExerciseDetails.ts). Picking one adds it with the
+  // trainer's photo, video and steps, and it takes none of your slots, so its
+  // rows have no edit or delete: it isn't yours to change.
+  const shared = useMemo(
+    () => sharedExercises(customExercises, carried.carried, carried.me),
+    [customExercises, carried],
+  );
   const { listData, layout } = useMemo(() => {
     const q = search.trim().toLowerCase();
     const muscleOk = (m: SelectableMuscle) => selectedMuscles.size === 0 || selectedMuscles.has(m);
 
-    const customs = customExercises.filter(e =>
+    const customMatch = (e: CustomExercise) =>
       (q === "" || e.name.toLowerCase().includes(q)) &&
-      (selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m)))
-    );
+      (selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m)));
+    const customs = customExercises.filter(customMatch);
+    const shareds = shared.filter(customMatch);
     // EXERCISES is the curated catalogue, already sorted alphabetically.
     const matched = EXERCISES.filter(e =>
       (q === "" || e.name.toLowerCase().includes(q) || e.equipment.toLowerCase().includes(q)) &&
@@ -224,27 +244,30 @@ export default function ExercisePicker({
     );
 
     const favCustoms = customs.filter(e => isFav(favourites, e.name));
+    const favShared = shareds.filter(e => isFav(favourites, e.name));
     const favMatched = matched.filter(e => isFav(favourites, e.name));
     // The Favourites chip is a second filter axis, ANDed with the muscle chips:
     // Favourites + Chest means starred chest exercises, not one or the other.
     const customSection = favouritesOnly ? [] : customs;
+    const sharedSection = favouritesOnly ? [] : shareds;
     const restMatched = favouritesOnly ? [] : matched.filter(e => !isFav(favourites, e.name));
 
     const rows: Row[] = [];
 
-    if (favCustoms.length || favMatched.length) {
+    if (favCustoms.length || favShared.length || favMatched.length) {
       // With the filter on, everything below IS a favourite, so the header would
       // just be labelling the whole list.
       if (!favouritesOnly) rows.push({ type: "header", key: "h:fav", label: "FAVOURITES" });
-      // One ordering across both kinds, so a starred custom sits with the other
+      // One ordering across every kind, so a starred custom sits with the other
       // exercises for its muscle group rather than in a clump of its own.
       const favRows: Row[] = [
         ...favCustoms.map((e): Row => ({ type: "custom", key: `fav-custom:${e.name}`, exercise: e })),
+        ...favShared.map((e): Row => ({ type: "shared", key: `fav-shared:${e.name}`, exercise: e })),
         ...favMatched.map((e): Row => ({ type: "exercise", key: `fav-ex:${e.id}`, exercise: e })),
       ];
       sortByMuscleThenName(
         favRows,
-        r => (r.type === "custom" ? r.exercise.muscles[0] : r.type === "exercise" ? r.exercise.primaryMuscle : undefined),
+        r => (r.type === "custom" || r.type === "shared" ? r.exercise.muscles[0] : r.type === "exercise" ? r.exercise.primaryMuscle : undefined),
         r => (r.type === "header" ? r.label : r.exercise.name),
       ).forEach(r => rows.push(r));
     }
@@ -252,6 +275,10 @@ export default function ExercisePicker({
     if (customSection.length) {
       rows.push({ type: "header", key: "h:custom", label: "CUSTOM" });
       customSection.forEach(e => rows.push({ type: "custom", key: `custom:${e.name}`, exercise: e }));
+    }
+    if (sharedSection.length) {
+      rows.push({ type: "header", key: "h:shared", label: "FROM YOUR TRAINER" });
+      sharedSection.forEach(e => rows.push({ type: "shared", key: `shared:${e.name}`, exercise: e }));
     }
     if (restMatched.length && (rows.length > 0)) {
       rows.push({ type: "header", key: "h:ex", label: "EXERCISES" });
@@ -266,7 +293,7 @@ export default function ExercisePicker({
       return entry;
     });
     return { listData: rows, layout };
-  }, [search, selectedMuscles, customExercises, favourites, favouritesOnly]);
+  }, [search, selectedMuscles, customExercises, shared, favourites, favouritesOnly]);
 
   const canAddCustom = customExercises.length < MAX_CUSTOM;
 
@@ -393,6 +420,29 @@ export default function ExercisePicker({
                 <TrashIcon size={16} color="#fff" />
               </View>
             </BounceButton>
+          </View>
+          {renderPickBadge(e.name)}
+        </TouchableOpacity>
+      );
+    }
+
+    if (item.type === "shared") {
+      const e = item.exercise;
+      return (
+        <TouchableOpacity
+          onPress={() => togglePick(e.name)}
+          activeOpacity={0.6}
+          style={[styles.pickerRow, { borderBottomColor: t.div }]}
+        >
+          {renderThumb(e.name, (
+            <ExerciseImage exerciseId={`custom:${e.name}`} overrideUri={e.imageUri} variant="thumb" size={52} radius={10}
+              backgroundColor={t.div} fallbackColor={t.ts} />
+          ))}
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.pickerExName, { color: t.tp }]} numberOfLines={1}>{e.name}</Text>
+            <Text style={[styles.pickerExMeta, { color: t.ts }]} numberOfLines={1}>
+              {e.muscles.join(", ") || "From your trainer"}
+            </Text>
           </View>
           {renderPickBadge(e.name)}
         </TouchableOpacity>

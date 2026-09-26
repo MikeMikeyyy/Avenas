@@ -9,7 +9,7 @@
 // connect handshake writes no local roster, so reading a local key here is what
 // used to leave this page permanently empty.
 
-import { forwardRef, useCallback, useImperativeHandle, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -22,10 +22,13 @@ import Avatar from "../Avatar";
 import TrashIcon from "../TrashIcon";
 import PeopleIcon from "../icons/PeopleIcon";
 import SendIcon from "../icons/SendIcon";
+import UserRoundMinusIcon from "../icons/UserRoundMinusIcon";
+import UserRoundPlusIcon from "../icons/UserRoundPlusIcon";
 import RecipientPickerSheet from "./RecipientPickerSheet";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import SimpleSheet from "./SimpleSheet";
 import SheetPill from "../SheetPill";
+import { RemoveCircleButton, RemoveModeBar } from "./RemoveMode";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -33,7 +36,7 @@ import {
   acceptSharedProgram,
   addTrainerAsClient,
   appendSharedPrograms,
-  batchKeyOf,
+  dismissKeyOf,
   dismissSharedBatch,
   loadSharedPrograms,
   migrateCoachReceivedShares,
@@ -81,6 +84,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   const [trainerClientIds, setTrainerClientIds] = useState<Set<string>>(new Set());
   /** The trainer whose action sheet is open (null = closed). */
   const [menuFor, setMenuFor] = useState<AssignedPT | null>(null);
+  /** "Remove a Trainer" was picked: each card shows a red minus (RemoveMode.tsx). */
+  const [removing, setRemoving] = useState(false);
   /** Set while picking which program to send to `sendTo`. */
   const [sendTo, setSendTo] = useState<AssignedPT | null>(null);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
@@ -102,6 +107,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
       .then(roster => {
         setTrainers(roster.trainers);
         setTrainerClientIds(roster.trainerClientIds);
+        // Nobody left to remove: out of remove mode.
+        if (roster.trainers.length === 0) setRemoving(false);
       })
       .catch(err => { if (__DEV__) console.warn("[avenas] resolve trainer roster", err); })
       .finally(() => setTrainersLoaded(true));
@@ -132,6 +139,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   // on the way back.
   useFocusEffect(useCallback(() => {
     void reload();
+    // Leaving the page ends remove mode, so it never greets you on the way back.
+    return () => setRemoving(false);
   }, [reload]));
 
   const handleConnectTrainer = useCallback(() => {
@@ -215,26 +224,17 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     );
   }, [reload]);
 
-  // Step into "remove" sub-menu — lists every trainer as an Alert button so
-  // the user can pick which one to remove. Cancel returns to nothing.
-  const openRemovePicker = useCallback(() => {
+  // "Remove a Trainer": a red minus on each card rather than an alert listing
+  // every trainer, which didn't scale past a few (components/trainer/RemoveMode.tsx).
+  const startRemoving = useCallback(() => {
     if (trainers.length === 0) {
       Alert.alert("No trainers", "You haven't connected to any trainers yet.");
       return;
     }
-    Alert.alert(
-      "Remove a Trainer",
-      "Pick a trainer to remove.",
-      [
-        { text: "Cancel", style: "cancel" },
-        ...trainers.map(trainer => ({
-          text: trainer.name,
-          style: "destructive" as const,
-          onPress: () => handleRemoveTrainer(trainer),
-        })),
-      ],
-    );
-  }, [trainers, handleRemoveTrainer]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setMenuFor(null);
+    setRemoving(true);
+  }, [trainers]);
 
   // Top-right plus button entry — offers both add and remove paths.
   const openMenu = useCallback(() => {
@@ -245,17 +245,32 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
       [
         { text: "Cancel", style: "cancel" },
         { text: "Add a Trainer", onPress: handleConnectTrainer },
-        { text: "Remove a Trainer", style: "destructive", onPress: openRemovePicker },
+        { text: "Remove a Trainer", style: "destructive", onPress: startRemoving },
       ],
     );
-  }, [handleConnectTrainer, openRemovePicker]);
+  }, [handleConnectTrainer, startRemoving]);
 
   useImperativeHandle(ref, () => ({ openMenu }), [openMenu]);
 
+  // Accepts in flight: a second tap while the first is on its way would
+  // otherwise say "added" twice (the store adds it once either way).
+  const accepting = useRef(new Set<string>());
+
   const handleAccept = useCallback(async (share: SharedProgram) => {
-    if (share.acceptedAtISO) return;
+    if (share.acceptedAtISO || accepting.current.has(share.id)) return;
+    accepting.current.add(share.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const importedId = await acceptSharedProgram(share.id);
+    let importedId: string | null;
+    try {
+      importedId = await acceptSharedProgram(share.id);
+    } catch (e) {
+      // Deleted or archived since the card was drawn: the reload takes it away.
+      Alert.alert("Couldn't add program", alertMessage(e, "Check your connection and try again."));
+      await reload();
+      return;
+    } finally {
+      accepting.current.delete(share.id);
+    }
     scheduleCloudPush(); // the accept materialised/updated @avenas/programs (a synced key)
     const acceptedAt = new Date().toISOString();
     setReceived(prev => prev.map(r => r.id === share.id
@@ -263,7 +278,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
       : r
     ));
     Alert.alert("Program Added", `"${share.programName}" was added to your programs.`);
-  }, []);
+  }, [reload]);
 
   const handleOpenPassDown = useCallback(async (share: SharedProgram) => {
     if (!share.acceptedProgramId) return;
@@ -290,7 +305,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
       "Remove Program",
       accepted
         ? `Remove "${share.programName}" from your trainers list? Your accepted copy stays in your library.`
-        : `Remove "${share.programName}"? You won't be able to get it back unless your trainer sends it again.`,
+        : `Remove "${share.programName}"? It comes back if your trainer sends it again or updates it.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -303,7 +318,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
           // signal the SENDER sees as "Removed", and the list here doesn't
           // filter on it, so the program came straight back — minus its tick.
           onPress: async () => {
-            await dismissSharedBatch(batchKeyOf(share));
+            // Hides this version: a Send Update brings it back (dismissKeyOf).
+            await dismissSharedBatch(dismissKeyOf(share));
             await reload();
           },
         },
@@ -367,6 +383,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
           </View>
         </NeuCard>
       ) : (
+        <>
+        {removing && <RemoveModeBar isDark={isDark} onDone={() => setRemoving(false)} />}
         <View style={{ marginTop: 12, gap: 10 }}>
           {trainers.map(coach => {
             const alsoClient = trainerClientIds.has(coach.id);
@@ -374,6 +392,8 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
               <TouchableOpacity
                 key={coach.id}
                 activeOpacity={0.85}
+                // While removing, only the minus does anything.
+                disabled={removing}
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setMenuFor(coach); }}
                 accessibilityRole="button"
                 accessibilityLabel={`Options for ${coach.name}`}
@@ -409,13 +429,16 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                         );
                       })()}
                     </View>
-                    <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
+                    {removing
+                      ? <RemoveCircleButton onPress={() => handleRemoveTrainer(coach)} accessibilityLabel={`Remove ${coach.name}`} />
+                      : <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />}
                   </View>
                 </NeuCard>
               </TouchableOpacity>
             );
           })}
         </View>
+        </>
       )}
 
       {trainers.length > 0 && (
@@ -481,7 +504,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                         )}
                         {accepted ? (
                           <View style={styles.actionRow}>
-                            <BounceButton style={{ flex: 1 }} onPress={() => handleOpenPassDown(r)} accessibilityLabel={`Send ${r.programName} to your clients`}>
+                            <BounceButton style={{ flex: 1 }} onPress={() => handleOpenPassDown(r)} needsConnection accessibilityLabel={`Send ${r.programName} to your clients`}>
                               <View style={[styles.passBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                                 <SendIcon size={16} color="#fff" />
                                 <Text style={styles.passBtnText}>Send to my clients</Text>
@@ -495,7 +518,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
                           </View>
                         ) : (
                           <View style={styles.actionRow}>
-                            <BounceButton style={{ flex: 1 }} onPress={() => handleAccept(r)} accessibilityLabel={`Accept ${r.programName}`}>
+                            <BounceButton style={{ flex: 1 }} onPress={() => handleAccept(r)} needsConnection accessibilityLabel={`Accept ${r.programName}`}>
                               <View style={[styles.acceptBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                                 <Ionicons name="checkmark" size={16} color="#fff" />
                                 <Text style={styles.acceptBtnText}>Accept</Text>
@@ -550,13 +573,15 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
           />
           <SheetPill
             label={menuFor && trainerClientIds.has(menuFor.id) ? "Remove from my clients" : "Add as my client"}
-            icon={c => <Ionicons name={menuFor && trainerClientIds.has(menuFor.id) ? "person-remove-outline" : "person-add-outline"} size={18} color={c} />}
+            icon={c => menuFor && trainerClientIds.has(menuFor.id)
+              ? <UserRoundMinusIcon size={18} color={c} />
+              : <UserRoundPlusIcon size={18} color={c} />}
             onPress={() => menuFor && toggleAsClient(menuFor)}
           />
           <SheetPill
             label="Remove trainer"
             variant="danger"
-            icon={c => <Ionicons name="close-circle-outline" size={18} color={c} />}
+            icon={c => <UserRoundMinusIcon size={18} color={c} />}
             onPress={() => { const c = menuFor; setMenuFor(null); if (c) handleRemoveTrainer(c); }}
           />
         </View>

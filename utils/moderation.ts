@@ -3,7 +3,8 @@
 // Client-side moderation for the Trainer hub's user-generated content, built to
 // satisfy Apple Guideline 1.2 (Safety — UGC): block abusive users, report
 // objectionable content/people, and filter reported messages out of every
-// thread. Blocking and hiding take effect immediately and persist locally.
+// thread. Blocking and hiding take effect immediately and persist locally;
+// blocks are also recorded server-side (migration 0040, see `blockUser`).
 //
 // Reports are REAL server-side (migration 0014): every report against a real
 // account is delivered to the reports table for operator review. The on-device
@@ -14,11 +15,13 @@
 import { getJSON, setJSON, removeKey } from "./storage";
 import { insertReportRow } from "../lib/reports";
 import { isCloudContactId } from "../lib/chat";
+import { deleteBlock, fetchMyBlocks, insertBlock, type ServerBlock } from "../lib/blocks";
 import {
   loadClients, saveClients,
   loadCoaches, removeCoach,
   loadAssignedPT, saveAssignedPT,
   removeOtherTrainer,
+  makeInitials,
 } from "./trainerStore";
 import {
   BLOCKED_USERS_KEY, REPORTS_KEY, HIDDEN_MESSAGES_KEY,
@@ -56,44 +59,144 @@ export async function loadBlockedIds(): Promise<Set<string>> {
   return new Set((await loadBlocked()).map(b => b.id));
 }
 
-export async function blockUser(user: { id: string; name: string; initials: string }): Promise<void> {
-  const list = await loadBlocked();
-  if (list.some(b => b.id === user.id)) return;
-  await setJSON(BLOCKED_USERS_KEY, [
-    { id: user.id, name: user.name, initials: user.initials, blockedAtISO: new Date().toISOString() },
-    ...list,
-  ]);
+// Blocks live in two places (migration 0040): this phone's list, which is what
+// hides people here, and the server's, which severs, takes them out of the
+// blocker's own groups, silences their notifications and carries the block to
+// the blocker's other devices. Block, unblock and sync each read the list, talk
+// to the server and write it back, so they run one at a time: a sync that
+// fetched just before a block landed would otherwise read it as "lifted on
+// another device" and drop it.
+let blockChain: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
+  const run = blockChain.then(fn, fn);
+  blockChain = run.catch(() => {});
+  return run;
 }
 
-export async function unblockUser(id: string): Promise<void> {
+async function markOnServer(ids: Set<string>): Promise<void> {
+  if (ids.size === 0) return;
   const list = await loadBlocked();
-  await setJSON(BLOCKED_USERS_KEY, list.filter(b => b.id !== id));
+  await setJSON(BLOCKED_USERS_KEY, list.map(b => (ids.has(b.id) && !b.onServer ? { ...b, onServer: true } : b)));
+}
+
+/** Block on this phone at once, then tell the server. Returns whether the
+ *  server has it; when it doesn't (offline), the block still holds here and
+ *  `syncBlocks` sends it later. A local contact has no account, so there's
+ *  nothing to send and that counts as done. */
+export function blockUser(user: { id: string; name: string; initials: string }): Promise<boolean> {
+  return oneAtATime(async () => {
+    const list = await loadBlocked();
+    if (!list.some(b => b.id === user.id)) {
+      await setJSON(BLOCKED_USERS_KEY, [
+        { id: user.id, name: user.name, initials: user.initials, blockedAtISO: new Date().toISOString() },
+        ...list,
+      ]);
+    }
+    if (!isCloudContactId(user.id)) return true;
+    try {
+      await insertBlock(user.id, user.name);
+    } catch (e) {
+      if (__DEV__) console.warn("[avenas] record block", e);
+      return false;
+    }
+    await markOnServer(new Set([user.id]));
+    return true;
+  });
+}
+
+/** Lift a block. The server goes first and a failure throws, with the block
+ *  still in place: lifted here but not there, the next sync would read the
+ *  server's row as a block from another device and put it straight back. */
+export function unblockUser(id: string): Promise<void> {
+  return oneAtATime(async () => {
+    if (isCloudContactId(id)) await deleteBlock(id);
+    const list = await loadBlocked();
+    await setJSON(BLOCKED_USERS_KEY, list.filter(b => b.id !== id));
+  });
+}
+
+/**
+ * Bring this phone's blocks and the server's into line. Run after startup and
+ * on coming back online (hooks/useTrainerHubPrefetch.ts):
+ *   - a block the server hasn't heard of (made offline, or before 0040) is sent,
+ *     which is also when it severs and leaves the blocker's groups;
+ *   - a block the server has and this phone doesn't (made on another device)
+ *     is added;
+ *   - a block this phone knows the server HAD, and the server no longer has,
+ *     was lifted on another device, and goes.
+ * Nothing changes when the server can't be asked, and local contacts (no
+ * account) are never touched.
+ */
+export function syncBlocks(): Promise<void> {
+  return oneAtATime(async () => {
+    let server: ServerBlock[];
+    try {
+      server = await fetchMyBlocks();
+    } catch (e) {
+      if (__DEV__) console.warn("[avenas] sync blocks", e);
+      return;
+    }
+    const onServer = new Map(server.map(b => [b.id, b]));
+    const local = await loadBlocked();
+
+    const sent = new Set<string>();
+    for (const b of local) {
+      if (!isCloudContactId(b.id) || b.onServer || onServer.has(b.id)) continue;
+      try {
+        await insertBlock(b.id, b.name);
+        sent.add(b.id);
+      } catch (e) {
+        // Waits for the next sync. Not a break: one the server refuses (their
+        // account is gone) mustn't hold up the rest.
+        if (__DEV__) console.warn("[avenas] send block", b.id, e);
+      }
+    }
+
+    const liftedElsewhere = (b: BlockedUser) => b.onServer && isCloudContactId(b.id) && !onServer.has(b.id);
+    const known = new Set(local.map(b => b.id));
+    const next: BlockedUser[] = [
+      ...local
+        .filter(b => !liftedElsewhere(b))
+        .map(b => (!b.onServer && (onServer.has(b.id) || sent.has(b.id)) ? { ...b, onServer: true } : b)),
+      ...server
+        .filter(s => !known.has(s.id))
+        .map(s => {
+          const name = s.name || "User";
+          return { id: s.id, name, initials: makeInitials(name), blockedAtISO: s.blockedAtISO, onServer: true };
+        }),
+    ];
+    await setJSON(BLOCKED_USERS_KEY, next);
+  });
 }
 
 /**
  * Block a person everywhere, in one call. This is the entry point every "Block"
  * button should use (chat, Connect, etc.) so blocking is consistent no matter
  * where it's triggered:
- *   1. record the block locally (so they can't be silently re-added),
+ *   1. record the block locally (so they can't be silently re-added), and on
+ *      the server (0040), which also takes them out of every group I OWN and
+ *      stops their notifications reaching me,
  *   2. drop any local trainer-hub link (clients / coaches / assigned trainer),
  *   3. sever the live account-to-account connection server-side.
  *
- * Returns `{ severed }` so callers can tell the user when the server-side step
- * couldn't run (offline / signed out). The local block always succeeds; the
- * surrounding UI (rosters, lists, the chat-thread guard) filters the blocked
- * contact out on the next focus regardless, so a `false` here means "they're
- * blocked locally but the cloud connection row is still up — it'll sever next
- * time the device is online and the list refreshes."
+ * Returns `{ severed, recorded }` so callers can tell the user when the
+ * server-side steps couldn't run (offline / signed out). The local block always
+ * succeeds; the surrounding UI (rosters, lists, the chat-thread guard) filters
+ * the blocked contact out on the next focus regardless. `recorded: false` means
+ * the server hasn't got the block yet: `syncBlocks` sends it when the phone is
+ * back online, and the sever and the group removal happen then.
  */
 export async function blockContact(
   contact: { id: string; name: string; initials: string },
   accountType: AccountType,
-): Promise<{ severed: boolean }> {
-  await blockUser(contact);
+): Promise<{ severed: boolean; recorded: boolean }> {
+  const recorded = await blockUser(contact);
   // unaddContact does both the local roster cleanup and the server-side
   // disconnect; the local block above keeps them filtered out of every list
-  // even when the sever couldn't run (offline), unlike a plain un-add.
-  return unaddContact(contact.id, accountType);
+  // even when the sever couldn't run (offline), unlike a plain un-add. A
+  // recorded block has severed already (0040's trigger), so that counts.
+  const { severed } = await unaddContact(contact.id, accountType);
+  return { severed: severed || recorded, recorded };
 }
 
 // ─── reporting ─────────────────────────────────────────────────────────────────

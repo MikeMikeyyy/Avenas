@@ -23,6 +23,7 @@ import RecipientPickerSheet from "./RecipientPickerSheet";
 import PeopleIcon from "../icons/PeopleIcon";
 import ChatIcon from "../icons/ChatIcon";
 import UserRoundPlusIcon from "../icons/UserRoundPlusIcon";
+import UserRoundIcon from "../icons/UserRoundIcon";
 import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
 import UnreadBadge from "../UnreadBadge";
@@ -56,6 +57,7 @@ import { getJSON } from "../../utils/storage";
 import { archiveShareChoice } from "../../utils/removeShare";
 import { askArchiveOrDelete } from "../../utils/archiveChoice";
 import ArchiveButton from "../ArchiveButton";
+import OfflineBanner from "../OfflineBanner";
 import { loadGroupRows, sortByFavourite } from "../../utils/groupStore";
 import { groupAlertCounts } from "../../utils/groupAlerts";
 import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites, isGroupLimitError } from "../../lib/groups";
@@ -192,7 +194,7 @@ function SentCard({ batch, open, isDark, sentTo, nameFor, onToggle, onView, onRe
                 <Text style={[styles.reviewBtnText, { color: t.tp }]}>View Program</Text>
               </View>
             </BounceButton>
-            <BounceButton style={{ flex: 1 }} onPress={onRemove} accessibilityLabel={`Remove ${batch.programName}`}>
+            <BounceButton style={{ flex: 1 }} onPress={onRemove} needsConnection accessibilityLabel={`Remove ${batch.programName}`}>
               <View style={[styles.sharedActionBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
                 <TrashIcon size={16} color="#fff" />
                 <Text style={[styles.deleteBtnText, { color: "#fff" }]}>Remove</Text>
@@ -261,7 +263,7 @@ function ReceivedCard({ review, open, isDark, from, onToggle, onOpen, onRemove }
               <Text style={[styles.reviewBtnText, { color: t.tp }]}>Review</Text>
             </View>
           </BounceButton>
-          <BounceButton style={{ flex: 1 }} onPress={onRemove} accessibilityLabel={`Remove ${review.programName}`}>
+          <BounceButton style={{ flex: 1 }} onPress={onRemove} needsConnection accessibilityLabel={`Remove ${review.programName}`}>
             <View style={[styles.sharedActionBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
               <TrashIcon size={16} color="#fff" />
               <Text style={[styles.reviewBtnText, { color: "#fff" }]}>Remove</Text>
@@ -665,7 +667,14 @@ export default function PTHome() {
         drop();
       },
       onDelete: async () => {
-        await removeSharedProgramBatch(batch.key);
+        try {
+          await removeSharedProgramBatch(batch.key);
+        } catch (e) {
+          // It used to drop the card whatever happened, and with no signal it
+          // came back on the next load.
+          Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
         drop();
       },
     });
@@ -739,6 +748,7 @@ export default function PTHome() {
           />
         }
       >
+        <OfflineBanner />
         <View style={styles.coachesRow}>
           <BounceButton
             style={styles.coachesBtnWrap}
@@ -746,7 +756,7 @@ export default function PTHome() {
             accessibilityLabel="Open my trainers"
           >
             <View style={[styles.coachesBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name="person-outline" size={16} color={ACCT} />
+              <UserRoundIcon size={16} color={ACCT} />
               <Text style={[styles.coachesBtnText, { color: t.tp }]}>My Trainers</Text>
             </View>
           </BounceButton>
@@ -790,7 +800,7 @@ export default function PTHome() {
           </Pressable>
         </View>
 
-        <BounceButton style={{ marginBottom: 18 }} onPress={() => setSendOpen(true)}>
+        <BounceButton style={{ marginBottom: 18 }} onPress={() => setSendOpen(true)} needsConnection>
           <View style={[styles.broadcast, { backgroundColor: ACCT, shadowColor: ACCT }]}>
             <SendIcon size={18} color="#fff" />
             <Text style={styles.broadcastText}>Send a Program</Text>

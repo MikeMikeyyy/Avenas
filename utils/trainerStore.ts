@@ -21,9 +21,11 @@ import type { JournalEntry } from "../constants/journal";
 import type { CustomExercise } from "../constants/exercises";
 import { UNIT_KEY, stampWeightUnits, type WeightUnit } from "./units";
 import { GROUP_FAVOURITES_KEY } from "../constants/groups";
+import { BLOCKED_USERS_KEY, type BlockedUser } from "../constants/chat";
 import { ACCOUNT_TYPE_KEY } from "../contexts/AccountTypeContext";
 import { isCloudContactId } from "../lib/chat";
 import { fetchClientTraining, fetchClientsActivePrograms } from "../lib/clientTraining";
+import { detailsForSend } from "../lib/exerciseMedia";
 import {
   deleteShareRow,
   fetchGroupShareRows,
@@ -35,6 +37,8 @@ import {
   returnSharedReview,
   setGroupReviewCompleted,
   setShareArchived,
+  stampReviewApplied,
+  stampShareAccepted,
   updateShareRow,
   type NewShareRow,
   type SharedProgramRow,
@@ -43,6 +47,50 @@ import {
 const warnShares = (op: string, err: unknown) => {
   if (__DEV__) console.warn("[avenas] shares", op, err);
 };
+
+/**
+ * One of this phone's program actions at a time. Accepting reads My Programs,
+ * the share meta and the removed list, waits on the server, then writes what
+ * it read back with its change; two at once (a double tap, Accept on two cards
+ * before the first finished, or the same program's Accept on two screens)
+ * each wrote back its own read, so the program was added twice or the other
+ * change was lost. Same pattern as utils/achievementStore.ts.
+ *
+ * Never call one exclusive function from inside another: it would wait on
+ * itself forever.
+ */
+let localChain: Promise<unknown> = Promise.resolve();
+function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const run = localChain.then(fn);
+  localChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Accept found nothing to accept: the program was deleted, taken back, or
+ * archived after the card was drawn. The screen says so rather than claiming
+ * it was added.
+ */
+export class ShareUnavailableError extends Error {
+  constructor(message = "This program is no longer available. Your trainer may have removed or archived it.") {
+    super(message);
+    this.name = "ShareUnavailableError";
+  }
+}
+
+/** What a program action says when the server couldn't be reached. Every
+ *  action that needs the server throws this (or its own words) rather than
+ *  carrying on as if it had worked. */
+const UNREACHABLE = "Couldn't reach the server. Check your connection and try again.";
+
+/** A review the person who asked has withdrawn while the trainer had it open. */
+const reviewWithdrawn = () =>
+  new ShareUnavailableError("This program is no longer available. The person who asked may have withdrawn it.");
+
+/** A new program's local id. Not `program_${Date.now()}` alone: two imports in
+ *  the same millisecond (one accept straight after another) got the same id,
+ *  and from then on every edit or delete of one hit both. */
+const newLocalProgramId = () => `program_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 /** Cloud rows are keyed by uuid; local mock entries by `share_…` / `sent_…`. */
 const isCloudShareId = isCloudContactId;
@@ -235,7 +283,16 @@ export const clientDataKey = (clientId: string) => `${CLIENT_DATA_PREFIX}${clien
 /** Per-cloud-share local state the server doesn't need: which LOCAL program a
  *  recipient's accept materialised, so re-accepts update in place. */
 export const CLOUD_SHARE_META_KEY = "@avenas/pt/cloud_share_meta";
-type CloudShareMeta = Record<string, { acceptedProgramId?: string }>;
+type CloudShareMeta = Record<string, {
+  /** A share: the local program its accept made or updated. */
+  acceptedProgramId?: string;
+  /** A review I asked for: the local program accepting what came back wrote
+   *  to, when my original was gone and it made a new one. Separate from
+   *  acceptedProgramId on purpose: deleting that program must not stamp the
+   *  review "removed" (removeSharedProgramByLocalId), which would take it off
+   *  the trainer's inbox. */
+  appliedProgramId?: string;
+}>;
 
 async function loadShareMeta(): Promise<CloudShareMeta> {
   return getJSON<CloudShareMeta>(CLOUD_SHARE_META_KEY, {});
@@ -377,7 +434,7 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
     await setJSON(PROGRAMS_KEY, updated);
     return existing.id;
   }
-  const importedId = `program_${Date.now()}`;
+  const importedId = newLocalProgramId();
   const imported: SavedProgram = {
     ...snap,
     id: importedId,
@@ -487,6 +544,9 @@ async function loadLocalSharedPrograms(): Promise<SharedProgram[]> {
  *  both directions (see SharedProgram.archivedAtISO); the archive page has its
  *  own read. */
 export async function loadSharedPrograms(): Promise<SharedProgram[]> {
+  // Anything I did offline that the server is still waiting to hear, first,
+  // so what loads already includes it.
+  await flushPendingShareUnlinks();
   const local = (await loadLocalSharedPrograms()).filter(s => !s.archivedAtISO);
   const cloud = await fetchCloudRowsSafe();
   if (!cloud) return withoutDismissed(local, null);
@@ -504,12 +564,27 @@ export async function loadDismissedShareKeys(): Promise<Set<string>> {
   return new Set(await getJSON<string[]>(DISMISSED_SHARES_KEY, []));
 }
 
-/** Remove a program someone sent me from my received lists. Hides that SEND —
- *  every row sharing its batch key — on this device. Idempotent. */
-export async function dismissSharedBatch(batchKey: string): Promise<void> {
-  const keys = await getJSON<string[]>(DISMISSED_SHARES_KEY, []);
-  if (keys.includes(batchKey)) return;
-  await setJSON(DISMISSED_SHARES_KEY, [...keys, batchKey]);
+/** Remove a program someone sent me from my received lists, on this device.
+ *  `key` is `dismissKeyOf(share)`, or `returnedKeyOf(review)` for a review sent
+ *  back. Idempotent. */
+export function dismissSharedBatch(key: string): Promise<void> {
+  return exclusive(async () => {
+    const keys = await getJSON<string[]>(DISMISSED_SHARES_KEY, []);
+    if (keys.includes(key)) return;
+    await setJSON(DISMISSED_SHARES_KEY, [...keys, key]);
+  });
+}
+
+/**
+ * What removing a received program hides: THIS version of that send, every
+ * row of it. The key carries the trainer's last edit, so their Send Update
+ * brings the card back with Accept on it, as `returnedKeyOf` does for a review
+ * sent back. Keyed on the send alone, a removed card stayed hidden through
+ * every update: the client could never take the new version, and the trainer
+ * saw them as not having accepted it, for good.
+ */
+export function dismissKeyOf(s: SharedProgram): string {
+  return `${batchKeyOf(s)}|${s.lastEditedAtISO ?? ""}`;
 }
 
 /**
@@ -520,11 +595,33 @@ export async function dismissSharedBatch(batchKey: string): Promise<void> {
  *
  * Only ever drops a row I RECEIVED. My own sends are never filtered, whatever
  * is in the list — a trainer's outgoing history can't be hidden by accident.
+ *
+ * A bare batch key is how a removal was recorded before `dismissKeyOf`, and
+ * still hides every version: showing those again would undo what the user
+ * tidied away.
+ *
+ * Anything sent by someone I've blocked goes the same way (see
+ * `loadBlockedSenderIds`), which is what keeps a block meaningful inside a
+ * group: they stay a member, and their programs stop reaching my lists.
  */
 async function withoutDismissed(list: SharedProgram[], myUid: string | null): Promise<SharedProgram[]> {
-  const dismissed = await loadDismissedShareKeys();
-  if (dismissed.size === 0) return list;
-  return list.filter(s => !(dismissed.has(batchKeyOf(s)) && (!myUid || s.senderId !== myUid)));
+  const [dismissed, blocked] = await Promise.all([loadDismissedShareKeys(), loadBlockedSenderIds()]);
+  if (dismissed.size === 0 && blocked.size === 0) return list;
+  const removed = (s: SharedProgram) =>
+    dismissed.has(dismissKeyOf(s)) || dismissed.has(batchKeyOf(s)) || (!!s.senderId && blocked.has(s.senderId));
+  return list.filter(s => !(removed(s) && (!myUid || s.senderId !== myUid)));
+}
+
+/**
+ * Everyone I've blocked, whose programs and review requests leave my lists
+ * (utils/moderation.ts owns the list; it's read here directly because
+ * moderation imports this file). Blocking severs the connection, but group
+ * membership doesn't need one, so a blocked member of a group I don't own is
+ * still in it (0040 only removes them from groups I own) and their rows still
+ * come back from the server. Only ever applied to rows I RECEIVED.
+ */
+async function loadBlockedSenderIds(): Promise<Set<string>> {
+  return new Set((await getJSON<BlockedUser[]>(BLOCKED_USERS_KEY, [])).map(b => b.id));
 }
 
 /** Everything sent to one group, from the group's point of view rather than
@@ -577,6 +674,17 @@ function withSenderUnits(snapshot: SavedProgram, unit: WeightUnit): SavedProgram
   return workouts === snapshot.workouts ? snapshot : { ...snapshot, workouts };
 }
 
+/**
+ * Everything a snapshot needs before it leaves this phone: weights in the
+ * sender's unit, and every custom exercise carrying its details with its
+ * photo and video uploaded, so the other end sees the exercise its author
+ * made rather than a bare name (lib/exerciseMedia.ts detailsForSend). Every
+ * write of a snapshot to another person goes through here.
+ */
+async function prepareSnapshot(snapshot: SavedProgram, unit: WeightUnit): Promise<SavedProgram> {
+  return detailsForSend(withSenderUnits(snapshot, unit));
+}
+
 /** Send program shares. Entries addressed to REAL accounts (uuid clientId) go
  *  through the cloud table — and THROW when that fails (offline / not
  *  connected), so callers can tell the user instead of faking success. Mock
@@ -591,19 +699,24 @@ export async function appendSharedPrograms(entries: SharedProgram[]): Promise<vo
     const uid = await getMyUid();
     if (!uid) throw new Error("Sign in to send programs to connected accounts.");
     const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-    const rows: NewShareRow[] = cloudEntries.map(e => {
+    // One send is one program to many people: prepare each distinct snapshot
+    // once, so its media upload once, not once per recipient.
+    const prepared = new Map<SavedProgram, SavedProgram>();
+    const rows: NewShareRow[] = [];
+    for (const e of cloudEntries) {
       const snapshot = e.programSnapshot ?? programs.find(p => p.id === e.programId);
       if (!snapshot) throw new Error(`Program "${e.programName}" was not found.`);
-      return {
+      if (!prepared.has(snapshot)) prepared.set(snapshot, await prepareSnapshot(snapshot, unit));
+      rows.push({
         recipientId: e.clientId as string,
         kind: "share",
         senderProgramId: e.programId,
         programName: e.programName,
-        snapshot: withSenderUnits(snapshot, unit),
+        snapshot: prepared.get(snapshot)!,
         sentKey: e.sentAtISO,
         groupId: e.groupId,
-      };
-    });
+      });
+    }
     await insertShareRows(uid, rows);
   }
   if (localEntries.length > 0) {
@@ -663,66 +776,120 @@ export async function migrateBroadcastShares(clients: Client[]): Promise<void> {
  *  incoming CLOUD rows alike. Materialises the snapshot to @avenas/programs
  *  exactly once (re-using an existing acceptedProgramId from either side) so
  *  all entries in the batch land on the same local program. */
-export async function acceptSharedProgramBatch(batchKey: string): Promise<string | null> {
-  const acceptedAt = new Date().toISOString();
-  const list = await loadLocalSharedPrograms();
-  const localTargets = list.filter(s => batchKeyOf(s) === batchKey);
+export function acceptSharedProgramBatch(batchKey: string): Promise<string | null> {
+  return exclusive(async () => {
+    const acceptedAt = new Date().toISOString();
+    const list = await loadLocalSharedPrograms();
+    const localTargets = list.filter(s => batchKeyOf(s) === batchKey && !s.archivedAtISO);
 
-  const cloud = await fetchCloudRowsSafe();
-  const meta = await loadShareMeta();
-  const cloudTargets = (cloud?.rows ?? []).filter(
-    r => r.kind === "share" && r.recipient_id === cloud?.uid && `${r.sender_program_id}|${r.sent_key}` === batchKey,
-  );
-  if (localTargets.length === 0 && cloudTargets.length === 0) return null;
-
-  const snap =
-    localTargets.find(t => t.programSnapshot)?.programSnapshot ??
-    (cloudTargets[0]?.snapshot as unknown as SavedProgram | undefined);
-  if (!snap) {
-    const next = list.map(s => batchKeyOf(s) === batchKey ? { ...s, acceptedAtISO: acceptedAt } : s);
-    await setJSON(SHARED_PROGRAMS_KEY, next);
-    return null;
-  }
-
-  const priorId =
-    localTargets.find(t => t.acceptedProgramId)?.acceptedProgramId ??
-    cloudTargets.map(r => meta[r.id]?.acceptedProgramId).find(Boolean);
-  const importedId = await materialiseSnapshot(snap, priorId);
-
-  if (localTargets.length > 0) {
-    const next = list.map(s => batchKeyOf(s) === batchKey
-      ? { ...s, acceptedAtISO: acceptedAt, acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
-      : s
+    const cloud = await fetchCloudRowsSafe();
+    const meta = await loadShareMeta();
+    // An archived send is off every recipient's list, so accepting it from a
+    // screen drawn before it was archived is refused like a deleted one.
+    const cloudTargets = (cloud?.rows ?? []).filter(
+      r => r.kind === "share" && r.recipient_id === cloud?.uid && !r.archived_at && rowBatchKey(r) === batchKey,
     );
-    await setJSON(SHARED_PROGRAMS_KEY, next);
-  }
-  for (const r of cloudTargets) {
-    meta[r.id] = { acceptedProgramId: importedId };
-    try {
-      await updateShareRow(r.id, { accepted_at: acceptedAt, deleted_by_recipient_at: null });
-    } catch (e) {
-      // Local import already happened; the pending stamp just means the entry
-      // still shows unaccepted next load — re-accepting is idempotent.
-      warnShares("acceptBatch", e);
+    if (localTargets.length === 0 && cloudTargets.length === 0) {
+      if (!cloud) throw new Error(UNREACHABLE);
+      throw new ShareUnavailableError();
     }
-  }
-  await saveShareMeta(meta);
-  return importedId;
+
+    const snap =
+      localTargets.find(t => t.programSnapshot)?.programSnapshot ??
+      (cloudTargets[0]?.snapshot as unknown as SavedProgram | undefined);
+    if (!snap) {
+      const next = list.map(s => batchKeyOf(s) === batchKey ? { ...s, acceptedAtISO: acceptedAt } : s);
+      await setJSON(SHARED_PROGRAMS_KEY, next);
+      return null;
+    }
+
+    const priorId =
+      localTargets.find(t => t.acceptedProgramId)?.acceptedProgramId ??
+      cloudTargets.map(r => meta[r.id]?.acceptedProgramId).find(Boolean);
+    let importedId = await materialiseSnapshot(snap, priorId);
+
+    if (localTargets.length > 0) {
+      const next = list.map(s => batchKeyOf(s) === batchKey
+        ? { ...s, acceptedAtISO: acceptedAt, acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
+        : s
+      );
+      await setJSON(SHARED_PROGRAMS_KEY, next);
+    }
+    // Recorded before the stamp: if the stamp fails, a second Accept still
+    // lands on this copy instead of adding another.
+    for (const r of cloudTargets) meta[r.id] = { acceptedProgramId: importedId };
+    await saveShareMeta(meta);
+    for (const r of cloudTargets) {
+      try {
+        importedId = await stampAcceptedRow(r, importedId, acceptedAt);
+      } catch (e) {
+        // The copy is in My Programs; the card just shows unaccepted until the
+        // next Accept, which updates the same copy.
+        warnShares("acceptBatch", e);
+      }
+    }
+    await dropPendingUnlinks(cloudTargets.map(r => r.id));
+    return importedId;
+  });
 }
 
-/** Unsend a whole batch (local entries + my outgoing cloud rows). */
+/**
+ * Record my accept on a row, but only against the version I added. If the
+ * sender saved an update between my reading the row and this write, that
+ * version is taken over the same copy and stamped instead, so "accepted" (what
+ * the trainer sees, and what clears my card) never sits on a version I don't
+ * have. It used to stamp unconditionally, so accepting while the trainer saved
+ * an update left the client on the old program with the trainer told they had
+ * the new one. A row deleted meanwhile keeps what I took, as if I'd accepted
+ * just before it went. Returns the local program id.
+ */
+async function stampAcceptedRow(row: SharedProgramRow, localId: string, acceptedAt: string): Promise<string> {
+  let current = row;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (await stampShareAccepted(current.id, current.last_edited_at ?? null, acceptedAt)) return localId;
+    const fresh = await fetchShareRow(current.id);
+    if (!fresh) return localId;
+    localId = await materialiseSnapshot(fresh.snapshot as unknown as SavedProgram, localId);
+    current = fresh;
+  }
+  throw new Error("The program kept changing while it was being added. Try again.");
+}
+
+/**
+ * Unsend a whole batch (local entries + my outgoing cloud rows).
+ *
+ * THROWS when it didn't go (offline, or the connection dropped part way), so
+ * the screen keeps the card and says so. It used to swallow that, and with no
+ * signal the card vanished and came back on the next load.
+ */
 export async function removeSharedProgramBatch(batchKey: string): Promise<void> {
   const existing = await loadLocalSharedPrograms();
-  await setJSON(SHARED_PROGRAMS_KEY, existing.filter(s => batchKeyOf(s) !== batchKey));
-  const cloud = await fetchCloudRowsSafe();
-  for (const r of (cloud?.rows ?? []).filter(
-    r => r.kind === "share" && r.sender_id === cloud?.uid && `${r.sender_program_id}|${r.sent_key}` === batchKey,
-  )) {
+  const localHit = existing.some(s => batchKeyOf(s) === batchKey);
+  if (localHit) await setJSON(SHARED_PROGRAMS_KEY, existing.filter(s => batchKeyOf(s) !== batchKey));
+  const uid = await getMyUid().catch(() => null);
+  if (!uid) return; // a mock-roster send, which lives on the device
+  let rows: SharedProgramRow[];
+  try {
+    rows = await fetchMyShareRows(uid);
+  } catch (e) {
+    warnShares("unsendBatch", e);
+    if (localHit) return;
+    throw new Error(UNREACHABLE);
+  }
+  const mine = rows.filter(r => r.kind === "share" && r.sender_id === uid && rowBatchKey(r) === batchKey);
+  let removed = 0;
+  let unreachable = false;
+  for (const r of mine) {
     try {
-      await deleteShareRow(r.id);
+      removed += await deleteShareRow(r.id);
     } catch (e) {
       warnShares("unsendBatch", e);
+      unreachable = true;
     }
+  }
+  if (unreachable) throw new Error(UNREACHABLE);
+  if (mine.length > 0 && removed === 0 && await batchStillThere(undefined, batchKey)) {
+    throw new Error("Only the trainer who sent it can remove it.");
   }
 }
 
@@ -749,7 +916,7 @@ export async function removeGroupSharedProgramBatch(groupId: string, batchKey: s
     rows = await fetchGroupShareRows(groupId);
   } catch (e) {
     warnShares("unsendGroupBatch", e);
-    throw new Error("Couldn't reach the server to remove it.");
+    throw new Error(UNREACHABLE);
   }
   const batch = rows.filter(r => r.kind === "share" && `${r.sender_program_id}|${r.sent_key}` === batchKey);
   let removed = 0;
@@ -760,17 +927,36 @@ export async function removeGroupSharedProgramBatch(groupId: string, batchKey: s
       warnShares("unsendGroupBatch", e);
     }
   }
-  if (batch.length > 0 && removed === 0) {
+  if (batch.length > 0 && removed === 0 && await batchStillThere(groupId, batchKey)) {
     throw new Error("Only the trainer who sent it or someone who runs the group can remove it.");
+  }
+}
+
+/**
+ * Whether any row of a group send still exists, after a remove or archive of
+ * it moved nothing. Nothing moving means "not allowed" only if the rows are
+ * still there: when another trainer removed the send a moment earlier (or the
+ * same trainer on another screen), it's already done, and saying "only the
+ * trainer who sent it can" was wrong. Assumes it's there if it can't check.
+ */
+async function batchStillThere(groupId: string | undefined, batchKey: string): Promise<boolean> {
+  try {
+    const uid = await getMyUid();
+    const rows = groupId ? await fetchGroupShareRows(groupId) : uid ? await fetchMyShareRows(uid) : [];
+    return rows.some(r => r.kind === "share" && rowBatchKey(r) === batchKey);
+  } catch {
+    return true;
   }
 }
 
 /** Apply a patch to every entry in the batch. Used by the post-send edit flow. */
 export async function updateSharedProgramBatch(batchKey: string, patch: Partial<SharedProgram>): Promise<void> {
+  // Units are already stamped by the builder, which is the only caller with a
+  // snapshot; the custom exercises it uses still have to travel with it.
+  if (patch.programSnapshot) patch = { ...patch, programSnapshot: await detailsForSend(patch.programSnapshot) };
   const existing = await loadLocalSharedPrograms();
-  const next = existing.map(s => batchKeyOf(s) === batchKey ? { ...s, ...patch } : s);
-  await setJSON(SHARED_PROGRAMS_KEY, next);
-  const cloud = await fetchCloudRowsSafe();
+  const localHit = existing.some(s => batchKeyOf(s) === batchKey);
+  if (localHit) await setJSON(SHARED_PROGRAMS_KEY, existing.map(s => batchKeyOf(s) === batchKey ? { ...s, ...patch } : s));
   const rowPatch: Parameters<typeof updateShareRow>[1] = {};
   if (patch.programSnapshot) rowPatch.snapshot = patch.programSnapshot as unknown as Record<string, unknown>;
   if (patch.programName) rowPatch.program_name = patch.programName;
@@ -779,60 +965,74 @@ export async function updateSharedProgramBatch(batchKey: string, patch: Partial<
   // acceptance after an edit — mirror that as a NULL, not "leave unchanged".
   if ("acceptedAtISO" in patch) rowPatch.accepted_at = patch.acceptedAtISO ?? null;
   if (Object.keys(rowPatch).length === 0) return;
-  for (const r of (cloud?.rows ?? []).filter(
-    r => r.kind === "share" && r.sender_id === cloud?.uid && `${r.sender_program_id}|${r.sent_key}` === batchKey,
-  )) {
+  // THROWS when the update didn't reach everyone, so the builder stays open
+  // and says so. With no signal it used to close as if saved, and the clients
+  // never got the new version.
+  const cloud = await fetchCloudRowsSafe();
+  if (!cloud) {
+    if (localHit) return; // a mock-roster send, which lives on the device
+    throw new Error(UNREACHABLE);
+  }
+  let unreachable = false;
+  for (const r of cloud.rows.filter(r => r.kind === "share" && r.sender_id === cloud.uid && rowBatchKey(r) === batchKey)) {
     try {
       await updateShareRow(r.id, rowPatch);
     } catch (e) {
       warnShares("editBatch", e);
+      unreachable = true;
     }
   }
+  if (unreachable) throw new Error(UNREACHABLE);
 }
 
 /** Accept a shared program. On first accept the snapshot is appended to @avenas/programs.
  *  On a re-accept (trainer edited after the user previously accepted) the existing local program is updated in place. */
-export async function acceptSharedProgram(shareId: string): Promise<string | null> {
-  if (isCloudShareId(shareId)) {
-    let row: SharedProgramRow | null = null;
-    try {
-      row = await fetchShareRow(shareId);
-    } catch (e) {
-      warnShares("accept", e);
+export function acceptSharedProgram(shareId: string): Promise<string | null> {
+  return exclusive(async () => {
+    if (isCloudShareId(shareId)) {
+      let row: SharedProgramRow | null;
+      try {
+        row = await fetchShareRow(shareId);
+      } catch (e) {
+        warnShares("accept", e);
+        throw new Error(UNREACHABLE);
+      }
+      // Gone, or archived after this screen was drawn (see acceptSharedProgramBatch).
+      if (!row || row.archived_at) throw new ShareUnavailableError();
+      const meta = await loadShareMeta();
+      let importedId = await materialiseSnapshot(
+        row.snapshot as unknown as SavedProgram,
+        meta[row.id]?.acceptedProgramId,
+      );
+      meta[row.id] = { acceptedProgramId: importedId };
+      await saveShareMeta(meta);
+      try {
+        importedId = await stampAcceptedRow(row, importedId, new Date().toISOString());
+      } catch (e) {
+        warnShares("acceptStamp", e); // local import done; re-accept updates the same copy
+      }
+      await dropPendingUnlinks([row.id]);
+      return importedId;
     }
-    if (!row) return null;
-    const meta = await loadShareMeta();
-    const importedId = await materialiseSnapshot(
-      row.snapshot as unknown as SavedProgram,
-      meta[row.id]?.acceptedProgramId,
+
+    const list = await loadLocalSharedPrograms();
+    const target = list.find(s => s.id === shareId && !s.archivedAtISO);
+    if (!target) throw new ShareUnavailableError();
+    if (!target.programSnapshot) {
+      // Nothing to materialise — just stamp acceptedAtISO.
+      const next = list.map(s => s.id === shareId ? { ...s, acceptedAtISO: new Date().toISOString() } : s);
+      await setJSON(SHARED_PROGRAMS_KEY, next);
+      return null;
+    }
+
+    const importedId = await materialiseSnapshot(target.programSnapshot, target.acceptedProgramId);
+    const next = list.map(s => s.id === shareId
+      ? { ...s, acceptedAtISO: new Date().toISOString(), acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
+      : s
     );
-    meta[row.id] = { acceptedProgramId: importedId };
-    await saveShareMeta(meta);
-    try {
-      await updateShareRow(row.id, { accepted_at: new Date().toISOString(), deleted_by_recipient_at: null });
-    } catch (e) {
-      warnShares("acceptStamp", e); // local import done; re-accept is idempotent
-    }
-    return importedId;
-  }
-
-  const list = await loadLocalSharedPrograms();
-  const target = list.find(s => s.id === shareId);
-  if (!target) return null;
-  if (!target.programSnapshot) {
-    // Nothing to materialise — just stamp acceptedAtISO.
-    const next = list.map(s => s.id === shareId ? { ...s, acceptedAtISO: new Date().toISOString() } : s);
     await setJSON(SHARED_PROGRAMS_KEY, next);
-    return null;
-  }
-
-  const importedId = await materialiseSnapshot(target.programSnapshot, target.acceptedProgramId);
-  const next = list.map(s => s.id === shareId
-    ? { ...s, acceptedAtISO: new Date().toISOString(), acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
-    : s
-  );
-  await setJSON(SHARED_PROGRAMS_KEY, next);
-  return importedId;
+    return importedId;
+  });
 }
 
 export async function loadAssignedPT(): Promise<AssignedPT | null> {
@@ -924,12 +1124,12 @@ async function loadLocalSentPrograms(): Promise<SentProgram[]> {
 export async function loadSentPrograms(): Promise<SentProgram[]> {
   const isPT = await viewerIsPT();
   const local = (await loadLocalSentPrograms()).filter(s => !(isPT && s.archivedAtISO));
-  const cloud = await fetchCloudRowsSafe();
+  const [cloud, blocked] = await Promise.all([fetchCloudRowsSafe(), loadBlockedSenderIds()]);
   if (!cloud) return local;
   const mapped = cloud.rows
     .filter(r => r.kind === "review")
     .filter(r => (isPT
-      ? r.recipient_id === cloud.uid && !r.deleted_by_recipient_at && !r.group_id && !r.archived_at
+      ? r.recipient_id === cloud.uid && !r.deleted_by_recipient_at && !r.group_id && !r.archived_at && !blocked.has(r.sender_id)
       : r.sender_id === cloud.uid))
     .map(r => rowToSent(r, cloud.uid));
   return [...mapped, ...local].sort(
@@ -964,8 +1164,9 @@ export async function loadGroupReviewPrograms(groupId: string): Promise<SentProg
   if (!uid) return [];
   let rows: SharedProgramRow[];
   let dismissed: Set<string>;
+  let blocked: Set<string>;
   try {
-    [rows, dismissed] = await Promise.all([fetchGroupShareRows(groupId), loadDismissedShareKeys()]);
+    [rows, dismissed, blocked] = await Promise.all([fetchGroupShareRows(groupId), loadDismissedShareKeys(), loadBlockedSenderIds()]);
   } catch (e) {
     warnShares("loadGroupReviews", e);
     return [];
@@ -976,6 +1177,7 @@ export async function loadGroupReviewPrograms(groupId: string): Promise<SentProg
     .filter(s => {
       if (s.senderId === uid && s.status === "returned") return !isReturnedDismissed(s, dismissed);
       if (s.completedAtISO) return false;
+      if (s.senderId && s.senderId !== uid && blocked.has(s.senderId)) return false;
       return s.senderId === uid || !s.archivedAtISO;
     });
 }
@@ -998,19 +1200,29 @@ export async function loadMyGroupReviews(): Promise<SentProgram[]> {
   const uid = await getMyUid().catch(() => null);
   if (!uid) return [];
   let rows: SharedProgramRow[];
+  let blocked: Set<string>;
   try {
-    rows = await fetchMyGroupReviewRows();
+    [rows, blocked] = await Promise.all([fetchMyGroupReviewRows(), loadBlockedSenderIds()]);
   } catch (e) {
     warnShares("loadMyGroupReviews", e);
     return [];
   }
-  return rows.filter(r => r.sender_id !== uid && !r.archived_at).map(r => rowToSent(r, uid));
+  return rows
+    .filter(r => r.sender_id !== uid && !r.archived_at && !blocked.has(r.sender_id))
+    .map(r => rowToSent(r, uid));
 }
 
 /** Mark a group review dealt with (or reopen it). Coach-only — the RPC raises
- *  for anyone else rather than silently no-opping. */
+ *  for anyone else rather than silently no-opping. One withdrawn meanwhile is
+ *  already out of the queue, so that isn't an error ("not a group program" is
+ *  the RPC finding no row). */
 export async function setGroupReviewDone(id: string, done: boolean): Promise<void> {
-  await setGroupReviewCompleted(id, done);
+  try {
+    await setGroupReviewCompleted(id, done);
+  } catch (e) {
+    if (done && !(await fetchShareRow(id).catch(() => true))) return;
+    throw e;
+  }
 }
 
 // ─── archive (migration 0037) ─────────────────────────────────────────────────
@@ -1067,13 +1279,13 @@ export async function setSendBatchArchived(batchKey: string, archived: boolean, 
     warnShares("archiveBatch", e);
     // A mock-roster send lives on the device and is already done.
     if (localHit) return;
-    throw new Error("Couldn't reach the server.");
+    throw new Error(UNREACHABLE);
   }
   const ids = rows
     .filter(r => r.kind === "share" && rowBatchKey(r) === batchKey && (groupId ? true : r.sender_id === uid))
     .map(r => r.id);
   if (ids.length === 0) return;
-  if ((await setShareArchived(ids, archived)) === 0) {
+  if ((await setShareArchived(ids, archived)) === 0 && await batchStillThere(groupId, batchKey)) {
     throw new Error("Only the trainer who sent it, or a trainer of its group, can do that.");
   }
 }
@@ -1085,7 +1297,9 @@ export async function setSendBatchArchived(batchKey: string, archived: boolean, 
  */
 export async function setReviewArchived(id: string, archived: boolean): Promise<void> {
   if (isCloudShareId(id)) {
-    if ((await setShareArchived([id], archived)) === 0) {
+    // Nothing moved and nothing there: withdrawn meanwhile, so it's already
+    // off the list, which is all archiving (or its Delete) was for.
+    if ((await setShareArchived([id], archived)) === 0 && await fetchShareRow(id).catch(() => true)) {
       throw new Error("Only the trainer it was sent to can do that.");
     }
     return;
@@ -1179,8 +1393,9 @@ export async function appendSentProgram(entry: SentProgram, recipientId?: string
       kind: "review",
       senderProgramId: entry.programId,
       programName: entry.programName,
-      // The client's own weights reach the trainer as the client typed them.
-      snapshot: withSenderUnits(snapshot, await senderUnit()),
+      // The client's own weights reach the trainer as the client typed them,
+      // and their own custom exercises as they made them.
+      snapshot: await prepareSnapshot(snapshot, await senderUnit()),
       sentKey: entry.sentAtISO,
       groupId: entry.groupId,
     }]);
@@ -1193,7 +1408,11 @@ export async function appendSentProgram(entry: SentProgram, recipientId?: string
 /** When the gym user deletes a program in /programs, mark the matching SharedProgram(s)
  *  as withdrawn rather than removing them — the trainer's per-client view filters them out,
  *  but the gym user can still re-accept from their My Trainer page if they want it back. */
-export async function removeSharedProgramByLocalId(localProgramId: string): Promise<void> {
+export function removeSharedProgramByLocalId(localProgramId: string): Promise<void> {
+  return exclusive(() => unlinkSharesFromProgram(localProgramId));
+}
+
+async function unlinkSharesFromProgram(localProgramId: string): Promise<void> {
   const list = await loadLocalSharedPrograms();
   let mutated = false;
   const now = new Date().toISOString();
@@ -1206,18 +1425,66 @@ export async function removeSharedProgramByLocalId(localProgramId: string): Prom
 
   // Cloud shares that materialised this local program: hide from the sender's
   // view + clear the accept, keeping the row so the recipient can re-accept.
+  // With no signal the copy still goes (it's mine, on this phone); the notice
+  // waits and goes when it can. It used to be dropped, and the trainer's page
+  // said "accepted" for good about a copy that no longer existed.
   const meta = await loadShareMeta();
   const affected = Object.entries(meta).filter(([, m]) => m.acceptedProgramId === localProgramId);
   if (affected.length === 0) return;
+  const waiting: PendingUnlink[] = [];
   for (const [id] of affected) {
     delete meta[id];
     try {
       await updateShareRow(id, { deleted_by_recipient_at: now, accepted_at: null });
     } catch (e) {
       warnShares("hideByLocalId", e);
+      waiting.push({ id, at: now });
     }
   }
   await saveShareMeta(meta);
+  if (waiting.length > 0) {
+    const pending = await getJSON<PendingUnlink[]>(PENDING_SHARE_UNLINKS_KEY, []);
+    await setJSON(PENDING_SHARE_UNLINKS_KEY, [...pending.filter(p => !waiting.some(w => w.id === p.id)), ...waiting]);
+  }
+}
+
+/**
+ * "I deleted my copy" notices that couldn't reach the server at the time
+ * (offline). Local-only: a row id and when it happened.
+ */
+export const PENDING_SHARE_UNLINKS_KEY = "@avenas/pt/pending_share_unlinks";
+type PendingUnlink = { id: string; at: string };
+
+/**
+ * Send the waiting "deleted my copy" notices: before every load of my shares,
+ * and when the phone comes back online (hooks/useOnline.ts). Stops at the
+ * first that still can't go, and keeps it. A row that's gone just drops off
+ * (the update changes nothing), and one I've accepted again was taken off the
+ * list by that accept.
+ */
+export function flushPendingShareUnlinks(): Promise<void> {
+  return exclusive(async () => {
+    const pending = await getJSON<PendingUnlink[]>(PENDING_SHARE_UNLINKS_KEY, []);
+    if (pending.length === 0) return;
+    const left = [...pending];
+    while (left.length > 0) {
+      try {
+        await updateShareRow(left[0].id, { deleted_by_recipient_at: left[0].at, accepted_at: null });
+      } catch {
+        break; // still offline: the rest wait too
+      }
+      left.shift();
+    }
+    await setJSON(PENDING_SHARE_UNLINKS_KEY, left);
+  });
+}
+
+/** An accept supersedes a waiting "deleted my copy" for the same row. Called
+ *  from inside the exclusive accepts, so not exclusive itself. */
+async function dropPendingUnlinks(ids: string[]): Promise<void> {
+  const pending = await getJSON<PendingUnlink[]>(PENDING_SHARE_UNLINKS_KEY, []);
+  const left = pending.filter(p => !ids.includes(p.id));
+  if (left.length !== pending.length) await setJSON(PENDING_SHARE_UNLINKS_KEY, left);
 }
 
 /** Migration: pre-acceptedProgramId entries are linked back to a local program by name + snapshot match. */
@@ -1254,17 +1521,26 @@ export async function updateSentProgram(
 ): Promise<void> {
   if (isCloudShareId(id)) {
     const rowPatch: Parameters<typeof updateShareRow>[1] = {};
-    if (patch.programSnapshot) rowPatch.draft_snapshot = patch.programSnapshot as unknown as Record<string, unknown>;
+    // Not prepareSnapshot: a review's untagged weights are the CLIENT's, and the
+    // builder stamps them with the client's unit. Only the custom exercises the
+    // trainer added still need to travel with it.
+    if (patch.programSnapshot) {
+      rowPatch.draft_snapshot = await detailsForSend(patch.programSnapshot) as unknown as Record<string, unknown>;
+    }
     if (patch.programName) rowPatch.program_name = patch.programName;
     if (patch.lastEditedAtISO) rowPatch.last_edited_at = patch.lastEditedAtISO;
     if (patch.trainerComments !== undefined) rowPatch.trainer_comments = patch.trainerComments ?? null;
     if (Object.keys(rowPatch).length === 0) return;
+    let changed: number;
     try {
-      await updateShareRow(id, rowPatch);
+      changed = await updateShareRow(id, rowPatch);
     } catch (e) {
       warnShares("updateSent", e);
       throw e instanceof Error ? e : new Error("Couldn't update the program.");
     }
+    // Nothing changed means the row's gone: withdrawn while the builder was
+    // open. It used to "save" into nothing, and the edits were lost unseen.
+    if (changed === 0) throw reviewWithdrawn();
     return;
   }
   const existing = await loadLocalSentPrograms();
@@ -1290,6 +1566,9 @@ export async function returnReview(id: string): Promise<void> {
     try {
       await returnSharedReview(id);
     } catch (e) {
+      // "not a review" is the RPC finding no row: withdrawn meanwhile. Said in
+      // words rather than as the database's message.
+      if (e instanceof Error && /not a review/.test(e.message)) throw reviewWithdrawn();
       warnShares("returnReview", e);
       throw e instanceof Error ? e : new Error("Couldn't send it back.");
     }
@@ -1302,42 +1581,71 @@ export async function returnReview(id: string): Promise<void> {
     : s)));
 }
 
-/** Gym user accepts a returned program: overwrite the original entry in @avenas/programs with the trainer's edited snapshot. */
-export async function applyReturnedProgram(id: string): Promise<void> {
-  if (isCloudShareId(id)) {
-    let row: SharedProgramRow | null = null;
-    try {
-      row = await fetchShareRow(id);
-    } catch (e) {
-      warnShares("applyReturned", e);
+/**
+ * Gym user accepts a returned program: overwrite the original entry in
+ * @avenas/programs with the trainer's edited snapshot.
+ *
+ * The accept is recorded only against the version applied (the row's
+ * `returned_at`), for the same reason as `stampAcceptedRow`: a Send Update
+ * landing mid-apply used to be marked accepted while the client kept the
+ * version before it. Then the newer one is applied over the same program.
+ */
+export function applyReturnedProgram(id: string): Promise<void> {
+  return exclusive(async () => {
+    if (isCloudShareId(id)) {
+      let row: SharedProgramRow | null;
+      try {
+        row = await fetchShareRow(id);
+      } catch (e) {
+        warnShares("applyReturned", e);
+        throw new Error(UNREACHABLE);
+      }
+      if (!row || !row.returned_at) throw new Error("This review is no longer available.");
+      // Over my original program; if I've deleted it, over the copy an earlier
+      // accept of this review made in its place. That fallback is what stops
+      // every Send Update I accept adding another copy.
+      const meta = await loadShareMeta();
+      let target = [row.sender_program_id, meta[row.id]?.appliedProgramId].filter((x): x is string => !!x);
+      for (let attempt = 0; attempt < 3 && row && row.returned_at && !row.accepted_at; attempt++) {
+        const written = await materialiseSnapshotOverExisting(
+          (row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram,
+          target,
+        );
+        if (written !== row.sender_program_id && meta[row.id]?.appliedProgramId !== written) {
+          meta[row.id] = { ...meta[row.id], appliedProgramId: written };
+          await saveShareMeta(meta);
+        }
+        target = [written];
+        try {
+          if (await stampReviewApplied(row.id, row.returned_at)) return;
+          row = await fetchShareRow(id);
+        } catch (e) {
+          warnShares("applyStamp", e); // applied locally; the card offers Accept again, over the same program
+          return;
+        }
+      }
+      return;
     }
-    if (!row || !row.returned_at || row.accepted_at) return;
-    const snap = (row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram;
-    // In-place over the sender's original program; a fresh import if it's gone.
-    await materialiseSnapshotOverExisting(snap, row.sender_program_id);
-    try {
-      await updateShareRow(id, { accepted_at: new Date().toISOString() });
-    } catch (e) {
-      warnShares("applyStamp", e); // local apply done; re-apply is guarded by accepted_at staying null
-    }
-    return;
-  }
 
-  const list = await loadLocalSentPrograms();
-  const target = list.find(s => s.id === id);
-  if (!target || target.status !== "returned" || target.appliedAtISO) return;
-  if (!target.programSnapshot) return;
-  await materialiseSnapshotOverExisting(target.programSnapshot, target.programId);
-  const nextList = list.map(s => s.id === id ? { ...s, appliedAtISO: new Date().toISOString() } : s);
-  await setJSON(SENT_PROGRAMS_KEY, nextList);
+    const list = await loadLocalSentPrograms();
+    const target = list.find(s => s.id === id);
+    if (!target || target.status !== "returned" || target.appliedAtISO) return;
+    if (!target.programSnapshot) return;
+    await materialiseSnapshotOverExisting(target.programSnapshot, [target.programId]);
+    const nextList = list.map(s => s.id === id ? { ...s, appliedAtISO: new Date().toISOString() } : s);
+    await setJSON(SENT_PROGRAMS_KEY, nextList);
+  });
 }
 
-/** Overwrite `programId` in @avenas/programs with `snap` (preserving id,
- *  status, currentWeek, startDate), or import fresh when it no longer exists. */
-async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: string): Promise<void> {
+/** Overwrite the first of `candidates` still in @avenas/programs with `snap`
+ *  (preserving id, status, currentWeek, startDate), or import fresh when none
+ *  is. Returns the id written to. */
+async function materialiseSnapshotOverExisting(snap: SavedProgram, candidates: string[]): Promise<string> {
   const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-  const original = programs.find(p => p.id === programId);
+  const original = candidates.map(id => programs.find(p => p.id === id)).find(Boolean);
+  const programId = original?.id ?? "";
   let nextPrograms: SavedProgram[];
+  let writtenId = programId;
   if (original) {
     nextPrograms = programs.map(p => p.id === programId ? {
       ...p,
@@ -1359,7 +1667,7 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: st
   } else {
     const imported: SavedProgram = {
       ...snap,
-      id: `program_${Date.now()}`,
+      id: newLocalProgramId(),
       status: "created",
       currentWeek: 0,
       startDate: formatStoredDate(new Date()),
@@ -1367,9 +1675,11 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, programId: st
       completedDate: undefined,
       archivedAt: undefined,
     };
+    writtenId = imported.id;
     nextPrograms = [...programs, imported];
   }
   await setJSON(PROGRAMS_KEY, nextPrograms);
+  return writtenId;
 }
 
 /**
@@ -1397,13 +1707,16 @@ export async function dismissReceivedReview(id: string): Promise<void> {
   await setJSON(SENT_PROGRAMS_KEY, existing.filter(s => s.id !== id));
 }
 
-/** Gym user unsends a program they sent to the trainer. */
+/** Gym user unsends a program they sent to the trainer. THROWS when it didn't
+ *  reach the server: with no signal it used to leave their list while the
+ *  trainer still had it. */
 export async function removeSentProgram(id: string): Promise<void> {
   if (isCloudShareId(id)) {
     try {
       await deleteShareRow(id); // sender-only per RLS — this is the sender's flow
     } catch (e) {
       warnShares("unsendReview", e);
+      throw new Error(UNREACHABLE);
     }
     return;
   }
@@ -1415,26 +1728,31 @@ export async function removeSentProgram(id: string): Promise<void> {
  *  already accepted, their imported copy in `@avenas/programs` stays — they own
  *  it). Recipient → the row is hidden (deleted_by_recipient_at) so re-accepting
  *  stays possible, mirroring the local model. */
-export async function removeSharedProgram(id: string): Promise<void> {
-  if (isCloudShareId(id)) {
-    try {
-      const uid = await getMyUid();
-      const row = await fetchShareRow(id);
-      if (!row || !uid) return;
-      if (row.sender_id === uid) {
-        await deleteShareRow(id);
-      } else {
-        await updateShareRow(id, { deleted_by_recipient_at: new Date().toISOString(), accepted_at: null });
-        const meta = await loadShareMeta();
-        if (meta[id]) { delete meta[id]; await saveShareMeta(meta); }
+export function removeSharedProgram(id: string): Promise<void> {
+  return exclusive(async () => {
+    if (isCloudShareId(id)) {
+      // THROWS when it didn't reach the server, so the card stays and the
+      // screen says so; it used to vanish and come back on the next load.
+      try {
+        const uid = await getMyUid();
+        const row = await fetchShareRow(id);
+        if (!row || !uid) return; // already gone
+        if (row.sender_id === uid) {
+          await deleteShareRow(id);
+        } else {
+          await updateShareRow(id, { deleted_by_recipient_at: new Date().toISOString(), accepted_at: null });
+          const meta = await loadShareMeta();
+          if (meta[id]) { delete meta[id]; await saveShareMeta(meta); }
+        }
+      } catch (e) {
+        warnShares("remove", e);
+        throw new Error(UNREACHABLE);
       }
-    } catch (e) {
-      warnShares("remove", e);
+      return;
     }
-    return;
-  }
-  const existing = await loadLocalSharedPrograms();
-  await setJSON(SHARED_PROGRAMS_KEY, existing.filter(s => s.id !== id));
+    const existing = await loadLocalSharedPrograms();
+    await setJSON(SHARED_PROGRAMS_KEY, existing.filter(s => s.id !== id));
+  });
 }
 
 /** Generic patch update for a LOCAL SharedProgram entry (cloud entries go
@@ -1463,6 +1781,7 @@ export async function clearTrainerData(): Promise<void> {
     CLIENTS_KEY,
     SHARED_PROGRAMS_KEY,
     CLOUD_SHARE_META_KEY,
+    PENDING_SHARE_UNLINKS_KEY,
     PT_SEEDED_KEY,
     ASSIGNED_PT_KEY,
     SENT_PROGRAMS_KEY,

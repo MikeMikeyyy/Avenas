@@ -45,6 +45,7 @@ import {
   windowLengthDays,
 } from "../../utils/progressStats";
 import { toDisplayWeight } from "../../utils/units";
+import { carriedExercises, knownCustomExercises } from "../../utils/customExerciseDetails";
 
 // kg → display-unit lens for the radar stats: volume is the only weight-valued
 // field, sessions/sets pass through. Unit-invariant consumers (the load set
@@ -64,8 +65,9 @@ function convertMuscleVolumes(
 export interface ProgressViewProps {
   history: CompletedWorkout[];
   programs: SavedProgram[];
-  /** Custom exercises, used to resolve muscle groups for the Strength radar.
-   *  Optional so PT-viewed client data (bundled exercises only) can omit it. */
+  /** The viewer's (or the viewed client's) own custom exercises, used to
+   *  resolve muscle groups for the Strength radar, together with the custom
+   *  exercises `programs` carry (a trainer's, utils/customExerciseDetails.ts). */
   customExercises?: CustomExercise[];
   loaded: boolean;
   title?: string;
@@ -83,10 +85,12 @@ export interface ProgressViewProps {
   clientId?: string;
 }
 
+const NO_CUSTOM: CustomExercise[] = [];
+
 export default function ProgressView({
   history,
   programs,
-  customExercises = [],
+  customExercises = NO_CUSTOM,
   loaded,
   title = "Progress",
   asScreen = true,
@@ -176,18 +180,24 @@ export default function ProgressView({
   // counts balloon and the radar's "how close was each muscle to a solid
   // week?" framing stops meaning anything. Last week (the same-length,
   // weekday-aligned previous window) feeds the muted polygon + ▲/▼ arrows.
+  // A trainer's custom exercise counts toward the muscles the trainer gave it,
+  // which the programs carry: it isn't in the client's own list.
+  const knownCustoms = useMemo(
+    () => knownCustomExercises(customExercises, carriedExercises(programs)),
+    [customExercises, programs],
+  );
   const { muscleStats, prevMuscleStats, radarWindowDays } = useMemo(() => {
     const { startYMD, endYMD } = rangeWindow("thisWeek", new Date());
     const prev = previousComparableWindow(startYMD, endYMD);
     return {
       muscleStats: computeMuscleGroupStats(
-        filterByDateWindow(scopedWorkouts, startYMD, endYMD), customExercises),
+        filterByDateWindow(scopedWorkouts, startYMD, endYMD), knownCustoms),
       prevMuscleStats: computeMuscleGroupStats(
-        filterByDateWindow(scopedWorkouts, prev.startYMD, prev.endYMD), customExercises),
+        filterByDateWindow(scopedWorkouts, prev.startYMD, prev.endYMD), knownCustoms),
       // Scales the radar's per-week full-scale benchmarks to the window length.
       radarWindowDays: windowLengthDays(startYMD, endYMD),
     };
-  }, [scopedWorkouts, customExercises]);
+  }, [scopedWorkouts, knownCustoms]);
 
   // The slot grid the chart lays out against. Fixed for the ranges whose shape
   // is fixed; for the year it's whatever the window produced, because that one

@@ -29,6 +29,8 @@ import SimpleSheet from "../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import SheetPill from "../components/SheetPill";
+import UserRoundMinusIcon from "../components/icons/UserRoundMinusIcon";
+import FlagIcon from "../components/icons/FlagIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
@@ -176,7 +178,15 @@ export default function ConnectScreen() {
             `You blocked ${who}. Unblock them to connect again.`,
             [
               { text: "Cancel", style: "cancel" },
-              { text: "Unblock", onPress: async () => { await unblockUser(touched.otherId); await submitCode(code); } },
+              { text: "Unblock", onPress: async () => {
+                try {
+                  await unblockUser(touched.otherId);
+                } catch (e) {
+                  Alert.alert("Couldn't unblock", alertMessage(e, "Check your connection and try again."));
+                  return;
+                }
+                await submitCode(code);
+              } },
             ],
           );
           await refresh();
@@ -289,7 +299,7 @@ export default function ConnectScreen() {
     const who = c.name || "this person";
     Alert.alert(
       `Block ${who}?`,
-      "They'll be removed from your connections and can no longer connect with you. You can unblock them later in Settings.",
+      "They'll be removed from your connections and from any group you created, and can no longer connect with you. You can unblock them later in Settings.",
       [
         { text: "Cancel", style: "cancel" },
         { text: "Block", style: "destructive", onPress: async () => {
@@ -468,18 +478,25 @@ export default function ConnectScreen() {
           <>
             <Text style={[styles.label, { color: t.ts }]}>CONNECTED</Text>
             {accepted.map((c) => (
-              <NeuCard key={c.connectionId} dark={isDark} radius={16} style={styles.reqCard}>
-                <View style={styles.reqInner}>
-                  <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} backgroundColor={tint} textColor={ACCT} textStyle={[styles.avatarText, { color: ACCT }]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.reqName, { color: t.tp }]} numberOfLines={1}>{c.name || "User"}</Text>
-                    <Text style={[styles.reqSub, { color: t.ts }]}>{c.accountType === "pt" ? "Trainer" : "Member"}</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setMenuFor(c); }} style={[styles.iconBtn, { borderColor: t.div }]} accessibilityLabel={`Options for ${c.name || "this person"}`}>
+              <TouchableOpacity
+                key={c.connectionId}
+                style={styles.connRow}
+                activeOpacity={0.85}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setMenuFor(c); }}
+                accessibilityRole="button"
+                accessibilityLabel={`Options for ${c.name || "this person"}`}
+              >
+                <NeuCard dark={isDark} radius={16}>
+                  <View style={styles.reqInner}>
+                    <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} backgroundColor={tint} textColor={ACCT} textStyle={[styles.avatarText, { color: ACCT }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.reqName, { color: t.tp }]} numberOfLines={1}>{c.name || "User"}</Text>
+                      <Text style={[styles.reqSub, { color: t.ts }]}>{c.accountType === "pt" ? "Trainer" : "Member"}</Text>
+                    </View>
                     <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
-                  </TouchableOpacity>
-                </View>
-              </NeuCard>
+                  </View>
+                </NeuCard>
+              </TouchableOpacity>
             ))}
           </>
         )}
@@ -491,9 +508,9 @@ export default function ConnectScreen() {
       <SimpleSheet visible={menuFor !== null} onClose={() => setMenuFor(null)}>
         <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{menuFor?.name || "User"}</Text>
         <View style={styles.menu}>
-          <SheetPill label="Report" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={onReportConn} />
+          <SheetPill label="Report" icon={c => <FlagIcon size={18} color={c} />} onPress={onReportConn} />
           <SheetPill label="Block" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={onBlockConn} />
-          <SheetPill label="Remove connection" icon={c => <Ionicons name="person-remove-outline" size={18} color={c} />} onPress={onRemoveConn} />
+          <SheetPill label="Remove connection" icon={c => <UserRoundMinusIcon size={18} color={c} />} onPress={onRemoveConn} />
         </View>
       </SimpleSheet>
 
@@ -530,6 +547,9 @@ const styles = StyleSheet.create({
   connectBtnText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   disabled:    { opacity: 0.4 },
   reqCard:     { borderRadius: 16, marginBottom: 10 },
+  // A connection card is tappable as a whole, so its gap sits outside the
+  // touchable rather than on the card (where it would be tappable too).
+  connRow:     { marginBottom: 10 },
   reqInner:    { flexDirection: "row", alignItems: "center", gap: 12, padding: 12 },
   avatarText:  { fontFamily: FontFamily.bold, fontSize: 16 },
   reqName:     { fontFamily: FontFamily.bold, fontSize: 16 },

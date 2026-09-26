@@ -31,6 +31,7 @@ import Avatar from "../../components/Avatar";
 import KeyboardDismissButton from "../../components/KeyboardDismissButton";
 import ReportReasonSheet from "../../components/trainer/ReportReasonSheet";
 import PeopleIcon from "../../components/icons/PeopleIcon";
+import FlagIcon from "../../components/icons/FlagIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -58,6 +59,8 @@ export default function GroupEditScreen() {
   const [candidates, setCandidates] = useState<Client[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [members, setMembers] = useState<GroupMember[]>([]);
+  /** Members listed in the picker who are no longer connections. */
+  const [notConnected, setNotConnected] = useState<Set<string>>(new Set());
   const [isOwner, setIsOwner] = useState(true);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -108,22 +111,19 @@ export default function GroupEditScreen() {
             ? { ...already, isTrainer: true }
             : { id: tr.id, name: tr.name, initials: tr.initials, photoUri: tr.photoUri, isTrainer: true });
         }
-        // Alphabetical: the two buckets arrive in their own orders, and a list
-        // that changes order depending on which one someone came from reads as
-        // random to the person scrolling it.
-        const eligible = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
         if (cancelled) return;
-        setCandidates(eligible);
         setMyUid(uid);
 
+        let roster: GroupMember[] = [];
         if (groupId && uid) {
-          const [g, roster] = await Promise.all([fetchGroup(uid, groupId), fetchGroupMembers(groupId)]);
+          const [g, r] = await Promise.all([fetchGroup(uid, groupId), fetchGroupMembers(groupId)]);
           if (cancelled) return;
           if (!g) {
             Alert.alert("Group unavailable", "This group no longer exists, or you're no longer a member.");
             router.back();
             return;
           }
+          roster = r;
           setName(g.name);
           setIsOwner(g.isOwner);
           setPhotoUrl(g.photoUri ?? null);
@@ -131,6 +131,22 @@ export default function GroupEditScreen() {
           // The owner is always a member; the picker only covers the others.
           setSelected(new Set(roster.filter(m => m.id !== uid).map(m => m.id)));
         }
+
+        // Everyone already in the group is listed too, connected or not.
+        // Removing a connection (from either side) or blocking someone leaves
+        // their membership in place, and a picker built from connections alone
+        // hid them: MEMBERS (2) over one row, and no way to take the other out.
+        // They can be unticked like anyone else, but not added back until you
+        // connect again, which is what their tag says.
+        const unconnected = roster.filter(m => m.id !== uid && !m.isOwner && !byId.has(m.id));
+        setNotConnected(new Set(unconnected.map(m => m.id)));
+        // Alphabetical: the buckets arrive in their own orders, and a list that
+        // changes order depending on which one someone came from reads as
+        // random to the person scrolling it.
+        setCandidates([
+          ...byId.values(),
+          ...unconnected.map(m => ({ id: m.id, name: m.name, initials: m.initials, photoUri: m.photoUri })),
+        ].sort((a, b) => a.name.localeCompare(b.name)));
       } catch (err) {
         if (__DEV__) console.warn("[avenas] load group edit", err);
         if (!cancelled) Alert.alert("Couldn't load", "Check your connection and try again.");
@@ -213,9 +229,40 @@ export default function GroupEditScreen() {
     return "Save changes";
   }, [busy, isNew, selected.size]);
 
-  const onSave = async () => {
+  // Unticking someone takes them out of the group on Save, so Save asks first.
+  // Only people who were in the roster count: ticking and unticking someone
+  // new changes nothing. The owner isn't in the picker, so can't be here.
+  const onSave = () => {
     if (!canSave) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const removed = isNew ? [] : members.filter(m => m.id !== myUid && !m.isOwner && !selected.has(m.id));
+    if (removed.length === 0) {
+      void save();
+      return;
+    }
+    const names = removed.map(m => m.name);
+    const listed = names.length <= 3
+      ? names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+      : `${names.slice(0, 3).join(", ")} and ${names.length - 3} other${names.length - 3 === 1 ? "" : "s"}`;
+    // Someone you're no longer connected with drops out of this list once
+    // removed, so "add them back later" would be a promise it can't keep.
+    const anyUnconnected = removed.some(m => notConnected.has(m.id));
+    const addBack = !anyUnconnected
+      ? "You can add them back later."
+      : removed.length === 1
+        ? "You're no longer connected, so you'd need to connect again to add them back."
+        : "Anyone you're no longer connected with can only be added back once you connect again.";
+    Alert.alert(
+      removed.length === 1 ? `Remove ${names[0]}?` : `Remove ${removed.length} people?`,
+      `${listed} will be removed from ${trimmed}${removed.some(m => m.accepted) ? " and stop receiving its messages" : ""}. ${addBack}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: () => void save() },
+      ],
+    );
+  };
+
+  const save = async () => {
     setBusy(true);
     try {
       if (isNew) {
@@ -353,6 +400,11 @@ export default function GroupEditScreen() {
                               <Text style={[styles.ownerTagText, { color: ACCT }]}>TRAINER</Text>
                             </View>
                           )}
+                          {notConnected.has(c.id) && (
+                            <View style={[styles.ownerTag, { backgroundColor: t.div }]}>
+                              <Text style={[styles.ownerTagText, { color: t.ts }]}>NOT CONNECTED</Text>
+                            </View>
+                          )}
                           <View style={[styles.check, checked
                             ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
                             : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
@@ -405,7 +457,7 @@ export default function GroupEditScreen() {
                         accessibilityRole="button"
                         accessibilityLabel={`Report ${m.name}`}
                       >
-                        <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
+                        <FlagIcon size={18} color={t.ts} />
                       </TouchableOpacity>
                     )}
                   </View>

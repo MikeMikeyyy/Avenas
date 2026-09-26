@@ -21,6 +21,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import NeuCard from "../components/NeuCard";
+import TrashIcon from "../components/TrashIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, Colors, BUBBLE_LIGHT } from "../constants/theme";
 import AppSwitch from "../components/AppSwitch";
 import { alertMessage } from "../utils/errors";
@@ -453,7 +454,7 @@ export default function SettingsScreen() {
         <NeuCard dark={isDark} style={styles.signOutCard}>
           <TouchableOpacity activeOpacity={0.7} style={styles.row} onPress={handleDeleteAccount}>
             <View style={styles.rowLeft}>
-              <Ionicons name="trash-outline" size={20} color={Colors.error} />
+              <TrashIcon size={20} color={Colors.error} />
               <Text style={[styles.rowLabel, { color: Colors.error }]}>Delete Account</Text>
             </View>
           </TouchableOpacity>

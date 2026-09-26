@@ -19,9 +19,10 @@ interface Props {
   /** "thumb" = static still (lists), "full" = animated GIF (detail). Default "thumb". */
   variant?: "thumb" | "full";
   /**
-   * A user-supplied photo URI (e.g. a custom exercise's `imageUri`). When set it
-   * takes precedence over the bundled catalogue lookup — custom exercises aren't
-   * in the bundle, so without this they'd always fall back to the dumbbell tile.
+   * A user-supplied photo URI (e.g. a custom exercise's `imageUri`: a local
+   * file for your own, a URL for one a program carries). When set it takes
+   * precedence over the bundled catalogue lookup — custom exercises aren't in
+   * the bundle, so without this they'd always fall back to the dumbbell tile.
    */
   overrideUri?: string;
   /** Square side length in px. */
@@ -65,7 +66,9 @@ export default function ExerciseImage({
           // Bundled assets are already on-device — memory cache is enough and
           // keeps fast-scroll instant. `thumb` files are static stills; only
           // the `full` GIF animates (expo-image autoplays animated sources).
-          cachePolicy="memory"
+          // A trainer's photo carried with a program is a URL, so that one is
+          // kept on disk too rather than downloaded again every launch.
+          cachePolicy={overrideUri && /^https?:/i.test(overrideUri) ? "memory-disk" : "memory"}
           transition={0}
         />
       ) : (

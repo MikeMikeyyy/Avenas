@@ -14,7 +14,10 @@
 //   2. TODAY IS RESOLVED, NOT PLANNED. The Workout tab honors a same-day
 //      change-day override; the strip didn't, so picking Legs on a rest day
 //      changed one page and not the other. `resolvedTodayName` is what the tab
-//      resolved, and the effective day's row uses it.
+//      resolved, and the effective day's row uses it. A pick "Move to Tomorrow"
+//      carried to the next day (utils/skippedDates.ts pickAfterMove) is
+//      honored on its own row the same way, so the strip shows tomorrow as the
+//      Workout tab will once tomorrow comes.
 //   3. "TODAY" IS THE EFFECTIVE DAY (utils/workout.ts getEffectiveToday), which
 //      before 3am is still yesterday while yesterday's workout is unfinished.
 //      Keying off the calendar day put the highlight, and the line between past
@@ -25,7 +28,7 @@
 
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { addDaysYMD } from "./dates";
-import { getWorkoutForDate } from "./workout";
+import { resolveWorkoutForDate, type DayOverride } from "./workout";
 import { isDatePushed, isDateSkipped } from "./skippedDates";
 
 export type WeekDayPlan = {
@@ -68,6 +71,8 @@ export function buildWeekSchedule({
   weekStartYMD,
   effectiveToday,
   resolvedTodayName,
+  override = null,
+  allPrograms,
 }: {
   program: SavedProgram | null;
   history: CompletedWorkout[];
@@ -79,6 +84,11 @@ export function buildWeekSchedule({
    *  rest day. Pass it even when it equals the plan: it also carries a
    *  change-day override, including one pointing at another program's day. */
   resolvedTodayName: string | null;
+  /** The stored change-day override, for a pick dated after the effective day
+   *  (one a move carried forward). Today's row reads `resolvedTodayName`. */
+  override?: DayOverride | null;
+  /** Every program, so a carried pick from another program resolves. */
+  allPrograms?: SavedProgram[];
 }): WeekSchedule {
   const weekEndYMD = addDays(weekStartYMD, 6);
   const sessions = history.filter(w => w.date >= weekStartYMD && w.date <= weekEndYMD);
@@ -96,11 +106,15 @@ export function buildWeekSchedule({
   for (let i = 0; i < 7; i++) {
     const dateYMD = addDays(weekStartYMD, i);
     const session = sessionByDate.get(dateYMD) ?? null;
-    // getWorkoutForDate is skip-aware, so a date marked off reads as Rest
-    // without this loop knowing anything about skips.
+    // The plan is skip-aware, so a date marked off reads as Rest without this
+    // loop knowing anything about skips. The override answers only on its own
+    // date, and only AHEAD of the effective day (a pick a move carried there):
+    // one left behind on an earlier date is stale and ignored, as everywhere.
     const scheduled = dateYMD === effectiveToday
       ? resolvedTodayName
-      : (program ? getWorkoutForDate(program, dateYMD)?.name ?? null : null);
+      : (program
+          ? resolveWorkoutForDate(program, dateYMD > effectiveToday ? override : null, dateYMD, allPrograms)?.name ?? null
+          : null);
     const name = session?.workoutName ?? scheduled;
     const completed = session !== null;
     const isSkipped = !!program && isDateSkipped(program, dateYMD);

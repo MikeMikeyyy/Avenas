@@ -44,6 +44,10 @@ export type BlockedUser = {
   name: string;
   initials: string;
   blockedAtISO: string;
+  /** The server has this block (migration 0040). Absent on a block made
+   *  offline or before 0040, which utils/moderation.ts:syncBlocks sends; one
+   *  the server HAD and no longer has was lifted on another device. */
+  onServer?: boolean;
 };
 
 /** Why something was reported. Mirrors the standard moderation reason set. */

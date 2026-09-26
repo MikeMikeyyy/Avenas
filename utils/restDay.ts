@@ -10,7 +10,8 @@
 //
 //   MAKE REST DAY     — miss this one, the rest of the week is untouched.
 //   MOVE TO TOMORROW  — it moves a day, the next rest day absorbs the shift,
-//                       and you're back on your usual days after that.
+//                       and you're back on your usual days after that. A
+//                       workout picked with Change Workout Day moves with it.
 //
 // The message is one short line per button, named exactly as the button is,
 // saying only what differs and naming a REAL day ("Thursday's rest becomes
@@ -27,8 +28,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import { MONTH_NAMES } from "./dates";
-import { getEffectiveToday, normalizeDriftDates, resolveWorkoutForDate, type DayOverride } from "./workout";
-import { isDatePulled, isDatePushed, isDateSkipped, planDoItTomorrow, skipDate, unskipDate } from "./skippedDates";
+import { getEffectiveToday, getWorkoutForDate, normalizeDriftDates, resolveWorkoutForDate, type DayOverride } from "./workout";
+import { isDatePulled, isDatePushed, isDateSkipped, pickAfterMove, pickAfterUndoMove, planDoItTomorrow, skipDate, unskipDate } from "./skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { resyncScheduledNotifications } from "./notificationScheduler";
 
@@ -58,9 +59,32 @@ async function clearOverrideFor(ymd: string): Promise<void> {
     const raw = await AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY);
     if (!raw) return;
     const override = JSON.parse(raw) as DayOverride;
-    if (override?.date === ymd) await AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY);
+    if (override?.date !== ymd) return;
+    await AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY);
+    // The reminders name the pick, and commit's resync may have read it before
+    // it went. Resyncs run one after another, so this one reads the final state.
+    resyncScheduledNotifications();
   } catch (e) {
     warn("clearOverride", e);
+  }
+}
+
+async function readOverride(): Promise<DayOverride | null> {
+  try {
+    const raw = await AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY);
+    return raw ? (JSON.parse(raw) as DayOverride) : null;
+  } catch (e) {
+    warn("readOverride", e);
+    return null;
+  }
+}
+
+async function writeOverride(override: DayOverride): Promise<void> {
+  try {
+    await AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify(override));
+    resyncScheduledNotifications(); // as in clearOverrideFor
+  } catch (e) {
+    warn("writeOverride", e);
   }
 }
 
@@ -81,6 +105,25 @@ async function commit(programId: string, apply: (p: SavedProgram) => SavedProgra
   } catch (e) {
     warn("applyRestDay", e);
   }
+}
+
+/**
+ * "Make Rest Day" on `ymd`, from whichever path chose it: the date is marked
+ * off and any change-day pick on it goes too.
+ *
+ * Every path goes through here. The prompt's buttons used to write the skip
+ * alone, so a workout picked with Change Workout Day survived it: Home's row
+ * kept the pick's name with an X beside it, and the Workout tab kept offering it.
+ *
+ * A date whose plan holds no workout of its own (Full Body picked on a rest
+ * day) gets no skip mark: dropping the pick already makes it the rest day it
+ * was planned as, and a mark would put an X on that rest day whose undo brings
+ * nothing back.
+ */
+async function makeRestDay(programId: string, ymd: string): Promise<"skip"> {
+  await commit(programId, p => (getWorkoutForDate(p, ymd) ? skipDate(p, ymd) : p));
+  await clearOverrideFor(ymd);
+  return "skip";
 }
 
 /** What the user settled on. `null` means they backed out and NOTHING was
@@ -143,19 +186,21 @@ export async function applyRestDay(
   ymd: string,
   mode: RestDayMode = "ask",
 ): Promise<RestDayOutcome> {
-  if (mode === "skip") {
-    await commit(programId, p => skipDate(p, ymd));
-    await clearOverrideFor(ymd);
-    return "skip";
-  }
+  if (mode === "skip") return makeRestDay(programId, ymd);
   if (mode === "moveToTomorrow") {
+    // A change-day pick moves with its day (see pickAfterMove); anything else on
+    // this date goes, as it does for a rest day.
+    const override = await readOverride();
     let kind: "moved" | "extended" = "moved";
+    let carried = null as DayOverride | null;
     await commit(programId, p => {
+      carried = pickAfterMove(p, override, ymd);
       const plan = planDoItTomorrow(p, ymd);
       kind = plan.kind === "absorbed" ? "moved" : "extended";
       return plan.program;
     });
-    await clearOverrideFor(ymd);
+    if (carried) await writeOverride(carried);
+    else await clearOverrideFor(ymd);
     return kind;
   }
 
@@ -171,11 +216,10 @@ export async function applyRestDay(
   // "nothing scheduled" path below: no prompt, an instant X, and the Workout tab
   // still offering the workout. Every other day worked, because only the
   // effective day can carry an override.
-  const overrideRaw = await AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => null);
-  const override = overrideRaw ? (JSON.parse(overrideRaw) as DayOverride) : null;
+  const override = await readOverride();
   const scheduled = resolveWorkoutForDate(program, override, ymd, programs);
-  // Nothing scheduled: just mark it off without an interruption.
-  if (!scheduled) { await commit(programId, p => skipDate(p, ymd)); return "skip"; }
+  // Nothing scheduled: nothing to ask about.
+  if (!scheduled) return makeRestDay(programId, ymd);
 
   const name = scheduled.name;
 
@@ -192,15 +236,20 @@ export async function applyRestDay(
   const history: CompletedWorkout[] = historyRaw ? JSON.parse(historyRaw) : [];
   const today = getEffectiveToday(program, Array.isArray(history) ? history : []);
 
-  if (ymd < today) {
+  // A workout picked with Change Workout Day on a day the plan rests can't move
+  // either: the pick belongs to this date alone, so "Move to Tomorrow" would
+  // clear it and push a rest day, and nothing would reach tomorrow.
+  const pickedOnRestDay = getWorkoutForDate(program, ymd) === null;
+
+  if (ymd < today || pickedOnRestDay) {
     return new Promise<RestDayOutcome>(resolve => {
       Alert.alert(
-        `Missed '${name}'?`,
+        ymd < today ? `Missed '${name}'?` : `Not doing '${name}'?`,
         "Make Rest Day: nothing else changes.",
         [
           {
             text: "Make Rest Day",
-            onPress: () => { void commit(programId, p => skipDate(p, ymd)).then(() => resolve("skip")); },
+            onPress: () => { void makeRestDay(programId, ymd).then(resolve); },
           },
           { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
         ],
@@ -219,10 +268,15 @@ export async function applyRestDay(
   let moveCopy: string;
   if (plan.kind === "extended") {
     moveCopy = `${moveLabel}: your program ends a day later.`;
-  } else if (plan.lostRestDay && plan.lostRestBecomes) {
-    moveCopy = `${moveLabel}: ${dayName(plan.lostRestDay, ymd)}'s rest becomes ${plan.lostRestBecomes}.`;
   } else {
-    moveCopy = `${moveLabel}: the rest of your week shifts a day.`;
+    // The plan reads the cycle alone, so when the rest day lost is the very
+    // next one it names the slot's own workout. A pick moves there with the
+    // slot (pickAfterMove), so that day really becomes the workout picked.
+    const carriedTo = pickAfterMove(program, override, ymd)?.date;
+    const becomes = plan.lostRestDay !== null && plan.lostRestDay === carriedTo ? name : plan.lostRestBecomes;
+    moveCopy = plan.lostRestDay && becomes
+      ? `${moveLabel}: ${dayName(plan.lostRestDay, ymd)}'s rest becomes ${becomes}.`
+      : `${moveLabel}: the rest of your week shifts a day.`;
   }
 
   return new Promise<RestDayOutcome>(resolve => {
@@ -232,7 +286,7 @@ export async function applyRestDay(
       [
         {
           text: "Make Rest Day",
-          onPress: () => { void commit(programId, p => skipDate(p, ymd)).then(() => resolve("skip")); },
+          onPress: () => { void makeRestDay(programId, ymd).then(resolve); },
         },
         {
           text: moveLabel,
@@ -252,8 +306,22 @@ export async function applyRestDay(
  * move, the rest day it was absorbed into comes back too (see
  * `unskipDate`), so undoing leaves the week exactly as it was planned.
  */
-export async function clearRestDay(programId: string, ymd: string): Promise<void> {
-  return commit(programId, p => unskipDate(p, ymd));
+export async function clearRestDay(
+  programId: string,
+  ymd: string,
+  /** False when the caller is putting a NEW pick on `ymd`: the one a move
+   *  carried to the next day must not come back over it. */
+  restorePick = true,
+): Promise<void> {
+  let wasMoved = false as boolean;
+  await commit(programId, p => {
+    wasMoved = isDatePushed(p, ymd);
+    return unskipDate(p, ymd);
+  });
+  // A pick the move carried to the next day comes back with its day.
+  if (!wasMoved || !restorePick) return;
+  const restored = pickAfterUndoMove(await readOverride(), ymd);
+  if (restored) await writeOverride(restored);
 }
 
 /** Convenience for screens that need to render the current state. */

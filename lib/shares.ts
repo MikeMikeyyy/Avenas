@@ -107,16 +107,49 @@ export async function insertShareRows(uid: string, entries: NewShareRow[]): Prom
 }
 
 /** Column-level patch. trainerStore maps SharedProgram/SentProgram field names
- *  to these columns; unknown fields must never reach here. */
+ *  to these columns; unknown fields must never reach here. Returns how many
+ *  rows it changed: 0 when the row is gone (or not this account's to change),
+ *  which the API doesn't report as an error. */
 export async function updateShareRow(
   id: string,
   patch: Partial<Pick<SharedProgramRow,
     "snapshot" | "program_name" | "last_edited_at" | "accepted_at" |
     "deleted_by_recipient_at" | "trainer_comments" | "draft_snapshot"
   >>,
-): Promise<void> {
-  const { error } = await supabase.from("shared_programs").update(patch).eq("id", id);
+): Promise<number> {
+  const { data, error } = await supabase.from("shared_programs").update(patch).eq("id", id).select("id");
   if (error) throw new Error(`update share: ${error.message}`);
+  return data?.length ?? 0;
+}
+
+/**
+ * Stamp a recipient's accept, but only on the version they took: the row's
+ * `last_edited_at` must still be what they read. False when it isn't (the
+ * sender saved an update in between) or the row is gone, so the caller can
+ * take the new version and try again rather than mark an old one accepted.
+ */
+export async function stampShareAccepted(id: string, lastEditedAt: string | null, acceptedAt: string): Promise<boolean> {
+  let q = supabase
+    .from("shared_programs")
+    .update({ accepted_at: acceptedAt, deleted_by_recipient_at: null })
+    .eq("id", id);
+  q = lastEditedAt ? q.eq("last_edited_at", lastEditedAt) : q.is("last_edited_at", null);
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`accept share: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
+/** The person who asked accepts what came back, on the version they applied:
+ *  false when `returned_at` has moved on (a Send Update landed meanwhile). */
+export async function stampReviewApplied(id: string, returnedAt: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("shared_programs")
+    .update({ accepted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("returned_at", returnedAt)
+    .select("id");
+  if (error) throw new Error(`accept review: ${error.message}`);
+  return (data?.length ?? 0) > 0;
 }
 
 /** Send a review back, or send an update to one already sent back: copies the

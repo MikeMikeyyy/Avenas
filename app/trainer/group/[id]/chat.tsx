@@ -13,9 +13,11 @@
 //     report someone else's), as another step of the SAME sheet — one RN Modal
 //     per screen, including the report reasons, which used to be a second one,
 //   - blocked members' messages are filtered client-side. Blocking severs a
-//     CONNECTION (0006) and group membership is independent of that, so the
+//     CONNECTION (0006) and group membership is independent of that, so in a
+//     group the blocker doesn't own the blocked person stays a member and the
 //     server still delivers their rows; hiding them here keeps a block
-//     meaningful inside a group (Apple Guideline 1.2).
+//     meaningful inside a group (Apple Guideline 1.2). The owner's block takes
+//     them out of the group instead (0040, see onPickBlock).
 
 import { useCallback, useMemo, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Keyboard } from "react-native";
@@ -33,6 +35,7 @@ import { ReportReasonList } from "../../../../components/trainer/ReportReasonShe
 import MessageActions from "../../../../components/trainer/MessageActions";
 import GroupAvatar from "../../../../components/trainer/GroupAvatar";
 import SheetPill from "../../../../components/SheetPill";
+import FlagIcon from "../../../../components/icons/FlagIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../../constants/theme";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
@@ -241,33 +244,52 @@ export default function GroupThreadScreen() {
   }, []);
 
   /**
-   * Block someone in the group.
+   * Block someone in the group. What it does depends on whose group it is
+   * (migration 0040):
    *
-   * Blocking severs a CONNECTION, and group membership is independent of that,
-   * so the server keeps delivering their messages — `blockContact` records the
-   * block locally and this screen filters them out on load, which is what makes
-   * it mean anything in here. They're dropped from the thread on the spot too,
-   * rather than at the next open.
+   *   - the OWNER's block takes them out of the group, as it does from every
+   *     group the owner created;
+   *   - anyone else's leaves them in, since it isn't their group to change, and
+   *     the blocker stops seeing them here instead: this screen filters their
+   *     messages out on load, the program lists leave out what they send, and
+   *     the server stops their notifications.
+   *
+   * Their messages leave the thread on the spot either way, rather than at the
+   * next open.
    */
   const onPickBlock = useCallback((member: GroupMember) => {
     closeSheet();
+    const owner = !!group?.isOwner;
     Alert.alert(
       `Block ${member.name}?`,
-      "You won't see their messages in this group or anywhere else in the app. They aren't told.",
+      owner
+        ? "They'll be removed from this group and any other group you created, and you won't see them anywhere else in the app."
+        : "You won't see their messages or programs in this group or anywhere else in the app. They stay in the group and aren't told.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Block",
           style: "destructive",
           onPress: async () => {
-            await blockContact({ id: member.id, name: member.name, initials: member.initials }, accountType);
+            const { recorded } = await blockContact({ id: member.id, name: member.name, initials: member.initials }, accountType);
             setMessages(prev => prev.filter(m => m.senderId !== member.id));
-            Alert.alert("Blocked", `You won't see ${member.name}'s messages any more.`);
+            if (!owner) {
+              Alert.alert("Blocked", `You won't see ${member.name}'s messages or programs any more.`);
+            } else if (recorded) {
+              setMembers(prev => prev.filter(m => m.id !== member.id));
+              setGroup(g => g && { ...g, memberCount: Math.max(0, g.memberCount - 1) });
+              Alert.alert("Blocked", `${member.name} has been removed from ${displayName}.`);
+            } else {
+              Alert.alert(
+                `${member.name} is blocked`,
+                "We couldn't reach the server, so they're still in the group. They'll be removed when you're back online.",
+              );
+            }
           },
         },
       ],
     );
-  }, [accountType, closeSheet]);
+  }, [accountType, closeSheet, group, displayName]);
 
   const memberLabel = useMemo(() => {
     const n = group?.memberCount ?? members.length;
@@ -343,7 +365,7 @@ export default function GroupThreadScreen() {
           <>
             <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
             <View style={styles.menu}>
-              <SheetPill label="Report someone" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={() => setSheet({ step: "report" })} />
+              <SheetPill label="Report someone" icon={c => <FlagIcon size={18} color={c} />} onPress={() => setSheet({ step: "report" })} />
               <SheetPill label="Block someone" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={() => setSheet({ step: "block" })} />
             </View>
             <Text style={[styles.menuHint, { color: t.ts }]}>

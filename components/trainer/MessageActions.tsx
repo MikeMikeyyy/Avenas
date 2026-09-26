@@ -14,6 +14,7 @@ import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 import SheetPill from "../SheetPill";
+import FlagIcon from "../icons/FlagIcon";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 
@@ -44,7 +45,7 @@ export default function MessageActions({ message, authorName, onDelete, onReport
         {message.mine ? (
           <SheetPill label="Delete message" variant="danger" icon={c => <Ionicons name="trash-outline" size={18} color={c} />} onPress={onDelete} />
         ) : (
-          <SheetPill label="Report message" variant="danger" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={onReport} />
+          <SheetPill label="Report message" variant="danger" icon={c => <FlagIcon size={18} color={c} />} onPress={onReport} />
         )}
       </View>
     </>

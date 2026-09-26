@@ -14,6 +14,8 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import Svg, { Path } from "react-native-svg";
 
 import BounceButton from "../../../components/BounceButton";
+import OfflineBanner from "../../../components/OfflineBanner";
+import { alertOffline, useOffline } from "../../../contexts/ConnectivityContext";
 import ProgramHeaderCard from "../../../components/ProgramHeaderCard";
 import ProgramSnapshotView from "../../../components/ProgramSnapshotView";
 import ProgramActionFabs from "../../../components/ProgramActionFabs";
@@ -43,6 +45,7 @@ export default function ReviewScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  const offline = useOffline();
 
   const [entry, setEntry] = useState<SentProgram | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -166,6 +169,7 @@ export default function ReviewScreen() {
             <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>REVIEW PROGRAM</Text>
             <View style={{ width: 66 }} />
           </View>
+          <OfflineBanner />
           <ProgramHeaderCard name={snap?.name ?? entry.programName} snapshot={snap} isDark={isDark} />
 
           {/* Send Back sits UNDER THE TITLE, where you land, not at the foot of
@@ -176,7 +180,7 @@ export default function ReviewScreen() {
               to go back?", and that button belongs next to the name of the
               thing you're deciding about. */}
           {!isReturned ? (
-            <BounceButton style={{ marginTop: 14 }} onPress={handleSendBack} accessibilityLabel={`Send back to the ${who}`}>
+            <BounceButton style={{ marginTop: 14 }} onPress={handleSendBack} needsConnection accessibilityLabel={`Send back to the ${who}`}>
               <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                 <Ionicons name="paper-plane-outline" size={16} color="#fff" />
                 <Text style={styles.sendBtnText}>{`Send Back to ${Who}`}</Text>
@@ -188,7 +192,7 @@ export default function ReviewScreen() {
                 <Ionicons name="checkmark-circle" size={18} color={ACCT} />
                 <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
               </View>
-              <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} accessibilityLabel={`Send your latest edits to the ${who}`}>
+              <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} needsConnection accessibilityLabel={`Send your latest edits to the ${who}`}>
                 <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                   <Ionicons name="paper-plane-outline" size={16} color="#fff" />
                   <Text style={styles.sendBtnText}>{`Send Update to ${Who}`}</Text>
@@ -223,7 +227,9 @@ export default function ReviewScreen() {
         <ProgramActionFabs
           bottom={insets.bottom + 24}
           isDark={isDark}
-          onOpenBuilder={() => router.navigate({
+          // The builder saves this review to the server as you go, so with no
+          // signal it says why rather than opening onto edits it can't keep.
+          onOpenBuilder={offline ? alertOffline : () => router.navigate({
             pathname: "/new-program",
             params: groupId ? { reviewId: entry.id, groupId } : { reviewId: entry.id },
           })}

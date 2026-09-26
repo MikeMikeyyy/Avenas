@@ -45,7 +45,7 @@
 // (see scripts/verify-skipped-dates.ts).
 
 import type { SavedProgram } from "../constants/programs";
-import { getWorkoutForDate, normalizeDriftDates, resolveDayIndex } from "./workout";
+import { getWorkoutForDate, normalizeDriftDates, resolveDayIndex, type DayOverride } from "./workout";
 
 type SkipFields = Pick<SavedProgram, "skippedDates" | "pushedDates" | "pulledDates">;
 
@@ -250,4 +250,42 @@ export function planDoItTomorrow(program: SavedProgram, ymd: string): MovePlan {
   }
 
   return { kind: "absorbed", program: moved, lostRestDay, lostRestBecomes, backOnPlan };
+}
+
+/**
+ * The change-day pick on `ymd` once "Move to Tomorrow" has moved that date: the
+ * same pick, dated the next day. Null means there's nothing to carry and the
+ * pick should simply go.
+ *
+ * The move puts `ymd`'s slot on the next day. With Push picked on a Legs day,
+ * dropping the pick moved LEGS, so the prompt asked "Not doing 'Push'?" and then
+ * moved the workout the user had already swapped away. Carried, the next day
+ * holds that slot with the pick on it, exactly as `ymd` did.
+ *
+ * Only a pick made with Change Workout Day moves (it has a `dayId`). A custom
+ * workout's name would open tomorrow as an empty custom day. A pick on a day
+ * the plan rests can't move either: the rest slot lands on the next day, the
+ * rest day after it absorbs the move, and a pick there would replace the next
+ * day's own workout (the prompt doesn't offer the move for that case).
+ */
+export function pickAfterMove(program: SavedProgram, override: DayOverride | null, ymd: string): DayOverride | null {
+  if (!override || override.date !== ymd || !override.dayId || override.workoutName === "Rest") return null;
+  if (getWorkoutForDate(program, ymd) === null) return null;
+  const next = addDays(ymd, 1);
+  return next ? { ...override, date: next } : null;
+}
+
+/**
+ * The change-day pick to restore when a move on `ymd` is undone: a pick the
+ * move carried to the next day comes back to `ymd`. Null leaves the stored pick
+ * alone.
+ *
+ * Without this the pick stayed on the next day after an undo and replaced that
+ * day's own workout. A pick dated the day after `ymd` can only have been carried
+ * there: the Workout tab writes picks for the day it's on, and a move is only
+ * undone on a date that hasn't gone by, so the next day hasn't arrived yet.
+ */
+export function pickAfterUndoMove(override: DayOverride | null, ymd: string): DayOverride | null {
+  if (!override || !override.dayId || override.date !== addDays(ymd, 1)) return null;
+  return { ...override, date: ymd };
 }

@@ -13,7 +13,7 @@ import {
   type CompletedWorkout, type SavedProgram,
 } from "../constants/programs";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
-import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
+import { CUSTOM_KEY, EXERCISE_MEDIA_UPLOADS_KEY, type CustomExercise } from "../constants/exercises";
 import {
   customFromRow,
   journalFromRow,
@@ -33,6 +33,7 @@ import { clearModerationData } from "../utils/moderation";
 import { deleteGroup, fetchMyGroups } from "./groups";
 import { deleteShareRow, fetchMyShareRows, getMyUid } from "./shares";
 import { unregisterPushToken } from "./push";
+import { deleteMyExerciseMedia } from "./exerciseMedia";
 
 export type SyncCounts = {
   programs: number;
@@ -244,6 +245,8 @@ export async function deleteAccount(): Promise<void> {
     if (user) {
       const { error: photoError } = await supabase.storage.from("avatars").remove([`${user.id}/avatar`]);
       if (photoError && __DEV__) console.warn("[avenas] delete avatar", photoError.message);
+      // Same reason for the custom exercise photos and videos sent with programs.
+      await deleteMyExerciseMedia(user.id);
     }
   } catch (e) {
     if (__DEV__) console.warn("[avenas] delete avatar", e);
@@ -270,6 +273,7 @@ export async function clearLocalUserData(): Promise<void> {
     removeKey(WORKOUT_DATES_KEY),
     removeKey(JOURNAL_KEY),
     removeKey(CUSTOM_KEY),
+    removeKey(EXERCISE_MEDIA_UPLOADS_KEY),
     removeKey(WORKOUT_DRAFT_KEY),
     removeKey(WORKOUT_DAY_OVERRIDE_KEY),
     // Local-only, but it describes THIS account's training: the next account on

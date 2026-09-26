@@ -11,6 +11,8 @@ import { Ionicons } from "@expo/vector-icons";
 
 import NeuCard from "../../../components/NeuCard";
 import BounceButton from "../../../components/BounceButton";
+import OfflineBanner from "../../../components/OfflineBanner";
+import { alertOffline, useOffline } from "../../../contexts/ConnectivityContext";
 import ProgressView from "../../../components/progress/ProgressView";
 import ClientJournalView from "../../../components/journal/ClientJournalView";
 import ProgramPickerSheet from "../../../components/trainer/ProgramPickerSheet";
@@ -20,6 +22,8 @@ import { loadFavouriteMemberIds, toggleFavouriteMember } from "../../../utils/gr
 import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
 import ChatIcon from "../../../components/icons/ChatIcon";
 import SendIcon from "../../../components/icons/SendIcon";
+import UserRoundMinusIcon from "../../../components/icons/UserRoundMinusIcon";
+import FlagIcon from "../../../components/icons/FlagIcon";
 import TrashIcon from "../../../components/TrashIcon";
 import SheetPill from "../../../components/SheetPill";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../../constants/theme";
@@ -111,6 +115,7 @@ export default function ClientDetailScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  const offline = useOffline();
 
   const { accountType, loaded: accountLoaded } = useAccountType();
   const { isKg: ownIsKg } = useUnit();
@@ -258,7 +263,14 @@ export default function ClientDetailScreen() {
           text: prompt.confirm,
           style: "destructive",
           onPress: async () => {
-            await removeSharedProgram(entry.id);
+            try {
+              await removeSharedProgram(entry.id);
+            } catch (e) {
+              // It used to drop the card whatever happened, and with no signal
+              // it came back on the next load.
+              Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+              return;
+            }
             setShared(prev => prev.filter(s => s.id !== entry.id));
           },
         },
@@ -317,7 +329,7 @@ export default function ClientDetailScreen() {
     setMenuOpen(false);
     Alert.alert(
       `Block ${client.name}?`,
-      "They'll be removed from your connections and can no longer message you. You can unblock them later in Settings.",
+      "They'll be removed from your connections and from any group you created, and can no longer message you. You can unblock them later in Settings.",
       [
         { text: "Cancel", style: "cancel" },
         { text: "Block", style: "destructive", onPress: async () => {
@@ -536,7 +548,8 @@ export default function ClientDetailScreen() {
             contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 34, paddingBottom: insets.bottom + 140 }}
             refreshControl={refreshControl}
           >
-            <BounceButton style={{ marginBottom: 16 }} onPress={() => setShareOpen(true)}>
+            <OfflineBanner />
+            <BounceButton style={{ marginBottom: 16 }} onPress={() => setShareOpen(true)} needsConnection>
               <View style={[styles.shareBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                 <SendIcon size={18} color="#fff" />
                 <Text style={styles.shareBtnText}>Share a Program</Text>
@@ -628,11 +641,14 @@ export default function ClientDetailScreen() {
                         </Text>
                       </View>
                       <TouchableOpacity
-                        onPress={() => handleUnshare(s)}
+                        // Taking it back needs the server: dimmed offline, and says why.
+                        onPress={offline ? alertOffline : () => handleUnshare(s)}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         activeOpacity={0.7}
                         accessibilityLabel="Remove program"
                         accessibilityRole="button"
+                        accessibilityState={{ disabled: offline }}
+                        style={offline ? styles.offlineDim : undefined}
                       >
                         <TrashIcon size={18} color={DANGER_BRIGHT} />
                       </TouchableOpacity>
@@ -670,9 +686,9 @@ export default function ClientDetailScreen() {
             onPress={onToggleFavourite}
             accessibilityState={{ selected: isFavourite }}
           />
-          <SheetPill label="Report" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={onReportUser} />
+          <SheetPill label="Report" icon={c => <FlagIcon size={18} color={c} />} onPress={onReportUser} />
           <SheetPill label="Block" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={onBlock} />
-          <SheetPill label="Remove connection" icon={c => <Ionicons name="person-remove-outline" size={18} color={c} />} onPress={onUnadd} />
+          <SheetPill label="Remove connection" icon={c => <UserRoundMinusIcon size={18} color={c} />} onPress={onUnadd} />
         </View>
       </SimpleSheet>
 
@@ -687,6 +703,8 @@ export default function ClientDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  /** BounceButton's offline fade, for the plain touchable bin. */
+  offlineDim:    { opacity: 0.4 },
   header:        { flexDirection: "row", alignItems: "center", paddingHorizontal: BACK_LEFT, paddingBottom: 10, gap: 12 },
   headerCenter:  { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   iconBtn:       { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },

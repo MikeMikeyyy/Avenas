@@ -26,7 +26,7 @@ import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
-import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
+import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardProgramAchievement } from "../utils/achievementStore";
@@ -47,6 +47,8 @@ import { fetchPeopleUnits } from "../lib/clientTraining";
 import { formatStoredDate } from "../utils/dates";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { musclesForExercise } from "../utils/muscleGroups";
+import { carriedIn, exerciseSummaryParams, knownCustomExercises, stampCustomDetails } from "../utils/customExerciseDetails";
+import { loadCarriedExercises } from "../lib/exerciseMedia";
 import { canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, reorderCycleSlots, trainingDayKeys } from "../utils/programDays";
 import { alertMessage } from "../utils/errors";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
@@ -434,7 +436,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
         <TouchableOpacity
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.navigate({ pathname: "/exercise-summary", params: { exerciseName: exercise.name } });
+            router.navigate({ pathname: "/exercise-summary", params: exerciseSummaryParams(exercise) });
           }}
           activeOpacity={0.7}
           accessibilityLabel={`View ${exercise.name} summary`}
@@ -1972,7 +1974,7 @@ export default function NewProgramScreen() {
   // keeps reading the same way. A review's weights are the client's, so they
   // wait for the client's unit rather than guess.
   const stampUnit: WeightUnit | undefined = isReviewMode ? otherUnit : unitOf(ownIsKg);
-  const stampForSave = useCallback(
+  const stampUnits = useCallback(
     (w: WorkoutMap): WorkoutMap => (stampUnit ? stampWeightUnits(w, stampUnit) : w),
     [stampUnit],
   );
@@ -2025,15 +2027,44 @@ export default function NewProgramScreen() {
   const [isTrainingDay, setIsTrainingDay] = useState<boolean[]>([true, true, true, false, false, false, false]);
   const [workouts, setWorkouts] = useState<WorkoutMap>({});
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
+  // Other people's custom exercises that your programs carry, e.g. a trainer's
+  // (utils/customExerciseDetails.ts). What a "From your trainer" pick is
+  // stamped from on save, and part of what a name is looked up in here.
+  const [programCarried, setProgramCarried] = useState<CarriedExercise[]>([]);
+  // And the ones THIS program carries, which matters when it isn't in your list
+  // (a client's program you're reviewing). Keyed by content: `workouts` changes
+  // on every keystroke, what it carries almost never, and a new identity here
+  // would re-render every exercise row through customImageByName.
+  const carriedHereKey = useMemo(() => JSON.stringify(carriedIn(workouts)), [workouts]);
+  const carriedHere = useMemo(() => JSON.parse(carriedHereKey) as CarriedExercise[], [carriedHereKey]);
+  // Every custom exercise a name here can mean: yours first, then this
+  // program's, then your other programs'. For photos and muscles only; the
+  // picker's slots, edit and delete stay on your own list.
+  const knownCustoms = useMemo(
+    () => knownCustomExercises(customExercises, carriedHere, programCarried),
+    [customExercises, carriedHere, programCarried],
+  );
   // Lowercased name → custom photo URI, so the builder's exercise rows can show
-  // the user's photo (custom exercises aren't in the bundled image maps).
+  // the photo (custom exercises aren't in the bundled image maps).
   const customImageByName = useMemo(() => {
     const map: Record<string, string> = {};
-    for (const c of customExercises) {
+    for (const c of knownCustoms) {
       if (c.imageUri) map[c.name.trim().toLowerCase()] = c.imageUri;
     }
     return map;
-  }, [customExercises]);
+  }, [knownCustoms]);
+  // Weights stamped with their unit, and every exercise picked from "From your
+  // trainer" carrying its details, so it keeps them in this program even after
+  // the program it came from is gone. Your own custom exercises aren't stamped
+  // here (your list has them); a send stamps those (lib/exerciseMedia.ts).
+  const stampForSave = useCallback(
+    (w: WorkoutMap): WorkoutMap => stampCustomDetails(stampUnits(w), {
+      own: customExercises,
+      stampOwn: false,
+      carried: programCarried,
+    }),
+    [stampUnits, customExercises, programCarried],
+  );
   const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
   // ── Modals ──────────────────────────────────────────────────────────────────
   // Every modal surface on this screen is owned here, and AT MOST ONE may be
@@ -2163,6 +2194,9 @@ export default function NewProgramScreen() {
         setCustomExercises(parsed as CustomExercise[]);
       }
     }).catch((e) => warnStorage("getItem", CUSTOM_KEY, e));
+    loadCarriedExercises()
+      .then(r => setProgramCarried(r.carried))
+      .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
 
     if (pendingPickerDay.current) {
       setPickerState({ day: pendingPickerDay.current });
@@ -2455,7 +2489,13 @@ export default function NewProgramScreen() {
                     completedDate: prev?.completedDate,
                   };
                   await updateSentProgram(reviewId, { programSnapshot: updatedSnap, programName, lastEditedAtISO: new Date().toISOString() });
-                } catch (err) { warnStorage("setItem", "sent_programs", err); }
+                } catch (err) {
+                  // Stay put and say so: leaving looked like a save that
+                  // worked (withdrawn meanwhile, or offline). Discard is still
+                  // there to leave without it.
+                  Alert.alert("Couldn't save", alertMessage(err, "Check your connection and try again."));
+                  return;
+                }
               }
               isLeavingIntentionally.current = true;
               navigation.dispatch(e.data.action);
@@ -3240,7 +3280,7 @@ export default function NewProgramScreen() {
         cyclePattern={cyclePattern}
         isTrainingDay={isTrainingDay}
         workouts={workouts}
-        customExercises={customExercises}
+        customExercises={knownCustoms}
         onReorderDays={reorderCycleDays}
         onReorderExercises={reorderExercises}
         onRemoveExercise={removeExercise}

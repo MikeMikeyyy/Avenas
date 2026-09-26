@@ -24,11 +24,14 @@ import VideoDemo from "../components/VideoDemo";
 import FavouriteStar from "../components/FavouriteStar";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { pill, pillGlow } from "../constants/buttons";
-import { CUSTOM_KEY, FAVOURITE_EXERCISES_KEY, type CustomExercise } from "../constants/exercises";
+import { CUSTOM_KEY, FAVOURITE_EXERCISES_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
+import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
 import { getJSON, setJSON } from "../utils/storage";
 import { isFavourite as isFav, toggleFavourite } from "../utils/exerciseFavourites";
 import { exerciseByName, exerciseIdByName } from "../utils/exerciseLookup";
+import { carriedExercises, knownCustomExercises } from "../utils/customExerciseDetails";
+import { normalizeExerciseName } from "../utils/workout";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // "middle back" → "Middle Back". Catalogue secondary muscles are free-text
@@ -37,9 +40,22 @@ function titleCase(s: string): string {
   return s.replace(/\b\w/g, c => c.toUpperCase());
 }
 
+/** The `details` param (exerciseSummaryParams): the custom exercise the row
+ *  that opened this screen carries, or null if absent or unreadable. */
+function parseDetails(raw: string | undefined): CarriedExercise | null {
+  if (!raw) return null;
+  try {
+    const d: unknown = JSON.parse(raw);
+    return d && typeof d === "object" && typeof (d as CarriedExercise).name === "string"
+      && Array.isArray((d as CarriedExercise).muscles) ? d as CarriedExercise : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function ExerciseSummaryScreen() {
   const router = useRouter();
-  const { exerciseName } = useLocalSearchParams<{ exerciseName: string }>();
+  const { exerciseName, details } = useLocalSearchParams<{ exerciseName: string; details?: string }>();
   const name = exerciseName ?? "";
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -49,7 +65,9 @@ export default function ExerciseSummaryScreen() {
 
   // Bundled catalogue entry (muscles/equipment/instructions) resolves
   // synchronously. Custom exercises aren't in the catalogue, so we fall back to
-  // the user's saved list for muscles/description/photo.
+  // the user's saved list for muscles/description/photo, and then to what a
+  // program carries: a trainer's exercise, with the trainer's photo, video and
+  // steps (utils/customExerciseDetails.ts).
   const bundled = exerciseByName(name);
   const [custom, setCustom] = useState<CustomExercise | null>(null);
 
@@ -85,13 +103,24 @@ export default function ExerciseSummaryScreen() {
       if (bundled) return;            // catalogue entry already has everything
       let cancelled = false;
       (async () => {
-        const list = await getJSON<CustomExercise[]>(CUSTOM_KEY, []);
+        const [own, programs] = await Promise.all([
+          getJSON<CustomExercise[]>(CUSTOM_KEY, []),
+          getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+        ]);
         if (cancelled) return;
-        const key = name.trim().toLowerCase();
-        setCustom((Array.isArray(list) ? list : []).find(c => c.name.trim().toLowerCase() === key) ?? null);
+        // Yours first, then the row's own copy (a program you're reviewing
+        // isn't in your list), then whatever your programs carry.
+        const fromRow = parseDetails(details);
+        const known = knownCustomExercises(
+          Array.isArray(own) ? own : [],
+          fromRow ? [fromRow] : [],
+          carriedExercises(Array.isArray(programs) ? programs : []),
+        );
+        const key = normalizeExerciseName(name);
+        setCustom(known.find(c => normalizeExerciseName(c.name) === key) ?? null);
       })();
       return () => { cancelled = true; };
-    }, [bundled, name]),
+    }, [bundled, name, details]),
   );
 
   const primaryMuscle = bundled?.primaryMuscle ?? custom?.muscles?.[0];

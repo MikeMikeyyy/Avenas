@@ -379,6 +379,8 @@ export default function HomeScreen() {
       weekStartYMD: weekStartFor(effectiveToday),
       effectiveToday,
       resolvedTodayName: resolvedToday?.name ?? null,
+      override: todayOverride,
+      allPrograms: programs,
     });
 
     const totalMinutes = Math.round(
@@ -400,7 +402,7 @@ export default function HomeScreen() {
       totalVolumeKg,
       weekDays,
     };
-  }, [workoutHistory, activeProgram, effectiveToday, resolvedToday]);
+  }, [workoutHistory, activeProgram, effectiveToday, resolvedToday, todayOverride, programs]);
 
   // Tapping a day in the week strip either restores it or asks what to do:
   //   marked off (skipped or moved) -> put it back as planned, no prompt. For a

@@ -232,8 +232,9 @@ export const EMPTY_GYM_HUB: GymHubData = {
   myUid: null,
 };
 
-/** One card per send, from a trainer, for "From Your Trainer". */
-function receivedFromTrainers(rows: SharedProgram[], myUid: string | null): SharedProgram[] {
+/** One card per send, from a trainer, for "From Your Trainer". Exported for
+ *  scripts/verify-program-flows.ts, which checks what each person sees. */
+export function receivedFromTrainers(rows: SharedProgram[], myUid: string | null): SharedProgram[] {
   // Dedupe per batch: broadcasts expand into N per-client entries, but the gym
   // user represents all recipients on this device and should see one card per
   // batch.

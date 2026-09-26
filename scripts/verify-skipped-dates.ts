@@ -12,6 +12,8 @@ import {
   isDatePulled,
   isDatePushed,
   isDateSkipped,
+  pickAfterMove,
+  pickAfterUndoMove,
   planDoItTomorrow,
   pullDate,
   pushDate,
@@ -647,6 +649,26 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
     const plainSkip = clearShifts(skipDate(mine, FUTURE_SAT), "2026-09-21");
     eq(isDateSkipped(plainSkip, FUTURE_SAT), true, "set date: a plain skip is left alone — it never shifted anything");
   }
+}
+
+// ─── a Change Workout Day pick moves with its day ────────────────────────────
+// Which picks travel. Their effect on the week is in verify-week-schedule.ts.
+{
+  const pick = { date: MON, workoutName: "Lower", programId: "P", dayId: "d1" };
+  eq(pickAfterMove(base, pick, MON), { ...pick, date: TUE }, "pick: carried to the next day, everything else kept");
+  eq(pickAfterMove(base, { ...pick, date: WED }, WED), null,
+    "pick on a planned rest day: not carried (the rest slot moves, and the pick would replace the next day's workout)");
+  eq(pickAfterMove(base, { date: MON, workoutName: "Arms" }, MON), null,
+    "custom workout: not carried (tomorrow would open as an empty custom day)");
+  eq(pickAfterMove(base, { date: MON, workoutName: "Rest" }, MON), null, "a Rest override: nothing to carry");
+  eq(pickAfterMove(base, pick, TUE), null, "a pick for another date: none of this move's business");
+  eq(pickAfterMove(base, null, MON), null, "no pick: nothing to carry");
+
+  const carried = pickAfterMove(base, pick, MON);
+  eq(pickAfterUndoMove(carried, MON), pick, "undo: the carried pick comes back to its day");
+  eq(pickAfterUndoMove(pick, MON), null, "undo: a pick still on the day itself is left alone");
+  eq(pickAfterUndoMove({ ...pick, date: WED }, MON), null, "undo: a pick further out isn't this move's");
+  eq(pickAfterUndoMove({ date: TUE, workoutName: "Arms" }, MON), null, "undo: a custom workout is never treated as carried");
 }
 
 // ─── a cycle with no rest day: the move genuinely costs a day ───────────────

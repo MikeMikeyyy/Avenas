@@ -23,6 +23,7 @@ import { dropSnapshot, GROUP_PAGE_SNAPSHOT_PREFIX, hydrateSnapshot, peekSnapshot
 import { cycleOnly } from "./trainerHub";
 import { loadFavouriteGroupIds, loadFavouriteMemberIds, loadGroupUnread } from "./groupStore";
 import { resolveTrainerRoster } from "./roster";
+import { loadBlockedIds } from "./moderation";
 import {
   loadClientActivePrograms,
   loadGroupReviewPrograms,
@@ -62,6 +63,11 @@ export type GroupPageData = {
    *  loadGroupReviewPrograms). A member gets only their own, since RLS gives a
    *  group's reviews to its coaches. */
   groupReviews: SentProgram[];
+  /** Members I've blocked. They stay in a group I don't own (0040 only takes
+   *  them out of the blocker's own), so the roster says so: their messages and
+   *  programs are hidden from me, and this is why. Optional because a copy
+   *  saved before it existed has none. */
+  blockedMemberIds?: string[];
   myUid: string | null;
 };
 
@@ -128,7 +134,7 @@ export async function loadGroupPage(owner: string, groupId: string): Promise<Gro
     // one read that waits on another. Everything else runs alongside.
     const membersP = fetchGroupMembers(groupId);
     const activeP = membersP.then(ms => loadClientActivePrograms(ms.map(m => m.id)));
-    const [group, members, roster, unread, favGroups, favMembers, groupShares, groupReviews, activeProgramByClient] =
+    const [group, members, roster, unread, favGroups, favMembers, groupShares, groupReviews, activeProgramByClient, blocked] =
       await Promise.all([
         fetchGroup(uid, groupId),
         membersP,
@@ -139,6 +145,7 @@ export async function loadGroupPage(owner: string, groupId: string): Promise<Gro
         loadGroupSharedPrograms(groupId),
         loadGroupReviewPrograms(groupId),
         activeP,
+        loadBlockedIds(),
       ]);
 
     if (!group) {
@@ -157,6 +164,7 @@ export async function loadGroupPage(owner: string, groupId: string): Promise<Gro
       favouriteMemberIds: [...favMembers],
       groupShares,
       groupReviews,
+      blockedMemberIds: members.filter(m => blocked.has(m.id)).map(m => m.id),
       myUid: uid,
     };
     saveGroupPage(owner, groupId, data);

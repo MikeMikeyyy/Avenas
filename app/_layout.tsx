@@ -15,6 +15,7 @@ import { AccountTypeProvider } from "../contexts/AccountTypeContext";
 import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileContext";
 import { NotificationPrefsProvider } from "../contexts/NotificationPrefsContext";
 import { AuthProvider, useAuth } from "../contexts/AuthContext";
+import { ConnectivityProvider } from "../contexts/ConnectivityContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
@@ -188,19 +189,21 @@ export default function RootLayout() {
 
   return (
     <KeyboardProvider>
-      <ThemeProvider>
-        <UnitProvider>
-          <AccountTypeProvider>
-            <UserProfileProvider>
-              <NotificationPrefsProvider>
-                <AuthProvider>
-                  <AppShell />
-                </AuthProvider>
-              </NotificationPrefsProvider>
-            </UserProfileProvider>
-          </AccountTypeProvider>
-        </UnitProvider>
-      </ThemeProvider>
+      <ConnectivityProvider>
+        <ThemeProvider>
+          <UnitProvider>
+            <AccountTypeProvider>
+              <UserProfileProvider>
+                <NotificationPrefsProvider>
+                  <AuthProvider>
+                    <AppShell />
+                  </AuthProvider>
+                </NotificationPrefsProvider>
+              </UserProfileProvider>
+            </AccountTypeProvider>
+          </UnitProvider>
+        </ThemeProvider>
+      </ConnectivityProvider>
     </KeyboardProvider>
   );
 }

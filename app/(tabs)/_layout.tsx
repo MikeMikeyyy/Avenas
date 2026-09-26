@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import RestTimerBanner from "../../components/RestTimerBanner";
 import DumbbellIcon from "../../components/DumbbellIcon";
-import Svg, { Path } from "react-native-svg";
+import Svg, { Path, Circle } from "react-native-svg";
 import { useRef, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
@@ -38,11 +38,15 @@ const HomeIcon = ({ size, color }: { size: number; color: string }) => (
 const ProgressIcon = ({ size, color }: { size: number; color: string }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Path d="M3 3v16a2 2 0 0 0 2 2h16" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <Path d="m19 9-5 5-4-4-3 3" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M18 17V9" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M13 17V5" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M8 17v-3" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
   </Svg>
 );
 
 
+// The Trainer tab's previous icon, kept so it can be switched back in
+// renderIcon if the Users icon below doesn't stick.
 const CommunityIcon = ({ size, color }: { size: number; color: string }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
     <Path d="M9.15957 11.62C9.12957 11.62 9.10957 11.62 9.07957 11.62C9.02957 11.61 8.95957 11.61 8.89957 11.62C5.99957 11.53 3.80957 9.25 3.80957 6.44C3.80957 3.58 6.13957 1.25 8.99957 1.25C11.8596 1.25 14.1896 3.58 14.1896 6.44C14.1796 9.25 11.9796 11.53 9.18957 11.62C9.17957 11.62 9.16957 11.62 9.15957 11.62ZM8.99957 2.75C6.96957 2.75 5.30957 4.41 5.30957 6.44C5.30957 8.44 6.86957 10.05 8.85957 10.12C8.91957 10.11 9.04957 10.11 9.17957 10.12C11.1396 10.03 12.6796 8.42 12.6896 6.44C12.6896 4.41 11.0296 2.75 8.99957 2.75Z" fill={color} />
@@ -52,12 +56,21 @@ const CommunityIcon = ({ size, color }: { size: number; color: string }) => (
   </Svg>
 );
 
+const UsersIcon = ({ size, color }: { size: number; color: string }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M16 3.128a4 4 0 0 1 0 7.744" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M22 21v-2a4 4 0 0 0-3-3.87" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <Circle cx="9" cy="7" r="4" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
 const renderIcon = (name: string, size: number, color: string) => {
   switch (name) {
     case "home":         return <HomeIcon size={size} color={color} />;
     case "workout":      return <DumbbellIcon size={size} color={color} />;
     case "progress":     return <ProgressIcon size={size} color={color} />;
-    case "trainer-hub":  return <CommunityIcon size={size} color={color} />;
+    case "trainer-hub":  return <UsersIcon size={size} color={color} />;
     default:             return null;
   }
 };

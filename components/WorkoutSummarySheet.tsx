@@ -18,7 +18,8 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { getJSON } from "../utils/storage";
 import { WORKOUT_HISTORY_KEY, type CompletedWorkout } from "../constants/programs";
-import { CUSTOM_KEY, type CustomExercise, type SelectableMuscle } from "../constants/exercises";
+import type { SelectableMuscle } from "../constants/exercises";
+import { loadKnownCustomExercises } from "../lib/exerciseMedia";
 import type { MuscleGroupStat } from "../constants/progress";
 import { computeWorkoutTonnage, computeMuscleGroupStats } from "../utils/progressStats";
 import { RADAR_GROUPS } from "../utils/muscleGroups";
@@ -64,14 +65,15 @@ export default function WorkoutSummarySheet({
 
   const [data, setData] = useState<SummaryData | null>(null);
 
-  // Records / muscle split need history + custom exercises from storage. The
-  // just-finished workout may or may not have been persisted yet (the write
-  // runs in the background), so filter it out by id either way.
+  // Records / muscle split need history + custom exercises from storage (your
+  // own, and a trainer's that your programs carry). The just-finished workout
+  // may or may not have been persisted yet (the write runs in the background),
+  // so filter it out by id either way.
   useEffect(() => {
     let alive = true;
     (async () => {
       const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
-      const customs = await getJSON<CustomExercise[]>(CUSTOM_KEY, []);
+      const customs = await loadKnownCustomExercises();
       if (!alive) return;
       const prior = history.filter(w => w.id !== workout.id);
       const records = computeSessionRecords(workout, prior);

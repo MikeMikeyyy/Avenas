@@ -11,7 +11,7 @@
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { buildWeekSchedule, weekStartFor } from "../utils/weekSchedule";
 import { getEffectiveToday, resolveWorkoutForDate, type DayOverride } from "../utils/workout";
-import { skipDate } from "../utils/skippedDates";
+import { pickAfterMove, pickAfterUndoMove, planDoItTomorrow, skipDate, unskipDate } from "../utils/skippedDates";
 
 let passed = 0;
 const failures: string[] = [];
@@ -51,6 +51,8 @@ function strip(history: CompletedWorkout[], now: Date, override: DayOverride | n
     weekStartYMD: weekStartFor(effectiveToday),
     effectiveToday,
     resolvedTodayName: resolved?.name ?? null,
+    override,
+    allPrograms: [p],
   });
   return { effectiveToday, resolvedName: resolved?.name ?? null, schedule };
 }
@@ -117,6 +119,35 @@ const names = (s: ReturnType<typeof strip>) => s.schedule.days.map(d => d.workou
   const stale = strip([], now, { date: THU, workoutName: "Legs", programId: "P", dayId: "d5" });
   eq([stale.resolvedName, row(stale, FRI).workoutName], [null, "Rest"],
     "yesterday's override doesn't leak into today on either page");
+  eq(row(stale, THU).workoutName, "Upper", "nor back onto yesterday's own row, which reads its plan");
+}
+
+// ─── Move to Tomorrow takes a Change Workout Day pick with it ────────────────
+// The report: Legs picked on Thursday's Upper, then "Not doing 'Legs'? Move to
+// Tomorrow" moved UPPER and dropped the pick.
+{
+  const thursday = new Date("2026-09-17T08:00:00");
+  const pick: DayOverride = { date: THU, workoutName: "Legs", programId: "P", dayId: "d5" };
+  const plan = planDoItTomorrow(program, THU);
+  const carried = pickAfterMove(program, pick, THU);
+  eq(carried?.date, FRI, "the pick is carried to Friday");
+
+  const moved = strip([], thursday, carried, plan.program);
+  eq([row(moved, THU).workoutName, row(moved, THU).isPushed], ["Rest", true], "Thursday is moved, with nothing left on it");
+  eq(row(moved, FRI).workoutName, "Legs", "Friday shows the pick on the strip before Friday arrives");
+  eq(names(moved).slice(5), ["Legs", "Rest"], "Saturday's rest absorbs the move, so the weekend is back on plan");
+  // The prompt names the lost rest day by what lands on it: the pick, since it
+  // travels with the slot (utils/restDay.ts reads plan.lostRestDay for this).
+  eq(plan.kind === "absorbed" ? plan.lostRestDay : null, carried?.date, "the rest day lost is Friday, where the pick lands");
+
+  const friday = strip([], new Date("2026-09-18T08:00:00"), carried, plan.program);
+  eq([friday.resolvedName, row(friday, FRI).workoutName], ["Legs", "Legs"], "on Friday both pages say Legs");
+
+  // Undone from the strip: the move comes off and the pick comes home.
+  const restored = pickAfterUndoMove(carried, THU);
+  const undone = strip([], thursday, restored, unskipDate(plan.program, THU));
+  eq([undone.resolvedName, row(undone, THU).workoutName], ["Legs", "Legs"], "undo: Thursday is Legs again on both pages");
+  eq(row(undone, FRI).workoutName, "Rest", "undo: and Friday is back to its rest day");
 }
 
 // ─── complete, delete, do it again ───────────────────────────────────────────

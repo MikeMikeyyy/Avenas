@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -16,9 +16,11 @@ import ChevronToggle from "../ChevronToggle";
 import ExpandReveal, { useReveal } from "../ExpandReveal";
 import ChatIcon from "../icons/ChatIcon";
 import UserRoundPlusIcon from "../icons/UserRoundPlusIcon";
+import UserRoundIcon from "../icons/UserRoundIcon";
 import PeopleIcon from "../icons/PeopleIcon";
 import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
+import OfflineBanner from "../OfflineBanner";
 import UnreadBadge from "../UnreadBadge";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
@@ -39,12 +41,14 @@ import {
   appendSentProgram,
   applyReturnedProgram,
   batchKeyOf,
+  dismissKeyOf,
   dismissSharedBatch,
   isReturnedDismissed,
   returnedKeyOf,
   sentKeyOf,
   loadSentPrograms,
   removeSentProgram,
+  ShareUnavailableError,
   type AssignedPT,
   type SentProgram,
   type SharedProgram,
@@ -197,7 +201,7 @@ function ReturnedReviewCard({ review, fromLabel, isDark, open, onToggle, onView,
             </View>
           </BounceButton>
           {!applied && (
-            <BounceButton style={{ flex: 1 }} onPress={onAccept} accessibilityLabel={`Accept your trainer's changes to ${review.programName}`}>
+            <BounceButton style={{ flex: 1 }} onPress={onAccept} needsConnection accessibilityLabel={`Accept your trainer's changes to ${review.programName}`}>
               <View style={[styles.viewBtnInner, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
                 <Text style={[styles.viewBtnText, { color: "#fff" }]}>Accept</Text>
               </View>
@@ -446,10 +450,22 @@ export default function MyPTHome() {
     );
   }, []);
 
+  // Accepts in flight, by card: a second tap while the first is still on its
+  // way would otherwise say "added" twice (the store adds it once either way).
+  const accepting = useRef(new Set<string>());
+
   const handleApplyReturned = useCallback(async (entry: SentProgram) => {
-    if (entry.appliedAtISO) return;
+    if (entry.appliedAtISO || accepting.current.has(entry.id)) return;
+    accepting.current.add(entry.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await applyReturnedProgram(entry.id);
+    try {
+      await applyReturnedProgram(entry.id);
+    } catch (e) {
+      Alert.alert("Couldn't update your program", alertMessage(e, "Check your connection and try again."));
+      return;
+    } finally {
+      accepting.current.delete(entry.id);
+    }
     scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
     const appliedAt = new Date().toISOString();
     setHub(h => h && { ...h, sent: h.sent.map(s => s.id === entry.id ? { ...s, appliedAtISO: appliedAt } : s) });
@@ -470,7 +486,7 @@ export default function MyPTHome() {
       "Remove Program",
       accepted
         ? `Remove "${entry.programName}" from this list? It stays in your programs.`
-        : `Remove "${entry.programName}" without accepting it? You won't be able to add it to your programs unless it's sent again.`,
+        : `Remove "${entry.programName}" without accepting it? It comes back if your trainer sends it again or updates it.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -478,7 +494,8 @@ export default function MyPTHome() {
           style: "destructive",
           onPress: async () => {
             const key = batchKeyOf(entry);
-            await dismissSharedBatch(key);
+            // Hides this version: a Send Update brings it back (dismissKeyOf).
+            await dismissSharedBatch(dismissKeyOf(entry));
             // The badge counts from `shares` too, so a removed program stops
             // counting as waiting on me straight away.
             setHub(h => h && {
@@ -545,7 +562,14 @@ export default function MyPTHome() {
           text: "Remove",
           style: "destructive",
           onPress: async () => {
-            await removeSentProgram(entry.id);
+            try {
+              await removeSentProgram(entry.id);
+            } catch (e) {
+              // It used to leave the list whatever happened, while the trainer
+              // still had it.
+              Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+              return;
+            }
             setHub(h => h && { ...h, sent: h.sent.filter(s => s.id !== entry.id) });
           },
         },
@@ -586,10 +610,27 @@ export default function MyPTHome() {
   }, [pt]);
 
   const handleAccept = useCallback(async (share: SharedProgram) => {
-    if (share.acceptedAtISO) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const key = batchKeyOf(share);
-    const importedId = await acceptSharedProgramBatch(key);
+    if (share.acceptedAtISO || accepting.current.has(key)) return;
+    accepting.current.add(key);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    let importedId: string | null;
+    try {
+      importedId = await acceptSharedProgramBatch(key);
+    } catch (e) {
+      Alert.alert("Couldn't add program", alertMessage(e, "Check your connection and try again."));
+      // Deleted or archived since this card was drawn: it's gone, so is its card.
+      if (e instanceof ShareUnavailableError) {
+        setHub(h => h && {
+          ...h,
+          received: h.received.filter(r => batchKeyOf(r) !== key),
+          shares: h.shares.filter(r => batchKeyOf(r) !== key),
+        });
+      }
+      return;
+    } finally {
+      accepting.current.delete(key);
+    }
     scheduleCloudPush(); // the accept materialised/updated @avenas/programs (a synced key)
     const acceptedAt = new Date().toISOString();
     setHub(h => h && {
@@ -630,6 +671,7 @@ export default function MyPTHome() {
           />
         }
       >
+        <OfflineBanner />
         <View style={styles.topPills}>
           <BounceButton
             style={styles.trainersBtnWrap}
@@ -637,7 +679,7 @@ export default function MyPTHome() {
             accessibilityLabel="Open my trainers"
           >
             <View style={[styles.trainersBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name="person-outline" size={16} color={ACCT} />
+              <UserRoundIcon size={16} color={ACCT} />
               <Text style={[styles.trainersBtnText, { color: t.tp }]}>My Trainers</Text>
             </View>
           </BounceButton>
@@ -673,6 +715,7 @@ export default function MyPTHome() {
           <BounceButton
             style={{ marginTop: 16 }}
             onPress={() => { if (pt) setSendOpen(true); }}
+            needsConnection
             accessibilityLabel={pt ? `Send a program to ${pt.name} for review` : "Send a program to your trainer for review"}
           >
             <View style={styles.sendProgramBtn}>
@@ -884,6 +927,7 @@ export default function MyPTHome() {
                     <BounceButton
                       style={{ flex: 1 }}
                       onPress={() => handleAccept(r)}
+                      needsConnection
                       accessibilityLabel={`Accept ${r.programName}`}
                     >
                       <View style={[styles.viewBtnInner, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
@@ -1052,6 +1096,7 @@ export default function MyPTHome() {
                       your own copy of the program stays. */}
                   <BounceButton
                     onPress={() => handleUnsendProgram(s)}
+                    needsConnection
                     accessibilityLabel={`Remove ${s.programName}`}
                   >
                     <View style={[styles.viewBtnInner, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>

@@ -20,6 +20,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
+/** For the few requests supabase-js can't make well itself: a file streamed
+ *  from disk to Storage (lib/exerciseMedia.ts), which its upload() would first
+ *  read whole into JS memory. */
+export const SUPABASE_URL: string = supabaseUrl;
+export const SUPABASE_ANON_KEY: string = supabaseAnonKey;
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: AsyncStorage,

@@ -17,6 +17,7 @@ import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import Avatar from "../Avatar";
 import PeopleIcon from "../icons/PeopleIcon";
+import { RemoveCircleButton, RemoveModeBar } from "./RemoveMode";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -41,6 +42,8 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
 
   const [trainers, setTrainers] = useState<AssignedPT[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
+  /** "Remove a Trainer" was picked: each card shows a red minus (RemoveMode.tsx). */
+  const [removing, setRemoving] = useState(false);
   // An empty list means "none" only once we've looked. Without this the page
   // said "No trainers yet" to people with trainers, for as long as the
   // connections lookup took.
@@ -51,6 +54,8 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
       const { all, primary } = await resolveMyTrainers();
       setTrainers(all);
       setPrimaryId(primary?.id ?? null);
+      // Nobody left to remove: out of remove mode.
+      if (all.length === 0) setRemoving(false);
     } catch (err) {
       if (__DEV__) console.warn("[avenas] resolve trainers", err);
     } finally {
@@ -67,7 +72,8 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
       await reload();
       if (cancelled) {/* no-op */}
     })();
-    return () => { cancelled = true; };
+    // Leaving the page ends remove mode, so it never greets you on the way back.
+    return () => { cancelled = true; setRemoving(false); };
   }, [reload]));
 
   const handleConnect = useCallback(() => {
@@ -115,26 +121,16 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
     );
   }, [reload]);
 
-  // Step into "remove" sub-menu — lists every trainer as an Alert button so
-  // the user can pick which one to remove. Cancel returns to nothing.
-  const openRemovePicker = useCallback(() => {
+  // "Remove a Trainer": a red minus on each card rather than an alert listing
+  // every trainer, which didn't scale past a few (components/trainer/RemoveMode.tsx).
+  const startRemoving = useCallback(() => {
     if (trainers.length === 0) {
       Alert.alert("No trainers", "You haven't connected to any trainers yet.");
       return;
     }
-    Alert.alert(
-      "Remove a Trainer",
-      "Pick a trainer to remove.",
-      [
-        { text: "Cancel", style: "cancel" },
-        ...trainers.map(trainer => ({
-          text: trainer.id === primaryId ? `${trainer.name} (Primary)` : trainer.name,
-          style: "destructive" as const,
-          onPress: () => handleRemove(trainer),
-        })),
-      ],
-    );
-  }, [trainers, primaryId, handleRemove]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRemoving(true);
+  }, [trainers]);
 
   // Top-right plus button entry — offers both add and remove paths.
   const openMenu = useCallback(() => {
@@ -145,10 +141,10 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
       [
         { text: "Cancel", style: "cancel" },
         { text: "Add a Trainer", onPress: handleConnect },
-        { text: "Remove a Trainer", style: "destructive", onPress: openRemovePicker },
+        { text: "Remove a Trainer", style: "destructive", onPress: startRemoving },
       ],
     );
-  }, [handleConnect, openRemovePicker]);
+  }, [handleConnect, startRemoving]);
 
   useImperativeHandle(ref, () => ({ openMenu }), [openMenu]);
 
@@ -178,11 +174,16 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
           </View>
         </NeuCard>
       ) : (
+        <>
+        {removing && <RemoveModeBar isDark={isDark} onDone={() => setRemoving(false)} />}
         <View style={{ marginTop: 12, gap: 10 }}>
           {all.map(({ trainer, isPrimary }) => (
             <TouchableOpacity
               key={trainer.id}
               activeOpacity={0.85}
+              // While removing, only the minus does anything: a stray tap
+              // mustn't switch your primary trainer.
+              disabled={removing}
               onPress={() => handlePickTrainer(trainer, isPrimary)}
               accessibilityRole="button"
               accessibilityLabel={isPrimary ? `${trainer.name}, primary trainer` : `Switch to ${trainer.name}`}
@@ -220,11 +221,15 @@ const MyTrainersSection = forwardRef<MyTrainersSectionRef, {}>(function MyTraine
                       );
                     })()}
                   </View>
+                  {removing && (
+                    <RemoveCircleButton onPress={() => handleRemove(trainer)} accessibilityLabel={`Remove ${trainer.name}`} />
+                  )}
                 </View>
               </NeuCard>
             </TouchableOpacity>
           ))}
         </View>
+        </>
       )}
     </View>
   );

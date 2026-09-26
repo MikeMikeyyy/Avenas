@@ -3,7 +3,7 @@
 // person reappear in your conversation list.
 
 import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -17,6 +17,8 @@ import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { pill, PILL_H_XS } from "../constants/buttons";
 import { loadBlocked, unblockUser } from "../utils/moderation";
+import { alertMessage } from "../utils/errors";
+import { alertOffline, useOffline } from "../contexts/ConnectivityContext";
 import type { BlockedUser } from "../constants/chat";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -41,10 +43,19 @@ export default function BlockedAccountsScreen() {
     }, []),
   );
 
+  // Unblocking lifts the block on the server too (migration 0040), so it needs
+  // a connection: offline it dims and says so, and a failure puts the row back
+  // rather than showing someone unblocked who isn't.
+  const offline = useOffline();
   const unblock = async (b: BlockedUser) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setBlocked(prev => prev.filter(x => x.id !== b.id)); // optimistic
-    await unblockUser(b.id);
+    try {
+      await unblockUser(b.id);
+    } catch (e) {
+      setBlocked(await loadBlocked());
+      Alert.alert("Couldn't unblock", alertMessage(e, "Check your connection and try again."));
+    }
   };
 
   return (
@@ -94,9 +105,9 @@ export default function BlockedAccountsScreen() {
                   </View>
                   <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{b.name}</Text>
                   <TouchableOpacity
-                    onPress={() => unblock(b)}
+                    onPress={offline ? alertOffline : () => unblock(b)}
                     activeOpacity={0.8}
-                    style={[styles.unblockBtn, { borderColor: ACCT }]}
+                    style={[styles.unblockBtn, { borderColor: ACCT, opacity: offline ? 0.4 : 1 }]}
                     accessibilityRole="button"
                     accessibilityLabel={`Unblock ${b.name}`}
                   >

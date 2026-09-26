@@ -30,6 +30,7 @@ import { Ionicons } from "@expo/vector-icons";
 import FadeScreen from "../components/FadeScreen";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import OfflineBanner from "../components/OfflineBanner";
 import TrashIcon from "../components/TrashIcon";
 import ArchiveIcon from "../components/icons/ArchiveIcon";
 import BackButton, { BACK_SIZE, BACK_TOP } from "../components/BackButton";
@@ -103,7 +104,7 @@ function CycleStrip({ cycle, isDark }: { cycle: string[]; isDark: boolean }) {
  * Restore beside Delete at the same width. Always open: this page is only
  * for acting on what's in it, so nothing sits behind a tap.
  */
-function ArchiveCard({ name, meta, pill, cycle, isDark, onRestore, onDelete }: {
+function ArchiveCard({ name, meta, pill, cycle, isDark, onRestore, onDelete, needsConnection }: {
   name: string;
   meta: string;
   pill?: ReactNode;
@@ -111,6 +112,9 @@ function ArchiveCard({ name, meta, pill, cycle, isDark, onRestore, onDelete }: {
   isDark: boolean;
   onRestore: () => void;
   onDelete: () => void;
+  /** The Trainer tab's and a group's archives act on the server; My Programs'
+   *  is all on this phone. */
+  needsConnection?: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   return (
@@ -125,13 +129,13 @@ function ArchiveCard({ name, meta, pill, cycle, isDark, onRestore, onDelete }: {
         </View>
         <CycleStrip cycle={cycle} isDark={isDark} />
         <View style={styles.actionRow}>
-          <BounceButton style={{ flex: 1 }} onPress={onRestore} accessibilityLabel={`Restore ${name}`}>
+          <BounceButton style={{ flex: 1 }} onPress={onRestore} needsConnection={needsConnection} accessibilityLabel={`Restore ${name}`}>
             <View style={[styles.actionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
               <Ionicons name="arrow-undo" size={15} color="#fff" />
               <Text style={styles.actionText}>Restore</Text>
             </View>
           </BounceButton>
-          <BounceButton style={{ flex: 1 }} onPress={onDelete} accessibilityLabel={`Delete ${name} for good`}>
+          <BounceButton style={{ flex: 1 }} onPress={onDelete} needsConnection={needsConnection} accessibilityLabel={`Delete ${name} for good`}>
             <View style={[styles.actionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
               <TrashIcon size={15} color="#fff" />
               <Text style={styles.actionText}>Delete</Text>
@@ -366,6 +370,7 @@ export default function ProgramArchiveScreen() {
           <View style={styles.headerSide} />
         </View>
         <Text style={[styles.caption, { color: t.ts }]} numberOfLines={1}>{caption}</Text>
+        {scope !== "programs" && <OfflineBanner />}
 
         {!loaded ? (
           <View style={styles.loading}><ActivityIndicator color={ACCT} /></View>
@@ -433,6 +438,7 @@ export default function ProgramArchiveScreen() {
                       isDark={isDark}
                       onRestore={() => restoreBatch(b)}
                       onDelete={() => deleteBatch(b)}
+                      needsConnection
                     />
                   );
                 })}
@@ -451,6 +457,7 @@ export default function ProgramArchiveScreen() {
                     isDark={isDark}
                     onRestore={() => restoreReview(r)}
                     onDelete={() => deleteReview(r)}
+                    needsConnection
                   />
                 ))}
               </>

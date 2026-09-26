@@ -27,11 +27,20 @@
 //   7. ARCHIVING (0037): a send is archived by its sender or a trainer of its
 //      group, a review by its trainer(s), and never by the person on the
 //      other end; a whole send moves in one call, and restoring clears it.
+//   8. CUSTOM EXERCISE MEDIA (0038): anyone reads a photo or clip a program
+//      carries; only its author writes, and only inside their own folder. The
+//      carried details themselves are in the round-trip's program (1).
+//   9. WHICH COLUMNS (0039): through the API, each party to a shared program
+//      may change only what the app changes for them; archiving, closing and
+//      sending back are the security-definer functions' alone, and nobody can
+//      re-address a row.
 //
-// Supabase-only pieces are stood in for by SUPABASE_STANDINS below (the auth
-// and storage schemas, pg_net, the API roles). Login is simulated: auth.uid()
-// reads a setting the test switches between accounts, so this checks what the
-// functions DO for a given caller, not the API's own role grants.
+// Supabase-only pieces are stood in for by SUPABASE_STANDINS in
+// scripts/harness/db.ts (the auth and storage schemas, pg_net, the API roles),
+// shared with scripts/verify-program-flows.ts. Login is simulated: auth.uid()
+// reads a setting the test switches between accounts, so most of this checks
+// what the functions DO for a given caller; 8 and 9 also run as the API's own
+// role, since there the policies and triggers are the rule.
 //
 // Run:  npx tsx scripts/verify-db.ts
 // Exits non-zero if a migration fails to apply or any assertion fails.
@@ -49,6 +58,7 @@ import {
   toReplaceUserDataPayload,
   workoutFromRow,
 } from "../lib/mappers";
+import { migrationFiles, readMigration, SUPABASE_STANDINS } from "./harness/db";
 
 let passed = 0;
 const failures: string[] = [];
@@ -67,62 +77,6 @@ function eq(actual: unknown, expected: unknown, label: string) {
   const b = JSON.stringify(canon(expected));
   if (a === b) { passed += 1; return; }
   failures.push(`✗ ${label}\n    expected: ${b}\n    actual:   ${a}`);
-}
-
-// The app has no Node type definitions, and shouldn't: they'd change the
-// globals every screen compiles against. So the little of Node this script
-// uses is typed here instead (React Native already declares `require`).
-declare const __dirname: string;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- an `import` would need @types/node, see above
-const { readdirSync, readFileSync } = require("node:fs") as {
-  readdirSync(dir: string): string[];
-  readFileSync(file: string, encoding: "utf8"): string;
-};
-
-const MIGRATIONS = `${__dirname}/../supabase/migrations`;
-
-/**
- * What hosted Supabase provides that plain Postgres doesn't, reduced to what
- * the migrations touch. auth.uid() reads `request.jwt.claim.sub`, the setting
- * Supabase's own version reads, which `as()` below sets per "request".
- */
-const SUPABASE_STANDINS = `
-  create role anon;
-  create role authenticated;
-  create role service_role;
-
-  create schema auth;
-  create table auth.users (
-    id uuid primary key,
-    email text,
-    raw_user_meta_data jsonb not null default '{}'::jsonb
-  );
-  create table auth.identities (
-    id uuid primary key default gen_random_uuid(),
-    user_id uuid references auth.users(id) on delete cascade,
-    provider text
-  );
-  create function auth.uid() returns uuid language sql stable as
-    $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
-
-  create schema storage;
-  create table storage.buckets (id text primary key, name text not null, public boolean not null default false);
-  create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text, owner uuid);
-  alter table storage.objects enable row level security;
-  create function storage.foldername(name text) returns text[] language sql immutable as
-    $$ select (string_to_array(name, '/'))[1:greatest(array_length(string_to_array(name, '/'), 1) - 1, 0)] $$;
-
-  -- pg_net (0012): the push trigger's HTTP call. Never reached here, since no
-  -- test account registers a push token, but it has to exist.
-  create schema net;
-  create function net.http_post(url text, body jsonb default '{}'::jsonb, params jsonb default '{}'::jsonb,
-    headers jsonb default '{}'::jsonb, timeout_milliseconds integer default 5000)
-    returns bigint language sql as $$ select 0::bigint $$;
-`;
-
-/** Statements only hosted Supabase can run, with the stand-in above doing the job. */
-function prepare(sql: string): string {
-  return sql.replace(/create extension if not exists pg_net;/gi, "-- pg_net: see SUPABASE_STANDINS");
 }
 
 // ─── Accounts ───────────────────────────────────────────────────────────────
@@ -160,7 +114,23 @@ const fullProgram: Required<SavedProgram> = {
       id: "e1", name: "Bench Press", isIsometric: false, restSeconds: 120, programNotes: "Pause on the chest",
       sets: [{ type: "warmup", weightKg: "40", reps: "10" }, { type: "working", weightKg: "80", weightUnit: "lb", repMode: "range", repsMin: "6", repsMax: "8" }],
     }],
-    "1:Pull": [{ id: "e2", name: "Row", sets: [{ type: "working", weightKg: "60", repMode: "target", reps: "10" }] }],
+    "1:Pull": [
+      { id: "e2", name: "Row", sets: [{ type: "working", weightKg: "60", repMode: "target", reps: "10" }] },
+      // A trainer's custom exercise, carried with the program (0038): its
+      // details ride in the workouts jsonb, so the backup must bring them back.
+      {
+        id: "e4", name: "Landmine Twist", sets: [{ type: "working", reps: "12" }],
+        customDetails: {
+          name: "Landmine Twist",
+          muscles: ["Core", "Shoulders"],
+          imageUri: `https://example.supabase.co/storage/v1/object/public/exercise-media/${TRAINER}/exercise_icon_1.jpg`,
+          videoUri: `https://example.supabase.co/storage/v1/object/public/exercise-media/${TRAINER}/exercise_video_1.mp4`,
+          muted: true,
+          steps: ["Brace", "Rotate through the hips"],
+          by: TRAINER,
+        },
+      },
+    ],
   },
   extraWorkouts: ["Arms"],
 };
@@ -261,10 +231,9 @@ async function main() {
   await db.exec(SUPABASE_STANDINS);
 
   // ─── Every migration applies, in order ────────────────────────────────────
-  const files = readdirSync(MIGRATIONS).filter(f => f.endsWith(".sql")).sort();
-  for (const f of files) {
+  for (const f of migrationFiles()) {
     try {
-      await db.exec(prepare(readFileSync(`${MIGRATIONS}/${f}`, "utf8")));
+      await db.exec(readMigration(f));
       passed += 1;
     } catch (e) {
       failures.push(`✗ migration ${f} failed to apply: ${(e as Error).message}\n    (if it needs a Supabase-only feature, give it a stand-in in SUPABASE_STANDINS)`);
@@ -613,6 +582,229 @@ async function main() {
   eq(await setArchived(COACHED_PT, [inGroup]), 1, "archive: a trainer of the group can archive its review");
   eq(await setArchived(STRANGER, [inGroup], false), 1, "archive: another trainer of it can restore it");
   eq(await setArchived(null, [direct1]), null, "archive: signed out is an error");
+
+  // ─── 8. Custom exercise media (0038) ──────────────────────────────────────
+  // A custom exercise's photo and video go wherever its program goes, so
+  // anyone may read them; only their author may write, and only in their own
+  // folder. Storage has no functions to call, so the policies are the rule,
+  // and they're checked here as the API's own `authenticated` role (Supabase
+  // grants it the public tables; the group-photo policy reads groups).
+  eq((await db.query(`select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'exercise-media'`)).rows[0],
+    { public: true, file_size_limit: 52428800, allowed_mime_types: ["image/jpeg", "image/png", "video/mp4", "video/quicktime"] },
+    "exercise media: a public bucket for photos and clips, capped at 50 MB");
+  await db.exec(`
+    grant usage on schema storage to authenticated;
+    grant select, insert, update, delete on storage.objects to authenticated;
+    grant usage on schema public to authenticated;
+    grant select on all tables in schema public to authenticated;
+  `);
+  /** Run as `uid` through the API role; the error message, or null. */
+  const asApi = async (uid: string, sql: string, params: unknown[] = []) => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      await db.query(sql, params);
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  const putMedia = (uid: string, path: string) =>
+    asApi(uid, `insert into storage.objects (bucket_id, name, owner) values ('exercise-media', $1, $2)`, [path, uid]);
+  eq(await putMedia(TRAINER, `${TRAINER}/exercise_icon_1.jpg`), null, "exercise media: you can upload into your own folder");
+  eq(/row-level security/.test((await putMedia(TRAINER, `${CLIENT}/exercise_icon_2.jpg`)) ?? ""), true,
+    "exercise media: ...and not into anyone else's");
+  eq(/row-level security/.test((await putMedia(TRAINER, `exercise_icon_3.jpg`)) ?? ""), true,
+    "exercise media: ...nor outside a folder");
+  await as(CLIENT);
+  await db.exec("set role authenticated");
+  const seen = (await db.query<{ n: number }>(
+    `select count(*)::int as n from storage.objects where bucket_id = 'exercise-media' and name = $1`, [`${TRAINER}/exercise_icon_1.jpg`])).rows[0].n;
+  await db.exec("reset role");
+  eq(seen, 1, "exercise media: anyone can read it, which is how the client sees the trainer's photo");
+  await asApi(CLIENT, `delete from storage.objects where bucket_id = 'exercise-media' and name = $1`, [`${TRAINER}/exercise_icon_1.jpg`]);
+  eq((await db.query(`select 1 from storage.objects where name = $1`, [`${TRAINER}/exercise_icon_1.jpg`])).rows.length, 1,
+    "exercise media: only its author can delete it");
+
+  // ─── 9. Who may change which columns of a shared program (0039) ──────────
+  // Through the API, with their own login, a party to a row could change any
+  // of it. Now each may change only what the app changes for them; the rest
+  // is the security-definer functions' alone. Run as the API role, which
+  // Supabase grants every table in public (RLS still decides which rows).
+  await db.exec(`
+    grant insert, update, delete on all tables in schema public to authenticated;
+    grant usage on schema auth to authenticated;
+  `);
+  const blocked =(msg: string | null) => msg !== null && /can't be changed here|can't start/.test(msg);
+  const setRow = (uid: string, id: string, set: string, params: unknown[] = []) =>
+    asApi(uid, `update public.shared_programs set ${set} where id = $1`, [id, ...params]);
+  const rowOf = async (id: string) => (await db.query<Record<string, unknown>>(
+    `select * from public.shared_programs where id = $1`, [id])).rows[0];
+
+  const send9 = await sendShare(TRAINER, CLIENT, "send-9");
+  eq(await setRow(CLIENT, send9, "accepted_at = now(), deleted_by_recipient_at = null"), null, "columns: a client accepts a send");
+  eq(await setRow(CLIENT, send9, "deleted_by_recipient_at = now(), accepted_at = null"), null, "columns: ...and deletes their copy");
+  eq(await setRow(TRAINER, send9, `snapshot = '{"name":"v2"}'::jsonb, program_name = 'v2', last_edited_at = now(), accepted_at = null`), null,
+    "columns: the trainer sends an update, re-opening Accept");
+  eq(await asApi(TRAINER, `select public.set_share_archived(array[$1]::uuid[], true)`, [send9]), null, "columns: the trainer archives it (the function)");
+  eq(blocked(await setRow(CLIENT, send9, "archived_at = null")), true, "columns: the client can't un-archive it");
+  eq((await rowOf(send9)).archived_at !== null, true, "columns: ...and it stays archived");
+  eq(blocked(await setRow(CLIENT, send9, "sender_id = $2, recipient_id = $3", [CLIENT, STRANGER])), true,
+    "columns: the client can't re-address it to someone they aren't connected to");
+  eq(blocked(await setRow(TRAINER, send9, "recipient_id = $2", [STRANGER])), true, "columns: nor can the trainer");
+  eq(blocked(await setRow(TRAINER, send9, "accepted_at = now()")), true, "columns: the trainer can't accept it for the client");
+  eq(blocked(await setRow(CLIENT, send9, `snapshot = '{"name":"mine"}'::jsonb`)), true, "columns: the client can't rewrite what was sent");
+
+  const review9 = (await db.query<{ id: string }>(
+    `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key)
+     values ($1, $2, 'review', 'program_1', 'PPL', '{"name":"PPL"}'::jsonb, 'review-9') returning id`, [CLIENT, TRAINER])).rows[0].id;
+  eq(await setRow(TRAINER, review9, `draft_snapshot = '{"name":"edit"}'::jsonb, program_name = 'edit', last_edited_at = now(), trainer_comments = 'Nice'`), null,
+    "columns: the trainer saves a review in the builder");
+  eq(blocked(await setRow(TRAINER, review9, `returned_snapshot = '{"name":"x"}'::jsonb, returned_at = now()`)), true,
+    "columns: ...but can't send it back except through the function");
+  eq(await asApi(TRAINER, `select public.return_shared_review($1)`, [review9]), null, "columns: the trainer sends it back (the function)");
+  eq(await setRow(CLIENT, review9, "accepted_at = now()"), null, "columns: the client accepts the changes");
+  eq(blocked(await setRow(CLIENT, review9, "returned_at = now()")), true, "columns: the client can't fake a send-back");
+  eq(blocked(await setRow(CLIENT, review9, "completed_at = now()")), true, "columns: ...or close their own review");
+  eq(await setRow(TRAINER, review9, "deleted_by_recipient_at = now()"), null, "columns: the trainer deletes it from their list");
+
+  eq(blocked(await asApi(CLIENT,
+    `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key, returned_at)
+     values ($1, $2, 'review', 'program_1', 'PPL', '{}'::jsonb, 'review-10', now())`, [CLIENT, TRAINER])), true,
+    "columns: a new row can't arrive already sent back");
+  eq(await asApi(CLIENT,
+    `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key)
+     values ($1, $2, 'review', 'program_1', 'PPL', '{}'::jsonb, 'review-11')`, [CLIENT, TRAINER]), null,
+    "columns: asking for a review still works");
+
+  // Deleting a group nulls its sends' group_id: the database's own action, not
+  // the caller's, so it isn't refused.
+  const g9 = await newGroup(TRAINER, "Closing down", [CLIENT]);
+  await joinGroup(CLIENT, g9);
+  const groupSend9 = await sendShare(TRAINER, CLIENT, "send-10", g9);
+  eq(await asApi(TRAINER, `delete from public.groups where id = $1`, [g9]), null, "columns: the owner can still delete a group with sends in it");
+  eq((await rowOf(groupSend9))?.group_id ?? null, null, "columns: ...and its sends lose their group");
+
+  // ─── 10. Blocks (0040) ────────────────────────────────────────────────────
+  // A block is the blocker's alone to see and lift. It severs, takes the
+  // person out of every group the BLOCKER OWNS (and nobody else's), and stops
+  // their notifications reaching the blocker. Pushes are caught by swapping
+  // pg_net's stand-in for one that records what it was asked to send.
+  const B_OWNER = "ffffffff-0000-4000-8000-000000000010";   // runs two groups
+  const B_MEMBER = "ffffffff-0000-4000-8000-000000000011";  // in both, and in B_OTHER's
+  const B_PEER = "ffffffff-0000-4000-8000-000000000012";    // a member who blocks a trainer
+  const B_POSTER = "ffffffff-0000-4000-8000-000000000013";  // a trainer of B_OWNER's group
+  const B_INVITEE = "ffffffff-0000-4000-8000-000000000014"; // invited, not yet in
+  const B_OTHER = "ffffffff-0000-4000-8000-000000000015";   // runs a group B_MEMBER is in
+  for (const [id, type] of [
+    [B_OWNER, "pt"], [B_MEMBER, "user"], [B_PEER, "user"], [B_POSTER, "pt"], [B_INVITEE, "user"], [B_OTHER, "pt"],
+  ] as const) {
+    await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+    await db.query(`update public.profiles set account_type = $2 where id = $1`, [id, type]);
+  }
+  for (const other of [B_MEMBER, B_PEER, B_POSTER, B_INVITEE]) await connect(B_OWNER, other);
+  await connect(B_OTHER, B_MEMBER);
+  const groupOf = async (owner: string, members: [string, "member" | "trainer", boolean][]) => {
+    const g = (await db.query<{ id: string }>(
+      `insert into public.groups (owner_id, name) values ($1, 'Blocks') returning id`, [owner])).rows[0].id;
+    // The owner is a member of their own group, as create_group makes them.
+    for (const [uid, role, accepted] of [[owner, "member", true] as const, ...members]) {
+      await db.query(
+        `insert into public.group_members (group_id, user_id, role, accepted_at) values ($1, $2, $3, ${accepted ? "now()" : "null"})`,
+        [g, uid, role]);
+    }
+    return g;
+  };
+  const gMain = await groupOf(B_OWNER, [
+    [B_MEMBER, "member", true], [B_PEER, "member", true], [B_POSTER, "trainer", true], [B_INVITEE, "member", false],
+  ]);
+  const gSecond = await groupOf(B_OWNER, [[B_MEMBER, "member", true]]);
+  const gOthers = await groupOf(B_OTHER, [[B_MEMBER, "member", true]]);
+  const inGroupNow = async (groupId: string, uid: string) => (await db.query(
+    `select 1 from public.group_members where group_id = $1 and user_id = $2`, [groupId, uid])).rows.length === 1;
+  const connected = async (a: string, b: string) => (await db.query(
+    `select 1 from public.connections where (requester_id = $1 and addressee_id = $2) or (requester_id = $2 and addressee_id = $1)`,
+    [a, b])).rows.length > 0;
+  const block = (blocker: string, blockedId: string) =>
+    asApi(blocker, `insert into public.blocks (blocker_id, blocked_id, name) values (auth.uid(), $1, 'Them')
+                    on conflict do nothing`, [blockedId]);
+  const blocksSeenBy = async (uid: string) => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      return (await db.query<{ n: number }>(`select count(*)::int as n from public.blocks`)).rows[0].n;
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+
+  await db.exec(`
+    create table public._pushes (body jsonb);
+    create or replace function net.http_post(url text, body jsonb default '{}'::jsonb, params jsonb default '{}'::jsonb,
+      headers jsonb default '{}'::jsonb, timeout_milliseconds integer default 5000)
+      returns bigint language sql as $$ insert into public._pushes values (body); select 0::bigint $$;
+  `);
+  for (const uid of [B_OWNER, B_MEMBER, B_PEER, B_POSTER]) {
+    await db.query(`insert into public.push_tokens (user_id, token) values ($1, $2)`, [uid, `tok-${uid}`]);
+  }
+  /** Who a push went to since the last call, by account. */
+  const pushedSince = async () => {
+    const rows = (await db.query<{ to: string }>(
+      `select e->>'to' as to from public._pushes p, jsonb_array_elements(p.body) e`)).rows;
+    await db.query(`delete from public._pushes`);
+    return new Set(rows.map(r => r.to.replace(/^tok-/, "")));
+  };
+  const groupMessage = async (sender: string, groupId: string) => {
+    await as(sender);
+    await db.query(`insert into public.group_messages (group_id, sender_id, body) values ($1, $2, 'hi')`, [groupId, sender]);
+  };
+  await pushedSince();
+
+  // The owner blocks a member: out of both their groups, not out of B_OTHER's.
+  eq(await block(B_OWNER, B_MEMBER), null, "blocks: you can block someone");
+  eq([await inGroupNow(gMain, B_MEMBER), await inGroupNow(gSecond, B_MEMBER)], [false, false],
+    "blocks: the owner's block takes them out of every group the owner runs");
+  eq(await inGroupNow(gOthers, B_MEMBER), true, "blocks: ...and out of nobody else's");
+  eq(await connected(B_OWNER, B_MEMBER), false, "blocks: ...and severs the connection");
+  eq(await block(B_OWNER, B_MEMBER), null, "blocks: blocking again is harmless");
+  eq(await block(B_OWNER, B_INVITEE), null, "blocks: the owner blocks someone they've invited");
+  eq(await inGroupNow(gMain, B_INVITEE), false, "blocks: ...and the invite is withdrawn");
+
+  // A member blocks a trainer of the group: both stay, the trainer's
+  // notifications stop reaching them, and nobody else's change.
+  eq(await block(B_PEER, B_POSTER), null, "blocks: a member blocks a trainer of their group");
+  eq([await inGroupNow(gMain, B_PEER), await inGroupNow(gMain, B_POSTER)], [true, true],
+    "blocks: ...and both stay in the group, which isn't the member's to change");
+  await groupMessage(B_POSTER, gMain);
+  eq([...await pushedSince()], [B_OWNER], "blocks: their group messages notify everyone except whoever blocked them");
+  await groupMessage(B_PEER, gMain);
+  eq((await pushedSince()).has(B_POSTER), true, "blocks: one way: the blocker's messages still notify the person blocked");
+  await sendShare(B_POSTER, B_PEER, "send-block", gMain);
+  await sendShare(B_POSTER, B_OWNER, "send-block", gMain);
+  eq([...await pushedSince()], [B_OWNER], "blocks: a program they send to the group doesn't notify whoever blocked them");
+  const ownersReview = await askForReview(B_PEER, B_OWNER, gMain);
+  await pushedSince();
+  await db.query(`update public.shared_programs set draft_snapshot = '{"name":"x"}'::jsonb where id = $1`, [ownersReview]);
+  await as(B_POSTER);
+  await db.query(`select public.return_shared_review($1)`, [ownersReview]);
+  eq((await pushedSince()).has(B_PEER), false, "blocks: nor does a review they send back");
+  await db.query(`insert into public.connections (requester_id, addressee_id, status) values ($1, $2, 'pending')`, [B_MEMBER, B_OWNER]);
+  eq((await pushedSince()).has(B_OWNER), false, "blocks: nor a connection request from them");
+
+  // Only the blocker sees or lifts it.
+  eq(await blocksSeenBy(B_POSTER), 0, "blocks: the person blocked can't see that they are");
+  eq(await blocksSeenBy(B_PEER), 1, "blocks: the blocker sees their own");
+  await asApi(B_POSTER, `delete from public.blocks where blocked_id = $1`, [B_POSTER]);
+  eq(await blocksSeenBy(B_PEER), 1, "blocks: the person blocked can't lift it");
+  eq(/row-level security/.test((await asApi(B_POSTER,
+    `insert into public.blocks (blocker_id, blocked_id) values ($1, $2)`, [B_PEER, B_OWNER])) ?? ""), true,
+    "blocks: nobody can block on someone else's behalf");
+  eq((await block(B_PEER, B_PEER)) !== null, true, "blocks: you can't block yourself");
+  eq(await asApi(B_PEER, `delete from public.blocks where blocked_id = $1`, [B_POSTER]), null, "blocks: the blocker lifts it");
+  await groupMessage(B_POSTER, gMain);
+  eq((await pushedSince()).has(B_PEER), true, "blocks: ...and their messages notify them again");
 
   return finish(db);
 }

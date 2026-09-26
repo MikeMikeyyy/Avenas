@@ -42,6 +42,7 @@ import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
 import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type DayOverride } from "../../utils/workout";
 import { resumeWithPrompt } from "../../utils/programPause";
+import { exerciseSummaryParams } from "../../utils/customExerciseDetails";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../../utils/units";
 import { scheduleCloudPush } from "../../lib/syncManager";
@@ -1012,7 +1013,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           <TouchableOpacity
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.navigate({ pathname: "/exercise-summary", params: { exerciseName: exercise.name } });
+              router.navigate({ pathname: "/exercise-summary", params: exerciseSummaryParams(exercise) });
             }}
             activeOpacity={0.7}
             style={styles.exTitleBlock}
@@ -2008,18 +2009,19 @@ export default function WorkoutScreen() {
     if (day === "Rest") {
       setChangeDayOpen(false);
       const ymd = effectiveTodayRef.current;
-      // Clearing the screen and storing the "Rest" override is what makes today
-      // read as a rest day HERE; marking the date off is what makes it one
-      // everywhere else (week strip, reminders, streak).
-      const commitRest = () => {
+      // Marking the date off (applyRestDay) is what makes today a rest day
+      // everywhere (week strip, reminders, streak); clearing the screen shows it
+      // here. A day already off only needs a pick made on it since replaced,
+      // which is what the "Rest" override is for.
+      const clearScreen = () => {
         setWorkoutInfo(null);
         setLog({});
-        AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: ymd, workoutName: "Rest" }))
-          .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
       };
       // Nothing to ask about — no program to move, or the day is already off.
       if (!activeProgram || isDateSkipped(activeProgram, ymd)) {
-        commitRest();
+        clearScreen();
+        AsyncStorage.setItem(WORKOUT_DAY_OVERRIDE_KEY, JSON.stringify({ date: ymd, workoutName: "Rest" }))
+          .catch((e) => warnStorage("setItem", WORKOUT_DAY_OVERRIDE_KEY, e));
         return;
       }
       // Ask FIRST and commit nothing until an answer comes back. Writing the
@@ -2027,9 +2029,14 @@ export default function WorkoutScreen() {
       // schedule everywhere else still had the workout — the two disagreed and
       // nothing put them back. Reload after, since a push moved the cycle and
       // this screen's copy of the program is a version behind.
+      //
+      // No "Rest" override after it: applyRestDay has already settled today's
+      // pick (dropped it, or carried it to tomorrow with a move) and today now
+      // resolves to nothing. There's one override slot, so writing Rest here
+      // threw away a pick that had just moved to tomorrow.
       void applyRestDay(activeProgram.id, ymd, "ask").then(outcome => {
         if (!outcome) return;
-        commitRest();
+        clearScreen();
         loadData(true);
       });
       return;
@@ -2057,7 +2064,8 @@ export default function WorkoutScreen() {
     // shows a workout. A push, if one happened, deliberately stands: the cycle
     // moved, and that isn't what picking a day today is asking to reverse.
     if (activeProgram && isDateSkipped(activeProgram, effectiveTodayRef.current)) {
-      void clearRestDay(activeProgram.id, effectiveTodayRef.current);
+      // The pick just written replaces any a move carried to tomorrow.
+      void clearRestDay(activeProgram.id, effectiveTodayRef.current, false);
     }
   }, [activeProgram, loadData]);
 

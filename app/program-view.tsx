@@ -10,7 +10,7 @@
 // breakdown and Summary, and nothing else. It's the client's program, so there
 // is nothing here to edit, remove or accept.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -24,6 +24,7 @@ import { scheduleCloudPush } from "../lib/syncManager";
 import FadeScreen from "../components/FadeScreen";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import OfflineBanner from "../components/OfflineBanner";
 import ProgramHeaderCard from "../components/ProgramHeaderCard";
 import ProgramSnapshotView from "../components/ProgramSnapshotView";
 import ProgramActionFabs from "../components/ProgramActionFabs";
@@ -34,6 +35,7 @@ import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
 import { pill, PILL_H_SM } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
+import { alertOffline, useOffline } from "../contexts/ConnectivityContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import { getMyUid } from "../lib/chat";
 import { fetchGroupMembers } from "../lib/groups";
@@ -72,6 +74,7 @@ export default function ProgramViewScreen() {
   }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const offline = useOffline();
   const { accountType } = useAccountType();
   const insets = useSafeAreaInsets();
   const clientIsKg = useClientUnit(clientId);
@@ -212,19 +215,41 @@ export default function ProgramViewScreen() {
   const showFloatingAcceptChanges = sentReturned && !sentApplied;
   const showFloatingAccept = showFloatingAcceptProgram || showFloatingAcceptChanges;
 
+  // A second tap on Accept while the first is on its way would otherwise say
+  // "added" twice (the store adds it once either way).
+  const accepting = useRef(false);
+
   const handleAccept = useCallback(async () => {
-    if (!share || accepted) return;
+    if (!share || accepted || accepting.current) return;
+    accepting.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await acceptSharedProgram(share.id);
+    try {
+      await acceptSharedProgram(share.id);
+    } catch (e) {
+      // Deleted or archived since this page was opened: the reload shows that.
+      Alert.alert("Couldn't add program", alertMessage(e, "Check your connection and try again."));
+      await reload();
+      return;
+    } finally {
+      accepting.current = false;
+    }
     scheduleCloudPush(); // the accept materialised/updated @avenas/programs (a synced key)
     await reload();
     Alert.alert("Program Added", `"${share.programName}" was added to your programs.`);
   }, [share, accepted, reload]);
 
   const handleApplyReturned = useCallback(async () => {
-    if (!sent || sentApplied) return;
+    if (!sent || sentApplied || accepting.current) return;
+    accepting.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await applyReturnedProgram(sent.id);
+    try {
+      await applyReturnedProgram(sent.id);
+    } catch (e) {
+      Alert.alert("Couldn't update your program", alertMessage(e, "Check your connection and try again."));
+      return;
+    } finally {
+      accepting.current = false;
+    }
     scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
     await reload();
     Alert.alert("Program Updated", `"${sent.programName}" in your programs was updated with your trainer's edits.`);
@@ -307,7 +332,12 @@ export default function ProgramViewScreen() {
       body: choice.body,
       onArchive: () => void archiveThenBack(),
       onDelete: async () => {
-        await removeSharedProgram(share.id);
+        try {
+          await removeSharedProgram(share.id);
+        } catch (e) {
+          Alert.alert("Couldn't remove program", alertMessage(e, "Check your connection and try again."));
+          return;
+        }
         router.back();
       },
     });
@@ -381,25 +411,29 @@ export default function ProgramViewScreen() {
           be pulled out of a group by whoever runs it. Members get neither. */}
       {canDelete && (
         <View style={[styles.topActions, { top: insets.top + BACK_TOP }]}>
+          {/* Both need the server (an edit re-sends it), so with no signal
+              they dim and say why, like BounceButton's needsConnection. */}
           {isOutgoing && (
           <TouchableOpacity
-            onPress={handleEdit}
+            onPress={offline ? alertOffline : handleEdit}
             activeOpacity={0.8}
             accessibilityLabel="Edit program"
             accessibilityRole="button"
+            accessibilityState={{ disabled: offline }}
           >
-            <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+            <View style={[styles.backBtn, { backgroundColor: t.ctrl }, offline && styles.offlineDim]}>
               <SquarePenIcon size={20} color={t.tp} />
             </View>
           </TouchableOpacity>
           )}
           <TouchableOpacity
-            onPress={handleDelete}
+            onPress={offline ? alertOffline : handleDelete}
             activeOpacity={0.8}
             accessibilityLabel="Remove program"
             accessibilityRole="button"
+            accessibilityState={{ disabled: offline }}
           >
-            <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
+            <View style={[styles.backBtn, { backgroundColor: t.ctrl }, offline && styles.offlineDim]}>
               <TrashIcon size={20} color={DANGER_BRIGHT} />
             </View>
           </TouchableOpacity>
@@ -427,6 +461,7 @@ export default function ProgramViewScreen() {
           <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>View Program</Text>
           <View style={{ width: topChromeW }} />
         </View>
+        <OfflineBanner />
 
         {!loaded ? null : (!share && !sent && !clientProgram) ? (
           <NeuCard dark={isDark} radius={16}>
@@ -492,7 +527,7 @@ export default function ProgramViewScreen() {
                     )
                   ) : accepted ? (
                     accountType === "pt" ? (
-                      <BounceButton style={{ flex: 1 }} onPress={handleOpenPassDown}>
+                      <BounceButton style={{ flex: 1 }} onPress={handleOpenPassDown} needsConnection>
                         <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
                           <Ionicons name="paper-plane-outline" size={16} color="#fff" />
                           <Text style={styles.primaryBtnText}>Send to my clients</Text>
@@ -533,6 +568,7 @@ export default function ProgramViewScreen() {
               the builder's Create pill and "Open in Builder". */}
           <BounceButton
             onPress={showFloatingAcceptChanges ? handleApplyReturned : handleAccept}
+            needsConnection
             accessibilityLabel={showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
           >
             <View style={[styles.primaryBtn, styles.slateBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
@@ -552,7 +588,7 @@ export default function ProgramViewScreen() {
           // Only the sender edits: a program sent TO you becomes yours to change
           // once you accept it, and until then the builder would be editing
           // someone else's copy.
-          onOpenBuilder={isOutgoing ? handleEdit : undefined}
+          onOpenBuilder={isOutgoing ? (offline ? alertOffline : handleEdit) : undefined}
           onOpenSummary={() => setSummaryOpen(true)}
         />
       )}
@@ -587,6 +623,8 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20,
     alignItems: "center", justifyContent: "center", overflow: "hidden",
   },
+  /** BounceButton's offline fade, for the two plain touchables up top. */
+  offlineDim: { opacity: 0.4 },
   topActions: {
     position: "absolute",
     right: 20,

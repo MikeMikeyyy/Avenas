@@ -27,7 +27,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { pill, pillGlow } from "../constants/buttons";
 import {
-  CUSTOM_KEY, MAX_CUSTOM, MUSCLE_GROUPS,
+  CUSTOM_KEY, MAX_CUSTOM, MAX_MEDIA_BYTES, MAX_VIDEO_SECONDS, MUSCLE_GROUPS,
   type SelectableMuscle, type CustomExercise,
 } from "../constants/exercises";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
@@ -210,8 +210,31 @@ export default function CreateCustomExerciseScreen() {
         videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
       });
       if (!result.canceled) {
+        const asset = result.assets[0];
+        // Checked before the copy, so a long video never lands in the app's
+        // folder (or later in the upload). The picker's own duration limit
+        // only applies to recording, so the check is here.
+        if ((asset.duration ?? 0) > (MAX_VIDEO_SECONDS + 0.5) * 1000) {
+          Alert.alert(
+            "Video too long",
+            `Demo videos can be up to ${MAX_VIDEO_SECONDS} seconds. Trim it in your Photos app, then add it again.`,
+          );
+          return;
+        }
+        let bytes = asset.fileSize;
+        if (bytes == null) {
+          const info = await FileSystem.getInfoAsync(asset.uri);
+          bytes = info.exists ? info.size : 0;
+        }
+        if (bytes > MAX_MEDIA_BYTES) {
+          Alert.alert(
+            "Video too large",
+            `Demo videos can be up to ${Math.round(MAX_MEDIA_BYTES / (1024 * 1024))} MB. Try a shorter clip.`,
+          );
+          return;
+        }
         const dest = `${FileSystem.documentDirectory}exercise_video_${Date.now()}.mp4`;
-        await FileSystem.copyAsync({ from: result.assets[0].uri, to: dest });
+        await FileSystem.copyAsync({ from: asset.uri, to: dest });
         setVideoUri(dest);
       }
     } catch (e) {
@@ -401,7 +424,7 @@ export default function CreateCustomExerciseScreen() {
         </NeuCard>
 
         {/* Video Demo */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>VIDEO DEMO <Text style={{ fontFamily: FontFamily.regular }}>(optional)</Text></Text>
+        <Text style={[styles.fieldLabel, { color: t.ts }]}>VIDEO DEMO <Text style={{ fontFamily: FontFamily.regular }}>(optional, up to {MAX_VIDEO_SECONDS}s)</Text></Text>
         <NeuCard dark={isDark} style={styles.mediaCard}>
           {videoUri ? (
             <>

@@ -26,7 +26,7 @@ import { SchedulableTriggerInputTypes } from "expo-notifications";
 
 import { getJSON } from "./storage";
 import { fromYMD, toYMD, todayYMD, fmtDuration } from "./dates";
-import { getWorkoutForDate, resolveWorkoutForDate, type DayOverride } from "./workout";
+import { resolveWorkoutForDate, type DayOverride } from "./workout";
 import { streakBreakDate } from "./streak";
 import {
   PROGRAMS_KEY,
@@ -175,8 +175,9 @@ async function doResync(): Promise<void> {
   const active = programs.find((p) => p.status === "active") ?? null;
 
   // Workout reminders: one one-shot per scheduled (non-Rest) day at the user's
-  // chosen time. Today is skipped once its workout is already logged, and the
-  // change-day override is honored for today only (its only valid day).
+  // chosen time. Today is skipped once its workout is already logged. The
+  // change-day override is honored on its own date only: today's pick, or one
+  // "Move to Tomorrow" carried to the next day (pickAfterMove).
   if (prefs.categories.workoutReminders) {
     if (active) {
       const override = await getJSON<DayOverride | null>(WORKOUT_DAY_OVERRIDE_KEY, null);
@@ -187,10 +188,7 @@ async function doResync(): Promise<void> {
         if (fireAt.getTime() <= now.getTime()) continue;
         const ymd = toYMD(fireAt);
         if (ymd === today && doneDates.includes(today)) continue;
-        const resolved =
-          ymd === today
-            ? resolveWorkoutForDate(active, override, ymd, programs)
-            : getWorkoutForDate(active, ymd);
+        const resolved = resolveWorkoutForDate(active, override, ymd, programs);
         if (!resolved) continue;
         await schedule(
           "workoutReminders",

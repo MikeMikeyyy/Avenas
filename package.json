@@ -9,9 +9,10 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts && npx tsx scripts/verify-workout-summary.ts && npx tsx scripts/verify-program-edits.ts && npx tsx scripts/verify-streak.ts && npx tsx scripts/verify-exercise-favourites.ts && npx tsx scripts/verify-skipped-dates.ts && npx tsx scripts/verify-session-track.ts && npx tsx scripts/verify-week-schedule.ts && npx tsx scripts/verify-program-history.ts &&npx tsx scripts/verify-journal-feed.ts && npx tsx scripts/verify-group-alerts.ts && npx tsx scripts/verify-archive.ts && npx tsx scripts/verify-achievements.ts && npx tsx scripts/verify-client-achievements.ts && npx tsx scripts/verify-db.ts",
+    "verify": "npx tsx scripts/verify-data-layer.ts && npx tsx scripts/verify-progress-stats.ts && npx tsx scripts/verify-workout-summary.ts && npx tsx scripts/verify-program-edits.ts && npx tsx scripts/verify-streak.ts && npx tsx scripts/verify-exercise-favourites.ts && npx tsx scripts/verify-skipped-dates.ts && npx tsx scripts/verify-session-track.ts && npx tsx scripts/verify-week-schedule.ts && npx tsx scripts/verify-program-history.ts &&npx tsx scripts/verify-journal-feed.ts && npx tsx scripts/verify-group-alerts.ts && npx tsx scripts/verify-archive.ts && npx tsx scripts/verify-custom-details.ts && npx tsx scripts/verify-achievements.ts && npx tsx scripts/verify-client-achievements.ts && npx tsx scripts/verify-db.ts && npx tsx scripts/verify-program-flows.ts",
     "verify:stats": "npx tsx scripts/verify-progress-stats.ts",
-    "verify:db": "npx tsx scripts/verify-db.ts"
+    "verify:db": "npx tsx scripts/verify-db.ts",
+    "verify:flows": "npx tsx scripts/verify-program-flows.ts"
   },
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",
@@ -20,6 +21,7 @@
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "9.1.0",
+    "@react-native-community/netinfo": "12.0.1",
     "@react-native-masked-view/masked-view": "0.3.2",
     "@supabase/supabase-js": "^2.107.0",
     "expo": "~57.0.21",

@@ -1,5 +1,6 @@
 import { cycleDrift } from "../utils/cycleDrift";
 import type { WeightUnit } from "../utils/units";
+import type { CarriedExercise } from "./exercises";
 
 export const PROGRAMS_KEY = "@avenas/programs";
 export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
@@ -119,6 +120,13 @@ export type Exercise = {
   isIsometric?: boolean;
   restSeconds?: number;
   programNotes?: string;
+  /** Someone's custom exercise, carried with the program so it reads the same
+   *  on every phone it reaches: the author's muscles, steps, photo and video.
+   *  Absent for catalogue exercises and for your own custom ones in your own
+   *  programs (your list already has them). Stamped on send and on builder save
+   *  (utils/customExerciseDetails.ts stampCustomDetails); rides in the workouts
+   *  jsonb, so it syncs with no column. */
+  customDetails?: CarriedExercise;
   // Legacy fields — kept optional for migration only
   warmupSets?: number;
   workingSets?: number;

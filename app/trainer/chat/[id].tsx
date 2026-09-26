@@ -25,6 +25,8 @@ import SimpleSheet from "../../../components/trainer/SimpleSheet";
 import { ReportReasonList } from "../../../components/trainer/ReportReasonSheet";
 import MessageActions from "../../../components/trainer/MessageActions";
 import SheetPill from "../../../components/SheetPill";
+import UserRoundMinusIcon from "../../../components/icons/UserRoundMinusIcon";
+import FlagIcon from "../../../components/icons/FlagIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
@@ -109,7 +111,7 @@ export default function ChatThreadScreen() {
     closeSheet();
     Alert.alert(
       `Block ${displayName}?`,
-      "They'll be removed from your connections and can no longer message you. You can unblock them later in Settings.",
+      "They'll be removed from your connections and from any group you created, and can no longer message you. You can unblock them later in Settings.",
       [
         { text: "Cancel", style: "cancel" },
         { text: "Block", style: "destructive", onPress: async () => {
@@ -264,9 +266,9 @@ export default function ChatThreadScreen() {
           <>
             <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
             <View style={styles.menu}>
-              <SheetPill label="Report" icon={c => <Ionicons name="flag-outline" size={18} color={c} />} onPress={onReportUser} />
+              <SheetPill label="Report" icon={c => <FlagIcon size={18} color={c} />} onPress={onReportUser} />
               <SheetPill label="Block" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={onBlock} />
-              <SheetPill label="Remove connection" icon={c => <Ionicons name="person-remove-outline" size={18} color={c} />} onPress={onUnadd} />
+              <SheetPill label="Remove connection" icon={c => <UserRoundMinusIcon size={18} color={c} />} onPress={onUnadd} />
             </View>
             <Text style={[styles.menuHint, { color: t.ts }]}>
               Tap any message to delete it or report it.

@@ -19,6 +19,7 @@ import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import FadeScreen from "../../../../components/FadeScreen";
 import NeuCard from "../../../../components/NeuCard";
 import BounceButton from "../../../../components/BounceButton";
+import OfflineBanner from "../../../../components/OfflineBanner";
 import Avatar from "../../../../components/Avatar";
 import ClientCard from "../../../../components/trainer/ClientCard";
 import GroupAvatar from "../../../../components/trainer/GroupAvatar";
@@ -33,6 +34,7 @@ import GroupChatIcon from "../../../../components/icons/GroupChatIcon";
 import UserPlusIcon from "../../../../components/icons/UserPlusIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
+import UserRoundMinusIcon from "../../../../components/icons/UserRoundMinusIcon";
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "../../../../components/trainer/ReviewStatusPill";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT, ROLE_OWNER, ROLE_TRAINER, ROLE_MEMBER } from "../../../../constants/theme";
 import { pill, pillGlow, haloGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../../../constants/buttons";
@@ -45,11 +47,11 @@ import { fetchPeopleUnits } from "../../../../lib/clientTraining";
 import { unitLabel, unitOf } from "../../../../utils/units";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
 import { useAuth } from "../../../../contexts/AuthContext";
-import { deleteGroup, leaveGroup, setGroupMemberRole, subscribeToGroup } from "../../../../lib/groups";
+import { deleteGroup, fetchGroupMembers, leaveGroup, setGroupMemberRole, setGroupMembers, subscribeToGroup } from "../../../../lib/groups";
 import { getMyUid } from "../../../../lib/chat";
 import { scheduleCloudPush } from "../../../../lib/syncManager";
 import { loadGroupUnread, sortByFavourite, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
-import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, applyReturnedProgram, batchKeyOf, dismissSharedBatch, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, returnedKeyOf, setGroupReviewDone, setReviewArchived, setSendBatchArchived, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
+import { acceptSharedProgramBatch, appendSentProgram, appendSharedPrograms, applyReturnedProgram, batchKeyOf, dismissKeyOf, dismissSharedBatch, loadGroupReviewPrograms, loadGroupSharedPrograms, removeGroupSharedProgramBatch, returnedKeyOf, setGroupReviewDone, setReviewArchived, setSendBatchArchived, type Client, type SentProgram, type SharedProgram } from "../../../../utils/trainerStore";
 import {
   dropGroupPage,
   EMPTY_GROUP_PAGE,
@@ -258,7 +260,7 @@ function SentBatchCard({ batch, open, myUid, iCoachGroup, isDark, senderName, na
               </View>
             </BounceButton>
             {mine && !mine.acceptedAtISO && (
-              <BounceButton style={styles.sentActionFlex} onPress={onAccept} accessibilityLabel={`Accept ${batch.programName}`}>
+              <BounceButton style={styles.sentActionFlex} onPress={onAccept} needsConnection accessibilityLabel={`Accept ${batch.programName}`}>
                 <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
                   <Text style={[styles.sentActionText, { color: "#fff" }]}>Accept</Text>
                 </View>
@@ -267,6 +269,8 @@ function SentBatchCard({ batch, open, myUid, iCoachGroup, isDark, senderName, na
             {(canRemoveForAll || mine) && (
               <BounceButton
                 onPress={canRemoveForAll ? onRemove : onDismiss}
+                // Taking it out of the group needs the server; off my own list doesn't.
+                needsConnection={canRemoveForAll}
                 accessibilityLabel={canRemoveForAll ? `Remove ${batch.programName} from the group` : `Remove ${batch.programName} from your list`}
               >
                 <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
@@ -388,7 +392,7 @@ function GroupReviewCard({ review, from, open, mode, isDark, onToggle, onOpen, o
                     <Text style={[styles.sentActionText, { color: t.tp }]}>Review</Text>
                   </View>
                 </BounceButton>
-                <BounceButton style={{ flex: 1 }} onPress={onRemove} accessibilityLabel={`Remove ${review.programName}`}>
+                <BounceButton style={{ flex: 1 }} onPress={onRemove} needsConnection accessibilityLabel={`Remove ${review.programName}`}>
                   <View style={[styles.sentActionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
                     <TrashIcon size={15} color="#fff" />
                     <Text style={[styles.sentActionText, { color: "#fff" }]}>Remove</Text>
@@ -406,7 +410,7 @@ function GroupReviewCard({ review, from, open, mode, isDark, onToggle, onOpen, o
                   </View>
                 </BounceButton>
                 {!review.appliedAtISO && (
-                  <BounceButton style={styles.sentActionFlex} onPress={onAccept} accessibilityLabel={`Accept the trainer's changes to ${review.programName}`}>
+                  <BounceButton style={styles.sentActionFlex} onPress={onAccept} needsConnection accessibilityLabel={`Accept the trainer's changes to ${review.programName}`}>
                     <View style={[styles.sentActionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
                       <Text style={[styles.sentActionText, { color: "#fff" }]}>Accept</Text>
                     </View>
@@ -489,8 +493,10 @@ export default function GroupPageScreen() {
     favouriteMemberIds,
     groupShares,
     groupReviews,
+    blockedMemberIds,
     myUid,
   } = page ?? EMPTY_GROUP_PAGE;
+  const blockedMembers = useMemo(() => new Set(blockedMemberIds ?? []), [blockedMemberIds]);
   /** Starred PEOPLE, oldest star first — the order they're pinned in. */
   const favouriteMembers = useMemo(() => new Set(favouriteMemberIds), [favouriteMemberIds]);
 
@@ -656,14 +662,15 @@ export default function GroupPageScreen() {
       "Remove Program",
       accepted
         ? `Remove "${batch.programName}" from this list? It stays in your programs.`
-        : `Remove "${batch.programName}" without accepting it? You won't be able to add it to your programs unless it's sent again.`,
+        : `Remove "${batch.programName}" without accepting it? It comes back if it's sent again or updated.`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Remove",
           style: "destructive",
           onPress: async () => {
-            await dismissSharedBatch(batch.key);
+            // Hides this version: a Send Update brings it back (dismissKeyOf).
+            await dismissSharedBatch(dismissKeyOf(mine ?? batch.entries[0]));
             await refreshGroupShares();
           },
         },
@@ -726,9 +733,24 @@ export default function GroupPageScreen() {
     );
   }, [refreshGroupShares, groupId, iCoachGroup]);
 
+  // Accepts in flight, by card: a second tap while the first is on its way
+  // would otherwise say "added" twice (the store adds it once either way).
+  const accepting = useRef(new Set<string>());
+
   const handleAcceptBatch = useCallback(async (batchKey: string, programName: string) => {
+    if (accepting.current.has(batchKey)) return;
+    accepting.current.add(batchKey);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await acceptSharedProgramBatch(batchKey);
+    try {
+      await acceptSharedProgramBatch(batchKey);
+    } catch (e) {
+      // Deleted or archived since the card was drawn: the refresh takes it away.
+      Alert.alert("Couldn't add program", alertMessage(e, "Check your connection and try again."));
+      await refreshGroupShares();
+      return;
+    } finally {
+      accepting.current.delete(batchKey);
+    }
     scheduleCloudPush(); // the accept materialised a local program
     await refreshGroupShares();
     Alert.alert("Program Added", `"${programName}" is now in your programs.`);
@@ -786,9 +808,17 @@ export default function GroupPageScreen() {
    *  program, as from my trainer page. Here too because a trainer who asked a
    *  group has no trainer page to do it from. */
   const handleAcceptReturned = useCallback(async (entry: SentProgram) => {
-    if (entry.appliedAtISO) return;
+    if (entry.appliedAtISO || accepting.current.has(entry.id)) return;
+    accepting.current.add(entry.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await applyReturnedProgram(entry.id);
+    try {
+      await applyReturnedProgram(entry.id);
+    } catch (e) {
+      Alert.alert("Couldn't update your program", alertMessage(e, "Check your connection and try again."));
+      return;
+    } finally {
+      accepting.current.delete(entry.id);
+    }
     scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
     const appliedAt = new Date().toISOString();
     setPage(p => p && { ...p, groupReviews: p.groupReviews.map(r => (r.id === entry.id ? { ...r, appliedAtISO: appliedAt } : r)) });
@@ -1014,6 +1044,35 @@ export default function GroupPageScreen() {
     }
   }, [groupId]);
 
+  // Take someone out of the group, or withdraw their invite. Owner-only, and
+  // set_group_members refuses anyone else. That RPC replaces the roster
+  // wholesale (keeping every row it's passed as it was, role and accept alike),
+  // so it's handed the roster read NOW minus this one person: the page's copy
+  // could still list someone who has since left, and passing them would invite
+  // them straight back.
+  const removeMember = useCallback((m: GroupMember) => {
+    setMemberMenu(null);
+    Alert.alert(
+      m.accepted ? `Remove ${m.name}?` : `Cancel ${m.name}'s invite?`,
+      m.accepted
+        ? `They'll leave ${displayName} and stop receiving its messages. You can add them back later.`
+        : `They won't be able to join ${displayName}. You can invite them again later.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: m.accepted ? "Remove" : "Cancel Invite", style: "destructive", onPress: async () => {
+          try {
+            const roster = await fetchGroupMembers(groupId);
+            const rest = roster.filter(x => x.id !== m.id);
+            await setGroupMembers(groupId, rest.filter(x => !x.isOwner).map(x => x.id));
+            setPage(p => p && { ...p, members: rest });
+          } catch (e) {
+            Alert.alert(m.accepted ? "Couldn't remove them" : "Couldn't cancel the invite", alertMessage(e, "Check your connection and try again."));
+          }
+        } },
+      ],
+    );
+  }, [groupId, displayName]);
+
   // Everyone in the group except me. A trainer never sends a program to
   // themselves, and only real connections can receive one.
   const recipientIds = members.filter(m => m.id !== myUid).map(m => m.id);
@@ -1081,14 +1140,19 @@ export default function GroupPageScreen() {
    * My own row says "YOU" AND my role, in the role's colour ("YOU · TRAINER"):
    * it said "YOU" alone, so someone made a trainer had no way to see it. It's
    * also why that one row doesn't respond to a tap.
+   *
+   * Someone I've blocked reads "BLOCKED", in grey, over everything else: they
+   * stay in a group I don't own, their messages and programs are hidden from
+   * me, and without it they'd simply seem to have gone quiet.
    */
   const memberRows = visibleMembers.map(m => {
     const isMe = m.id === myUid;
+    const isBlocked = !isMe && blockedMembers.has(m.id);
     return {
       member: m,
       isMe,
-      badge: isMe ? `YOU · ${ROLE_LABEL[m.role]}` : m.accepted ? ROLE_LABEL[m.role] : "INVITED",
-      badgeColor: isMe || m.accepted ? ROLE_COLOR[m.role] : t.ts,
+      badge: isBlocked ? "BLOCKED" : isMe ? `YOU · ${ROLE_LABEL[m.role]}` : m.accepted ? ROLE_LABEL[m.role] : "INVITED",
+      badgeColor: isBlocked ? t.ts : isMe || m.accepted ? ROLE_COLOR[m.role] : t.ts,
       // Everyone but you opens the same sheet, whatever your standing here.
       // It used to be owner-only, with a coach going straight to the client
       // page and a plain member's row doing nothing at all — which left
@@ -1445,6 +1509,7 @@ export default function GroupPageScreen() {
             />
           }
         >
+          <OfflineBanner />
           {/* Banner: who's in it, and the two things you do with a group. The
               group's own photo lives in the header beside its name instead —
               stacked above the member faces it read as one more of them, a
@@ -1484,7 +1549,7 @@ export default function GroupPageScreen() {
                   </View>
                 </BounceButton>
                 {canSendToGroup ? (
-                  <BounceButton style={{ flex: 1 }} onPress={() => setPicker("send")} accessibilityLabel="Send a program to this group">
+                  <BounceButton style={{ flex: 1 }} onPress={() => setPicker("send")} needsConnection accessibilityLabel="Send a program to this group">
                     <View style={[styles.actionBtn, styles.actionPrimary]}>
                       <SendIcon size={17} color="#fff" />
                       <Text style={[styles.actionText, { color: "#fff" }]}>Send Program</Text>
@@ -1495,7 +1560,7 @@ export default function GroupPageScreen() {
                      whichever coach is free picks it up. One request to the
                      group rather than one per trainer, so a gym with three
                      trainers doesn't produce three reviews of one program. */
-                  <BounceButton style={{ flex: 1 }} onPress={() => setPicker("review")} accessibilityLabel="Send a program to this group for review">
+                  <BounceButton style={{ flex: 1 }} onPress={() => setPicker("review")} needsConnection accessibilityLabel="Send a program to this group for review">
                     <View style={[styles.actionBtn, styles.actionPrimary]}>
                       <SendIcon size={17} color="#fff" />
                       <Text style={[styles.actionText, { color: "#fff" }]}>Ask for Review</Text>
@@ -1510,7 +1575,7 @@ export default function GroupPageScreen() {
                   stays the one green action, and three buttons wouldn't fit on
                   one line. */}
               {canSendToGroup && myRole !== "owner" && (
-                <BounceButton onPress={() => setPicker("review")} accessibilityLabel="Send a program to this group for review">
+                <BounceButton onPress={() => setPicker("review")} needsConnection accessibilityLabel="Send a program to this group for review">
                   <View style={[styles.actionBtn, styles.actionChrome, { backgroundColor: t.ctrl }]}>
                     <SendIcon size={17} color={t.tp} />
                     <Text style={[styles.actionText, { color: t.tp }]}>Ask for Review</Text>
@@ -1767,6 +1832,14 @@ export default function GroupPageScreen() {
               tint={memberMenu?.role === "trainer" ? undefined : ROLE_TRAINER}
               icon={c => <Ionicons name={memberMenu?.role === "trainer" ? "arrow-down-circle-outline" : "shield-checkmark-outline"} size={18} color={c} />}
               onPress={() => memberMenu && toggleRole(memberMenu)}
+            />
+          )}
+          {group?.isOwner && (
+            <SheetPill
+              label={memberMenu?.accepted === false ? "Cancel invite" : "Remove from group"}
+              variant="danger"
+              icon={c => <UserRoundMinusIcon size={18} color={c} />}
+              onPress={() => memberMenu && removeMember(memberMenu)}
             />
           )}
         </View>
