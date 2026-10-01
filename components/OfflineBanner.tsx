@@ -2,7 +2,8 @@
 // Trainer tab, a group, a program someone sent, an archive, a review): the page
 // is showing the copy it last loaded, and its buttons that need the server are
 // dimmed (BounceButton `needsConnection`). Nothing while online, so a page can
-// always render it.
+// always render it. A page that works offline says what still happens instead
+// (`message`: the Workout page, where a session saves on the phone).
 
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -11,7 +12,9 @@ import { PILL_RADIUS } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { useOffline } from "../contexts/ConnectivityContext";
 
-export default function OfflineBanner({ style }: { style?: StyleProp<ViewStyle> }) {
+const SHOWING_LAST_COPY = "You're offline. Showing what was here last time.";
+
+export default function OfflineBanner({ style, message = SHOWING_LAST_COPY }: { style?: StyleProp<ViewStyle>; message?: string }) {
   const { isDark } = useTheme();
   const offline = useOffline();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -23,9 +26,7 @@ export default function OfflineBanner({ style }: { style?: StyleProp<ViewStyle> 
       accessibilityLiveRegion="polite"
     >
       <Ionicons name="cloud-offline-outline" size={16} color={t.ts} />
-      <Text style={[styles.text, { color: t.tp }]}>
-        {"You're offline. Showing what was here last time."}
-      </Text>
+      <Text style={[styles.text, { color: t.tp }]}>{message}</Text>
     </View>
   );
 }

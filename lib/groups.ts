@@ -105,11 +105,17 @@ export async function fetchMyGroupInvites(): Promise<GroupInvite[]> {
   }));
 }
 
-/** The database's refusal when the account is already in MAX_GROUPS groups
- *  (migration 0035). createGroup and acceptGroupInvite throw it as their error;
- *  screens show the limit prompt for it rather than the raw message. */
+/** The database's refusal when the account has already created
+ *  MAX_OWNED_GROUPS groups (createGroup) or is in MAX_JOINED_GROUPS of other
+ *  people's (acceptGroupInvite), migration 0042. Screens show the limit prompt
+ *  for it rather than the raw message. */
 export const isGroupLimitError = (e: unknown): boolean =>
   e instanceof Error && e.message.includes("group_limit_reached");
+
+/** The database's refusal when a group already holds MAX_GROUP_MEMBERS people,
+ *  invites included (createGroup, setGroupMembers; migration 0042). */
+export const isGroupFullError = (e: unknown): boolean =>
+  e instanceof Error && e.message.includes("group_full");
 
 /** Join a group I was invited to. Idempotent in the RPC, so a double tap on a
  *  slow connection is not an error. */

@@ -26,9 +26,14 @@
 //   pulledDates  — a rest day spent to catch back up (−1 drift).
 //
 // "Move to Tomorrow" is a PUSH on the missed date paired with a PULL on the next
-// rest day, so the net drift returns to zero there. Undoing the push removes its
-// pull too — see `unskipDate`. Only when the cycle has no rest day to spend is
-// it a bare push, and then (and only then) the program finishes a day later.
+// free rest day, so the net drift returns to zero there. Undoing the push gives
+// its rest day back too — see `unskipDate`. Only when no rest day can absorb it
+// (the cycle has none, or a hold starts first) is it a bare push, and then (and
+// only then) the program finishes a day later. Moves can overlap (move today,
+// then tomorrow; or move the day an earlier move was absorbed into): each still
+// gets its own rest day, and undoing any one puts the week back as it was.
+// A move is never offered onto a day already made a rest day (utils/restDay.ts):
+// that day blanks whatever lands on it, so the moved workout would vanish.
 //
 // Anchoring to DATES rather than nudging `cycleOffset` is load-bearing: an
 // offset is a phase shift over the whole timeline, so pushing Tuesday also
@@ -44,8 +49,9 @@
 // RN-free and pure so it can be unit-tested under plain node/tsx
 // (see scripts/verify-skipped-dates.ts).
 
-import type { SavedProgram } from "../constants/programs";
-import { getWorkoutForDate, normalizeDriftDates, resolveDayIndex, type DayOverride } from "./workout";
+import { programFinishDate, type SavedProgram } from "../constants/programs";
+import { toYMD } from "./dates";
+import { cycleIndexForDate, getWorkoutForDate, normalizeDriftDates, type DayOverride } from "./workout";
 
 type SkipFields = Pick<SavedProgram, "skippedDates" | "pushedDates" | "pulledDates">;
 
@@ -103,13 +109,29 @@ export function pullDate(program: SavedProgram, ymd: string): SavedProgram {
 /**
  * `program` with `ymd` restored to its planned workout.
  *
- * Undoing a MOVE also removes the pull it was absorbed into — the first pull
- * after it. The two were created as one action, so they come off as one: take
- * just the push away and the orphaned pull would drag the rest of the program a
- * day EARLIER, which is a worse state than either the move or no move.
+ * Undoing a MOVE also gives back the rest day it was absorbed into. The two
+ * were created as one action, so they come off as one: take just the push away
+ * and the orphaned pull would drag the rest of the program a day EARLIER, which
+ * is a worse state than either the move or no move.
  *
- * Pulls are therefore never removed by date. They're owned by the push before
- * them, and "Set Workout Date" is the only other thing that clears them.
+ * Which pull was its isn't stored, and "the first pull after it" (what this
+ * used to take) is wrong whenever moves overlap: move Thursday, then Friday,
+ * and the first pull after Friday is THURSDAY's (often re-targeted by the
+ * second move), so undoing Friday took Thursday's catch-up and left the week
+ * shifted, sometimes a day late. So the rest days from `ymd` on are worked out
+ * again for the moves still standing, exactly as those moves found them: each,
+ * oldest first, takes the next free rest day after it (reabsorbFrom). That's
+ * the state the week was in before the undone move, rest days and all, because
+ * it's the state the moves are always left in: anything that re-dates the
+ * timeline under them pairs them up the same way again (repairMoves,
+ * marksAfterHold, marksAfterEdit). Before those did, a re-dating could leave a
+ * rest day later than this places it, and putting a move straight back pulled
+ * that rest day forward, changing the days in between. Pulls before `ymd`
+ * stay: those days are settled, and a move is only ever undone on a day that
+ * hasn't gone by (Home and the Journal lock past ones).
+ *
+ * Pulls are never removed by date. They're owned by the moves, and "Set
+ * Workout Date" is the only other thing that clears them.
  *
  * Returns the SAME object when there was nothing to undo, so callers can use
  * identity to skip a write.
@@ -120,18 +142,122 @@ export function unskipDate(program: SavedProgram, ymd: string): SavedProgram {
 
   const skipped = (program.skippedDates ?? []).filter(d => d !== ymd);
   const pushed = (program.pushedDates ?? []).filter(d => d !== ymd);
-  let pulled = program.pulledDates ?? [];
-  if (wasPushed) {
-    // Both lists are "YYYY-MM-DD", so a string compare is a date compare.
-    const partner = [...pulled].sort().find(d => d > ymd);
-    if (partner !== undefined) pulled = pulled.filter(d => d !== partner);
-  }
-  return {
+  const restored: SavedProgram = {
     ...program,
     skippedDates: skipped.length > 0 ? skipped : undefined,
     pushedDates: pushed.length > 0 ? pushed : undefined,
-    pulledDates: pulled.length > 0 ? pulled : undefined,
   };
+  return wasPushed ? reabsorbFrom(restored, ymd) : restored;
+}
+
+/**
+ * The rest days that absorb the moves still owed at `fromYMD`, found again as
+ * the moves found them: each, oldest first, takes the next free rest day after
+ * it (nextRestDate, against the week with the ones before it already taken).
+ * Pulls before `fromYMD` stay where they are and pay off the oldest moves; the
+ * moves left over, and every move from `fromYMD` on, are owed one.
+ *
+ * A rest day that already holds a pull and has since been marked off keeps it
+ * (normalizeDriftDates' rule: skipping the day a move was absorbed into mustn't
+ * un-absorb it), so it's still a candidate here.
+ *
+ * And as planDoItTomorrow decides it, a rest day after the program's last day
+ * absorbs nothing: that move ends the program a day later instead. Without
+ * this, a re-sweep near the end put a rest day past the finish, which then
+ * moved the finish back and forth.
+ */
+function reabsorbFrom(program: SavedProgram, fromYMD: string): SavedProgram {
+  const pushes = [...(program.pushedDates ?? [])].sort();
+  const kept = (program.pulledDates ?? []).filter(d => d < fromYMD).sort();
+  const settledBefore = new Set((program.pulledDates ?? []).filter(d => d >= fromYMD && isDateSkipped(program, d)));
+  const before = pushes.filter(d => d < fromYMD);
+  const owed = [...before.slice(Math.min(before.length, kept.length)), ...pushes.filter(d => d >= fromYMD)];
+
+  let current: SavedProgram = { ...program, pulledDates: kept.length > 0 ? kept : undefined };
+  owed.forEach((push, i) => {
+    const after = addDays(push, 1);
+    if (!after) return;
+    // The last day as the program stood before this move, with the moves owed
+    // after it not yet made: they're replayed oldest first.
+    const toCome = new Set(owed.slice(i));
+    const end = programFinishDate({ ...current, pushedDates: (current.pushedDates ?? []).filter(d => !toCome.has(d)) });
+    const rest = freeRestDate(current, after < fromYMD ? fromYMD : after, settledBefore);
+    if (rest && (!end || rest <= toYMD(end))) current = pullDate(current, rest);
+  });
+  return current;
+}
+
+/**
+ * `program`'s moves paired again with rest days, on a timeline that has just
+ * been re-dated under them (a session logged before the start moved it back).
+ * Every day now sits on a different slot, so the rest day each move was
+ * absorbed into can be a workout now (normalizeDriftDates would re-target it)
+ * or, still a rest day, no longer the first one after the move. Left there, the
+ * week read fine, but putting a later move straight back paired that move up
+ * afresh and the days between the two rest days changed. Each move takes the
+ * next free rest day after it, oldest first, as on a fresh run of the moves.
+ */
+export function repairMoves(program: SavedProgram): SavedProgram {
+  const first = [...(program.pushedDates ?? [])].sort()[0];
+  return first ? normalizeDriftDates(reabsorbFrom(program, first)) : normalizeDriftDates(program);
+}
+
+/**
+ * A program as the builder saves an edit of it (app/new-program.tsx), given
+ * how it was before.
+ *
+ * Every save of a program runs normalizeDriftDates (CLAUDE.md), and the
+ * builder's didn't: change which days rest and a rest day a move was absorbed
+ * into could become a workout, which the pull there then took out of the plan.
+ * When the rest days or the program's length changed, the timeline under the
+ * moves changed too, so they're paired with rest days again (repairMoves), as
+ * after a back-dated start. An edit that changes neither (exercises, names, a
+ * day moved between training slots) leaves them be.
+ */
+export function marksAfterEdit(before: SavedProgram, edited: SavedProgram): SavedProgram {
+  const rests = (p: SavedProgram) => p.cyclePattern.map(n => !n || n === "Rest").join();
+  const redated = before.cycleDays !== edited.cycleDays || before.totalWeeks !== edited.totalWeeks || rests(before) !== rests(edited);
+  return redated ? repairMoves(edited) : normalizeDriftDates(edited);
+}
+
+/**
+ * `program`'s marks once a hold from `pausedAt` ends on `resumeYMD`. The caller
+ * (utils/programPause.ts resumeProgram) has already cleared the hold and
+ * shifted startDate (and, picking up today, the offset) onto the new timeline.
+ *
+ * Days marked off inside the hold are meaningless (nothing was scheduled on
+ * them), and so is a move dated there: the hold already did the waiting it
+ * asked for, so the workout it moved is the one the program picks up with.
+ * Kept, it extended the program for a day it never programmed.
+ *
+ * A move and the rest day that absorbs it can sit either side of the pause,
+ * though, and they only mean anything as a pair. Dropped one at a time, a move
+ * made before the pause whose rest day fell in the hold ran the program a day
+ * late, and a rest day after the hold whose move was in it ran it a day early:
+ * resuming landed a day off where it left off, even a week back. So the rest
+ * days from the pause on are worked out again (reabsorbFrom). A pull ON the
+ * pause day still counts, as the program had already caught up there when it
+ * stopped. Every move still standing takes the next free rest day after the
+ * resume day, where the rest day it was waiting for comes round again. So the
+ * resume day is on the cycle and week the pause day was, and the program still
+ * finishes on time.
+ */
+export function marksAfterHold(program: SavedProgram, pausedAt: string, resumeYMD: string): SavedProgram {
+  // Resumed the day it was paused: nothing was held, so nothing moves.
+  if (resumeYMD <= pausedAt) return normalizeDriftDates(program);
+  const inHold = (d: string) => d >= pausedAt && d < resumeYMD;
+  const keep = (list: string[] | undefined, drop: (d: string) => boolean) => {
+    const kept = (list ?? []).filter(d => !drop(d));
+    return kept.length > 0 ? kept : undefined;
+  };
+  const dayAfter = addDays(resumeYMD, 1);
+  const settled: SavedProgram = {
+    ...program,
+    skippedDates: keep(program.skippedDates, inHold),
+    pushedDates: keep(program.pushedDates, inHold),
+    pulledDates: keep(program.pulledDates, d => d > pausedAt),
+  };
+  return normalizeDriftDates(dayAfter ? reabsorbFrom(settled, dayAfter) : settled);
 }
 
 /** Toggle `ymd` between scheduled and not-training (as a plain skip). */
@@ -173,15 +299,32 @@ function addDays(ymd: string, days: number): string | null {
   return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
 }
 
-/** The next date from `fromYMD` (inclusive), within one cycle, that the
- *  schedule rests on and that isn't already marked. Null when there is none. */
+/** The next date from `fromYMD` (inclusive) that the schedule rests on and
+ *  that isn't already marked. Null when there is none: no rest in the cycle,
+ *  or a hold starts first. */
 export function nextRestDate(program: SavedProgram, fromYMD: string): string | null {
-  for (let i = 0; i <= program.cycleDays; i++) {
+  return freeRestDate(program, fromYMD, new Set());
+}
+
+/**
+ * nextRestDate, with `allowed`: marked-off days that may still be taken because
+ * they already hold a pull (see reabsorbFrom).
+ *
+ * A cycle with a rest day has one in every cycle, but other moves' pulls can
+ * be holding the nearest ones, so the search looks a cycle further for each.
+ * Limited to one cycle, a move with its rest day taken by another's came out
+ * "extended" (the program a day late) with a free rest day just beyond.
+ */
+function freeRestDate(program: SavedProgram, fromYMD: string, allowed: ReadonlySet<string>): string | null {
+  const reach = program.cycleDays * (1 + (program.pulledDates?.length ?? 0));
+  for (let i = 0; i <= reach; i++) {
     const ymd = addDays(fromYMD, i);
     if (!ymd) return null;
     if (program.pausedAt && ymd >= program.pausedAt) return null;
-    if (isDateSkipped(program, ymd) || isDatePulled(program, ymd)) continue;
-    const idx = resolveDayIndex(program, ymd);
+    if (isDatePulled(program, ymd) || isDatePushed(program, ymd)) continue;
+    if (isDateSkipped(program, ymd) && !allowed.has(ymd)) continue;
+    // The cycle's own slot: a day marked off still rests or trains underneath.
+    const idx = cycleIndexForDate(program, ymd);
     if (idx === null) continue;
     const name = program.cyclePattern[idx];
     if (!name || name === "Rest") return ymd;
@@ -223,7 +366,12 @@ export type MovePlan =
 export function planDoItTomorrow(program: SavedProgram, ymd: string): MovePlan {
   const pushed = pushDate(program, ymd);
   const from = addDays(ymd, 1);
-  const pull = from ? nextRestDate(pushed, from) : null;
+  // A rest day after the program's last day absorbs nothing: the last workout
+  // still lands a day later, so near the end a move ENDS the program a day
+  // later, and the prompt says so rather than promising the rest of the week.
+  const end = programFinishDate(program);
+  const found = from ? nextRestDate(pushed, from) : null;
+  const pull = found && (!end || found <= toYMD(end)) ? found : null;
   if (!pull) return { kind: "extended", program: normalizeDriftDates(pushed) };
 
   const moved = normalizeDriftDates(pullDate(pushed, pull));
@@ -253,14 +401,28 @@ export function planDoItTomorrow(program: SavedProgram, ymd: string): MovePlan {
 }
 
 /**
+ * The day a move on `ymd` puts that day's workout on: the next day, or, when
+ * the next day's own workout has moved on as well, the first day after it
+ * that hasn't (both shift, and the move lands past it). Null only for an
+ * unparseable date.
+ */
+export function moveLandsOn(program: SkipFields, ymd: string): string | null {
+  let day = addDays(ymd, 1);
+  while (day !== null && isDatePushed(program, day)) day = addDays(day, 1);
+  return day;
+}
+
+/**
  * The change-day pick on `ymd` once "Move to Tomorrow" has moved that date: the
- * same pick, dated the next day. Null means there's nothing to carry and the
- * pick should simply go.
+ * same pick, dated the day the move lands on (moveLandsOn). Null means there's
+ * nothing to carry and the pick should simply go.
  *
- * The move puts `ymd`'s slot on the next day. With Push picked on a Legs day,
+ * The move puts `ymd`'s slot on that day. With Push picked on a Legs day,
  * dropping the pick moved LEGS, so the prompt asked "Not doing 'Push'?" and then
- * moved the workout the user had already swapped away. Carried, the next day
- * holds that slot with the pick on it, exactly as `ymd` did.
+ * moved the workout the user had already swapped away. Carried, the day holds
+ * that slot with the pick on it, exactly as `ymd` did. Carried to the next day
+ * when THAT day's workout had moved on too, the pick sat on a day that shows
+ * nothing and the day after showed Legs again.
  *
  * Only a pick made with Change Workout Day moves (it has a `dayId`). A custom
  * workout's name would open tomorrow as an empty custom day. A pick on a day
@@ -271,21 +433,24 @@ export function planDoItTomorrow(program: SavedProgram, ymd: string): MovePlan {
 export function pickAfterMove(program: SavedProgram, override: DayOverride | null, ymd: string): DayOverride | null {
   if (!override || override.date !== ymd || !override.dayId || override.workoutName === "Rest") return null;
   if (getWorkoutForDate(program, ymd) === null) return null;
-  const next = addDays(ymd, 1);
-  return next ? { ...override, date: next } : null;
+  const lands = moveLandsOn(program, ymd);
+  return lands ? { ...override, date: lands } : null;
 }
 
 /**
- * The change-day pick to restore when a move on `ymd` is undone: a pick the
- * move carried to the next day comes back to `ymd`. Null leaves the stored pick
- * alone.
+ * The change-day pick to restore when a move on `ymd` is undone: a pick on the
+ * day the move landed on comes back to `ymd`, as the slot under it does. Null
+ * leaves the stored pick alone.
  *
- * Without this the pick stayed on the next day after an undo and replaced that
- * day's own workout. A pick dated the day after `ymd` can only have been carried
- * there: the Workout tab writes picks for the day it's on, and a move is only
- * undone on a date that hasn't gone by, so the next day hasn't arrived yet.
+ * Without this the pick stayed put after an undo and replaced that day's own
+ * workout. A pick dated after `ymd` can only have been carried there: the
+ * Workout tab writes picks for the day it's on, and a move is only undone on a
+ * date that hasn't gone by, so that day hasn't arrived yet. It needn't be this
+ * move that carried it: with the next day moved on too, an earlier pick rides
+ * both moves to the same day, and undoing either brings the slot, and the pick
+ * on it, back to the day that move was on.
  */
-export function pickAfterUndoMove(override: DayOverride | null, ymd: string): DayOverride | null {
-  if (!override || !override.dayId || override.date !== addDays(ymd, 1)) return null;
+export function pickAfterUndoMove(program: SkipFields, override: DayOverride | null, ymd: string): DayOverride | null {
+  if (!override || !override.dayId || override.date !== moveLandsOn(program, ymd)) return null;
   return { ...override, date: ymd };
 }

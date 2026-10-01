@@ -2,7 +2,7 @@ import { Stack, useRouter, type Href, DarkTheme, DefaultTheme, ThemeProvider as 
 import * as Notifications from "expo-notifications";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { View, AppState } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -15,12 +15,12 @@ import { AccountTypeProvider } from "../contexts/AccountTypeContext";
 import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileContext";
 import { NotificationPrefsProvider } from "../contexts/NotificationPrefsContext";
 import { AuthProvider, useAuth } from "../contexts/AuthContext";
-import { ConnectivityProvider } from "../contexts/ConnectivityContext";
+import { ConnectivityProvider, useOffline } from "../contexts/ConnectivityContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
 import ForceUpdateGate from "../components/ForceUpdateGate";
-import { flushCloudPush } from "../lib/syncManager";
+import { flushCloudPush, retryFailedCloudPush } from "../lib/syncManager";
 import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
@@ -133,6 +133,16 @@ function AppShell() {
     });
     return () => { sub.remove(); if (beat) clearInterval(beat); };
   }, []);
+
+  // Back online: a backup that failed while the phone had no signal goes now,
+  // which is what the Workout page's offline banner promises a session logged
+  // then. Only on the change back, never at launch.
+  const offline = useOffline();
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    if (wasOffline.current && !offline) retryFailedCloudPush();
+    wasOffline.current = offline;
+  }, [offline]);
 
   // Theme the navigator's screen background. React Navigation's default screen
   // background is white, which flashes through during the Insights modal's dismiss

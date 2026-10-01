@@ -34,18 +34,17 @@ import { pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgram,
-  addTrainerAsClient,
   appendSharedPrograms,
   dismissKeyOf,
   dismissSharedBatch,
   loadSharedPrograms,
   migrateCoachReceivedShares,
-  removeTrainerAsClient,
   type AssignedPT,
   type Client,
   type SharedProgram,
 } from "../../utils/trainerStore";
 import { resolveTrainerRoster } from "../../utils/roster";
+import { setConnectionRole } from "../../lib/connectionRoles";
 import { unaddContact } from "../../utils/moderation";
 import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
@@ -143,26 +142,35 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     return () => setRemoving(false);
   }, [reload]));
 
-  const handleConnectTrainer = useCallback(() => {
+  // The ordinary Connect screen. Connecting is role-blind (utils/roster.ts
+  // files a person by their account type), so this was never "add a trainer":
+  // a trainer account lands here, anyone else in My Clients. The labels below
+  // say so instead of promising a trainer.
+  const handleConnect = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate("/connect");
   }, [router]);
 
-  // Take a fellow trainer on as a client, or stop. Only the local filing
-  // changes: the connection stays, so they remain on this page either way and
-  // programs keep flowing in both directions.
+  // Take a fellow trainer on as a client too, or stop (trainer ↔ both). Only
+  // the filing changes (lib/connectionRoles.ts, saved on the server so a new
+  // phone keeps it): the connection stays, so they remain on this page either
+  // way and programs keep flowing in both directions.
   const toggleAsClient = useCallback(async (trainer: AssignedPT) => {
     setMenuFor(null);
     const isClient = trainerClientIds.has(trainer.id);
-    if (isClient) {
-      await removeTrainerAsClient(trainer.id);
-      await reload();
-      Alert.alert("Removed from clients", `${trainer.name} is no longer one of your clients. You're still connected.`);
+    try {
+      await setConnectionRole(trainer.id, isClient ? "trainer" : "both");
+    } catch (e) {
+      Alert.alert("Couldn't save that", alertMessage(e, "Check your connection and try again."));
       return;
     }
-    await addTrainerAsClient(trainer.id);
     await reload();
-    Alert.alert("Added to clients", `${trainer.name} now appears in My Clients, and you can add them to groups.`);
+    Alert.alert(
+      isClient ? "Removed from clients" : "Added to clients",
+      isClient
+        ? `${trainer.name} is no longer one of your clients. You're still connected.`
+        : `${trainer.name} now appears in My Clients, and you can add them to groups.`,
+    );
   }, [trainerClientIds, reload]);
 
   const openSendProgram = useCallback((trainer: AssignedPT) => {
@@ -198,6 +206,31 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   }, [sendTo]);
 
   const handleRemoveTrainer = useCallback((trainer: AssignedPT) => {
+    // Also my client: removing them as a trainer keeps them as a client and
+    // the connection with it. Only someone who's nothing else is disconnected.
+    if (trainerClientIds.has(trainer.id)) {
+      Alert.alert(
+        "Remove Trainer",
+        `Stop being coached by ${trainer.name}? They stay one of your clients, and programs you've already accepted stay in your library.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Remove",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                await setConnectionRole(trainer.id, "client");
+              } catch (e) {
+                Alert.alert("Couldn't remove them", alertMessage(e, "Check your connection and try again."));
+                return;
+              }
+              await reload();
+            },
+          },
+        ],
+      );
+      return;
+    }
     Alert.alert(
       "Remove Trainer",
       `Stop being coached by ${trainer.name}? Programs you've already accepted will stay in your library.`,
@@ -222,7 +255,7 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         },
       ]
     );
-  }, [reload]);
+  }, [reload, trainerClientIds]);
 
   // "Remove a Trainer": a red minus on each card rather than an alert listing
   // every trainer, which didn't scale past a few (components/trainer/RemoveMode.tsx).
@@ -241,14 +274,14 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert(
       "Manage Trainers",
-      undefined,
+      "Anyone you connect with who has a trainer account shows up here. Everyone else goes to My Clients.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Add a Trainer", onPress: handleConnectTrainer },
+        { text: "Connect", onPress: handleConnect },
         { text: "Remove a Trainer", style: "destructive", onPress: startRemoving },
       ],
     );
-  }, [handleConnectTrainer, startRemoving]);
+  }, [handleConnect, startRemoving]);
 
   useImperativeHandle(ref, () => ({ openMenu }), [openMenu]);
 
@@ -373,11 +406,11 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
             </View>
             <Text style={[styles.emptyTitle, { color: t.tp }]}>No trainers yet</Text>
             <Text style={[styles.emptyBody, { color: t.ts }]}>
-              Connect to a senior trainer to receive programs you can adapt and pass on to your own clients.
+              Anyone you connect with who has a trainer account shows up here, so you can receive programs to adapt and pass on to your own clients.
             </Text>
-            <BounceButton style={{ marginTop: 8 }} onPress={handleConnectTrainer}>
+            <BounceButton style={{ marginTop: 8 }} onPress={handleConnect}>
               <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                <Text style={styles.ctaText}>Connect to a Trainer</Text>
+                <Text style={styles.ctaText}>Connect</Text>
               </View>
             </BounceButton>
           </View>
@@ -441,7 +474,9 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         </>
       )}
 
-      {trainers.length > 0 && (
+      {/* Also when My Trainers is empty but a program came in: a trainer I've
+          filed as a client only can still send me one. */}
+      {(trainers.length > 0 || received.length > 0) && (
         <>
           <View style={styles.sectionHeadingRow}>
             <Text style={[styles.sectionHeading, { color: t.tp }]}>From Your Trainers</Text>

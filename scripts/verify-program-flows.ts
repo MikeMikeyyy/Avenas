@@ -2,12 +2,15 @@
 // trainer of their group and two clients, run on simulated phones against the
 // real database, with every person's view checked after every step.
 //
-// Four flows (scripts/harness/flows/):
+// Six flows (scripts/harness/flows/):
 //
 //   direct send    Tara sends a program to Cara and Cody
 //   group send     Tara sends it into the group (Cole is its other trainer)
 //   direct review  Cara asks Tara to review her program
 //   group review   Cara asks the group (Tara and Cole can both act on it)
+//   direct re-send Tara sends it again (after archiving and restoring it, an
+//   group re-send  edit, or whatever became of the first send); a client
+//                  keeps ONE copy however many sends of it they accept
 //
 // In each, every action a person can take from what's on their screen:
 // accept, remove, archive, restore, delete, send an update, send back, take
@@ -37,12 +40,19 @@ import { explore, type Budget, type Report } from "./harness/explore";
 import { closeWorld, setupWorld } from "./harness/world";
 import { sendFlow } from "./harness/flows/sends";
 import { reviewFlow } from "./harness/flows/reviews";
+import { resendFlow } from "./harness/flows/resends";
 
 declare const process: { argv: string[]; exitCode?: number };
 const DEEP = process.argv.includes("--deep");
 const BUDGET: Budget = DEEP
   ? { depth: 4, concurrentDepth: 2, walks: 300, walkLength: 16 }
   : { depth: 3, concurrentDepth: 1, walks: 60, walkLength: 14 };
+// A re-send has a set of actions per send, so every step has about twice the
+// choices: one step shallower, the pairs from its start only, and longer walks
+// to reach the deep combinations (its pinned stories go further still).
+const RESEND_BUDGET: Budget = DEEP
+  ? { depth: 3, concurrentDepth: 1, walks: 400, walkLength: 20 }
+  : { depth: 2, concurrentDepth: 0, walks: 100, walkLength: 16 };
 
 async function main() {
   const started = Date.now();
@@ -53,6 +63,8 @@ async function main() {
     ["group send", seed => explore(sendFlow("group"), BUDGET, seed)],
     ["direct review", seed => explore(reviewFlow("direct"), BUDGET, seed)],
     ["group review", seed => explore(reviewFlow("group"), BUDGET, seed)],
+    ["direct re-send", seed => explore(resendFlow("direct"), RESEND_BUDGET, seed)],
+    ["group re-send", seed => explore(resendFlow("group"), RESEND_BUDGET, seed)],
   ];
   // --only=review runs just the flows whose name has "review" in it.
   const only = process.argv.find(a => a.startsWith("--only="))?.slice("--only=".length);

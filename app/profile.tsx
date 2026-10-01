@@ -21,7 +21,8 @@ import BounceButton from "../components/BounceButton";
 import SegmentedControl from "../components/SegmentedControl";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, DANGER, FontFamily } from "../constants/theme";
-import { clearCoachingData, pushAccountType, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
+import { clearCoachingData, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
+import { changeAccountType } from "../lib/connectionRoles";
 import { isApplePrivateEmail } from "../lib/auth";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -91,8 +92,11 @@ export default function ProfileScreen() {
           "Switch to Gym User?",
           "You'll stop being a trainer, and your coaching data is deleted:\n\n" +
             "• Your client list and everything saved against each client\n" +
+            "• Your connections with your gym-user clients\n" +
             "• Any groups you created, removed for every member\n" +
-            "• Programs you've sent (clients keep copies they already accepted)\n\n" +
+            "• Programs you've sent (clients keep copies they already accepted)\n" +
+            "• Reviews waiting on you, which go back to whoever asked\n\n" +
+            "Everyone you're connected with gets a note saying you're no longer a trainer. " +
             "Your own workouts, programs and trainers are not affected. This can't be undone.",
           [
             { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
@@ -141,10 +145,12 @@ export default function ProfileScreen() {
 
       // Role last, and the server write BEFORE the local teardown: if the push
       // fails we bail with the coaching data still intact, rather than deleting
-      // clients for a switch that never took.
+      // clients for a switch that never took. changeAccountType is the switch
+      // proper (migration 0041): it re-files and notifies everyone connected,
+      // on the server, which a bare write to the column doesn't.
       let roleNote = "";
       if (accountTypeChanged) {
-        await pushAccountType(userId, accountTypeDraft);
+        await changeAccountType(accountTypeDraft);
         if (isDowngrade) {
           await clearCoachingData();
           roleNote = " Your coaching data has been removed.";
@@ -346,7 +352,7 @@ export default function ProfileScreen() {
         />
         <Text style={[styles.hint, { color: isDowngrade ? DANGER : t.ts }]}>
           {isDowngrade
-            ? "Switching to Gym User deletes your clients, groups and sent programs. You'll be asked to confirm when you save."
+            ? "Switching to Gym User deletes your clients, groups and sent programs, and disconnects you from your clients. You'll be asked to confirm when you save."
             : accountTypeChanged
               ? "Tap Save changes to switch to a trainer account."
               : "Trainers get a coaching hub with clients, program sharing, and messaging."}

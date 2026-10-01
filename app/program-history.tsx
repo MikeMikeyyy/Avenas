@@ -12,7 +12,7 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter, useFocusEffect } from "expo-router";
+import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
@@ -29,6 +29,8 @@ import {
   type SavedProgram,
 } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
+import { loadCachedClientData } from "../utils/trainerStore";
+import { parseStoredDate } from "../utils/dates";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 
@@ -50,6 +52,10 @@ const TS  = APP_LIGHT.ts;
 
 export default function ProgramHistoryScreen() {
   const router = useRouter();
+  // `clientId` makes it a TRAINER reading a client's programs, from the client
+  // page's Journal tab: the copy that page loaded, each card opening that
+  // program's page for the same client.
+  const { clientId } = useLocalSearchParams<{ clientId?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -60,10 +66,16 @@ export default function ProgramHistoryScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (clientId) {
+        loadCachedClientData(clientId)
+          .then(d => setPrograms(Array.isArray(d.programs) ? d.programs : []))
+          .catch(() => {});
+        return;
+      }
       AsyncStorage.getItem(PROGRAMS_KEY)
         .then(raw => { if (raw) setPrograms(JSON.parse(raw)); })
         .catch(() => {});
-    }, [])
+    }, [clientId])
   );
 
   const searchInputRef = useRef<TextInput>(null);
@@ -92,7 +104,15 @@ export default function ProgramHistoryScreen() {
     // ids become uuids after a cloud round-trip, and several programs made the
     // same day share a startDate. Local writes append, and the cloud pull is
     // ordered by created_at, so a higher index means newer.
-    const byRecency = programs.map((p, createdRank) => ({ p, createdRank }));
+    //
+    // Except a client's copy (a trainer reading it): every backup rewrites all
+    // of a client's programs in one statement, so the order they arrive in
+    // means nothing. There the start date is the best "newest" there is.
+    const startMs = (p: SavedProgram) => parseStoredDate(p.startDate)?.getTime() ?? -Infinity;
+    const ranked = clientId
+      ? [...programs].sort((a, b) => startMs(a) - startMs(b))
+      : programs;
+    const byRecency = ranked.map((p, createdRank) => ({ p, createdRank }));
 
     const q = query.trim().toLowerCase();
     const matched = q
@@ -107,7 +127,7 @@ export default function ProgramHistoryScreen() {
         return b.createdRank - a.createdRank; // newest created first
       })
       .map(({ p }) => p);
-  }, [programs, query]);
+  }, [programs, query, clientId]);
 
   const hasQuery = query.trim().length > 0;
 
@@ -199,7 +219,9 @@ export default function ProgramHistoryScreen() {
               <View style={styles.emptyInner}>
                 <Text style={[styles.emptyTitle, { color: t.tp }]}>No programs yet</Text>
                 <Text style={[styles.emptyBody, { color: t.ts }]}>
-                  Create a program to start tracking workouts here.
+                  {clientId
+                    ? "Programs your client starts will show here."
+                    : "Create a program to start tracking workouts here."}
                 </Text>
               </View>
             </NeuCard>
@@ -217,7 +239,7 @@ export default function ProgramHistoryScreen() {
               style={styles.cardWrap}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                router.navigate({ pathname: "/program-history-detail", params: { programId: prog.id } });
+                router.navigate({ pathname: "/program-history-detail", params: { programId: prog.id, ...(clientId ? { clientId } : {}) } });
               }}
             >
               <NeuCard dark={isDark} style={styles.card}>

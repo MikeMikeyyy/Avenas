@@ -44,8 +44,9 @@ import {
   type SharedProgram,
 } from "./trainerStore";
 import { fetchAllGroupMemberships, fetchGroupMembers, fetchMyGroupInvites } from "../lib/groups";
+import { fetchConnectionNotices, type ConnectionNotice } from "../lib/connectionRoles";
 import { getMyUid } from "../lib/chat";
-import type { Group, GroupInvite } from "../constants/groups";
+import { memberFaces, type Group, type GroupInvite, type MemberFace } from "../constants/groups";
 import type { SavedProgram } from "../constants/programs";
 import type { AccountType } from "../contexts/AccountTypeContext";
 
@@ -84,6 +85,10 @@ export type PTHubData = {
   groupMemberships: Record<string, string[]>;
   /** groupId → unread messages in its thread, one half of a group's badge. */
   unreadByGroup: Record<string, number>;
+  /** groupId → the faces on its card (loadGroupFaces). Absent on a copy saved
+   *  before they existed, and for a group just joined until the next load: its
+   *  card says how many members instead. */
+  groupFaces?: Record<string, MemberFace[]>;
   /** Starred groups, oldest star first. */
   favouriteGroupIds: string[];
   /** Starred PEOPLE, oldest star first. Set from a client's own page or a group
@@ -91,6 +96,9 @@ export type PTHubData = {
   favouriteMemberIds: string[];
   /** Mine, for "is this share addressed to me". */
   myUid: string | null;
+  /** Notes left when someone I'm connected with switched account type
+   *  (lib/connectionRoles.ts). Absent on a copy saved before they existed. */
+  notices?: ConnectionNotice[];
 };
 
 export const EMPTY_PT_HUB: PTHubData = {
@@ -103,32 +111,71 @@ export const EMPTY_PT_HUB: PTHubData = {
   groupInvites: [],
   groupMemberships: {},
   unreadByGroup: {},
+  groupFaces: {},
   favouriteGroupIds: [],
   favouriteMemberIds: [],
   myUid: null,
+  notices: [],
 };
 
-/** A trainer's groups, every group's roster and the invites waiting on them:
- *  three reads in all, not one per group. Null when the read FAILED, which is
- *  not the same as having none. */
-async function loadCoachGroups(): Promise<{ rows: GroupChatRow[]; memberships: Record<string, string[]>; invites: GroupInvite[] } | null> {
+/** My notes, or null when the read FAILED (so the last-known ones stay). */
+const loadNotices = (): Promise<ConnectionNotice[] | null> =>
+  fetchConnectionNotices().catch(e => {
+    warn("load connection notices", e);
+    return null;
+  });
+
+/** A trainer's groups, every group's roster and the invites waiting on them,
+ *  in three reads, and then each group's faces for its card. Null when the
+ *  read FAILED, which is not the same as having none. */
+async function loadCoachGroups(prevFaces: Record<string, MemberFace[]>): Promise<{
+  rows: GroupChatRow[];
+  memberships: Record<string, string[]>;
+  invites: GroupInvite[];
+  faces: Record<string, MemberFace[]>;
+} | null> {
   try {
     const uid = await getMyUid();
-    if (!uid) return { rows: [], memberships: {}, invites: [] };
+    if (!uid) return { rows: [], memberships: {}, invites: [], faces: {} };
     // A trainer gets invited to other trainers' groups the same way a gym user
     // does, so the invite list belongs on both hubs. loadGroupRows rather than
     // fetchMyGroups: it's the same groups with each thread's unread count
     // worked out, which is half of what the badge on a group card counts.
-    const [rows, memberships, invites] = await Promise.all([
-      loadGroupRows(),
+    const rowsP = loadGroupRows();
+    const [rows, memberships, invites, faces] = await Promise.all([
+      rowsP,
       fetchAllGroupMemberships(uid),
       fetchMyGroupInvites(),
+      rowsP.then(rs => loadGroupFaces(rs.map(r => r.group.id), prevFaces)),
     ]);
-    return { rows, memberships, invites };
+    return { rows, memberships, invites, faces };
   } catch (e) {
     warn("load groups", e);
     return null;
   }
+}
+
+/**
+ * groupId → the faces on its card: the group's roster in get_group_members'
+ * order (owner first, invites still to be answered included), exactly what its
+ * page's banner stacks (components/trainer/MemberStack.tsx).
+ *
+ * One read per group, where the rest of the hub's group reads are one for all
+ * of them: other people's names and photos are only readable through that
+ * function (profiles are each person's own), and the group limits keep it to
+ * a handful. They run together, alongside the hub's other reads. A group whose
+ * read fails keeps the faces it had, so its card doesn't drop back to a count.
+ */
+async function loadGroupFaces(groupIds: string[], prev: Record<string, MemberFace[]>): Promise<Record<string, MemberFace[]>> {
+  const entries = await Promise.all(groupIds.map(async (id): Promise<[string, MemberFace[]] | null> => {
+    try {
+      return [id, memberFaces(await fetchGroupMembers(id))];
+    } catch (e) {
+      warn("load group faces", e);
+      return prev[id] ? [id, prev[id]] : null;
+    }
+  }));
+  return Object.fromEntries(entries.filter((e): e is [string, MemberFace[]] => e !== null));
 }
 
 async function loadPTHub(owner: string): Promise<PTHubData> {
@@ -153,17 +200,18 @@ async function loadPTHub(owner: string): Promise<PTHubData> {
     return loadSharedPrograms();
   })();
 
-  const [clients, activeProgramByClient, reviews, groupReviews, sharedOut, coachGroups, favGroups, favMembers, myUid] =
+  const [clients, activeProgramByClient, reviews, groupReviews, sharedOut, coachGroups, favGroups, favMembers, myUid, notices] =
     await Promise.all([
       clientsP,
       activeP,
       loadSentPrograms(),
       loadMyGroupReviews(),
       sharedP,
-      loadCoachGroups(),
+      loadCoachGroups(prev?.groupFaces ?? {}),
       loadFavouriteGroupIds(),
       loadFavouriteMemberIds(),
       getMyUid().catch(() => null),
+      loadNotices(),
     ]);
 
   return {
@@ -178,9 +226,11 @@ async function loadPTHub(owner: string): Promise<PTHubData> {
     unreadByGroup: coachGroups
       ? Object.fromEntries(coachGroups.rows.map(r => [r.group.id, r.unreadCount]))
       : prev?.unreadByGroup ?? {},
+    groupFaces: coachGroups ? coachGroups.faces : prev?.groupFaces ?? {},
     favouriteGroupIds: [...favGroups],
     favouriteMemberIds: [...favMembers],
     myUid,
+    notices: notices ?? prev?.notices ?? [],
   };
 }
 
@@ -217,6 +267,9 @@ export type GymHubData = {
    *  RPC: until you accept, the group itself isn't readable (migration 0027). */
   groupInvites: GroupInvite[];
   myUid: string | null;
+  /** Notes left when someone I'm connected with switched account type (a
+   *  trainer who's now a gym user, or the reverse). Absent on an older copy. */
+  notices?: ConnectionNotice[];
 };
 
 export const EMPTY_GYM_HUB: GymHubData = {
@@ -230,6 +283,7 @@ export const EMPTY_GYM_HUB: GymHubData = {
   groupReviewsToDo: [],
   groupInvites: [],
   myUid: null,
+  notices: [],
 };
 
 /** One card per send, from a trainer, for "From Your Trainer". Exported for
@@ -323,7 +377,7 @@ async function loadGymHub(owner: string): Promise<GymHubData> {
     }
   })();
 
-  const [trainers, programs] = await Promise.all([trainersP, programsP]);
+  const [trainers, programs, notices] = await Promise.all([trainersP, programsP, loadNotices()]);
   const groups = programs ? programs.groups : prev?.groups ?? [];
 
   return {
@@ -339,6 +393,7 @@ async function loadGymHub(owner: string): Promise<GymHubData> {
     groupReviewsToDo: programs ? programs.groupReviewsToDo : prev?.groupReviewsToDo ?? [],
     groupInvites: programs ? programs.groupInvites : prev?.groupInvites ?? [],
     myUid: programs ? programs.myUid : prev?.myUid ?? null,
+    notices: notices ?? prev?.notices ?? [],
   };
 }
 

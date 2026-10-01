@@ -46,6 +46,15 @@ export type GroupMember = {
   accepted: boolean;
 };
 
+/** One face in a group's member stack (components/trainer/MemberStack.tsx): as
+ *  much of a GroupMember as a face draws, so the Trainer tab's saved copy keeps
+ *  only that for each group's card. */
+export type MemberFace = Pick<GroupMember, "id" | "initials" | "photoUri">;
+
+/** A roster's faces, in its order. */
+export const memberFaces = (members: GroupMember[]): MemberFace[] =>
+  members.map(m => ({ id: m.id, initials: m.initials, photoUri: m.photoUri }));
+
 /**
  * A group someone has been added to but hasn't answered yet.
  *
@@ -73,27 +82,41 @@ export type GroupInvite = {
 export const canCoachGroup = (role: GroupRole): boolean => role === "owner" || role === "trainer";
 
 /**
- * How many groups one account can be in, counting the groups it created (an
- * owner is an accepted member of their own group). Pending invites don't count.
- * The database enforces the same number (migration 0035, keep the two in step);
- * the app checks first so the prompt comes before a form is filled in. Never
- * shown as a count: the limit only ever surfaces as the prompt below.
+ * The group limits (user decision, 2026-10-01), two separate ones per account
+ * and one per group. The database enforces the same numbers (migration 0042,
+ * keep them in step); the app checks first so the prompt comes before a form
+ * is filled in. Never shown as a count: a limit only ever surfaces as its
+ * prompt below.
+ *
+ * Groups an account has CREATED. Its own groups never count toward the next.
  */
-export const MAX_GROUPS = 5;
+export const MAX_OWNED_GROUPS = 3;
 
-/** The prompt at the limit. */
+/** Groups someone ELSE created that an account is in. Pending invites don't
+ *  count: an invite can always be sent, and waits until there's room. */
+export const MAX_JOINED_GROUPS = 3;
+
+/** People in one group: its owner, its members, and anyone invited who hasn't
+ *  answered yet. An invite holds a place, so nobody who taps Accept is ever
+ *  told the group is full. */
+export const MAX_GROUP_MEMBERS = 10;
+
+/** The prompt at the creating or joining limit. */
 export const GROUP_LIMIT_TITLE = "Group limit reached";
 
 /** The prompt's body, for creating a group or accepting an invite. Someone who
- *  runs a group is told those count and can be deleted; nobody else is, since
- *  a gym user has nothing to delete. */
+ *  runs a group is told those don't count toward joining; nobody else is,
+ *  since a gym user has none. */
 export function groupLimitMessage(action: "create" | "join", ownsAGroup: boolean): string {
-  const limit = `You can be in up to ${MAX_GROUPS} groups at a time${ownsAGroup ? ", including groups you've created" : ""}.`;
-  const fix = ownsAGroup ? "Leave or delete a group" : "Leave a group";
   return action === "create"
-    ? `${limit} ${fix} to create a new one.`
-    : `${limit} ${fix} to accept this invite. It'll wait here until then.`;
+    ? `You can create up to ${MAX_OWNED_GROUPS} groups. Delete one of yours to create a new one.`
+    : `You can be in up to ${MAX_JOINED_GROUPS} groups at a time${ownsAGroup ? ", besides the ones you've created" : ""}. Leave one to accept this invite. It'll wait here until then.`;
 }
+
+/** The prompt when a group has no room for someone else. */
+export const GROUP_FULL_TITLE = "Group is full";
+export const GROUP_FULL_MESSAGE =
+  `A group can have up to ${MAX_GROUP_MEMBERS} people, including you and anyone who hasn't accepted their invite yet. Untick someone to make room.`;
 
 /** A message in a group thread. Extends the 1:1 ChatMessage shape with author
  *  identity, which a group needs and a 1:1 thread does not. */

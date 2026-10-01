@@ -282,6 +282,18 @@ const byFile: Record<string, unknown> = {
 };
 
 /**
+ * Stand in for another module the app reaches, before anything loads it: by
+ * package name, or by file relative to the app root ("lib/syncManager.ts").
+ * The program flows never reach these; the solo flows (scripts/harness/solo/)
+ * do, through the rest-day and resume prompts, the backup scheduler and the
+ * reminders.
+ */
+export function stubModule(target: { request: string } | { file: string }, exports: Record<string, unknown>): void {
+  if ("request" in target) byRequest[target.request] = { __esModule: true, ...exports };
+  else byFile[norm(path.join(APP_ROOT, ...target.file.split("/")))] = { __esModule: true, ...exports };
+}
+
+/**
  * A copy of the app's modules of its own, as each phone has: whatever `load`
  * requires comes back as fresh instances, with fresh module state (the
  * trainer store's one-at-a-time queue, cached pages). Sharing one copy would

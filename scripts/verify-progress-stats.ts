@@ -35,6 +35,7 @@ import {
   filterByProgramScope,
   programsInScope,
   scopedProgramDays,
+  groupDaysByProgram,
   workoutMatchesDay,
   collectLoggedExercisesForDay,
   sessionCountForDay,
@@ -667,6 +668,34 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   );
   // A live day is never duplicated as a historical one.
   eq(historicalDays(history, [program], programDays(program)).map(d => d.dayId), ["d0"], "historicalDays: skips ids the cycle still has");
+}
+
+// ── groupDaysByProgram ("All programs" in Exercise Progress) ──────────────────
+{
+  const done = makeProgram({ id: "pDone", name: "Upper Lower", status: "completed", cyclePattern: ["Upper", "Lower", "Rest"], cycleDays: 3, dayIds: ["d0", "d1", "d2"] });
+  const later = makeProgram({ id: "pNew", name: "5x5", status: "created", cyclePattern: ["Push", "Rest"], cycleDays: 2, dayIds: ["d0", "d1"] });
+  const running = makeProgram({ id: "pRun", name: "PPL", status: "active", dayIds: ["d0", "d1", "d2", "d3", "d4", "d5", "d6"] });
+  const history = [
+    // A day that has left the completed program, so it's appended after every
+    // live day in the scope, not beside its own program's days.
+    workout({ id: "h1", programId: "pDone", dayId: "gone", workoutName: "Arms", exercises: [ex("Curl", [set("20", "12")])] }),
+  ];
+  const days = scopedProgramDays({ kind: "all" }, [done, later, running], history);
+  const groups = groupDaysByProgram(days, [done, later, running]);
+  eq(groups.map(g => g.programName), ["PPL", "5x5", "Upper Lower"], "groups: active, then not started, then completed");
+  eq(groups.map(g => g.status), ["active", "created", "completed"], "groups: each carries its program's status");
+  eq(groups[2].days.map(d => [d.label, d.isHistorical]), [["Upper", false], ["Lower", false], ["Arms", true]], "groups: a day that left a program is listed under it, after its live days");
+  eq(groups.reduce((n, g) => n + g.days.length, 0), days.length, "groups: every day in scope lands in exactly one group");
+  // "Push" is in PPL (twice) and in 5x5: within 5x5 it's unique, within PPL it isn't.
+  check(days.filter(d => d.label === "Push").every(d => d.duplicateLabel), "groups: across the whole scope every Push reads as duplicated");
+  eq(groups[1].days.map(d => d.duplicateLabel), [false], "groups: a name repeated only in ANOTHER program needs no qualifier under its heading");
+  check(groups[0].days.filter(d => d.label === "Push").every(d => d.duplicateLabel), "groups: a name repeated within one program is still qualified");
+  eq(
+    groups.flatMap(g => g.days).filter(d => d.absorbsUnidentified).map(d => d.key).sort(),
+    days.filter(d => d.absorbsUnidentified).map(d => d.key).sort(),
+    "groups: which row absorbs a session with no dayId is still decided across the whole scope",
+  );
+  eq(groupDaysByProgram([], [running]), [], "groups: no days, no groups");
 }
 
 // ── report ────────────────────────────────────────────────────────────────────

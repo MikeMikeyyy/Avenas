@@ -58,8 +58,9 @@ struct WorkoutActivityAttributes: ActivityAttributes {
 
 // ─── App-Group payloads ──────────────────────────────────────────────────────
 
-/// One not-yet-done set, in on-screen order. Head of the queue = the set the
-/// lock-screen tick button marks done. `weight`/`reps` are a display-only
+/// One not-yet-done set, in the order the session will get to them (JS
+/// utils/nextSet.ts). Head of the queue = the set the lock-screen tick button
+/// marks done. `weight`/`reps` are a display-only
 /// preview (values the user typed, else the previous-session hint) — the tick
 /// never writes them into the workout log; the user enters the real numbers
 /// after unlocking.

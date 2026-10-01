@@ -57,15 +57,17 @@ import { getJSON } from "../../utils/storage";
 import { archiveShareChoice } from "../../utils/removeShare";
 import { askArchiveOrDelete } from "../../utils/archiveChoice";
 import ArchiveButton from "../ArchiveButton";
+import ConnectionNotices from "./ConnectionNotices";
 import OfflineBanner from "../OfflineBanner";
 import { loadGroupRows, sortByFavourite } from "../../utils/groupStore";
 import { groupAlertCounts } from "../../utils/groupAlerts";
-import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites, isGroupLimitError } from "../../lib/groups";
+import { acceptGroupInvite, declineGroupInvite, fetchGroupMembers, fetchMyGroupInvites, isGroupLimitError } from "../../lib/groups";
 import GroupInviteCard from "./GroupInviteCard";
 import GroupAvatar from "./GroupAvatar";
+import MemberStack from "./MemberStack";
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "./ReviewStatusPill";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
-import { GROUP_LIMIT_TITLE, MAX_GROUPS, groupLimitMessage, type Group, type GroupInvite } from "../../constants/groups";
+import { GROUP_LIMIT_TITLE, MAX_JOINED_GROUPS, MAX_OWNED_GROUPS, groupLimitMessage, memberFaces, type Group, type GroupInvite } from "../../constants/groups";
 import { alertMessage } from "../../utils/errors";
 
 function fmtAgo(iso: string): string {
@@ -315,6 +317,7 @@ export default function PTHome() {
     groupInvites,
     groupMemberships,
     unreadByGroup,
+    groupFaces,
     favouriteGroupIds,
     favouriteMemberIds,
     myUid,
@@ -451,20 +454,23 @@ export default function PTHome() {
     setHub(h => h && { ...h, clients: [newClient, ...h.clients] });
   }, []);
 
-  // The group limit is checked against this list before anything is sent, so
-  // the prompt comes before the form is filled in. The database refuses a 6th
-  // too (0035), which covers a list that's out of date.
-  const atGroupLimit = groups.length >= MAX_GROUPS;
-  const ownsAGroup = groups.some(g => g.isOwner);
+  // The group limits are checked against this list before anything is sent, so
+  // the prompt comes before the form is filled in: the groups I made, and
+  // separately the ones I joined. The database refuses past either too (0042),
+  // which covers a list that's out of date.
+  const ownedCount = groups.filter(g => g.isOwner).length;
+  const atCreateLimit = ownedCount >= MAX_OWNED_GROUPS;
+  const atJoinLimit = groups.length - ownedCount >= MAX_JOINED_GROUPS;
+  const ownsAGroup = ownedCount > 0;
 
   const openNewGroup = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (atGroupLimit) {
+    if (atCreateLimit) {
       Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("create", ownsAGroup));
       return;
     }
     router.navigate("/trainer/group-edit");
-  }, [router, atGroupLimit, ownsAGroup]);
+  }, [router, atCreateLimit, ownsAGroup]);
 
   const openGroup = useCallback((g: Group) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -476,7 +482,7 @@ export default function PTHome() {
    *  nothing. Same reasoning as the gym-user hub. */
   const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {
     // At the limit the invite stays where it is, to accept after leaving a group.
-    if (atGroupLimit) {
+    if (atJoinLimit) {
       Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("join", ownsAGroup));
       return;
     }
@@ -488,15 +494,23 @@ export default function PTHome() {
       return;
     }
     // Same read as the initial load, so a group joined from an invite arrives
-    // with its badge rather than an empty one until the next focus.
-    const [rows, inv] = await Promise.all([loadGroupRows(), fetchMyGroupInvites()]);
+    // with its badge (and its faces) rather than an empty one until the next
+    // focus. Without its faces, its card says how many members instead.
+    const [rows, inv, joined] = await Promise.all([
+      loadGroupRows(),
+      fetchMyGroupInvites(),
+      fetchGroupMembers(invite.groupId).catch(() => null),
+    ]);
     setHub(h => h && {
       ...h,
       groups: sortByFavourite(rows.map(r => r.group), new Set(h.favouriteGroupIds)),
       unreadByGroup: Object.fromEntries(rows.map(r => [r.group.id, r.unreadCount])),
+      groupFaces: joined
+        ? { ...h.groupFaces, [invite.groupId]: memberFaces(joined) }
+        : h.groupFaces,
       groupInvites: inv,
     });
-  }, [atGroupLimit, ownsAGroup]);
+  }, [atJoinLimit, ownsAGroup]);
 
   const handleDeclineInvite = useCallback((invite: GroupInvite) => {
     Alert.alert(
@@ -783,6 +797,15 @@ export default function PTHome() {
           </BounceButton>
         </View>
 
+        {/* Someone I'm connected with switched account type: what it changed,
+            and the choice it leaves me (components/trainer/ConnectionNotices.tsx). */}
+        <ConnectionNotices
+          notices={hub?.notices ?? []}
+          accountType="pt"
+          onResolved={noticeId => setHub(h => h && { ...h, notices: (h.notices ?? []).filter(n => n.id !== noticeId) })}
+          onChanged={() => { void fetchPTHub(owner, { fresh: true }).then(setHub); }}
+        />
+
         <View style={styles.titleRow}>
           <Pressable
             onPress={toggleClientsSection}
@@ -893,17 +916,23 @@ export default function PTHome() {
              a stack of separate cards. The row content is unchanged —
              SUMMARY_ROW's padding is CARD_PAD on every side, so a row that
              becomes a whole card's body still sits where a card title does. */
-          groups.map(g => (
+          groups.map(g => {
+            // Who's in it, as faces under the name: the group page's banner
+            // stack, smaller and tucked closer. A group whose faces haven't
+            // loaded yet (just joined, or an older saved copy) says how many.
+            const faces = groupFaces?.[g.id];
+            const count = faces?.length ?? g.memberCount;
+            return (
             <BounceButton
               key={g.id}
               style={{ marginBottom: 10 }}
               onPress={() => openGroup(g)}
               accessibilityRole="button"
-              accessibilityLabel={`Open group ${g.name}`}
+              accessibilityLabel={`Open group ${g.name}, ${count} member${count === 1 ? "" : "s"}`}
             >
               <NeuCard dark={isDark} radius={16}>
                 <View style={styles.summaryRow}>
-                  <GroupAvatar uri={g.photoUri} size={38} isDark={isDark} />
+                  <GroupAvatar uri={g.photoUri} size={48} isDark={isDark} />
                   <View style={{ flex: 1 }}>
                     <View style={styles.groupNameRow}>
                       <Text style={[styles.groupName, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
@@ -915,9 +944,15 @@ export default function PTHome() {
                           button wears, for the same reason. */}
                       <UnreadBadge count={groupAlerts[g.id] ?? 0} />
                     </View>
-                    <Text style={[styles.groupMeta, { color: t.ts }]}>
-                      {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
-                    </Text>
+                    {faces && faces.length > 0 ? (
+                      <View style={styles.groupFaces}>
+                        <MemberStack members={faces} size={26} overlap={12} isDark={isDark} ringColor={t.bg} countColor={t.ts} />
+                      </View>
+                    ) : (
+                      <Text style={[styles.groupMeta, { color: t.ts }]}>
+                        {count} member{count === 1 ? "" : "s"}
+                      </Text>
+                    )}
                   </View>
                   {/* Display only, and only once starred. Favouriting is done
                       INSIDE the group, from its options menu: a star on every
@@ -928,7 +963,8 @@ export default function PTHome() {
                 </View>
               </NeuCard>
             </BounceButton>
-          ))
+            );
+          })
         )}
 
         {batches.length > 0 && (
@@ -1084,6 +1120,9 @@ const styles = StyleSheet.create({
   groupNameRow:  { flexDirection: "row", alignItems: "center", gap: 8 },
   groupName:     { flexShrink: 1, ...CARD_TITLE },
   groupMeta:     { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 1 },
+  // Under the name, a little apart from it: the faces' rings would otherwise
+  // sit against the title's descenders.
+  groupFaces:    { marginTop: 4 },
   groupEmpty:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, padding: 16, textAlign: "center" },
   // No `gap` here: a closed ExpandReveal is a zero-height child, and a gap
   // would reserve space on both sides of it, loosening every collapsed card.

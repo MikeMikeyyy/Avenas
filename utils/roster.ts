@@ -5,8 +5,15 @@
 // A real accepted connection's ROLE comes from the counterpart's account type,
 // never from which local list they happen to sit in:
 //
-//   viewer is a trainer (pt) → connected pt        = one of MY TRAINERS
-//                            → connected gym user  = one of MY CLIENTS
+//   viewer is a trainer (pt) → connected pt        = MY TRAINERS, MY CLIENTS or
+//                                                    both, as I've filed them
+//                                                    (lib/connectionRoles.ts;
+//                                                    not filed yet = trainer)
+//                            → connected gym user  = one of MY CLIENTS, except
+//                                                    a former trainer I haven't
+//                                                    decided about (filed
+//                                                    "trainer": in neither list,
+//                                                    their note asks)
 //   viewer is a gym user     → connected pt        = one of MY TRAINERS
 //                            → connected gym user  = not surfaced (no peer feature yet)
 //
@@ -25,6 +32,7 @@
 // imports trainerStore, so reading loadBlockedIds() from there would be a cycle.
 
 import { getMyConnections, type Connection } from "../lib/connections";
+import { loadConnectionRoles, type ConnectionRole } from "../lib/connectionRoles";
 import { isCloudContactId } from "../lib/chat";
 import { loadBlockedIds } from "./moderation";
 import {
@@ -33,7 +41,6 @@ import {
   loadClients,
   loadCoaches,
   loadOtherTrainers,
-  loadTrainerClientIds,
   makeInitials,
   saveAssignedPT,
   type AssignedPT,
@@ -92,57 +99,70 @@ const isStaleCloudEntry = (id: string, live: LiveConnections): boolean =>
   live !== null && isCloudContactId(id) && !live.ids.has(id);
 
 export type TrainerRoster = {
-  /** People this trainer coaches. Includes fellow trainers they've explicitly
-   *  taken on as a client, flagged `isTrainer` so the UI can badge them. */
+  /** People this trainer coaches. Includes fellow trainers filed as a client
+   *  (or both), flagged `isTrainer` so the UI can badge them. */
   clients: Client[];
   /** Trainers who coach THIS trainer — the "My Trainers" page. A trainer can
    *  appear in BOTH lists: they coach you and you coach them. */
   trainers: AssignedPT[];
-  /** Which of `trainers` are also clients, so the UI can show the right toggle. */
+  /** Which trainer-account connections are also (or only) clients, so the UI
+   *  can show the right toggle. */
   trainerClientIds: Set<string>;
+  /** How each connection is filed (lib/connectionRoles.ts). A trainer account
+   *  with no entry hasn't been decided yet and reads as a trainer. */
+  roles: Map<string, ConnectionRole>;
 };
 
-/** The trainer-side roster, split by the counterpart's account type. */
+/** Which lists a connection belongs in, for a TRAINER viewing it. */
+export function placeConnection(accountType: Connection["accountType"], role: ConnectionRole | undefined): { trainer: boolean; client: boolean } {
+  if (accountType === "pt") {
+    return { trainer: role !== "client", client: role === "client" || role === "both" };
+  }
+  // A gym account filed "trainer" is a former trainer switched to a gym account
+  // whose note is still waiting on my choice (migration 0041): in neither list
+  // until I keep them as a client or remove them.
+  return { trainer: false, client: role !== "trainer" };
+}
+
+/** The trainer-side roster, split by the counterpart's account type and by how
+ *  I've filed each trainer. */
 export async function resolveTrainerRoster(): Promise<TrainerRoster> {
-  const [localClients, localTrainers, trainerClientIds, { live, blocked }] = await Promise.all([
+  const [localClients, localTrainers, roles, { live, blocked }] = await Promise.all([
     loadClients(),
     loadCoaches(),
-    loadTrainerClientIds(),
+    loadConnectionRoles(),
     fetchLive(),
   ]);
 
-  const acceptedTrainers = (live?.accepted ?? []).filter(c => c.accountType === "pt");
-  const liveTrainers = acceptedTrainers.map(toTrainer);
-  const liveClients = (live?.accepted ?? []).filter(c => c.accountType !== "pt").map(toClient);
-  const trainerIds = new Set(liveTrainers.map(t => t.id));
+  const accepted = live?.accepted ?? [];
+  const placed = accepted.map(c => ({ c, ...placeConnection(c.accountType, roles.get(c.otherId)) }));
+  const liveTrainers = placed.filter(p => p.trainer).map(p => toTrainer(p.c));
+  // Trainer accounts I coach are flagged isTrainer so cards and pickers can
+  // badge them, and so removing them is distinguishable from an ordinary client.
+  const liveClients: Client[] = placed
+    .filter(p => p.client)
+    .map(p => (p.c.accountType === "pt" ? { ...toClient(p.c), isTrainer: true } : toClient(p.c)));
+  const trainerClientIds = new Set(liveClients.filter(c => c.isTrainer).map(c => c.id));
+
+  // A real connection's placement is decided above, hidden or not; the local
+  // roster can't put someone back in a list the live answer left them out of.
+  // Offline (live null) it's all there is.
+  const keepLocal = (id: string, seen: Set<string>) =>
+    !seen.has(id) && !(live?.ids.has(id)) && !blocked.has(id) && !isStaleCloudEntry(id, live);
   const clientIds = new Set(liveClients.map(c => c.id));
-
-  // Connected trainers the user has opted to coach. Flagged isTrainer so cards
-  // and pickers can badge them, and so removing them later is distinguishable
-  // from removing an ordinary client.
-  const trainersAsClients: Client[] = acceptedTrainers
-    .filter(c => trainerClientIds.has(c.otherId))
-    .map(c => ({ ...toClient(c), isTrainer: true }));
-  const trainerClientSet = new Set(trainersAsClients.map(c => c.id));
-
-  const keepLocal = (id: string, takenBy: Set<string>) =>
-    !takenBy.has(id) && !blocked.has(id) && !isStaleCloudEntry(id, live);
+  const trainerIds = new Set(liveTrainers.map(t => t.id));
 
   return {
-    // Connecting alone never makes a trainer a client — that stays an explicit
-    // opt-in (addTrainerAsClient), which is what trainersAsClients carries.
-    // Local entries are still filtered against trainerIds so a stale record
-    // from an older build can't reinstate one behind the user's back.
     clients: [
       ...liveClients,
-      ...trainersAsClients,
       ...localClients.filter(c => keepLocal(c.id, clientIds) && !trainerIds.has(c.id)),
     ],
     trainers: [
       ...liveTrainers,
       ...localTrainers.filter(t => keepLocal(t.id, trainerIds)),
     ],
-    trainerClientIds: trainerClientSet,
+    trainerClientIds,
+    roles,
   };
 }
 

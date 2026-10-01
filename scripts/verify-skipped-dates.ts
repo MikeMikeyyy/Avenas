@@ -12,6 +12,8 @@ import {
   isDatePulled,
   isDatePushed,
   isDateSkipped,
+  marksAfterEdit,
+  marksAfterHold,
   pickAfterMove,
   pickAfterUndoMove,
   planDoItTomorrow,
@@ -22,7 +24,9 @@ import {
   unskipDate,
 } from "../utils/skippedDates";
 import { cycleDrift } from "../utils/cycleDrift";
-import { getWorkoutForDate, resolveDayIndex, resolveWorkoutForDate, cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
+import { formatStoredDate } from "../utils/dates";
+import { programsAfterPastLog, setWorkoutDay } from "../utils/programLifecycle";
+import { getEffectiveToday, getWorkoutForDate, resolveDayIndex, resolveWorkoutForDate, cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
 import { sessionCountForDay, workoutMatchesDay } from "../utils/progressStats";
 import { markDayRefLabels, programDays } from "../utils/programDays";
 import { getCurrentWeek, programFinishDate } from "../constants/programs";
@@ -526,20 +530,162 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
      "re-activate: ...which is exactly what carrying the marks over would break");
 }
 
-// ─── resuming from a hold drops the marks the hold swallowed ────────────────
+// ─── resuming from a hold: each move keeps its rest day ─────────────────────
+// utils/programPause.ts resumeProgram shifts the start by the days held (it
+// can't be imported here: it pulls in React Native), then settles the marks
+// with marksAfterHold, which is what's tested. "Carry on where I left off": the
+// resume day must be on the cycle and week the pause day was.
 {
-  const held = pushDate({ ...base, pausedAt: TUE }, plus(TUE, 2));
-  const resumed = normalizeDriftDates({
-    ...held,
-    pausedAt: undefined,
-    skippedDates: (held.skippedDates ?? []).filter(d => !(d >= TUE && d < plus(TUE, 5))),
-    pushedDates: (held.pushedDates ?? []).filter(d => !(d >= TUE && d < plus(TUE, 5))),
-  });
-  // utils/programPause.ts can't be imported here (it pulls in React Native), so
-  // this mirrors its filter; the invariant is what matters, not the empty-array
-  // convention around it.
-  eq((resumed.pushedDates ?? []).length, 0, "resume: a push inside the hold window is dropped");
-  eq(cycleDrift(resumed, plus(TUE, 10)), 0, "resume: ...so it can't extend the program for days nothing was scheduled on");
+  const resume = (p: SavedProgram, pausedAt: string, on: string) => {
+    const held = Math.round((asDate(on).getTime() - asDate(pausedAt).getTime()) / 86400000);
+    return marksAfterHold({ ...p, startDate: formatStoredDate(new Date(2026, 8, 7 + held)) }, pausedAt, on);
+  };
+  const daysLater = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime();
+
+  // A move into the hold: Thursday's Upper moved on before a pause from
+  // Wednesday. The hold did the waiting, so the move goes, and so must the rest
+  // day that absorbed it, Sunday, after the hold. Kept, it ran the program a
+  // day early from Sunday on.
+  {
+    const moved = planDoItTomorrow(base, THU).program;
+    eq([moved.pushedDates, moved.pulledDates], [[THU], [plus(MON, 6)]], "hold setup: Thursday moved, absorbed on Sunday");
+    const back = resume(moved, WED, plus(MON, 5));
+    eq([back.skippedDates, back.pushedDates, back.pulledDates], [undefined, undefined, undefined],
+      "resume: a move into the hold goes, and so does the rest day after the hold it was paired with");
+    eq(schedule(back, plus(MON, 5), 21), schedule(base, WED, 21), "resume: picks up exactly where the pause day was");
+    eq(programFinishDate(back)!.getTime(), daysLater(programFinishDate(base)!, 3), "resume: finishes the days held later, no more, no less");
+  }
+  // A move before the hold whose rest day fell inside it: Tuesday's Lower
+  // moved to Wednesday, Thursday's rest spent, then paused from Wednesday.
+  // Dropped with the hold, that rest day left the move unpaid: the program ran
+  // a day late and resumed a day behind where it left off.
+  {
+    const moved = planDoItTomorrow(base, TUE).program;
+    eq(moved.pulledDates, [THU], "hold setup: Tuesday moved, absorbed on Thursday");
+    const on = plus(MON, 7);
+    const back = resume(moved, WED, on);
+    eq(back.pushedDates, [TUE], "resume: the move before the hold stands");
+    eq((back.pulledDates ?? []).length === 1 && back.pulledDates![0] > on, true, "resume: ...and takes a rest day after the resume day");
+    eq(schedule(back, on, 21), schedule(moved, WED, 21), "resume: picks up exactly where the pause day was, moved workout and all");
+    eq(getCurrentWeek(back, asDate(on)), getCurrentWeek(moved, asDate(WED)), "resume: in the week the hold began in");
+    eq(programFinishDate(back)!.getTime(), daysLater(programFinishDate(base)!, 5), "resume: finishes the days held later, no more, no less");
+  }
+  // A rest day spent ON the pause day still counts: the program had already
+  // caught up there when it stopped. (Its date can move: shifting the start
+  // re-labels the days before the resume too, and normalizeDriftDates keeps it
+  // on a rest day, no later than the resume day.)
+  {
+    const moved = planDoItTomorrow(base, MON).program;
+    eq(moved.pulledDates, [THU], "hold setup: Monday moved, absorbed on Thursday");
+    const back = resume(moved, THU, plus(MON, 5));
+    eq(cycleDrift(back, plus(MON, 5)), cycleDrift(moved, THU), "resume: a rest day spent on the pause day still counts");
+    eq(schedule(back, plus(MON, 5), 21), schedule(moved, THU, 21), "resume: picks up where the pause day was");
+  }
+  // A long hold moves the start past a move and the rest day that absorbed it,
+  // both before the pause. They're history, and still count: the rest day has
+  // no slot to check before the start, and re-targeted or dropped it left the
+  // move unpaid, resuming a day behind (a week back, on a week boundary).
+  {
+    const moved = planDoItTomorrow(base, MON).program;
+    const on = plus(MON, 21);
+    const back = resume(moved, FRI, on);
+    eq(back.pulledDates, [THU], "long hold: the rest day spent before the pause stays, though the start is now after it");
+    eq(schedule(back, on, 21), schedule(moved, FRI, 21), "long hold: picks up exactly where the pause day was");
+    eq(getCurrentWeek(back, asDate(on)), getCurrentWeek(moved, asDate(FRI)), "long hold: in the week the hold began in");
+  }
+  // Resumed the day it was paused: nothing was held, nothing moves.
+  {
+    const moved = planDoItTomorrow(base, TUE).program;
+    const back = marksAfterHold(moved, WED, WED);
+    eq([back.skippedDates, back.pushedDates, back.pulledDates], [moved.skippedDates, moved.pushedDates, moved.pulledDates],
+      "resume the same day: the marks are untouched");
+  }
+}
+
+// ─── a re-dated timeline pairs its moves up again ────────────────────────────
+// Logging day 1 before the start moves the start back, re-dating every day
+// under the moves. A rest day a move took that's now a workout was re-targeted
+// forward, past the first rest day after the move; then a move put straight
+// back paired that move up afresh, and the days between the two rest days came
+// back different.
+{
+  const three: SavedProgram = {
+    id: "T", name: "ULR", totalWeeks: 8, currentWeek: 1, status: "active",
+    startDate: "07 Sep 2026", trainingDays: 2, cycleDays: 3,
+    cyclePattern: ["Upper", "Lower", "Rest"], dayIds: ["t0", "t1", "t2"], workouts: {},
+  };
+  const moved = planDoItTomorrow(three, MON).program;
+  const log = { owningProgramId: "T", programId: "T", date: "2026-09-06", workoutName: "Upper" };
+  const [backdated] = programsAfterPastLog([moved], log).programs;
+  eq(backdated.startDate, "06 Sep 2026", "back-date: the start moves back to the session logged");
+  const roundTrip = unskipDate(planDoItTomorrow(backdated, TUE).program, TUE);
+  eq([roundTrip.pushedDates, roundTrip.pulledDates], [backdated.pushedDates, backdated.pulledDates],
+    "back-date: a move put straight back leaves the moves and rest days as they were");
+  eq(schedule(roundTrip, MON, 28), schedule(backdated, MON, 28), "back-date: ...and every day of the next four weeks");
+  // Contrast: only re-targeting (what a back-date did) left the rest day where
+  // a round trip doesn't put it back.
+  const retargeted = normalizeDriftDates({ ...moved, startDate: "06 Sep 2026" });
+  const retargetedTrip = unskipDate(planDoItTomorrow(retargeted, TUE).program, TUE);
+  eq(JSON.stringify(schedule(retargetedTrip, MON, 28)) !== JSON.stringify(schedule(retargeted, MON, 28)), true,
+    "back-date: ...which re-targeting alone didn't manage");
+}
+
+// ─── an edit of a running program keeps its marks legal ─────────────────────
+// The builder saved an edit without normalizeDriftDates: make Thursday's rest a
+// workout and the rest day a move was absorbed into took that workout out of
+// the plan.
+{
+  const moved = planDoItTomorrow(base, TUE).program;
+  const arms = { ...moved, cyclePattern: ["Upper", "Lower", "Arms", "Upper", "Lower", "Rest"], trainingDays: 5 };
+  eq(getWorkoutForDate({ ...arms, pulledDates: undefined }, THU)?.name, "Arms", "edit setup: Thursday now holds Arms");
+  eq(getWorkoutForDate(arms, THU)?.name === "Arms", false, "edit setup: ...which the stale rest day took out of the plan");
+  const saved = marksAfterEdit(moved, arms);
+  eq(getWorkoutForDate(saved, THU)?.name, "Arms", "edit: Arms stays on Thursday");
+  for (const d of saved.pulledDates ?? []) {
+    const idx = cycleIndexForDate({ ...saved, pulledDates: (saved.pulledDates ?? []).filter(x => x !== d) }, d);
+    eq(idx !== null && saved.cyclePattern[idx] === "Rest", true, `edit: the move's rest day ${d} is a rest day`);
+  }
+  eq(programFinishDate(saved)!.getTime(), programFinishDate({ ...arms, skippedDates: undefined, pushedDates: undefined, pulledDates: undefined })!.getTime(),
+    "edit: the move is still absorbed, so it finishes on time");
+  const renamed = marksAfterEdit(moved, { ...moved, name: "Renamed", workouts: { "0:Upper": [] } });
+  eq(renamed.pulledDates, moved.pulledDates, "edit: changing what's in the days leaves the moves alone");
+}
+
+// ─── a move put straight back near the end ───────────────────────────────────
+// A move with no rest day before the program's last day ends it a day later
+// (planDoItTomorrow), and putting ANOTHER move straight back mustn't then find
+// it a rest day after the end: that pull moved the finish back and forth.
+{
+  const week: SavedProgram = {
+    id: "W", name: "ULR", totalWeeks: 1, currentWeek: 1, status: "active",
+    startDate: "07 Sep 2026", trainingDays: 2, cycleDays: 3,
+    cyclePattern: ["Upper", "Lower", "Rest"], dayIds: ["w0", "w1", "w2"], workouts: {},
+  };
+  const SUN = plus(MON, 6);
+  const last = planDoItTomorrow(week, SUN);
+  eq(last.kind, "extended", "end: moving the last day ends the program a day later");
+  const trip = unskipDate(planDoItTomorrow(last.program, FRI).program, FRI);
+  eq([trip.pushedDates, trip.pulledDates], [last.program.pushedDates, last.program.pulledDates],
+    "end: a move put straight back leaves the last day's move as it was");
+  eq(programFinishDate(trip)!.getTime(), programFinishDate(last.program)!.getTime(), "end: ...and the finish");
+}
+
+// ─── Set Workout Date between midnight and 3am ───────────────────────────────
+// Re-aligning re-labels yesterday too. Wednesday was a rest day, so at 1am on
+// Thursday the app is on Thursday; "today is Lower" makes Wednesday an Upper
+// not logged, which holds the app on Wednesday (getEffectiveToday), and it
+// showed Upper. Wednesday is marked off instead, so the app stays on Thursday.
+{
+  const oneAm = new Date(2026, 8, 10, 1, 0);
+  eq(getEffectiveToday(base, [], oneAm), THU, "1am setup: the app is on Thursday (Wednesday rested)");
+  const set = setWorkoutDay(base, 1, THU, [], oneAm)!;
+  eq(getEffectiveToday(set, [], oneAm), THU, "1am: the app stays on the day that was set");
+  eq(getWorkoutForDate(set, THU)?.name, "Lower", "1am: ...which is Lower");
+  eq(isDateSkipped(set, WED), true, "1am: Wednesday reads as the rest it was, not an Upper missed");
+  const tenAm = setWorkoutDay(base, 1, THU, [], new Date(2026, 8, 10, 10, 0))!;
+  eq(isDateSkipped(tenAm, WED), false, "10am: nothing to hold, so yesterday is left alone");
+  const logged = setWorkoutDay(base, 1, THU, [{ date: WED }], oneAm)!;
+  eq(isDateSkipped(logged, WED), false, "1am, yesterday logged: it doesn't hold the app, so it's left alone");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -665,10 +811,25 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
   eq(pickAfterMove(base, null, MON), null, "no pick: nothing to carry");
 
   const carried = pickAfterMove(base, pick, MON);
-  eq(pickAfterUndoMove(carried, MON), pick, "undo: the carried pick comes back to its day");
-  eq(pickAfterUndoMove(pick, MON), null, "undo: a pick still on the day itself is left alone");
-  eq(pickAfterUndoMove({ ...pick, date: WED }, MON), null, "undo: a pick further out isn't this move's");
-  eq(pickAfterUndoMove({ date: TUE, workoutName: "Arms" }, MON), null, "undo: a custom workout is never treated as carried");
+  eq(pickAfterUndoMove(base, carried, MON), pick, "undo: the carried pick comes back to its day");
+  eq(pickAfterUndoMove(base, pick, MON), null, "undo: a pick still on the day itself is left alone");
+  eq(pickAfterUndoMove(base, { ...pick, date: WED }, MON), null, "undo: a pick further out isn't this move's");
+  eq(pickAfterUndoMove(base, { date: TUE, workoutName: "Arms" }, MON), null, "undo: a custom workout is never treated as carried");
+
+  // Tuesday's own workout already moved on: Monday's move lands on Wednesday,
+  // past it, and so does the pick. Carried to Tuesday, it sat on a day showing
+  // nothing while Wednesday showed Monday's Upper, the workout swapped away.
+  const tueMoved = planDoItTomorrow(base, TUE).program;
+  const both = planDoItTomorrow(tueMoved, MON).program;
+  const rides = pickAfterMove(tueMoved, pick, MON);
+  eq(rides?.date, WED, "pick: carried past a day whose own workout moved on, to where the move lands");
+  eq(getWorkoutForDate(both, WED)?.dayId, "d0", "pick: ...which is where Monday's slot now sits");
+  eq(pickAfterUndoMove(both, rides, MON), pick, "undo Monday: the pick comes back with its slot");
+  // Undoing Tuesday instead brings Monday's slot back to Tuesday, and the pick
+  // on it: it follows the slot, whichever move put it there.
+  const tueUndone = unskipDate(both, TUE);
+  eq(getWorkoutForDate(tueUndone, TUE)?.dayId, "d0", "undo Tuesday: Monday's slot lands on Tuesday now");
+  eq(pickAfterUndoMove(both, rides, TUE), { ...pick, date: TUE }, "undo Tuesday: ...and the pick with it");
 }
 
 // ─── a cycle with no rest day: the move genuinely costs a day ───────────────

@@ -37,6 +37,15 @@ interface Props<T extends string> {
    */
   triggerIcon?: keyof typeof Ionicons.glyphMap;
   /**
+   * "chip" (default) is the compact pill tucked into a card's header beside
+   * its title. "bar" is the full-height pill, for a page-level control that
+   * sits beside another full-size pill (the Progress page's time range, next
+   * to its program picker).
+   */
+  size?: "chip" | "bar";
+  /** Ionicons name drawn before the current value on a text trigger. */
+  leadingIcon?: keyof typeof Ionicons.glyphMap;
+  /**
    * Optional leading icon for each sheet row. Takes the option key so the
    * caller can mirror whatever icon it shows elsewhere for that value (the
    * Strength card reuses its header's per-metric icons here).
@@ -54,6 +63,8 @@ export default function DropdownPicker<T extends string>({
   onChange,
   sheetTitle = "Select",
   triggerIcon,
+  size = "chip",
+  leadingIcon,
   renderOptionIcon,
 }: Props<T>) {
   const { isDark } = useTheme();
@@ -104,6 +115,7 @@ export default function DropdownPicker<T extends string>({
   }, [open, mounted, slideY, backdropOpacity]);
 
   const current = options.find(o => o.key === value) ?? options[0];
+  const bar = size === "bar";
 
   return (
     <>
@@ -116,15 +128,21 @@ export default function DropdownPicker<T extends string>({
             the control surface as the buttons in its sheet (SheetPill), so the
             button and the popup it opens read as one family. The icon-only
             trigger is that pill at equal width and height: a round button. */}
-        <View style={[triggerIcon ? styles.iconBtn : styles.btn, { backgroundColor: t.ctrl }]}>
+        <View
+          style={[
+            triggerIcon ? styles.iconBtn : bar ? styles.btnBar : styles.btn,
+            { backgroundColor: t.ctrl },
+          ]}
+        >
           {triggerIcon ? (
             <Ionicons name={triggerIcon} size={16} color={t.tp} />
           ) : (
             <>
-              <Text style={[styles.btnText, { color: t.tp }]} numberOfLines={1}>
+              {leadingIcon ? <Ionicons name={leadingIcon} size={bar ? 17 : 14} color={t.ts} /> : null}
+              <Text style={[bar ? styles.btnTextBar : styles.btnText, { color: t.tp }]} numberOfLines={1}>
                 {current.shortLabel ?? current.label}
               </Text>
-              <Ionicons name="chevron-down" size={13} color={t.ts} />
+              <Ionicons name="chevron-down" size={bar ? 15 : 13} color={t.ts} />
             </>
           )}
         </View>
@@ -196,6 +214,19 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.bold,
     fontSize: 13,
     letterSpacing: 0.2,
+  },
+  // ProgramScopePicker's pill (constants/buttons.ts's PILL_H), so the two sit
+  // level in one row. The text is a size down from the program name's 17: the
+  // range is the secondary control and has to leave the name its width.
+  btnBar: {
+    ...pill(),
+    gap: 7,
+    paddingHorizontal: 18,
+    ...PILL_SHADOW,
+  },
+  btnTextBar: {
+    fontFamily: FontFamily.bold,
+    fontSize: 15,
   },
   iconBtn: {
     ...pill(PILL_H_CHIP),

@@ -5,14 +5,13 @@ import { BarChart } from "react-native-gifted-charts";
 import * as Haptics from "expo-haptics";
 import NeuCard from "./NeuCard";
 import SegmentedControl from "./SegmentedControl";
-import DropdownPicker from "./DropdownPicker";
 import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { niceAxis } from "../utils/niceAxis";
 import { MONTH_NAMES, fmtDuration } from "../utils/dates";
-import type { MetricKey, RangeKey, VolumeBucket } from "../constants/progress";
-import { METRIC_OPTIONS, RANGE_OPTIONS } from "../constants/progress";
+import type { MetricKey, VolumeBucket } from "../constants/progress";
+import { METRIC_OPTIONS } from "../constants/progress";
 
 interface Props {
   buckets: VolumeBucket[];
@@ -37,10 +36,6 @@ interface Props {
   metric: MetricKey;
   /** Callback when the user taps a different metric tab below the chart. */
   onMetricChange: (m: MetricKey) => void;
-  /** Active time-range key. */
-  range: RangeKey;
-  /** Callback when the user picks a different range from the dropdown. */
-  onRangeChange: (r: RangeKey) => void;
 }
 
 // Per-metric labels/copy. Centralised here so every site that varies on metric
@@ -102,7 +97,7 @@ function formatTotalForMetric(n: number, metric: MetricKey, unit: string): strin
  * - Tapping the focused bar again deselects.
  * - Y-axis ticks come from niceAxis() so they're clean round numbers.
  */
-export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, metric, onMetricChange, range, onRangeChange }: Props) {
+export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, metric, onMetricChange }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { width: screenWidth } = useWindowDimensions();
@@ -343,19 +338,13 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
   return (
     <NeuCard dark={isDark} radius={20} style={{ marginHorizontal: 20, marginTop: 16 }}>
       <View style={styles.inner}>
-        <View style={styles.headerRow}>
-          <View style={{ flex: 1, marginRight: 12 }}>
-            <Text style={[styles.title, { color: t.tp }]}>{METRIC_TITLES[metric]}</Text>
-            <Text style={[styles.headerValue, { color: focusedIndex == null ? t.ts : ACCT }]} numberOfLines={1}>
-              {headerLabel}
-            </Text>
-          </View>
-          <DropdownPicker<RangeKey>
-            value={range}
-            options={RANGE_OPTIONS}
-            onChange={onRangeChange}
-            sheetTitle="Time range"
-          />
+        {/* The time range is picked at the top of the page (ProgressView), where
+            it sets the window for the Strength radar as well. */}
+        <View>
+          <Text style={[styles.title, { color: t.tp }]}>{METRIC_TITLES[metric]}</Text>
+          <Text style={[styles.headerValue, { color: focusedIndex == null ? t.ts : ACCT }]} numberOfLines={1}>
+            {headerLabel}
+          </Text>
         </View>
 
         <Reanimated.View style={[styles.bodyWrap, animatedBodyStyle]}>
@@ -623,10 +612,6 @@ function GlowBar({
 const styles = StyleSheet.create({
   inner: {
     padding: 16,
-  },
-  headerRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
   },
   title: {
     fontFamily: FontFamily.bold,

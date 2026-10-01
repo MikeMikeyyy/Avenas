@@ -1,7 +1,9 @@
 // Loads the Trainer tab in the background shortly after launch, so it's up to
 // date by the time it's opened: its data (utils/trainerHub.ts) and the two
 // badges on it (Messages, Connect). Also brings this phone's blocks and the
-// server's into line (utils/moderation.ts:syncBlocks).
+// server's into line (utils/moderation.ts:syncBlocks), and asks a trainer how
+// to file any fellow trainer they've connected with and not placed yet
+// (utils/connectionRolePrompt.ts).
 //
 // AFTER startup, never part of it. The splash and Home wait on nothing here: it
 // starts a couple of seconds after the tabs mount, once Home has done its own
@@ -19,6 +21,8 @@ import { useOffline } from "../contexts/ConnectivityContext";
 import { hasAcceptedCommunityTerms, syncBlocks } from "../utils/moderation";
 import { prefetchTrainerHub } from "../utils/trainerHub";
 import { flushPendingShareUnlinks } from "../utils/trainerStore";
+import { importLegacyTrainerClients } from "../lib/connectionRoles";
+import { promptUndecidedConnectionRoles } from "../utils/connectionRolePrompt";
 import { warmUnreadMessages } from "./useUnreadMessages";
 import { warmConnectionPresence } from "./useConnectionPresence";
 
@@ -41,7 +45,18 @@ export function useTrainerHubPrefetch(): void {
           warmUnreadMessages(accountType, owner),
           warmConnectionPresence(owner),
           syncBlocks(),
+          // This phone's old "also my client" list, carried to the server once
+          // (lib/connectionRoles.ts). Before the question below, so a trainer
+          // already filed that way isn't asked about.
+          accountType === "pt" ? importLegacyTrainerClients() : Promise.resolve(),
         ]);
+        if (cancelled) return;
+        // Any trainer connection not yet filed as trainer / client / both,
+        // including a request I sent that was accepted since I last looked.
+        // After everything above, so the question never holds up the hub.
+        if (await promptUndecidedConnectionRoles(accountType)) {
+          await prefetchTrainerHub(accountType, owner);
+        }
       })().catch(err => {
         if (__DEV__) console.warn("[avenas] prefetch trainer hub", err);
       });

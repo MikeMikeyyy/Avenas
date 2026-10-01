@@ -8,7 +8,7 @@ import {
   PanResponder, Easing, useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import NeuCard, { NEU_BG, NEU_BG_DARK } from "../../components/NeuCard";
 import CollapsibleCard from "../../components/CollapsibleCard";
 import FadeScreen from "../../components/FadeScreen";
+import OfflineBanner from "../../components/OfflineBanner";
 import BounceButton from "../../components/BounceButton";
 import SheetPill, { SheetToggle } from "../../components/SheetPill";
 import ExercisePicker from "../../components/ExercisePicker";
@@ -37,6 +38,7 @@ import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERR
 import { programDays, workoutKey } from "../../utils/programDays";
 import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
 import { buildLiveActivityPayload } from "../../utils/liveActivity";
+import { nextSetOf } from "../../utils/nextSet";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
@@ -78,7 +80,10 @@ function fmtTime(secs: number): string {
 
 // ─── Log types ─────────────────────────────────────────────────────────────────
 
-type SetLog = { weight: string; reps: string; done: boolean; fillKey: number; originWorkingIdx?: number };
+// `doneAt` is when the set was ticked (epoch ms), set by every tick and cleared
+// by an untick: the set ticked last is where the session is up to
+// (utils/nextSet.ts). It rides in the draft; Finish never copies it.
+type SetLog = { weight: string; reps: string; done: boolean; doneAt?: number; fillKey: number; originWorkingIdx?: number };
 type ExerciseLog = { warmup: SetLog[]; working: SetLog[]; notes: string };
 type WorkoutLog = Record<string, ExerciseLog>;
 
@@ -1339,17 +1344,58 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 // stable callbacks, per-exercise exLog identity, memoized prevSets arrays.
 const MemoExerciseCard = React.memo(ExerciseCard);
 
-function getActiveSetFlatIdx(exId: string, exercises: Exercise[], log: WorkoutLog): number | null {
-  for (const ex of exercises) {
-    const exLog = log[ex.id];
-    if (!exLog) continue;
-    const allDone = [...exLog.warmup, ...exLog.working].map(s => s.done);
-    const firstUndone = allDone.findIndex(d => !d);
-    if (firstUndone !== -1) {
-      return ex.id === exId ? firstUndone : null;
-    }
+// Where the page goes to show a card: the top for the first exercise (the page
+// opens on it, under the workout's name), else that exercise's card. UP_TO_END
+// is the foot of the list, where Complete Workout sits.
+const UP_TO_TOP = "__top__";
+const UP_TO_END = "__end__";
+function cardTargetOf(exercises: Exercise[], exIndex: number): string {
+  return exIndex <= 0 ? UP_TO_TOP : exercises[exIndex].id;
+}
+
+// The card a session is up to: the one holding the set it's up to
+// (utils/nextSet.ts), or Complete Workout once only skipped sets are left,
+// since its Incomplete Sets warning is what takes you back to those.
+function upToTargetOf(exercises: Exercise[], log: WorkoutLog): string {
+  const next = nextSetOf(exercises.map(e => e.id), log);
+  if (!next || next.skipped) return UP_TO_END;
+  return cardTargetOf(exercises, next.exIndex);
+}
+
+// The card holding the first set still unticked, from the top: where the
+// Incomplete Sets warning's "Show Me" goes. null when every set is ticked.
+function firstUntickedTargetOf(exercises: Exercise[], log: WorkoutLog): string | null {
+  const i = exercises.findIndex(ex => {
+    const l = log[ex.id];
+    return !!l && [...l.warmup, ...l.working].some(s => !s.done);
+  });
+  return i === -1 ? null : cardTargetOf(exercises, i);
+}
+
+// The Incomplete Sets warning names what's left, so "Show Me" reads as a list
+// to work through: each press of Complete Workout after a fix goes to the next.
+function incompleteSetsMessage(exercises: Exercise[], log: WorkoutLog): string {
+  const open = exercises
+    .map(ex => {
+      const l = log[ex.id];
+      return { name: ex.name, left: l ? [...l.warmup, ...l.working].filter(s => !s.done).length : 0 };
+    })
+    .filter(o => o.left > 0);
+  if (open.length === 0) return "You haven't ticked off all your sets. Finish anyway?";
+  if (open.length === 1) {
+    const { name, left } = open[0];
+    return `${name} has ${left === 1 ? "a set" : `${left} sets`} you haven't ticked off. Finish anyway?`;
   }
-  return null;
+  const names = open.length <= 3
+    ? open.map(o => o.name)
+    : [open[0].name, open[1].name, `${open.length - 2} more`];
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} have sets you haven't ticked off. Finish anyway?`;
+}
+
+/** Focus mode shows one exercise: the target's, or the last for the end. */
+function upToFocusIndex(target: string, exercises: Exercise[]): number {
+  if (target === UP_TO_END) return Math.max(0, exercises.length - 1);
+  return Math.max(0, exercises.findIndex(ex => ex.id === target));
 }
 
 // Speech-bubble hint that floats above the round "+" add button when a workout
@@ -1514,6 +1560,57 @@ export default function WorkoutScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const sessionNotesInputRef = useRef<TextInput | null>(null);
 
+  // ── Where you're up to ──────────────────────────────────────────────────────
+  // Two ways back into a session open on the card it's up to (upToTargetOf,
+  // after the set you ticked last) rather than wherever the page happened to be:
+  //  - a relaunch. iOS often ends the app while the phone sits locked between
+  //    sets; the draft brings the session back, but the page started at the top.
+  //  - a tap on the in-progress bar over the other screens (the `upTo` param
+  //    below), which glides there.
+  // The Incomplete Sets warning's "Show Me" uses the same machinery to glide to
+  // the first unticked set. The list scrolls once the card has laid out. Cards
+  // above it, and the header's program line, can land a moment later and push
+  // it down, so every layout re-aims until the window closes: 1.5s after the
+  // first scroll, or as soon as you touch the page. Focus mode shows that
+  // exercise instead.
+  const upToRef = useRef<{ target: string; animated: boolean } | null>(null);
+  const upToCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cardYRef = useRef(new Map<string, number>());
+  const scrollMetricsRef = useRef({ contentH: 0, viewH: 0 });
+  const endUpTo = useCallback(() => {
+    upToRef.current = null;
+    if (upToCloseRef.current) { clearTimeout(upToCloseRef.current); upToCloseRef.current = null; }
+  }, []);
+  useEffect(() => endUpTo, [endUpTo]);
+  const aimAtUpTo = useCallback(() => {
+    const aim = upToRef.current;
+    if (!aim) return;
+    if (aim.target === UP_TO_TOP) {
+      // Nothing above the top can push it down, so no window to keep open.
+      scrollRef.current?.scrollTo({ y: 0, animated: aim.animated });
+      endUpTo();
+      return;
+    }
+    const y = aim.target === UP_TO_END ? Infinity : cardYRef.current.get(aim.target);
+    const { contentH, viewH } = scrollMetricsRef.current;
+    if (y == null || !contentH || !viewH) return;
+    const maxY = Math.max(0, contentH - viewH);
+    scrollRef.current?.scrollTo({ y: Math.min(maxY, Math.max(0, y - insets.top - 16)), animated: aim.animated });
+    if (!upToCloseRef.current) upToCloseRef.current = setTimeout(endUpTo, 1500);
+  }, [insets.top, endUpTo]);
+  // Bring a target on screen now (the page is already laid out): focus mode
+  // shows that exercise, the list scrolls to it.
+  const showTarget = useCallback((target: string, exercises: Exercise[], animated: boolean) => {
+    endUpTo();
+    if (focusMode) {
+      setFocusIndex(upToFocusIndex(target, exercises));
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+      return;
+    }
+    upToRef.current = { target, animated };
+    aimAtUpTo();
+  }, [focusMode, endUpTo, aimAtUpTo]);
+
   const lockedData = useMemo(() => {
     if (!todaysCompletedWorkout) return null;
     const exercises = todaysCompletedWorkout.exercises.map((ex, i) => ({
@@ -1653,6 +1750,7 @@ export default function WorkoutScreen() {
             setFreeWorkoutAddToProgram(!!draft.freeWorkoutAddToProgram);
             draftLockedRef.current = true;
             isWorkoutActiveRef.current = true;
+            upToRef.current = { target: upToTargetOf(draft.workoutInfo.exercises ?? [], draft.log), animated: false };
           } else {
             // Stale draft from a previous day — discard
             AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
@@ -1674,6 +1772,7 @@ export default function WorkoutScreen() {
   useEffect(() => {
     if (discardCount > 0 && discardCount !== prevDiscardCount.current) {
       prevDiscardCount.current = discardCount;
+      endUpTo();
       dismissRestTimer();
       setIsFreeWorkout(false);
       setFreeWorkoutAddToProgram(false);
@@ -1687,7 +1786,7 @@ export default function WorkoutScreen() {
       isWorkoutActiveRef.current = false;
       loadData(true);
     }
-  }, [discardCount, dismissRestTimer, loadData]);
+  }, [discardCount, dismissRestTimer, loadData, endUpTo]);
 
   useFocusEffect(useCallback(() => {
     if (draftRestored) loadData();
@@ -1848,7 +1947,7 @@ export default function WorkoutScreen() {
       if (!set.done && set.weight.trim() && set.reps.trim()) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         const sets = [...exLog[type]];
-        sets[idx] = { ...set, done: true };
+        sets[idx] = { ...set, done: true, doneAt: Date.now() };
         return { ...prev, [exId]: { ...exLog, [type]: sets } };
       }
       return prev;
@@ -1865,7 +1964,8 @@ export default function WorkoutScreen() {
       const exLog = prev[exId];
       if (!exLog) return prev;
       const sets = [...exLog[type]];
-      sets[idx] = { ...sets[idx], done: !sets[idx].done };
+      const done = !sets[idx].done;
+      sets[idx] = { ...sets[idx], done, doneAt: done ? Date.now() : undefined };
       return { ...prev, [exId]: { ...exLog, [type]: sets } };
     });
     startTimer();
@@ -2084,6 +2184,13 @@ export default function WorkoutScreen() {
       return [...exLog.warmup, ...exLog.working].every(s => s.done);
     });
 
+  // The set that glows: the one the session is up to (utils/nextSet.ts), after
+  // the set you ticked last, which is also the set a lock-screen tick marks.
+  const nextSet = useMemo(
+    () => (workoutInfo ? nextSetOf(workoutInfo.exercises.map(e => e.id), log) : null),
+    [workoutInfo, log],
+  );
+
   // Build the in-memory CompletedWorkout from current state. Pure — no I/O.
   const buildCompletedWorkout = (): CompletedWorkout | null => {
     if (!workoutInfo) return null;
@@ -2209,12 +2316,17 @@ export default function WorkoutScreen() {
       setCompleteSheetOpen(true);
     };
 
-    if (!allDone) {
+    if (!allDone && workoutInfo) {
+      // "Show Me" glides up to the first set still unticked (a skipped set
+      // waits here: see utils/nextSet.ts), to tick or fill in. Pressing
+      // Complete Workout again after fixing it moves on to the next.
+      const { exercises } = workoutInfo;
+      const target = firstUntickedTargetOf(exercises, log);
       Alert.alert(
         "Incomplete Sets",
-        "You haven't ticked off all your sets. Finish anyway?",
+        incompleteSetsMessage(exercises, log),
         [
-          { text: "Go Back", style: "cancel" },
+          { text: "Show Me", style: "cancel", onPress: () => { if (target) showTarget(target, exercises, true); } },
           { text: "Finish Anyway", onPress: doFinish },
         ]
       );
@@ -2394,8 +2506,9 @@ export default function WorkoutScreen() {
         // Tick only — unlike the in-app checkbox, a lock-screen tick never
         // writes numbers. Whatever the user typed before locking stays; an
         // empty set comes back ticked-but-empty for them to fill in after
-        // unlocking (the card's weight×reps preview is guidance only).
-        updated[a.setIdx] = { ...set, done: true };
+        // unlocking (the card's weight×reps preview is guidance only). Stamped
+        // with when it was ticked there, so the set ticked last stays right.
+        updated[a.setIdx] = { ...set, done: true, doneAt: a.ts };
         next = { ...next, [a.exId]: { ...exLog, [a.setType]: updated } };
       }
       return next;
@@ -2528,6 +2641,32 @@ export default function WorkoutScreen() {
 
   // Reset the focus index (but not the persisted view mode) when switching workouts.
   useEffect(() => { setFocusIndex(0); }, [workoutInfo?.name]);
+
+  // A restored session in focus mode opens on the exercise it's up to (see
+  // "Where you're up to"). Declared after the reset above so, on the render the
+  // draft lands in, this index is the one that sticks.
+  useEffect(() => {
+    const aim = upToRef.current;
+    if (!focusMode || !aim || !workoutInfo) return;
+    setFocusIndex(upToFocusIndex(aim.target, workoutInfo.exercises));
+    endUpTo();
+  }, [focusMode, workoutInfo, endUpTo]);
+
+  // The in-progress bar over the other screens (components/WorkoutActiveBar.tsx)
+  // opens this tab with a new `upTo` on every tap. It rides on the navigation,
+  // so a tap whose navigation never lands (the builder's Unsaved Changes, then
+  // Cancel) can't jump the page on some later visit.
+  const { upTo } = useLocalSearchParams<{ upTo?: string }>();
+  const takenUpToRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!upTo || upTo === takenUpToRef.current) return;
+    takenUpToRef.current = upTo;
+    if (!workoutInfo || todaysCompletedWorkout) return;
+    const { exercises } = workoutInfo;
+    const target = upToTargetOf(exercises, logRef.current);
+    // A frame on, once the tab is on screen, so the glide is seen.
+    requestAnimationFrame(() => showTarget(target, exercises, true));
+  }, [upTo, workoutInfo, todaysCompletedWorkout, showTarget]);
 
   // ─── No active program ──────────────────────────────────────────────────────
   // Skip this empty state when today's workout is already logged (e.g. a custom
@@ -2748,6 +2887,10 @@ export default function WorkoutScreen() {
         keyboardShouldPersistTaps="handled"
         style={{ backgroundColor: t.bg }}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: !todaysCompletedWorkout && workoutInfo ? safeBottom + 150 : 92 }]}
+        onLayout={e => { scrollMetricsRef.current.viewH = e.nativeEvent.layout.height; aimAtUpTo(); }}
+        onContentSizeChange={(_w, h) => { scrollMetricsRef.current.contentH = h; aimAtUpTo(); }}
+        onTouchStart={endUpTo}
+        onScrollBeginDrag={endUpTo}
       >
         {/* Header scrolls with content */}
         <View style={styles.header}>
@@ -2760,6 +2903,13 @@ export default function WorkoutScreen() {
             </Text>
           )}
         </View>
+
+        {/* Logging needs no signal: the session saves here, and a backup
+            that fails meanwhile goes again as the phone comes back online
+            (app/_layout.tsx). Only while there's a session to log. */}
+        {!todaysCompletedWorkout && workoutInfo && (
+          <OfflineBanner message="You're offline. Your workout saves on this phone and backs up when you're back online." />
+        )}
 
         {/* Focus mode: inline progress under header */}
         {focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
@@ -2864,6 +3014,7 @@ export default function WorkoutScreen() {
                 key={exercise.id}
                 isCollapsing={collapsingIds.has(exercise.id)}
                 onCollapsed={() => removeExercise(exercise.id)}
+                onLayout={e => { cardYRef.current.set(exercise.id, e.nativeEvent.layout.y); aimAtUpTo(); }}
               >
                 <MemoExerciseCard
                   exercise={exercise}
@@ -2885,7 +3036,7 @@ export default function WorkoutScreen() {
                   onToggleSetType={toggleSetType}
                   onInputFocus={handleInputFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
-                  activeSetFlatIdx={getActiveSetFlatIdx(exercise.id, workoutInfo.exercises, log)}
+                  activeSetFlatIdx={nextSet?.exId === exercise.id ? nextSet.flatIdx : null}
                   prevSets={prevHintsById[exercise.id] ?? EMPTY_PREV}
                   hideIndexLabel
                   numberBadge={focusMode ? undefined : i + 1}

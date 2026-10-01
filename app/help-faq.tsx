@@ -133,7 +133,7 @@ const SECTIONS: { title: string; items: { q: string; a: string }[] }[] = [
       },
       {
         q: "How do I switch between Gym User and Trainer?",
-        a: "In Settings, open Profile, choose Gym User or Trainer under Account Type and tap Save changes. Switching from Trainer back to Gym User deletes your clients, groups and sent programs, so you'll be asked to confirm first.",
+        a: "In Settings, open Profile, choose Gym User or Trainer under Account Type and tap Save changes. Switching from Trainer back to Gym User deletes your clients, groups and sent programs and disconnects you from your clients, so you'll be asked to confirm first. Everyone you're connected with gets a note on their Trainer tab saying you're no longer a trainer.",
       },
     ],
   },

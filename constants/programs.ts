@@ -211,8 +211,14 @@ export function programFinishDate(program: SavedProgram): Date | null {
   end.setDate(end.getDate() + span);
   const bound = (program.pushedDates?.length ?? 0) + (program.pulledDates?.length ?? 0) + 1;
   for (let i = 0; i < bound; i++) {
+    // A push ON the end date counts too: that day goes blank and its workout,
+    // the program's last, moves to the day after. cycleDrift counts a push only
+    // strictly before a date, which is right for what a day SHOWS, and on its
+    // own left the moved last workout outside the program.
+    const endYMD = toYMD(end);
+    const drift = cycleDrift(program, endYMD) + (program.pushedDates?.includes(endYMD) ? 1 : 0);
     const next = new Date(start);
-    next.setDate(next.getDate() + span + cycleDrift(program, toYMD(end)));
+    next.setDate(next.getDate() + span + drift);
     if (next.getTime() === end.getTime()) break;
     end = next;
   }

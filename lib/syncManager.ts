@@ -130,6 +130,13 @@ export function scheduleCloudPush(): void {
   }, DEBOUNCE_MS);
 }
 
+/** Back online: push again if the last attempt failed (a workout logged with
+ *  no signal), rather than waiting for the next change or the next time the
+ *  app is left. Nothing to redo if it went through, or none has run. */
+export function retryFailedCloudPush(): void {
+  if (lastFailed && !current) scheduleCloudPush();
+}
+
 /** Push now (cancelling any pending debounce). Used on app background/inactive. */
 export function flushCloudPush(): void {
   if (timer) {

@@ -25,11 +25,12 @@ import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./da
 import { ACCOUNT_TYPE_KEY, type AccountType } from "../contexts/AccountTypeContext";
 import { UNIT_KEY } from "../utils/units";
 import {
-  CLIENTS_KEY, CLIENT_DATA_PREFIX, PT_SEEDED_KEY, SHARED_PROGRAMS_KEY, TRAINER_CLIENTS_KEY,
+  CLIENTS_KEY, CLIENT_DATA_PREFIX, CONNECTION_ROLES_KEY, PT_SEEDED_KEY, SHARED_PROGRAMS_KEY, TRAINER_CLIENTS_KEY,
   clearTrainerData,
 } from "../utils/trainerStore";
 import { clearChatData } from "../utils/chatStore";
 import { clearModerationData } from "../utils/moderation";
+import { clearProgressSessions } from "../utils/progressSession";
 import { deleteGroup, fetchMyGroups } from "./groups";
 import { deleteShareRow, fetchMyShareRows, getMyUid } from "./shares";
 import { unregisterPushToken } from "./push";
@@ -267,6 +268,9 @@ export async function deleteAccount(): Promise<void> {
  *  sent programs, chat threads, block list) so one account's data never leaks
  *  into the next account on this device when deleting or switching accounts. */
 export async function clearLocalUserData(): Promise<void> {
+  // In memory, not storage: the Progress page's remembered selections name this
+  // account's programs and clients.
+  clearProgressSessions();
   await Promise.all([
     removeKey(PROGRAMS_KEY),
     removeKey(WORKOUT_HISTORY_KEY),
@@ -484,12 +488,18 @@ export async function reconcileAccountType(): Promise<void> {
  * module, so the dependency has to run this direction.
  *
  * Local removal happens first and unconditionally; the cloud steps are
- * best-effort per item, so one failure can't strand the rest half-done.
+ * best-effort per item, so one failure can't strand the rest half-done. Since
+ * migration 0041 the server's change_account_type has already done the cloud
+ * half (and disconnected gym-user clients, withdrawn waiting reviews and left
+ * everyone a note), so here it finds nothing left; it stays for a server
+ * without 0041, where the switch is a bare column write.
  */
 export async function clearCoachingData(): Promise<void> {
   const allKeys = await AsyncStorage.getAllKeys();
   const clientData = allKeys.filter(k => k.startsWith(CLIENT_DATA_PREFIX));
-  await AsyncStorage.multiRemove([CLIENTS_KEY, TRAINER_CLIENTS_KEY, PT_SEEDED_KEY, ...clientData]);
+  // The filings too (a gym account files nothing; the server dropped its copy
+  // in change_account_type, migration 0041).
+  await AsyncStorage.multiRemove([CLIENTS_KEY, TRAINER_CLIENTS_KEY, CONNECTION_ROLES_KEY, PT_SEEDED_KEY, ...clientData]);
 
   // Local share entries: drop the ones I SENT, keep what a trainer sent me.
   try {

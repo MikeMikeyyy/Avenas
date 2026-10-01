@@ -12,10 +12,12 @@ import { Platform } from "react-native";
 
 export type LiveActivitySetType = "warmup" | "working";
 
-/** One not-yet-done set, in on-screen order. Head = the set the lock-screen
- *  tick marks done. `weight`/`reps` are display-unit preview strings for the
- *  card (typed values, else previous-session hint) — the tick does NOT write
- *  them into the log; the user enters real numbers after unlocking. */
+/** One not-yet-done set, in the order the session will get to them
+ *  (utils/nextSet.ts). Head = the set the lock-screen tick marks done, the one
+ *  the Workout screen glows on. `weight`/`reps` are display-unit preview
+ *  strings for the card (typed values, else previous-session hint) — the tick
+ *  does NOT write them into the log; the user enters real numbers after
+ *  unlocking. */
 export type LiveActivityPendingSet = {
   exId: string;
   setType: LiveActivitySetType;

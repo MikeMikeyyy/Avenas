@@ -768,6 +768,55 @@ export function scopedProgramDays(
   return markDayRefLabels(refs);
 }
 
+/** One program's days, for the "All programs" Exercise Progress list. */
+export type ProgramDayGroup = {
+  programId: string;
+  programName: string;
+  /** Null when no program in the list has this id (a day whose program has
+   *  since gone can't appear, see historicalDays, but the type allows it). */
+  status: SavedProgram["status"] | null;
+  days: ProgramDayRef[];
+};
+
+// Same order as the program picker (ProgramScopePicker): what you're running,
+// then what's waiting, what's on hold, and what's done.
+const GROUP_STATUS_ORDER: Record<SavedProgram["status"], number> = { active: 0, created: 1, paused: 2, completed: 3 };
+
+/**
+ * The scope's days (scopedProgramDays) gathered under their programs, so "All
+ * programs" reads as a short list of programs to open rather than every day of
+ * every program in one run. Programs are ordered active → not started → paused
+ * → completed, then by name; each keeps its days in the order given (cycle,
+ * extras, then days that have left it).
+ *
+ * `duplicateLabel` is re-marked WITHIN each group: under a program heading,
+ * "Push" in two programs needs no qualifier, but two "Upper"s in one program
+ * still do. `absorbsUnidentified` is left as the whole scope decided it, since
+ * that's which row actually counts a session with no dayId.
+ */
+export function groupDaysByProgram(days: ProgramDayRef[], programs: SavedProgram[]): ProgramDayGroup[] {
+  const programById = new Map(programs.map(p => [p.id, p]));
+  const groups = new Map<string, ProgramDayGroup>();
+  for (const d of days) {
+    let g = groups.get(d.programId);
+    if (!g) {
+      const p = programById.get(d.programId);
+      g = { programId: d.programId, programName: p?.name ?? d.programName, status: p?.status ?? null, days: [] };
+      groups.set(d.programId, g);
+    }
+    g.days.push(d);
+  }
+  const out = Array.from(groups.values()).map(g => {
+    const counts = new Map<string, number>();
+    for (const d of g.days) counts.set(key(d.label), (counts.get(key(d.label)) ?? 0) + 1);
+    return { ...g, days: g.days.map(d => ({ ...d, duplicateLabel: (counts.get(key(d.label)) ?? 0) > 1 })) };
+  });
+  return out.sort((a, b) => {
+    const sd = (a.status ? GROUP_STATUS_ORDER[a.status] : 4) - (b.status ? GROUP_STATUS_ORDER[b.status] : 4);
+    return sd !== 0 ? sd : a.programName.localeCompare(b.programName);
+  });
+}
+
 /**
  * Does completed session `w` belong to workout day `day`?
  *

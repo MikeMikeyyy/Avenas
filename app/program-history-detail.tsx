@@ -1,6 +1,7 @@
 // The program page the Journal opens (and All Programs): the program's
 // progress at the top, then one card per week, Monday to Sunday, newest first,
-// numbered from the week the program started in.
+// numbered from the week the program started in. A trainer opens a client's
+// the same way, from the client page's Journal tab (`clientId`, read-only).
 //
 // A week's card says what each of its days was (a dot per day: trained,
 // missed, another workout instead, still to come), how much of its plan got
@@ -71,6 +72,8 @@ import {
 } from "../utils/programHistory";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
+import { useClientUnit } from "../hooks/useClientUnit";
+import { loadCachedClientData } from "../utils/trainerStore";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const WEEKDAY_LETTER = ["S", "M", "T", "W", "T", "F", "S"];
@@ -474,9 +477,16 @@ function WeekCard({ week, program, todayYMD, isDark, isKg, infoOf, onOpenWorkout
 
 export default function ProgramHistoryDetailScreen() {
   const router = useRouter();
-  const { programId } = useLocalSearchParams<{ programId: string }>();
+  // `clientId` makes it a TRAINER reading a client's program, opened from that
+  // client's Journal tab: it reads the copy the client page loaded (never your
+  // own storage, where none of their programs or sessions exist), and a session
+  // opens read-only, exactly as tapping it on their journal does.
+  const { programId, clientId } = useLocalSearchParams<{ programId: string; clientId?: string }>();
   const { isDark } = useTheme();
-  const { isKg } = useUnit();
+  const { isKg: ownIsKg } = useUnit();
+  // A client's numbers read in the unit THEY log in (0036), as on their phone.
+  const clientIsKg = useClientUnit(clientId);
+  const isKg = clientIsKg ?? ownIsKg;
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
 
@@ -488,17 +498,22 @@ export default function ProgramHistoryDetailScreen() {
   useFocusEffect(
     useCallback(() => {
       let live = true;
-      void Promise.all([
-        getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-        getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []),
-      ]).then(([progs, hist]) => {
+      // A client's copy is read from the cache, never refetched: every backup
+      // re-mints their ids, and the page that opened this one drew from it.
+      void (clientId
+        ? loadCachedClientData(clientId).then(d => [d.programs, d.workoutHistory] as const)
+        : Promise.all([
+            getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+            getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []),
+          ])
+      ).then(([progs, hist]) => {
         if (!live) return;
         setPrograms(Array.isArray(progs) ? progs : []);
         setHistory(Array.isArray(hist) ? hist : []);
         setLoaded(true);
-      });
+      }).catch(() => { if (live) setLoaded(true); });
       return () => { live = false; };
-    }, []),
+    }, [clientId]),
   );
 
   const program = useMemo(() => programs.find(p => p.id === programId) ?? null, [programs, programId]);
@@ -514,8 +529,8 @@ export default function ProgramHistoryDetailScreen() {
 
   const openWorkout = useCallback((id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.navigate({ pathname: "/workout-detail", params: { id } });
-  }, [router]);
+    router.navigate({ pathname: "/workout-detail", params: { id, ...(clientId ? { clientId } : {}) } });
+  }, [router, clientId]);
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>

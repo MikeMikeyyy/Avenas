@@ -27,9 +27,9 @@ import { Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
-import { MONTH_NAMES } from "./dates";
+import { MONTH_NAMES, addDaysYMD } from "./dates";
 import { getEffectiveToday, getWorkoutForDate, normalizeDriftDates, resolveWorkoutForDate, type DayOverride } from "./workout";
-import { isDatePulled, isDatePushed, isDateSkipped, pickAfterMove, pickAfterUndoMove, planDoItTomorrow, skipDate, unskipDate } from "./skippedDates";
+import { isDatePulled, isDatePushed, isDateSkipped, moveLandsOn, pickAfterMove, pickAfterUndoMove, planDoItTomorrow, skipDate, unskipDate } from "./skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { resyncScheduledNotifications } from "./notificationScheduler";
 
@@ -126,6 +126,25 @@ async function makeRestDay(programId: string, ymd: string): Promise<"skip"> {
   return "skip";
 }
 
+/**
+ * The day a move on `ymd` would land on, when nothing landing there would be
+ * scheduled: that day was already made a rest day (Make Rest Day, not a move),
+ * or the program is paused from it. Otherwise null.
+ *
+ * Either way a workout moved there just vanished, so the move isn't offered,
+ * and the prompt says why (and, for a rest day, how to get it: put that day
+ * back first). A day that's off because its OWN workout moved on is fine: both
+ * shift, and the move lands past it (moveLandsOn), so it's the day after those
+ * that counts. A pause starts on the day the app is on, so only a day that's
+ * gone back since (getEffectiveToday, before 3am) can have one ahead of it.
+ */
+function moveBlockedOn(program: SavedProgram, ymd: string): { day: string; paused: boolean } | null {
+  const lands = moveLandsOn(program, ymd);
+  if (!lands) return null;
+  if (program.pausedAt && lands >= program.pausedAt) return { day: lands, paused: true };
+  return isDateSkipped(program, lands) ? { day: lands, paused: false } : null;
+}
+
 /** What the user settled on. `null` means they backed out and NOTHING was
  *  written — callers must not commit any of their own side effects either.
  *  "moved" kept the workout; "extended" is a move that had no rest day to absorb
@@ -150,18 +169,19 @@ function dayName(ymd: string, from: string): string {
   return days > 6 ? `${weekday} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]}` : weekday;
 }
 
-/** "Tomorrow" for today, otherwise the next day's name ("Saturday"). The prompt
- *  can be opened for any upcoming day from the week strip, and "Move to
- *  tomorrow" on a Friday tapped from Tuesday would name the wrong day.
+/** The day a move on `ymd` lands on, as the button names it: "Tomorrow" for
+ *  the day after the one the app is on, otherwise its name ("Saturday"). The
+ *  prompt can be opened for any upcoming day from the week strip, and "Move to
+ *  tomorrow" on a Friday tapped from Tuesday would name the wrong day. Nor is
+ *  it always the next day: when that day's own workout has moved on as well,
+ *  the move lands past it (moveLandsOn).
  *
  *  `today` is the EFFECTIVE day, so at 1am — when the app is still on
  *  yesterday — the button says Tomorrow for the day the user is actually on. */
-function nextDayPhrase(ymd: string, today: string): string {
-  if (ymd === today) return "Tomorrow";
-  const d = parse(ymd);
-  if (!d) return "the next day";
-  d.setDate(d.getDate() + 1);
-  return WEEKDAYS[d.getDay()];
+function landingPhrase(program: SavedProgram, ymd: string, today: string): string {
+  const lands = moveLandsOn(program, ymd);
+  if (!lands) return "the next day";
+  return lands === addDaysYMD(today, 1) ? "Tomorrow" : dayName(lands, ymd);
 }
 
 /**
@@ -188,6 +208,11 @@ export async function applyRestDay(
 ): Promise<RestDayOutcome> {
   if (mode === "skip") return makeRestDay(programId, ymd);
   if (mode === "moveToTomorrow") {
+    // Never onto a day already made a rest day, or a paused one (the prompt
+    // doesn't offer it).
+    const raw = await AsyncStorage.getItem(PROGRAMS_KEY).catch(() => null);
+    const current = (raw ? (JSON.parse(raw) as SavedProgram[]) : []).find(p => p.id === programId);
+    if (!current || moveBlockedOn(current, ymd)) return null;
     // A change-day pick moves with its day (see pickAfterMove); anything else on
     // this date goes, as it does for a rest day.
     const override = await readOverride();
@@ -240,12 +265,19 @@ export async function applyRestDay(
   // either: the pick belongs to this date alone, so "Move to Tomorrow" would
   // clear it and push a rest day, and nothing would reach tomorrow.
   const pickedOnRestDay = getWorkoutForDate(program, ymd) === null;
+  // Nor onto a day already made a rest day, or paused: it would vanish there.
+  const blocked = moveBlockedOn(program, ymd);
 
-  if (ymd < today || pickedOnRestDay) {
+  if (ymd < today || pickedOnRestDay || blocked) {
+    const on = !blocked ? "" : blocked.day === addDaysYMD(today, 1) ? "tomorrow" : dayName(blocked.day, ymd);
+    const On = `${on.charAt(0).toUpperCase()}${on.slice(1)}`;
+    const why = !blocked || ymd < today || pickedOnRestDay ? ""
+      : blocked.paused ? `\nYour program is paused from ${on}.`
+      : `\n${On}'s already a rest day. To move it there, put ${on} back first.`;
     return new Promise<RestDayOutcome>(resolve => {
       Alert.alert(
         ymd < today ? `Missed '${name}'?` : `Not doing '${name}'?`,
-        "Make Rest Day: nothing else changes.",
+        `Make Rest Day: nothing else changes.${why}`,
         [
           {
             text: "Make Rest Day",
@@ -258,7 +290,7 @@ export async function applyRestDay(
     });
   }
 
-  const next = nextDayPhrase(ymd, today);
+  const next = landingPhrase(program, ymd, today);
   const plan = planDoItTomorrow(program, ymd);
 
   // One short line per button, naming it exactly as the button does, and saying
@@ -313,14 +345,14 @@ export async function clearRestDay(
    *  carried to the next day must not come back over it. */
   restorePick = true,
 ): Promise<void> {
-  let wasMoved = false as boolean;
+  let moved = null as SavedProgram | null;
   await commit(programId, p => {
-    wasMoved = isDatePushed(p, ymd);
+    if (isDatePushed(p, ymd)) moved = p;
     return unskipDate(p, ymd);
   });
-  // A pick the move carried to the next day comes back with its day.
-  if (!wasMoved || !restorePick) return;
-  const restored = pickAfterUndoMove(await readOverride(), ymd);
+  // A pick the move carried on comes back with its day.
+  if (!moved || !restorePick) return;
+  const restored = pickAfterUndoMove(moved, await readOverride(), ymd);
   if (restored) await writeOverride(restored);
 }
 

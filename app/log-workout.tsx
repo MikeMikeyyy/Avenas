@@ -30,7 +30,8 @@ import {
   normaliseSets, type SavedProgram, type CompletedWorkout, type ProgramSet,
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
-import { parseStoredDate, formatStoredDate, MONTH_FULL } from "../utils/dates";
+import { MONTH_FULL } from "../utils/dates";
+import { programsAfterPastLog } from "../utils/programLifecycle";
 import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type PrevExerciseKey } from "../utils/workout";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
@@ -1268,31 +1269,14 @@ export default function LogWorkoutScreen() {
       // program isn't evidence the program began then, and moving the start
       // re-dates the whole cycle: every scheduled day after it would shift.
       if (owningProgramId) {
-        const addPid = addToProgramId && addToProgramId.length > 0 ? addToProgramId : null;
-        const isProgramDay = !!programId && programId.length > 0;
-        const [yy, mm, dd] = (date ?? "").split("-").map(Number);
-        const loggedDate = (Number.isFinite(yy) && Number.isFinite(mm) && Number.isFinite(dd))
-          ? new Date(yy, mm - 1, dd) : null;
-
         const progsRaw = await AsyncStorage.getItem(PROGRAMS_KEY);
         const progs: SavedProgram[] = progsRaw ? JSON.parse(progsRaw) : [];
-        let changed = false;
-        const updated = progs.map(p => {
-          if (p.id !== owningProgramId) return p;
-          let next = p;
-          // Free workout added to a program → remember its name as an extra.
-          if (addPid === p.id && workoutName && !(p.extraWorkouts ?? []).includes(workoutName)) {
-            next = { ...next, extraWorkouts: [...(next.extraWorkouts ?? []), workoutName] };
-            changed = true;
-          }
-          // Move the start back if this session is earlier than the current start
-          // (only ever earlier — a later session doesn't change when it began).
-          const start = parseStoredDate(next.startDate);
-          if (isProgramDay && loggedDate && (!start || loggedDate.getTime() < start.getTime())) {
-            next = { ...next, startDate: formatStoredDate(loggedDate) };
-            changed = true;
-          }
-          return next;
+        const { programs: updated, changed } = programsAfterPastLog(progs, {
+          owningProgramId,
+          addToProgramId,
+          programId,
+          date: date ?? "",
+          workoutName: workoutName ?? "",
         });
         if (changed) await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
       }

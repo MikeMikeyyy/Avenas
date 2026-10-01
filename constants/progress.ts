@@ -22,14 +22,18 @@ export type RangeOption = {
   //                       ranges, e.g. "May 11-17" or "Apr 27-May 3".
   //   - "month"         → one bar per calendar month, labelled "Mar"…
   bucket: "day" | "rollingWeeks" | "month";
+  // The Strength radar's legend: this range's window, and the same-length
+  // window before it (previousComparableWindow) that the muted polygon plots.
+  currentLegend: string;
+  previousLegend: string;
 };
 
 export const RANGE_OPTIONS: RangeOption[] = [
-  { key: "thisWeek",    label: "This Week",   shortLabel: "Week",    bucket: "day"          },
-  { key: "lastWeek",    label: "Last Week",   shortLabel: "Last Wk", bucket: "day"          },
-  { key: "thisMonth",   label: "Last Month",  shortLabel: "Month",   bucket: "rollingWeeks" },
-  { key: "last3Months", label: "Last 3 Months", shortLabel: "3M",    bucket: "month"        },
-  { key: "year",        label: "Last Year",   shortLabel: "Year",    bucket: "month"        },
+  { key: "thisWeek",    label: "This Week",     shortLabel: "Week",    bucket: "day",          currentLegend: "This Week",     previousLegend: "Last Week"       },
+  { key: "lastWeek",    label: "Last Week",     shortLabel: "Last Wk", bucket: "day",          currentLegend: "Last Week",     previousLegend: "Week Before"     },
+  { key: "thisMonth",   label: "Last Month",    shortLabel: "Month",   bucket: "rollingWeeks", currentLegend: "Last Month",    previousLegend: "Month Before"    },
+  { key: "last3Months", label: "Last 3 Months", shortLabel: "3M",      bucket: "month",        currentLegend: "Last 3 Months", previousLegend: "3 Months Before" },
+  { key: "year",        label: "Last Year",     shortLabel: "Year",    bucket: "month",        currentLegend: "Last Year",     previousLegend: "Year Before"     },
 ];
 
 // Which metric the progress chart's bars represent. The bucketing template

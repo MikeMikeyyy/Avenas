@@ -1,5 +1,6 @@
 // Read-only journal view used by the PT to see a client's journal:
 // monthly activity calendar + recent timeline of journal entries and workouts.
+// (The Journal's programs section is the client page's Programs tab.)
 // Mirrors the look of the user's own Journal screen but without create/delete.
 // A workout opens the same way it does there, from its card or its day on the
 // calendar; a day with no workout does nothing, since logging one belongs to

@@ -27,7 +27,8 @@ import { Alert } from "react-native";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { formatStoredDate, parseStoredDate, todayYMD, toYMD } from "./dates";
-import { normalizeDriftDates, resolveDayIndex } from "./workout";
+import { marksAfterHold } from "./skippedDates";
+import { getEffectiveToday, resolveDayIndex } from "./workout";
 
 /** Days a program has been held, as of `asOfYMD`. 0 when not paused. */
 export function pausedDayCount(program: SavedProgram, asOfYMD: string = todayYMD()): number {
@@ -103,27 +104,15 @@ export function resumeProgram(
         ? (((p.cycleOffset ?? 0) + held) % p.cycleDays + p.cycleDays) % p.cycleDays
         : p.cycleOffset;
 
-    // Marks dated inside the hold are meaningless — nothing was scheduled on
-    // those days — and a push among them would extend the program for a day it
-    // never programmed. Drop them, then re-target what's left: shifting
-    // startDate (and, in "today" mode, the offset) moves every date onto a
-    // different cycle slot, which can land a workout on a rest day the user had
-    // spent. See normalizeDriftDates.
-    const inHold = (d: string) => d >= p.pausedAt! && d < onYMD;
-    const keep = (list?: string[]) => {
-      const next = (list ?? []).filter(d => !inHold(d));
-      return next.length > 0 ? next : undefined;
-    };
-
-    return normalizeDriftDates({
-      ...p,
-      pausedAt: undefined,
-      startDate: formatStoredDate(shifted),
-      cycleOffset: offset,
-      skippedDates: keep(p.skippedDates),
-      pushedDates: keep(p.pushedDates),
-      pulledDates: keep(p.pulledDates),
-    });
+    // The rest days and moves around the hold, settled for the shifted
+    // timeline (marksAfterHold): what the hold swallowed goes, and each move
+    // still standing keeps a rest day, so it picks up exactly where it was on
+    // the pause day and still finishes on time.
+    return marksAfterHold(
+      { ...p, pausedAt: undefined, startDate: formatStoredDate(shifted), cycleOffset: offset },
+      p.pausedAt,
+      onYMD,
+    );
   });
 }
 
@@ -224,7 +213,8 @@ export const AUTO_PAUSE_AFTER_DAYS = 7;
  * Pause the active program when a full week has gone by with no workouts.
  * Returns the program that was paused, or null when nothing changed.
  *
- * pausedAt is set to TODAY rather than the day the streak actually broke:
+ * pausedAt is set to TODAY (the day the Workout tab is on) rather than the
+ * day the streak actually broke:
  * backdating would retroactively blank days the weekly strip has already shown
  * as scheduled, and this change should only ever apply going forward.
  *
@@ -241,7 +231,11 @@ export async function autoPauseIfIdle(): Promise<SavedProgram | null> {
     const dates: string[] = datesRaw ? JSON.parse(datesRaw) : [];
     if (idleDays(active, dates) < AUTO_PAUSE_AFTER_DAYS) return null;
 
-    const updated = pauseProgram(programs, active.id);
+    // From the day the Workout tab is on (before 3am it can still be
+    // yesterday), as a pause from My Programs is: from the calendar day, a 1am
+    // open left last night's workout up on a held program, and a move put it
+    // inside the hold.
+    const updated = pauseProgram(programs, active.id, getEffectiveToday(active, dates.map(date => ({ date }))));
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     return updated.find(p => p.id === active.id) ?? null;
   } catch (err) {

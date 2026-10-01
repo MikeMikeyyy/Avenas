@@ -27,7 +27,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
-import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets, getCurrentWeek } from "../constants/programs";
+import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
+import { activateProgram, type FinishedProgram } from "../utils/programLifecycle";
+import { marksAfterEdit } from "../utils/skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardProgramAchievement } from "../utils/achievementStore";
 import { batchKeyOf, loadGroupReviewPrograms, loadSentPrograms, loadSharedPrograms, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
@@ -2826,7 +2828,9 @@ export default function NewProgramScreen() {
         try {
           const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
           const existing: SavedProgram[] = raw ? JSON.parse(raw) : [];
-          const updated = existing.map(p => p.id === editId ? {
+          // Its rest days and moves kept legal for the cycle as edited
+          // (marksAfterEdit), as every save of a program must.
+          const updated = existing.map(p => p.id === editId ? marksAfterEdit(p, {
             ...p,
             name: programName,
             totalWeeks,
@@ -2835,7 +2839,7 @@ export default function NewProgramScreen() {
             cyclePattern: savedCyclePattern,
             dayIds: savedDayIds,
             workouts: savedWorkouts,
-          } : p);
+          }) : p);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
           draftDeleted.current = true;
           await AsyncStorage.removeItem(DRAFT_KEY);
@@ -2872,25 +2876,11 @@ export default function NewProgramScreen() {
         const existing: SavedProgram[] = raw ? JSON.parse(raw) : [];
         let updated = [...existing, newProgram];
         // The outgoing program, when activating this one finishes it.
-        let finished: { program: SavedProgram; week: number } | null = null;
+        let finished: FinishedProgram | null = null;
         if (makeActive) {
-          // Demote the old active the same way programs.tsx handleMakeActive
-          // does: week-aware (completed / paused / created), snapshotting its
-          // currentWeek — the two activation paths must not diverge.
-          updated = updated.map(p => {
-            if (p.id === newProgram.id) return { ...p, status: "active" as const, currentWeek: 1 };
-            if (p.status === "active") {
-              const week = getCurrentWeek(p);
-              // pausedAt is cleared on both branches, same as programs.tsx: the
-              // demoted program is inactive or finished now, not on hold.
-              if (week >= p.totalWeeks) {
-                finished = { program: p, week };
-                return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: startDate, pausedAt: undefined };
-              }
-              return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week, pausedAt: undefined };
-            }
-            return p;
-          });
+          // My Programs' Make Active, the one rule for both: the old active
+          // demoted by the week it reached (utils/programLifecycle.ts).
+          ({ programs: updated, finished } = activateProgram(updated, newProgram.id, startDate));
         }
         await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
         // A same-day change-day override belongs to the demoted program — clear
@@ -2902,7 +2892,7 @@ export default function NewProgramScreen() {
         scheduleCloudPush();
         // Same as programs.tsx handleMakeActive: replacing a program that ran
         // to its end finishes it, which earns the achievement.
-        const done = finished as { program: SavedProgram; week: number } | null;
+        const done = finished as FinishedProgram | null;
         if (done) void awardProgramAchievement(done.program, done.week);
       } catch (e) {
         Alert.alert("Save failed", alertMessage(e, "Please try again."));

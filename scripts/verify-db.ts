@@ -23,7 +23,8 @@
 //      the trainer sends it back; Send Update hands over the new version and
 //      reopens Accept for a client who took the last one; only the review's
 //      trainer (or an accepted trainer of its group) can do it.
-//   5-6. The group limit (0035) and people's units (0036).
+//   5-6. The group limits (0042: groups made, groups joined, people in a
+//      group) and people's units (0036).
 //   7. ARCHIVING (0037): a send is archived by its sender or a trainer of its
 //      group, a review by its trainer(s), and never by the person on the
 //      other end; a whole send moves in one call, and restoring clears it.
@@ -449,16 +450,20 @@ async function main() {
   eq(await sendBack(COACHED_PT, inGroup), true, "review: a trainer of the group who isn't its owner can send it back");
   eq((await stateOf(inGroup)).returned, "Coach's edit", "review: ...handing over that trainer's edits");
 
-  // ─── 5. The group limit (0035) ────────────────────────────────────────────
-  // Five groups per account, the ones it created included. Only ACCEPTING
-  // counts, so an invite can still be sent to someone at the limit.
+  // ─── 5. The group limits (0042) ───────────────────────────────────────────
+  // An account creates at most 3 groups and is in at most 3 of other people's,
+  // the two counted apart. Only ACCEPTING counts toward the second, so an
+  // invite can still be sent to someone at the limit. A group holds at most 10
+  // people, its owner and anyone still to answer an invite included.
   const LIMITED = "ffffffff-0000-4000-8000-000000000007"; // runs groups and joins others'
   const INVITER = "ffffffff-0000-4000-8000-000000000008"; // invites LIMITED
-  for (const id of [LIMITED, INVITER]) {
+  const INVITER2 = "ffffffff-0000-4000-8000-000000000009"; // ...and so does this one
+  for (const id of [LIMITED, INVITER, INVITER2]) {
     await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
     await db.query(`update public.profiles set account_type = 'pt' where id = $1`, [id]);
   }
   await connect(INVITER, LIMITED);
+  await connect(INVITER2, LIMITED);
   const newGroup = async (owner: string, name: string, members: string[] = []) => {
     await as(owner);
     return (await db.query<{ id: string }>(`select public.create_group($1, $2::uuid[]) as id`, [name, members])).rows[0].id;
@@ -467,41 +472,83 @@ async function main() {
     await as(uid);
     await db.query(`select public.accept_group_invite($1)`, [groupId]);
   };
+  const setMembers = async (owner: string, groupId: string, members: string[]) => {
+    await as(owner);
+    await db.query(`select public.set_group_members($1, $2::uuid[])`, [groupId, members]);
+  };
   /** The refusal's message, or null when it went through. */
   const refusal = async (run: () => Promise<unknown>): Promise<string | null> => {
     try { await run(); return null; } catch (e) { return (e as Error).message; }
   };
-  const groupsOf = async (uid: string) => (await db.query<{ n: number }>(
-    `select count(*)::int as n from public.group_members where user_id = $1 and accepted_at is not null`, [uid])).rows[0].n;
+  const ownedBy = async (uid: string) => (await db.query<{ n: number }>(
+    `select count(*)::int as n from public.groups where owner_id = $1`, [uid])).rows[0].n;
+  const joinedBy = async (uid: string) => (await db.query<{ n: number }>(
+    `select count(*)::int as n from public.group_members m join public.groups g on g.id = m.group_id
+      where m.user_id = $1 and m.accepted_at is not null and g.owner_id <> $1`, [uid])).rows[0].n;
   const isPending = async (groupId: string, uid: string) => (await db.query<{ p: boolean }>(
     `select accepted_at is null as p from public.group_members where group_id = $1 and user_id = $2`, [groupId, uid])).rows[0]?.p;
+  const sizeOf = async (groupId: string) => (await db.query<{ n: number }>(
+    `select count(*)::int as n from public.group_members where group_id = $1`, [groupId])).rows[0].n;
 
-  const inviteA = await newGroup(INVITER, "Invite A", [LIMITED]);
-  const inviteB = await newGroup(INVITER, "Invite B", [LIMITED]);
+  // Creating: three, and no more.
   const own: string[] = [];
-  for (let i = 1; i <= 4; i++) own.push(await newGroup(LIMITED, `Own ${i}`));
-  eq(await groupsOf(LIMITED), 4, "group limit: pending invites don't count");
-  eq(await refusal(() => joinGroup(LIMITED, inviteA)), null, "group limit: joining a 5th group goes through");
-  eq(await groupsOf(LIMITED), 5, "group limit: ...and a joined group counts alongside the ones you created");
+  for (let i = 1; i <= 3; i++) own.push(await newGroup(LIMITED, `Own ${i}`));
+  eq(await refusal(() => newGroup(LIMITED, "Own 4")), "group_limit_reached", "group limits: creating a 4th is refused");
+  eq((await db.query(`select 1 from public.groups where name = 'Own 4'`)).rows.length, 0,
+    "group limits: ...and leaves no ownerless group behind");
 
-  eq(await refusal(() => newGroup(LIMITED, "Own 5")), "group_limit_reached", "group limit: creating a 6th is refused");
-  eq((await db.query(`select 1 from public.groups where name = 'Own 5'`)).rows.length, 0,
-    "group limit: ...and leaves no ownerless group behind");
-  eq(await refusal(() => joinGroup(LIMITED, inviteB)), "group_limit_reached", "group limit: accepting a 6th is refused");
-  eq(await isPending(inviteB, LIMITED), true, "group limit: ...and the invite is still there to accept later");
+  // Joining: three of other people's, whatever you've made yourself.
+  const invites = [];
+  for (const name of ["Invite A", "Invite B", "Invite C"]) invites.push(await newGroup(INVITER, name, [LIMITED]));
+  const inviteD = await newGroup(INVITER2, "Invite D", [LIMITED]);
+  eq(await joinedBy(LIMITED), 0, "group limits: pending invites don't count");
+  for (const g of invites) eq(await refusal(() => joinGroup(LIMITED, g)), null, "group limits: joining up to three goes through");
+  eq([await ownedBy(LIMITED), await joinedBy(LIMITED)], [3, 3],
+    "group limits: ...beside three of your own, the two counted apart");
+  eq(await refusal(() => joinGroup(LIMITED, inviteD)), "group_limit_reached", "group limits: accepting a 4th is refused");
+  eq(await isPending(inviteD, LIMITED), true, "group limits: ...and the invite is still there to accept later");
 
-  let inviteC = "";
-  eq(await refusal(async () => { inviteC = await newGroup(INVITER, "Invite C", [LIMITED]); }), null,
-    "group limit: someone at the limit can still be invited");
-  eq(inviteC ? await isPending(inviteC, LIMITED) : undefined, true, "group limit: ...as a pending invite");
-  await db.query(`update public.group_members set role = 'trainer' where group_id = $1 and user_id = $2`, [inviteA, LIMITED]);
-  eq(await groupsOf(LIMITED), 5, "group limit: a role change at the limit isn't refused");
+  let inviteE = "";
+  eq(await refusal(async () => { inviteE = await newGroup(INVITER2, "Invite E", [LIMITED]); }), null,
+    "group limits: someone at the limit can still be invited");
+  eq(inviteE ? await isPending(inviteE, LIMITED) : undefined, true, "group limits: ...as a pending invite");
+  await db.query(`update public.group_members set role = 'trainer' where group_id = $1 and user_id = $2`, [invites[0], LIMITED]);
+  eq(await joinedBy(LIMITED), 3, "group limits: a role change at the limit isn't refused");
 
-  await db.query(`delete from public.group_members where group_id = $1 and user_id = $2`, [inviteA, LIMITED]);
-  eq(await refusal(() => joinGroup(LIMITED, inviteB)), null, "group limit: leaving a group makes room to accept");
+  await db.query(`delete from public.group_members where group_id = $1 and user_id = $2`, [invites[0], LIMITED]);
+  eq(await refusal(() => joinGroup(LIMITED, inviteD)), null, "group limits: leaving a group makes room to accept");
   await db.query(`delete from public.groups where id = $1`, [own[0]]);
-  eq(await refusal(() => newGroup(LIMITED, "Own 5")), null, "group limit: deleting one of your groups makes room to create");
-  eq(await groupsOf(LIMITED), 5, "group limit: back at five");
+  eq(await refusal(() => newGroup(LIMITED, "Own 4")), null, "group limits: deleting one of your groups makes room to create");
+  eq([await ownedBy(LIMITED), await joinedBy(LIMITED)], [3, 3], "group limits: back at three and three");
+
+  // A group's size: ten people, counting its owner and every invite.
+  const crowd = Array.from({ length: 11 }, (_, i) => `ffffffff-0000-4000-8000-0000000003${String(i).padStart(2, "0")}`);
+  for (const id of crowd) {
+    await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+    await connect(INVITER2, id);
+  }
+  let ten = "";
+  eq(await refusal(async () => { ten = await newGroup(INVITER2, "Ten", crowd.slice(0, 9)); }), null,
+    "group size: an owner and nine others go in");
+  eq(await sizeOf(ten), 10, "group size: ...ten people, the invites still pending among them");
+  eq(await refusal(() => setMembers(INVITER2, ten, crowd.slice(0, 10))), "group_full", "group size: inviting an 11th is refused");
+  eq(await sizeOf(ten), 10, "group size: ...and the save changes nothing else");
+  eq(await refusal(() => db.query(`insert into public.group_members (group_id, user_id) values ($1, $2)`, [ten, crowd[10]])),
+    "group_full", "group size: ...however the row arrives");
+  eq(await refusal(() => setMembers(INVITER2, ten, crowd.slice(0, 9))), null,
+    "group size: saving a full group as it is goes through (a rename, a new photo)");
+  eq(await refusal(() => joinGroup(crowd[0], ten)), null, "group size: accepting into a full group goes through: the invite held the place");
+  await as(crowd[1]);
+  await db.query(`select public.decline_group_invite($1)`, [ten]);
+  eq(await refusal(() => setMembers(INVITER2, ten, [crowd[0], ...crowd.slice(2, 10)])), null,
+    "group size: an invite declined makes room for someone else");
+  eq(await refusal(() => setMembers(INVITER2, ten, [crowd[0], ...crowd.slice(3, 11)])), null,
+    "group size: taking one invite back and adding someone in the same save goes through");
+  eq(await sizeOf(ten), 10, "group size: ...still ten");
+  await db.query(`delete from public.groups where id = $1`, [inviteE]);
+  eq(await refusal(() => newGroup(INVITER2, "Eleven", crowd.slice(0, 10))), "group_full", "group size: creating with ten others is refused");
+  eq((await db.query(`select 1 from public.groups where name = 'Eleven'`)).rows.length, 0,
+    "group size: ...and leaves no group behind");
 
   // ─── 6. Units (0036) ──────────────────────────────────────────────────────
   // A trainer reads a client's unit with their training, and the send /
@@ -805,6 +852,126 @@ async function main() {
   eq(await asApi(B_PEER, `delete from public.blocks where blocked_id = $1`, [B_POSTER]), null, "blocks: the blocker lifts it");
   await groupMessage(B_POSTER, gMain);
   eq((await pushedSince()).has(B_PEER), true, "blocks: ...and their messages notify them again");
+
+  // ─── 11. Connection roles + switching account type (0041) ─────────────────
+  // How a trainer files each trainer they're connected with is theirs alone.
+  // Switching account type through change_account_type re-files and notifies
+  // everyone connected; a bare write to the column (the launch-time drift
+  // repair) does none of it.
+  const R_X = "ffffffff-0000-4000-8000-000000000020";        // the trainer who switches
+  const R_ONLY = "ffffffff-0000-4000-8000-000000000021";     // a trainer who has X as their trainer only
+  const R_UNDECIDED = "ffffffff-0000-4000-8000-000000000022"; // ...who never chose
+  const R_BOTH = "ffffffff-0000-4000-8000-000000000023";     // ...as trainer and client
+  const R_CLIENT = "ffffffff-0000-4000-8000-000000000024";   // ...as their client only
+  const R_GYM = "ffffffff-0000-4000-8000-000000000025";      // a gym user X coaches
+  const R_ASKER = "ffffffff-0000-4000-8000-000000000026";    // a gym user waiting on a review from X
+  const R_LATER = "ffffffff-0000-4000-8000-000000000027";    // a gym user connected once X is a gym user
+  for (const [id, type] of [
+    [R_X, "pt"], [R_ONLY, "pt"], [R_UNDECIDED, "pt"], [R_BOTH, "pt"], [R_CLIENT, "pt"],
+    [R_GYM, "user"], [R_ASKER, "user"], [R_LATER, "user"],
+  ] as const) {
+    await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+    await db.query(`update public.profiles set account_type = $2, name = $3 where id = $1`, [id, type, `Person ${id.slice(-2)}`]);
+  }
+  for (const other of [R_ONLY, R_UNDECIDED, R_BOTH, R_CLIENT, R_GYM, R_ASKER]) await connect(other, R_X);
+  const fileAs = (owner: string, other: string, role: string) =>
+    asApi(owner, `insert into public.connection_roles (owner_id, other_id, role) values (auth.uid(), $1, $2)
+                  on conflict (owner_id, other_id) do update set role = excluded.role`, [other, role]);
+  const roleOf = async (owner: string, other: string) => (await db.query<{ role: string }>(
+    `select role from public.connection_roles where owner_id = $1 and other_id = $2`, [owner, other])).rows[0]?.role ?? null;
+  const noticeFor = async (reader: string, about: string) => (await db.query<{ kind: string; withdrawn_reviews: number; other_name: string }>(
+    `select kind, withdrawn_reviews, other_name from public.connection_notices where user_id = $1 and other_id = $2`,
+    [reader, about])).rows[0] ?? null;
+  const countSeenBy = async (uid: string, table: string) => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      return (await db.query<{ n: number }>(`select count(*)::int as n from public.${table}`)).rows[0].n;
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  const switchTo = (uid: string, type: string) => asApi(uid, `select public.change_account_type($1)`, [type]);
+  const typeOf = async (uid: string) => (await db.query<{ t: string }>(
+    `select account_type as t from public.profiles where id = $1`, [uid])).rows[0].t;
+
+  eq(await fileAs(R_ONLY, R_X, "trainer"), null, "roles: a trainer files a connection as their trainer");
+  eq(await fileAs(R_BOTH, R_X, "both"), null, "roles: ...as both");
+  eq(await fileAs(R_CLIENT, R_X, "client"), null, "roles: ...as their client");
+  eq(await fileAs(R_BOTH, R_X, "both"), null, "roles: filing again is harmless");
+  eq(/row-level security/.test((await asApi(R_ONLY,
+    `insert into public.connection_roles (owner_id, other_id, role) values ($1, $2, 'client')`, [R_BOTH, R_X])) ?? ""), true,
+    "roles: nobody files a connection on someone else's behalf");
+  eq((await fileAs(R_ONLY, R_X, "boss")) !== null, true, "roles: only trainer, client or both");
+  eq(await countSeenBy(R_ONLY, "connection_roles"), 1, "roles: you see only your own filing");
+  eq(/row-level security/.test((await asApi(R_ONLY,
+    `insert into public.connection_notices (user_id, other_id, kind) values (auth.uid(), $1, 'new_trainer')`, [R_X])) ?? ""), true,
+    "roles: nobody writes a note directly");
+
+  // X's own state that the switch clears: a group, a program sent, a review
+  // waiting on X, one X already sent back, and a filing of X's own.
+  const xGroup = (await db.query<{ id: string }>(
+    `insert into public.groups (owner_id, name) values ($1, 'X group') returning id`, [R_X])).rows[0].id;
+  const xSend = await sendShare(R_X, R_GYM, "send-x");
+  const waiting = await askForReview(R_ASKER, R_X);
+  const answered = await askForReview(R_GYM, R_X);
+  await db.query(`update public.shared_programs set returned_at = now(), returned_snapshot = '{"name":"b"}'::jsonb where id = $1`, [answered]);
+  eq(await fileAs(R_X, R_ONLY, "client"), null, "roles: X files a trainer as their client");
+
+  // The launch-time repair writes the column alone: nothing else moves.
+  await db.query(`update public.profiles set account_type = 'user' where id = $1`, [R_X]);
+  eq([await connected(R_X, R_GYM), await noticeFor(R_GYM, R_X), await roleOf(R_ONLY, R_X)], [true, null, "trainer"],
+    "switch: a bare write to account_type severs nothing and notifies nobody");
+  await db.query(`update public.profiles set account_type = 'pt' where id = $1`, [R_X]);
+
+  eq(await switchTo(R_X, "user"), null, "switch: a trainer switches to a gym account");
+  eq(await typeOf(R_X), "user", "switch: ...and their account type changes");
+  eq([await roleOf(R_ONLY, R_X), (await noticeFor(R_ONLY, R_X))?.kind], ["trainer", "ex_trainer_choose"],
+    "switch: a trainer who had them as trainer only is asked what to do, and they're in neither list meanwhile");
+  eq([await roleOf(R_UNDECIDED, R_X), (await noticeFor(R_UNDECIDED, R_X))?.kind], ["trainer", "ex_trainer_choose"],
+    "switch: ...so is one who never chose");
+  eq([await roleOf(R_BOTH, R_X), (await noticeFor(R_BOTH, R_X))?.kind], ["client", "ex_trainer_client"],
+    "switch: as both, they stay a client, with a note");
+  eq([await roleOf(R_CLIENT, R_X), await noticeFor(R_CLIENT, R_X)], ["client", null],
+    "switch: as a client only, nothing changes");
+  eq([await connected(R_X, R_GYM), (await noticeFor(R_GYM, R_X))?.kind], [false, "ex_trainer_gone"],
+    "switch: the gym users they coached are disconnected, with a note");
+  eq((await noticeFor(R_GYM, R_X))?.other_name, "Person 20", "switch: ...which names them");
+  eq([(await noticeFor(R_ASKER, R_X))?.withdrawn_reviews, (await rowOf(waiting)) ?? null], [1, null],
+    "switch: a review still waiting on them is withdrawn, and the note says so");
+  eq((await rowOf(answered)) !== undefined, true, "switch: one they already sent back stays");
+  eq([(await db.query(`select 1 from public.groups where id = $1`, [xGroup])).rows.length, (await rowOf(xSend)) ?? null], [0, null],
+    "switch: their groups and the programs they sent are deleted");
+  eq(await roleOf(R_X, R_ONLY), null, "switch: a gym account keeps no filings of its own");
+  eq(await connected(R_X, R_ONLY), true, "switch: trainers stay connected, to choose for themselves");
+  eq(await countSeenBy(R_ONLY, "connection_notices"), 1, "switch: a note is read by the person it's for");
+  eq(await countSeenBy(R_GYM, "connection_notices"), 1, "switch: ...each their own");
+  eq(await asApi(R_BOTH, `delete from public.connection_notices where other_id = $1`, [R_X]), null, "switch: the reader dismisses it");
+  eq(await noticeFor(R_BOTH, R_X), null, "switch: ...and it's gone");
+  eq(await asApi(R_CLIENT, `delete from public.connection_notices where user_id = $1`, [R_ONLY]), null,
+    "switch: someone else's delete runs...");
+  eq(((await noticeFor(R_ONLY, R_X)) ?? null) !== null, true, "switch: ...and removes nothing");
+  eq(await switchTo(R_X, "user"), null, "switch: switching to what you already are is harmless");
+
+  // Back to a trainer.
+  await connect(R_LATER, R_X);
+  eq(await switchTo(R_X, "pt"), null, "switch: a gym user switches to a trainer account");
+  eq([await roleOf(R_CLIENT, R_X), (await noticeFor(R_CLIENT, R_X))?.kind], ["client", "new_trainer_client"],
+    "switch: a trainer coaching them keeps them as a client, with a note offering more");
+  eq([await roleOf(R_BOTH, R_X), (await noticeFor(R_BOTH, R_X))?.kind], ["client", "new_trainer_client"],
+    "switch: ...whatever they were before");
+  eq([await roleOf(R_ONLY, R_X), await noticeFor(R_ONLY, R_X)], ["trainer", null],
+    "switch: a trainer still deciding about them has them back as a trainer, and the note is out of date");
+  eq((await noticeFor(R_LATER, R_X))?.kind, "new_trainer", "switch: a gym user connected to them is told they're a trainer now");
+  eq(await roleOf(R_X, R_CLIENT), "trainer", "switch: their trainers are filed as trainers, so they aren't asked");
+
+  // A connection that goes takes both filings with it.
+  await db.query(`delete from public.connections where (requester_id = $1 and addressee_id = $2) or (requester_id = $2 and addressee_id = $1)`,
+    [R_CLIENT, R_X]);
+  eq([await roleOf(R_CLIENT, R_X), await roleOf(R_X, R_CLIENT)], [null, null], "roles: disconnecting forgets both sides' filing");
+  eq((await switchTo(R_X, "admin")) !== null, true, "switch: only pt or user");
+  await as(null);
+  eq(await refusal(() => db.query(`select public.change_account_type('user')`)) !== null, true, "switch: not without signing in");
 
   return finish(db);
 }

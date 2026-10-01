@@ -16,6 +16,7 @@ import { getJSON, removeKey, setJSON } from "./storage";
 import { forgetSnapshots, isPageSnapshotKey } from "./pageSnapshot";
 import { formatStoredDate } from "./dates";
 import { forkChangedDayIds, normalizeDayIds } from "./programDays";
+import { marksAfterEdit } from "./skippedDates";
 import { PROGRAMS_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 import type { CustomExercise } from "../constants/exercises";
@@ -128,12 +129,17 @@ export const COACHES_KEY = "@avenas/pt/coaches";
 // underneath the derived list.
 export const OTHER_TRAINERS_KEY = "@avenas/gym/other_trainers";
 
-// Connected TRAINERS this account has also taken on as a client — a uuid[].
-// Connecting alone never does this (utils/roster.ts routes a PT connection to
-// My Trainers), so coaching a fellow trainer is an explicit opt-in recorded
-// here. Local-only and never synced: it's how THIS account chooses to file a
-// connection, and the other side has their own independent view of it.
+// LEGACY: connected trainers this account had also taken on as a client, a
+// uuid[] kept on this phone only. Superseded by the synced connection_roles
+// table (migration 0041, lib/connectionRoles.ts), which imports what's here
+// once as "both" and then empties it. Until that import reaches the server the
+// roster still reads it, so going offline never drops anyone from My Clients.
 export const TRAINER_CLIENTS_KEY = "@avenas/pt/trainer_clients";
+
+// Record<otherId, "trainer" | "client" | "both">: the last copy of how this
+// account files its connections (connection_roles), for when the server can't
+// be asked. Local cache only; the server's copy is the real one.
+export const CONNECTION_ROLES_KEY = "@avenas/pt/connection_roles";
 
 export type Client = {
   id: string;
@@ -286,6 +292,10 @@ export const CLOUD_SHARE_META_KEY = "@avenas/pt/cloud_share_meta";
 type CloudShareMeta = Record<string, {
   /** A share: the local program its accept made or updated. */
   acceptedProgramId?: string;
+  /** A share: who sent it and which of their programs it is (shareOrigin), so
+   *  a later send of the same program still finds that copy once this row is
+   *  gone (copyToUpdate). Absent on accepts from before it was recorded. */
+  from?: string;
   /** A review I asked for: the local program accepting what came back wrote
    *  to, when my original was gone and it made a new one. Separate from
    *  acceptedProgramId on purpose: deleting that program must not stamp the
@@ -413,7 +423,9 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
   const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
   const existing = priorId ? programs.find(p => p.id === priorId) : undefined;
   if (existing) {
-    const updated = programs.map(p => p.id === existing.id ? {
+    // The copy keeps its own run (start, rest days, moves), kept legal for the
+    // cycle as sent (marksAfterEdit), as the builder's own edit is.
+    const updated = programs.map(p => p.id === existing.id ? marksAfterEdit(p, {
       ...p,
       name: snap.name,
       totalWeeks: snap.totalWeeks,
@@ -430,7 +442,7 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
       // Accepting a trainer's new version is asking for the program, so an
       // archived copy comes back to My Programs rather than updating unseen.
       archivedAt: undefined,
-    } : p);
+    }) : p);
     await setJSON(PROGRAMS_KEY, updated);
     return existing.id;
   }
@@ -457,6 +469,44 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
   };
   await setJSON(PROGRAMS_KEY, [...programs, imported]);
   return importedId;
+}
+
+/** Which program of whose a share row is: the same for every send of it. */
+const shareOrigin = (r: SharedProgramRow) => `${r.sender_id}|${r.sender_program_id}`;
+
+/**
+ * The copy in My Programs an accept lands on. Its own send's copy while that's
+ * still there (a re-accept after a Send Update); otherwise the copy an EARLIER
+ * send of the same program, from the same person, made here, so a program sent
+ * again updates the one the client has, as a Send Update would, and their
+ * logged sessions stay on it (user decision, 2026-10-01). It used to add a
+ * second copy of the same name beside the first. Undefined makes a new copy.
+ *
+ * `peers` are the local (mock-roster) entries of the same program.
+ */
+async function copyToUpdate(
+  own: string | undefined,
+  origin: string | undefined,
+  meta: CloudShareMeta,
+  rows: SharedProgramRow[],
+  peers: SharedProgram[],
+): Promise<string | undefined> {
+  const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+  if (own && programs.some(p => p.id === own)) return own;
+  const linked = new Set<string>();
+  if (origin) {
+    for (const m of Object.values(meta)) if (m.from === origin && m.acceptedProgramId) linked.add(m.acceptedProgramId);
+    // Accepts made before `from` was recorded: read the origin off the row,
+    // while the row is still there.
+    for (const r of rows) {
+      const id = meta[r.id]?.acceptedProgramId;
+      if (id && r.kind === "share" && shareOrigin(r) === origin) linked.add(id);
+    }
+  }
+  for (const s of peers) if (s.acceptedProgramId) linked.add(s.acceptedProgramId);
+  // More than one only from before this rule: the one being run, else the newest.
+  const copies = programs.filter(p => linked.has(p.id));
+  return (copies.find(p => p.status === "active") ?? copies[copies.length - 1])?.id;
 }
 
 export async function loadClients(): Promise<Client[]> {
@@ -803,9 +853,14 @@ export function acceptSharedProgramBatch(batchKey: string): Promise<string | nul
       return null;
     }
 
-    const priorId =
+    const priorId = await copyToUpdate(
       localTargets.find(t => t.acceptedProgramId)?.acceptedProgramId ??
-      cloudTargets.map(r => meta[r.id]?.acceptedProgramId).find(Boolean);
+        cloudTargets.map(r => meta[r.id]?.acceptedProgramId).find(Boolean),
+      cloudTargets[0] && shareOrigin(cloudTargets[0]),
+      meta,
+      cloud?.rows ?? [],
+      localTargets[0] ? list.filter(s => s.programId === localTargets[0].programId) : [],
+    );
     let importedId = await materialiseSnapshot(snap, priorId);
 
     if (localTargets.length > 0) {
@@ -817,7 +872,7 @@ export function acceptSharedProgramBatch(batchKey: string): Promise<string | nul
     }
     // Recorded before the stamp: if the stamp fails, a second Accept still
     // lands on this copy instead of adding another.
-    for (const r of cloudTargets) meta[r.id] = { acceptedProgramId: importedId };
+    for (const r of cloudTargets) meta[r.id] = { acceptedProgramId: importedId, from: shareOrigin(r) };
     await saveShareMeta(meta);
     for (const r of cloudTargets) {
       try {
@@ -1000,11 +1055,12 @@ export function acceptSharedProgram(shareId: string): Promise<string | null> {
       // Gone, or archived after this screen was drawn (see acceptSharedProgramBatch).
       if (!row || row.archived_at) throw new ShareUnavailableError();
       const meta = await loadShareMeta();
+      const rows = (await fetchCloudRowsSafe())?.rows ?? [];
       let importedId = await materialiseSnapshot(
         row.snapshot as unknown as SavedProgram,
-        meta[row.id]?.acceptedProgramId,
+        await copyToUpdate(meta[row.id]?.acceptedProgramId, shareOrigin(row), meta, rows, []),
       );
-      meta[row.id] = { acceptedProgramId: importedId };
+      meta[row.id] = { acceptedProgramId: importedId, from: shareOrigin(row) };
       await saveShareMeta(meta);
       try {
         importedId = await stampAcceptedRow(row, importedId, new Date().toISOString());
@@ -1025,7 +1081,10 @@ export function acceptSharedProgram(shareId: string): Promise<string | null> {
       return null;
     }
 
-    const importedId = await materialiseSnapshot(target.programSnapshot, target.acceptedProgramId);
+    const importedId = await materialiseSnapshot(
+      target.programSnapshot,
+      await copyToUpdate(target.acceptedProgramId, undefined, {}, [], list.filter(s => s.programId === target.programId)),
+    );
     const next = list.map(s => s.id === shareId
       ? { ...s, acceptedAtISO: new Date().toISOString(), acceptedProgramId: importedId, deletedByRecipientAtISO: undefined }
       : s
@@ -1058,23 +1117,10 @@ export async function removeOtherTrainer(id: string): Promise<void> {
   await setJSON(OTHER_TRAINERS_KEY, existing.filter(p => p.id !== id));
 }
 
-/** Ids of connected trainers this account also coaches. See TRAINER_CLIENTS_KEY. */
+/** LEGACY: ids this phone recorded as "also my client" before 0041. Read only
+ *  by lib/connectionRoles.ts, which imports them and then clears the key. */
 export async function loadTrainerClientIds(): Promise<Set<string>> {
   return new Set(await getJSON<string[]>(TRAINER_CLIENTS_KEY, []));
-}
-
-/** Take a connected trainer on as a client (idempotent). */
-export async function addTrainerAsClient(id: string): Promise<void> {
-  const ids = await getJSON<string[]>(TRAINER_CLIENTS_KEY, []);
-  if (ids.includes(id)) return;
-  await setJSON(TRAINER_CLIENTS_KEY, [...ids, id]);
-}
-
-/** Stop coaching a connected trainer. The CONNECTION is untouched — they stay
- *  in My Trainers, you just no longer treat them as one of your clients. */
-export async function removeTrainerAsClient(id: string): Promise<void> {
-  const ids = await getJSON<string[]>(TRAINER_CLIENTS_KEY, []);
-  await setJSON(TRAINER_CLIENTS_KEY, ids.filter(x => x !== id));
 }
 
 /** Legacy/mock entries only — read + delete. Nothing writes new ones: the
@@ -1647,7 +1693,9 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, candidates: s
   let nextPrograms: SavedProgram[];
   let writtenId = programId;
   if (original) {
-    nextPrograms = programs.map(p => p.id === programId ? {
+    // As materialiseSnapshot: the original's own run, kept legal for the cycle
+    // as returned (marksAfterEdit).
+    nextPrograms = programs.map(p => p.id === programId ? marksAfterEdit(p, {
       ...p,
       name: snap.name,
       totalWeeks: snap.totalWeeks,
@@ -1663,7 +1711,7 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, candidates: s
       workouts: snap.workouts,
       // Taking the trainer's changes brings an archived original back.
       archivedAt: undefined,
-    } : p);
+    }) : p);
   } else {
     const imported: SavedProgram = {
       ...snap,
@@ -1788,6 +1836,7 @@ export async function clearTrainerData(): Promise<void> {
     COACHES_KEY,
     OTHER_TRAINERS_KEY,
     TRAINER_CLIENTS_KEY,
+    CONNECTION_ROLES_KEY,
     GROUP_FAVOURITES_KEY,
     ...clientData,
   ]);

@@ -144,7 +144,7 @@ const names = (s: ReturnType<typeof strip>) => s.schedule.days.map(d => d.workou
   eq([friday.resolvedName, row(friday, FRI).workoutName], ["Legs", "Legs"], "on Friday both pages say Legs");
 
   // Undone from the strip: the move comes off and the pick comes home.
-  const restored = pickAfterUndoMove(carried, THU);
+  const restored = pickAfterUndoMove(plan.program, carried, THU);
   const undone = strip([], thursday, restored, unskipDate(plan.program, THU));
   eq([undone.resolvedName, row(undone, THU).workoutName], ["Legs", "Legs"], "undo: Thursday is Legs again on both pages");
   eq(row(undone, FRI).workoutName, "Rest", "undo: and Friday is back to its rest day");

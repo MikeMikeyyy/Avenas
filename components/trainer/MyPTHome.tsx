@@ -22,6 +22,7 @@ import SendIcon from "../icons/SendIcon";
 import TrashIcon from "../TrashIcon";
 import OfflineBanner from "../OfflineBanner";
 import UnreadBadge from "../UnreadBadge";
+import ConnectionNotices from "./ConnectionNotices";
 import { useUnreadMessages } from "../../hooks/useUnreadMessages";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import ProgramPickerSheet from "./ProgramPickerSheet";
@@ -30,7 +31,7 @@ import GroupAvatar from "./GroupAvatar";
 import { acceptGroupInvite, declineGroupInvite, fetchMyGroupInvites, isGroupLimitError } from "../../lib/groups";
 import { loadGroupRows } from "../../utils/groupStore";
 import { groupAlertCounts } from "../../utils/groupAlerts";
-import { GROUP_LIMIT_TITLE, MAX_GROUPS, groupLimitMessage, type GroupInvite } from "../../constants/groups";
+import { GROUP_LIMIT_TITLE, MAX_JOINED_GROUPS, groupLimitMessage, type GroupInvite } from "../../constants/groups";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, AWAITING_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
 import { haloGlow, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PAD, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP, REVEAL_BLEED, SUMMARY_ROW } from "../../constants/cards";
@@ -406,13 +407,15 @@ export default function MyPTHome() {
     [groups, shares, groupReviewsToDo, myUid],
   );
 
-  // The group limit is checked against this list before anything is sent; the
-  // database refuses a 6th too (0035), which covers a list that's out of date.
-  // At the limit the invite stays where it is, to accept after leaving a group.
-  const atGroupLimit = groups.length >= MAX_GROUPS;
-  const ownsAGroup = groups.some(r => r.group.isOwner);
+  // The joining limit is checked against this list before anything is sent:
+  // groups someone else made (a gym user makes none, but a role can change).
+  // The database refuses past it too (0042), which covers a list that's out of
+  // date. At the limit the invite stays where it is, to accept after leaving one.
+  const ownedCount = groups.filter(r => r.group.isOwner).length;
+  const atJoinLimit = groups.length - ownedCount >= MAX_JOINED_GROUPS;
+  const ownsAGroup = ownedCount > 0;
   const handleAcceptInvite = useCallback(async (invite: GroupInvite) => {
-    if (atGroupLimit) {
+    if (atJoinLimit) {
       Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("join", ownsAGroup));
       return;
     }
@@ -425,7 +428,7 @@ export default function MyPTHome() {
     }
     const [groupRows, invites] = await Promise.all([loadGroupRows(), fetchMyGroupInvites()]);
     setHub(h => h && { ...h, groups: groupRows, groupInvites: invites });
-  }, [atGroupLimit, ownsAGroup]);
+  }, [atJoinLimit, ownsAGroup]);
 
   const handleDeclineInvite = useCallback((invite: GroupInvite) => {
     Alert.alert(
@@ -701,6 +704,15 @@ export default function MyPTHome() {
             </View>
           </BounceButton>
         </View>
+
+        {/* A trainer I'm connected with switched to a gym account (or someone
+            became a trainer): what it changed (components/trainer/ConnectionNotices.tsx). */}
+        <ConnectionNotices
+          notices={hub?.notices ?? []}
+          accountType="gym_user"
+          onResolved={noticeId => setHub(h => h && { ...h, notices: (h.notices ?? []).filter(n => n.id !== noticeId) })}
+          onChanged={() => { void fetchGymHub(owner, { fresh: true }).then(setHub); }}
+        />
 
         <Text style={[styles.title, { color: t.tp }]}>My Trainer</Text>
 

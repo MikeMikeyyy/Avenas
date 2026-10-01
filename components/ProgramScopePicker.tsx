@@ -8,6 +8,8 @@ import {
   ScrollView,
   Animated,
   Easing,
+  type StyleProp,
+  type ViewStyle,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -23,6 +25,9 @@ interface Props {
   scope: ProgramScope;
   programs: SavedProgram[];
   onChange: (s: ProgramScope) => void;
+  /** Where the pill sits in its parent (the Progress page's filter row gives
+   *  it `flex: 1` beside the time range). */
+  style?: StyleProp<ViewStyle>;
 }
 
 const ChevronDown = ({ color, size = 16 }: { color: string; size?: number }) => (
@@ -31,7 +36,7 @@ const ChevronDown = ({ color, size = 16 }: { color: string; size?: number }) => 
   </Svg>
 );
 
-export default function ProgramScopePicker({ scope, programs, onChange }: Props) {
+export default function ProgramScopePicker({ scope, programs, onChange, style }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -127,7 +132,7 @@ export default function ProgramScopePicker({ scope, programs, onChange }: Props)
         accessibilityRole="button"
         accessibilityLabel={`Select program scope, currently ${currentLabel}`}
         onPress={() => setOpen(true)}
-        style={{ marginHorizontal: 20 }}
+        style={style}
       >
         {/* The app's pill on the control surface (it was a squared-off NeuCard,
             the one non-pill button on the page). Laid out as a dropdown: the

@@ -152,24 +152,40 @@ export function normalizeDriftDates(program: SavedProgram): SavedProgram {
   const pushed = new Set(program.pushedDates ?? []);
   const next: string[] = [];
   let changed = false;
+  // How far a pull may travel. A cycle with a rest day has one in every cycle,
+  // but several pulls can be after the same ones, and each needs its own: a
+  // cycle per pull before giving up. One cycle, and a pull crowded out by
+  // another move's was dropped, leaving the program a day late.
+  const reach = program.cycleDays * pulled.length;
 
   for (const ymd of [...pulled].sort()) {
+    // A pull dated before the start is history from before a resume, which
+    // moves the start past the days it held: it has no slot to check, and it
+    // still pays for the move before it, which still counts (cycleDrift counts
+    // every push before a date). Re-targeted or dropped, a long hold left that
+    // move unpaid and the program resumed a day behind where it stopped.
+    const days = daysSinceStart(program, ymd);
+    if (days !== null && days < 0) { next.push(ymd); continue; }
     // A pull can't share a date with a PUSH — the push says "nothing happens
     // here, wait a day", the pull says "a rest was spent here, catch up a day",
-    // and together they're meaningless. A SKIP is different and may stay: it
-    // just empties that one day, while the pull still shifts the days after.
-    // Dropping the pull there would silently un-absorb the move it belongs to
-    // and push the rest of the program a day late.
-    if (pushed.has(ymd)) { changed = true; continue; }
+    // and together they're meaningless. That happens when a day an earlier move
+    // was absorbed into is itself moved, and the pull is RE-TARGETED to the next
+    // rest day like any other stale pull (the push's date is never a candidate,
+    // below): dropping it un-absorbed the earlier move, so the program ran a day
+    // late and the next day showed the wrong workout. A SKIP is different and
+    // may stay: it just empties that one day, while the pull still shifts the
+    // days after. Dropping the pull there would silently un-absorb the move it
+    // belongs to and push the rest of the program a day late.
+    //
     // Evaluate candidates WITHOUT this pull applied. The question is "what does
     // this day hold today?" — a rest we may spend, or a session we must not —
     // and `cycleDrift` counts pulls inclusively, so including the candidate
     // would answer the day's content AFTER spending it, which is circular.
     const asIs = { ...program, pulledDates: next };
     let target: string | null = null;
-    // Search from the date itself out to one full cycle: if the cycle has a rest
-    // at all there is one within `cycleDays`, and if it has none there is none.
-    for (let i = 0; i <= program.cycleDays; i++) {
+    // Search from the date itself outward: if the cycle has no rest at all
+    // there is none to find, and the pull goes.
+    for (let i = 0; i <= reach; i++) {
       const candidate = addDaysYMD(ymd, i);
       if (candidate === null) break;
       if (pushed.has(candidate) || next.includes(candidate)) continue;
@@ -309,7 +325,8 @@ export const LATE_NIGHT_GRACE_HOUR = 3;
  */
 export function getEffectiveToday(
   program: SavedProgram | null,
-  history: CompletedWorkout[],
+  /** The workout history, or anything with its dates (only the dates are read). */
+  history: readonly Pick<CompletedWorkout, "date">[],
   now: Date = new Date(),
 ): string {
   const todayStr = toYMD(now);

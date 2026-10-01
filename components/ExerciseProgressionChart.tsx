@@ -47,6 +47,10 @@ interface Props {
    *  every workout this chart opens read that client's copy, read-only. Without
    *  it they read the viewer's own storage, where a client's ids don't exist. */
   clientId?: string;
+  /** Which metric the chart plots. Held by the page, which remembers it
+   *  between visits (utils/progressSession.ts). */
+  metric: ExerciseMetricKey;
+  onMetricChange: (m: ExerciseMetricKey) => void;
 }
 
 function fmtShortDate(ymd: string): string {
@@ -146,16 +150,22 @@ const GIFTED_TOP_PAD = 10;
  * - Tapping a point highlights it and shows date/weight/reps above the chart.
  * - Tapping a PR tile routes to that PR's source workout via /workout-detail.
  */
-export default function ExerciseProgressionChart({ exerciseName, dayName, dayId, history, prs, unit, clientId }: Props) {
+export default function ExerciseProgressionChart({
+  exerciseName,
+  dayName,
+  dayId,
+  history,
+  prs,
+  unit,
+  clientId,
+  metric,
+  onMetricChange,
+}: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
-
-  // Which metric the chart plots. Default to the original behavior (heaviest
-  // working set per session).
-  const [metric, setMetric] = useState<ExerciseMetricKey>("topWeight");
 
   // Every session passed in is plotted — no time-range filter, deliberately.
   // The parent already scopes `history` to the selected program (bounded by
@@ -512,7 +522,7 @@ export default function ExerciseProgressionChart({ exerciseName, dayName, dayId,
         <SegmentedControl<ExerciseMetricKey>
           options={EXERCISE_METRIC_OPTIONS}
           value={metric}
-          onChange={setMetric}
+          onChange={onMetricChange}
           style={{ marginTop: 16 }}
         />
       </View>

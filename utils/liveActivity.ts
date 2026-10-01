@@ -5,8 +5,10 @@
 // lifecycle glue in hooks/useWorkoutLiveActivity.
 //
 // The queue mirrors the Workout screen's semantics exactly:
-//   - Set order per exercise is the flat warmup→working order ExerciseCard
-//     renders, and exercises keep their on-screen order.
+//   - It runs in the order the session will get to its sets (utils/nextSet.ts),
+//     so its head is the set the Workout screen glows on: after the set ticked
+//     last, with skipped sets at the end. Within an exercise it's the flat
+//     warmup→working order ExerciseCard renders.
 //   - Each entry's weight/reps are a display-only preview for the card: values
 //     the user already typed win; a fully empty set falls back to the
 //     previous-session hint ("80×8", display units, indexed by flat position —
@@ -18,8 +20,9 @@ import type {
   LiveActivityPayload,
   LiveActivityPendingSet,
 } from "../modules/avenas-live-activity";
+import { pendingSetsInOrder } from "./nextSet";
 
-type LiveSet = { weight: string; reps: string; done: boolean };
+type LiveSet = { weight: string; reps: string; done: boolean; doneAt?: number };
 type LiveExerciseLog = { warmup: LiveSet[]; working: LiveSet[] };
 export type LiveActivityExercise = { id: string; name: string; restSeconds?: number };
 
@@ -46,42 +49,38 @@ export function buildLiveActivityQueue(
   log: Record<string, LiveExerciseLog | undefined>,
   prevHintsFor: (exerciseId: string) => string[],
 ): { queue: LiveActivityPendingSet[]; doneCount: number; totalCount: number } {
-  const queue: LiveActivityPendingSet[] = [];
   let doneCount = 0;
   let totalCount = 0;
-
   for (const ex of exercises) {
     const exLog = log[ex.id];
     if (!exLog) continue;
-    const hints = prevHintsFor(ex.id);
-    const workingTotal = exLog.working.length;
-    const flat = [
-      ...exLog.warmup.map((s, i) => ({ set: s, type: "warmup" as const, localIdx: i })),
-      ...exLog.working.map((s, i) => ({ set: s, type: "working" as const, localIdx: i })),
-    ];
-    flat.forEach((entry, flatIdx) => {
+    for (const set of [...exLog.warmup, ...exLog.working]) {
       totalCount += 1;
-      if (entry.set.done) {
-        doneCount += 1;
-        return;
-      }
-      const { weight, reps } = previewValues(entry.set, hints[flatIdx]);
-      queue.push({
-        exId: ex.id,
-        setType: entry.type,
-        setIdx: entry.localIdx,
-        exerciseName: ex.name,
-        setLabel:
-          entry.type === "warmup"
-            ? `Warmup ${entry.localIdx + 1}`
-            : `Set ${entry.localIdx + 1} of ${workingTotal}`,
-        weight,
-        reps,
-        restSeconds: ex.restSeconds ?? 0,
-        isFinal: false, // patched below once the full queue is known
-      });
-    });
+      if (set.done) doneCount += 1;
+    }
   }
+
+  const queue: LiveActivityPendingSet[] = pendingSetsInOrder(exercises.map(e => e.id), log).flatMap(p => {
+    const ex = exercises[p.exIndex];
+    const exLog = log[p.exId];
+    const set = exLog?.[p.setType][p.setIdx];
+    if (!exLog || !set) return [];
+    const { weight, reps } = previewValues(set, prevHintsFor(p.exId)[p.flatIdx]);
+    return [{
+      exId: p.exId,
+      setType: p.setType,
+      setIdx: p.setIdx,
+      exerciseName: ex.name,
+      setLabel:
+        p.setType === "warmup"
+          ? `Warmup ${p.setIdx + 1}`
+          : `Set ${p.setIdx + 1} of ${exLog.working.length}`,
+      weight,
+      reps,
+      restSeconds: ex.restSeconds ?? 0,
+      isFinal: false, // patched below once the full queue is known
+    }];
+  });
 
   if (queue.length > 0) {
     queue[queue.length - 1].isFinal = true;

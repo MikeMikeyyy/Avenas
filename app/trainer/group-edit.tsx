@@ -35,12 +35,12 @@ import FlagIcon from "../../components/icons/FlagIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
-import { createGroup, fetchGroup, fetchGroupMembers, isGroupLimitError, renameGroup, setGroupAvatar, setGroupMembers, uploadGroupAvatar } from "../../lib/groups";
+import { createGroup, fetchGroup, fetchGroupMembers, isGroupFullError, isGroupLimitError, renameGroup, setGroupAvatar, setGroupMembers, uploadGroupAvatar } from "../../lib/groups";
 import { getMyUid, isCloudContactId } from "../../lib/chat";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { loadBlockedIds, reportPerson } from "../../utils/moderation";
 import type { Client } from "../../utils/trainerStore";
-import { GROUP_LIMIT_TITLE, groupLimitMessage, type GroupMember } from "../../constants/groups";
+import { GROUP_FULL_MESSAGE, GROUP_FULL_TITLE, GROUP_LIMIT_TITLE, MAX_GROUP_MEMBERS, groupLimitMessage, type GroupMember } from "../../constants/groups";
 import type { ReportReason } from "../../constants/chat";
 import { alertMessage } from "../../utils/errors";
 import BackButton, { BACK_TOP, BACK_LEFT } from "../../components/BackButton";
@@ -159,13 +159,20 @@ export default function GroupEditScreen() {
 
   const toggle = useCallback((clientId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Room for one more? The owner counts, and so does everyone ticked here,
+    // invited or joined (0042). Unticking is always allowed, so a group already
+    // over the limit can be brought back under it.
+    if (!selected.has(clientId) && selected.size + 1 >= MAX_GROUP_MEMBERS) {
+      Alert.alert(GROUP_FULL_TITLE, GROUP_FULL_MESSAGE);
+      return;
+    }
     setSelected(prev => {
       const next = new Set(prev);
       if (next.has(clientId)) next.delete(clientId);
       else next.add(clientId);
       return next;
     });
-  }, []);
+  }, [selected]);
 
   // Pick from the library and STAGE it. The upload happens in onSave, which on a
   // NEW group is the only time it can: there's no group id to file the photo
@@ -282,10 +289,11 @@ export default function GroupEditScreen() {
       await commitPhoto(groupId);
       router.back();
     } catch (e) {
-      // The hub checks the limit before opening this screen; this is the
-      // database refusing a list that was out of date (0035). Whether they run
-      // a group isn't known here, so the prompt offers both ways out.
+      // The hub checks the creating limit before opening this screen, and the
+      // picker the group's size; these are the database refusing what was out
+      // of date (0042): groups made on another phone, or people added there.
       if (isGroupLimitError(e)) Alert.alert(GROUP_LIMIT_TITLE, groupLimitMessage("create", true));
+      else if (isGroupFullError(e)) Alert.alert(GROUP_FULL_TITLE, GROUP_FULL_MESSAGE);
       else Alert.alert("Couldn't save group", alertMessage(e, "Check your connection and try again."));
     } finally {
       setBusy(false);

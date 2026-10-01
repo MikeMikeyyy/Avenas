@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { View } from "react-native";
+import { View, type LayoutChangeEvent } from "react-native";
 import { useSharedValue, useAnimatedStyle, useAnimatedReaction, withTiming, runOnJS } from "react-native-reanimated";
 import Reanimated from "react-native-reanimated";
 
@@ -8,12 +8,14 @@ interface CollapsibleCardProps {
   onCollapsed: () => void;
   expanding?: boolean;
   naturalHeight?: number;
+  /** The card's frame in its parent (the scroll content, where cards are listed). */
+  onLayout?: (e: LayoutChangeEvent) => void;
   children: React.ReactNode;
 }
 
 // height.value >= 0  → constrained to that height (animating or collapsing)
 // height.value  < 0  → unconstrained, view sizes to content
-export default function CollapsibleCard({ isCollapsing, onCollapsed, expanding = false, naturalHeight, children }: CollapsibleCardProps) {
+export default function CollapsibleCard({ isCollapsing, onCollapsed, expanding = false, naturalHeight, onLayout, children }: CollapsibleCardProps) {
   const height = useSharedValue(expanding ? 0 : -1);
   const opacity = useSharedValue(expanding ? 0 : 1);
   const savedHeight = useRef(0);
@@ -70,7 +72,7 @@ export default function CollapsibleCard({ isCollapsing, onCollapsed, expanding =
   }, [isCollapsing]);
 
   return (
-    <View style={phase === "hidden" ? { height: 0, overflow: "hidden" } : undefined}>
+    <View style={phase === "hidden" ? { height: 0, overflow: "hidden" } : undefined} onLayout={onLayout}>
       <Reanimated.View
         style={animatedStyle}
         onLayout={e => {

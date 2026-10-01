@@ -23,9 +23,12 @@ import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
 import ChatIcon from "../../../components/icons/ChatIcon";
 import SendIcon from "../../../components/icons/SendIcon";
 import UserRoundMinusIcon from "../../../components/icons/UserRoundMinusIcon";
+import UserRoundPlusIcon from "../../../components/icons/UserRoundPlusIcon";
+import { loadConnectionRoles, setConnectionRole, type ConnectionRole } from "../../../lib/connectionRoles";
 import FlagIcon from "../../../components/icons/FlagIcon";
 import TrashIcon from "../../../components/TrashIcon";
 import SheetPill from "../../../components/SheetPill";
+import JournalProgramsBlock from "../../../components/journal/JournalProgramsBlock";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../../constants/theme";
 import { PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -138,6 +141,9 @@ export default function ClientDetailScreen() {
   const [isFavourite, setIsFavourite] = useState(false);
   // The gold the star is drawn in, for the label beside it.
   const favouriteGold = useFavouriteGold();
+  /** How I file this person (lib/connectionRoles.ts). Only matters for a
+   *  trainer account: "client" (coached only) or "both" (also my trainer). */
+  const [role, setRole] = useState<ConnectionRole | null>(null);
 
   const TABS: readonly Tab[] = useMemo(() => ["progress", "journal", "programs"] as const, []);
   const tabIndex = TABS.indexOf(tab);
@@ -165,7 +171,7 @@ export default function ClientDetailScreen() {
    * once you've navigated away, while a pull runs to completion.
    */
   const loadAll = useCallback(async (isCancelled: () => boolean) => {
-    const [list, d, progs, sharedAll, thread, reads, hidden, favs] = await Promise.all([
+    const [list, d, progs, sharedAll, thread, reads, hidden, favs, roles] = await Promise.all([
       loadClients(),
       id ? loadClientData(id) : Promise.resolve({ workoutHistory: [], programs: [], journal: [] } as ClientData),
       getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
@@ -174,8 +180,12 @@ export default function ClientDetailScreen() {
       loadReads(),
       loadHiddenMessageIds(),
       loadFavouriteMemberIds(),
+      loadConnectionRoles(),
     ]);
-    if (!isCancelled() && id) setIsFavourite(favs.has(id));
+    if (!isCancelled() && id) {
+      setIsFavourite(favs.has(id));
+      setRole(roles.get(id) ?? null);
+    }
     let found: Client | null = list.find(c => c.id === id) ?? null;
     if (!found && id) {
       // Real connected account (not in the local roster) — build a lightweight
@@ -229,11 +239,9 @@ export default function ClientDetailScreen() {
     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCT} colors={[ACCT]} />
   );
 
-  // Their programs, the running one first. Every backup rewrites all of a
-  // client's programs in one statement, so the order they arrive in means
-  // nothing.
-  const clientPrograms = useMemo(
-    () => [...data.programs].sort((a, b) => (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1)),
+  // The program the Programs tab leads with, as the client's Journal does.
+  const activeClientProgram = useMemo(
+    () => data.programs.find(p => p.status === "active") ?? null,
     [data.programs],
   );
 
@@ -341,9 +349,51 @@ export default function ClientDetailScreen() {
     );
   };
 
+  /** A fellow trainer I coach: also my trainer, or not any more (client ↔
+   *  both). The connection is untouched either way. */
+  const onToggleAlsoTrainer = async () => {
+    if (!client) return;
+    setMenuOpen(false);
+    const next: ConnectionRole = role === "both" ? "client" : "both";
+    try {
+      await setConnectionRole(client.id, next);
+    } catch (e) {
+      Alert.alert("Couldn't save that", alertMessage(e, "Check your connection and try again."));
+      return;
+    }
+    setRole(next);
+    Alert.alert(
+      next === "both" ? "Added to My Trainers" : "Removed from My Trainers",
+      next === "both"
+        ? `${client.name} is now in My Trainers as well as your clients.`
+        : `${client.name} is no longer listed as your trainer. They're still your client.`,
+    );
+  };
+
   const onUnadd = () => {
     if (!client) return;
     setMenuOpen(false);
+    // Also my trainer: removing them as a client keeps them as my trainer,
+    // and the connection with it.
+    if (client.isTrainer && role === "both") {
+      Alert.alert(
+        `Remove ${client.name} as a client?`,
+        "They stay in My Trainers and you stay connected. Programs already shared stay in their library.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Remove", style: "destructive", onPress: async () => {
+            try {
+              await setConnectionRole(client.id, "trainer");
+            } catch (e) {
+              Alert.alert("Couldn't remove them", alertMessage(e, "Check your connection and try again."));
+              return;
+            }
+            router.back();
+          } },
+        ],
+      );
+      return;
+    }
     Alert.alert(
       `Remove ${client.name}?`,
       "This removes your connection. Any programs already shared stay in their library.",
@@ -556,63 +606,20 @@ export default function ClientDetailScreen() {
               </View>
             </BounceButton>
 
-            <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 4 }]}>{`${client.name.split(" ")[0]}'s Programs`}</Text>
-            {clientPrograms.length === 0 ? (
+            {/* The client's programs exactly as their own Journal shows them:
+                the active one as a card, the rest behind All Programs, and each
+                opening its week-by-week page. Both read the copy this page
+                loaded (`clientId`) and open sessions read-only. */}
+            <JournalProgramsBlock
+              activeProgram={activeClientProgram}
+              isDark={isDark}
+              onOpenProgram={programId => router.navigate({ pathname: "/program-history-detail", params: { programId, clientId: client.id } })}
+              onOpenAllPrograms={() => router.navigate({ pathname: "/program-history", params: { clientId: client.id } })}
+            />
+            {data.programs.length === 0 && (
               <NeuCard dark={isDark} radius={16}>
                 <Text style={[styles.empty, { color: t.ts }]}>This client has no programs yet.</Text>
               </NeuCard>
-            ) : (
-              clientPrograms.map(p => {
-                const isActive = p.status === "active";
-                return (
-                  // Opens the program in full, read-only: every day with its
-                  // exercises, sets, rest and notes (app/program-view.tsx).
-                  <BounceButton
-                    key={p.id}
-                    style={{ marginBottom: 10 }}
-                    onPress={() => router.navigate({ pathname: "/program-view", params: { clientId: client.id, programId: p.id } })}
-                    accessibilityRole="button"
-                    accessibilityLabel={`View ${p.name}`}
-                  >
-                  <NeuCard dark={isDark} radius={16}>
-                    <View style={styles.programCardInner}>
-                      <View style={styles.programTopRow}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{p.name}</Text>
-                          <Text style={[styles.itemMeta, { color: t.ts }]}>{p.totalWeeks} weeks</Text>
-                        </View>
-                        {isActive && (
-                          <View style={[styles.statusPill, { backgroundColor: `${ACCT}22` }]}>
-                            <Text style={[styles.statusText, { color: ACCT }]}>Active</Text>
-                          </View>
-                        )}
-                        <Ionicons name="chevron-forward" size={16} color={t.ts} />
-                      </View>
-                      <View style={styles.cycleGrid}>
-                        {p.cyclePattern.map((day, i) => {
-                          const isTraining = day !== "Rest" && day !== "";
-                          return (
-                            <View
-                              key={i}
-                              style={[
-                                styles.cycleChip,
-                                isTraining
-                                  ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                  : { backgroundColor: t.div },
-                              ]}
-                            >
-                              <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                                {day || "Rest"}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                      </View>
-                    </View>
-                  </NeuCard>
-                  </BounceButton>
-                );
-              })
             )}
 
             <Text style={[styles.sectionHeading, { color: t.tp }]}>Shared with {client.name.split(" ")[0]}</Text>
@@ -686,9 +693,23 @@ export default function ClientDetailScreen() {
             onPress={onToggleFavourite}
             accessibilityState={{ selected: isFavourite }}
           />
+          {/* A fellow trainer I coach can be my trainer too (lib/connectionRoles.ts). */}
+          {client.isTrainer && (
+            <SheetPill
+              label={role === "both" ? "Remove as my trainer" : "Add as my trainer"}
+              icon={c => role === "both"
+                ? <UserRoundMinusIcon size={18} color={c} />
+                : <UserRoundPlusIcon size={18} color={c} />}
+              onPress={onToggleAlsoTrainer}
+            />
+          )}
           <SheetPill label="Report" icon={c => <FlagIcon size={18} color={c} />} onPress={onReportUser} />
           <SheetPill label="Block" variant="danger" icon={c => <Ionicons name="ban-outline" size={18} color={c} />} onPress={onBlock} />
-          <SheetPill label="Remove connection" icon={c => <UserRoundMinusIcon size={18} color={c} />} onPress={onUnadd} />
+          <SheetPill
+            label={client.isTrainer && role === "both" ? "Remove as client" : "Remove connection"}
+            icon={c => <UserRoundMinusIcon size={18} color={c} />}
+            onPress={onUnadd}
+          />
         </View>
       </SimpleSheet>
 
@@ -733,11 +754,6 @@ const styles = StyleSheet.create({
   tabDivider:    { width: 1, height: 16, borderRadius: 0.5 },
   section:       { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", marginTop: 16, marginBottom: 12 },
   sectionHeading:{ fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
-  programCardInner:{ padding: 14, gap: 10 },
-  programTopRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  cycleGrid:     { flexDirection: "row", flexWrap: "wrap", gap: 4 },
-  cycleChip:     { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
-  cycleChipText: { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
   empty:         { fontFamily: FontFamily.regular, fontSize: 13, padding: 18, textAlign: "center" },
   itemRow:       { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   itemName:      { fontFamily: FontFamily.semibold, fontSize: 14 },

@@ -27,16 +27,16 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
-import ActiveBadge from "../components/ActiveBadge";
 import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../components/journal/JournalWorkoutCard";
+import JournalProgramsBlock from "../components/journal/JournalProgramsBlock";
 import SheetPill from "../components/SheetPill";
 import SquarePenIcon from "../components/SquarePenIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
-  getCurrentWeek, type SavedProgram, type CompletedWorkout, type ProgramDayRef,
+  type SavedProgram, type CompletedWorkout, type ProgramDayRef,
 } from "../constants/programs";
 import { programDays } from "../utils/programDays";
 import { getEffectiveToday, getWorkoutForDate } from "../utils/workout";
@@ -594,58 +594,13 @@ export default function JournalScreen() {
           onDayPress={handleCalendarDayPress}
         />
 
-        {/* Programs shortcut */}
-        <View style={styles.programsBlock}>
-          <View style={styles.programsHeadingRow}>
-            {activeProgram && (
-              <Text style={[styles.sectionHeading, { color: t.tp, marginTop: 0, marginBottom: 0 }]}>Active Program</Text>
-            )}
-            <BounceButton onPress={() => router.navigate("/program-history")} accessibilityLabel="View all programs" accessibilityRole="button">
-              <View style={[styles.allProgramsBtn, { backgroundColor: t.ctrl }]}>
-                <Text style={[styles.allProgramsText, { color: t.tp }]}>All Programs</Text>
-                <Ionicons name="chevron-forward" size={14} color={t.tp} />
-              </View>
-            </BounceButton>
-          </View>
-          {activeProgram && (
-            <BounceButton
-              style={{ marginBottom: 10 }}
-              onPress={() => router.navigate({ pathname: "/program-history-detail", params: { programId: activeProgram.id } })}
-            >
-              <NeuCard dark={isDark} style={styles.activeProgramCard}>
-                <View style={styles.apCardInner}>
-                  <View style={styles.apNameRow}>
-                    <Text style={[styles.apName, { color: t.tp, flex: 1 }]} numberOfLines={1}>{activeProgram.name}</Text>
-                    <ActiveBadge />
-                    <Ionicons name="chevron-forward" size={16} color={t.ts} style={{ marginLeft: 6 }} />
-                  </View>
-                  <Text style={[styles.apSub, { color: t.ts }]}>
-                    Week {getCurrentWeek(activeProgram)} of {activeProgram.totalWeeks}
-                  </Text>
-                  <View style={styles.apDateRow}>
-                    <Ionicons name="calendar-outline" size={13} color={t.ts} />
-                    <Text style={[styles.apDate, { color: t.ts }]}>Started {activeProgram.startDate}</Text>
-                  </View>
-                  <View style={styles.apProgressRow}>
-                    {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => {
-                      const filled = i < getCurrentWeek(activeProgram);
-                      return (
-                        <View
-                          key={i}
-                          style={[
-                            styles.apProgressSeg,
-                            { backgroundColor: filled ? ACCT : t.div },
-                            filled && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 4 },
-                          ]}
-                        />
-                      );
-                    })}
-                  </View>
-                </View>
-              </NeuCard>
-            </BounceButton>
-          )}
-        </View>
+        {/* Programs shortcut (shared with a trainer's view of this page) */}
+        <JournalProgramsBlock
+          activeProgram={activeProgram}
+          isDark={isDark}
+          onOpenProgram={programId => router.navigate({ pathname: "/program-history-detail", params: { programId } })}
+          onOpenAllPrograms={() => router.navigate("/program-history")}
+        />
 
         {/* Recent activity heading */}
         {timeline.length > 0 && (
@@ -759,25 +714,6 @@ const styles = StyleSheet.create({
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1, color: TP },
 
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18, color: TP, marginTop: 24, marginBottom: 12 },
-
-  programsBlock:       { marginTop: 20, marginBottom: 4 },
-  programsHeadingRow:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-  activeProgramCard:{ borderRadius: 20 },
-  apCardInner:      { padding: 18, gap: 8 },
-  apNameRow:        { flexDirection: "row", alignItems: "center", gap: 8 },
-  apName:           { fontFamily: FontFamily.bold, fontSize: 16, color: TP },
-  // Fully rounded like every other button in the app. paddingHorizontal goes up
-  // with it: rounded ends eat into the usable width, so the same 10 that looked
-  // balanced at radius 10 reads tight on a pill.
-  apSub:            { fontFamily: FontFamily.regular, fontSize: 13, color: TS },
-  apDateRow:        { flexDirection: "row", alignItems: "center", gap: 6 },
-  apDate:           { fontFamily: FontFamily.regular, fontSize: 13, color: TS },
-  apProgressRow:    { flexDirection: "row", gap: 4, marginTop: 4 },
-  apProgressSeg:    { flex: 1, height: 6, borderRadius: 3 },
-  // Flat chrome pill (background from t.ctrl inline), matching the "+ New"
-  // button on My Programs rather than the neumorphic card it used to be.
-  allProgramsBtn:      { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 50, paddingVertical: 7, paddingHorizontal: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
-  allProgramsText:     { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.2 },
 
   emptyCard:    { borderRadius: 24, marginBottom: 20 },
   emptyInner:   { padding: 32, alignItems: "center", gap: 12 },

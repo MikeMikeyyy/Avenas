@@ -9,7 +9,7 @@
 // (migration 0032, the client page's Progress / Journal / Programs tabs).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Share, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
+import { ActivityIndicator, Alert, RefreshControl, Share, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -34,7 +34,7 @@ import FlagIcon from "../components/icons/FlagIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
-import { addTrainerAsClient } from "../utils/trainerStore";
+import { askConnectionRole, promptUndecidedConnectionRoles } from "../utils/connectionRolePrompt";
 import type { ReportReason } from "../constants/chat";
 import {
   getMyCode,
@@ -105,6 +105,22 @@ export default function ConnectScreen() {
 
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
 
+  // Pull to refresh: requests and connections made from the other phone show
+  // up without leaving the screen. It also retries your code if the first
+  // fetch failed (offline on arrival leaves the dash).
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        refresh(),
+        myCode ? Promise.resolve() : getMyCode().then(setMyCode).catch(() => {}),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh, myCode]);
+
   const describe = (res: RequestResult): { title: string; body: string } => {
     switch (res) {
       case "connected": return { title: "Connected", body: "You're now connected." };
@@ -116,9 +132,9 @@ export default function ConnectScreen() {
   };
 
   /**
-   * Just connected with a fellow TRAINER: offer to also take them on as a
-   * client, while the decision is in mind. Declining costs nothing — the same
-   * toggle lives on their card in My Trainers.
+   * Just connected with a fellow TRAINER: ask whether they're my trainer, my
+   * client, or both, while the decision is in mind (utils/connectionRolePrompt.ts).
+   * The answer is saved on the server and can be changed from their card.
    *
    * Trainer-to-trainer only. A gym user has no clients of their own, and a
    * trainer connecting with a gym user already gets them as a client
@@ -128,26 +144,15 @@ export default function ConnectScreen() {
    */
   const offerToCoach = useCallback((c: Connection) => {
     if (accountType !== "pt" || c.accountType !== "pt") return;
-    const who = c.name || "This trainer";
-    Alert.alert(
-      `Also coach ${who}?`,
-      `${who} has a trainer account, so they've been added to My Trainers. Add them as one of your clients too if you're coaching them.`,
-      [
-        { text: "Not now", style: "cancel" },
-        {
-          text: "Add as client",
-          onPress: async () => {
-            try {
-              await addTrainerAsClient(c.otherId);
-              Alert.alert("Added to clients", `${who} now appears in My Clients, and you can add them to groups.`);
-            } catch (e) {
-              if (__DEV__) console.warn("[avenas] addTrainerAsClient", e);
-            }
-          },
-        },
-      ],
-    );
+    void askConnectionRole(c.otherId, c.name);
   }, [accountType]);
+
+  // A request I sent, accepted while I was elsewhere (its push opens this
+  // screen), or one accepted on another phone: ask about any trainer not yet
+  // filed. Queued behind anything already being asked, so never twice.
+  useFocusEffect(useCallback(() => {
+    void promptUndecidedConnectionRoles(accountType);
+  }, [accountType]));
 
   const submitCode = useCallback(async (rawCode: string) => {
     const code = extractCode(rawCode);
@@ -359,6 +364,7 @@ export default function ConnectScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 32 }]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCT} colors={[ACCT]} />}
       >
         <View style={styles.header}>
           <View style={{ width: 40 }} />

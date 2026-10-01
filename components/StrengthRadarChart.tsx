@@ -33,6 +33,10 @@ interface Props {
    * the selected range. The previous comparable window has the same length.
    */
   windowDays: number;
+  /** The legend's names for the two windows, from the page's time range
+   *  (RangeOption.currentLegend / previousLegend): "This Week" / "Last Week". */
+  currentLegend: string;
+  previousLegend: string;
   metric: StrengthMetricKey;
   onMetricChange: (m: StrengthMetricKey) => void;
 }
@@ -169,17 +173,18 @@ const FULL_SCALE_PER_WEEK: Record<StrengthMetricKey, number> = {
  * current (ACCT) and previous (muted) polygons share that one scale, so their
  * overlap reads as real change. Behind them sits a hexagonal grid (GRID_LEVELS rings +
  * spokes). When `prevStats` contains training, each label also carries a
- * ▲ (ACCT) / ▼ (muted) vs the previous comparable window, and a
- * "Current Week / Previous Week" legend appears under the chart (ProgressView
- * pins the windows to exactly that — the radar is deliberately not tied to
- * the Volume chart's range filter). The per-axis labels always carry the
- * real numbers.
+ * ▲ (ACCT) / ▼ (muted) vs the previous comparable window, and a legend naming
+ * the two windows ("This Week / Last Week") appears under the chart. The
+ * windows are the page's time range, the one the Volume chart shows, and the
+ * same length before it. The per-axis labels always carry the real numbers.
  */
 export default function StrengthRadarChart({
   stats,
   prevStats,
   unit,
   windowDays,
+  currentLegend,
+  previousLegend,
   metric,
   onMetricChange,
 }: Props) {
@@ -334,8 +339,8 @@ export default function StrengthRadarChart({
           />
         </View>
 
-        {/* Just the metric explainer — the week-vs-week comparison is spelled
-            out by the "Current Week / Previous Week" legend below instead. */}
+        {/* Just the metric explainer — the period-vs-period comparison is
+            spelled out by the legend below instead. */}
         <Text style={[styles.caption, { color: t.ts }]} numberOfLines={1}>
           {METRIC_CAPTIONS[metric]}
         </Text>
@@ -452,9 +457,9 @@ export default function StrengthRadarChart({
         {prevPath ? (
           <View style={styles.legendRow}>
             <View style={[styles.legendDot, { backgroundColor: ACCT }]} />
-            <Text style={[styles.legendText, { color: t.ts }]}>Current Week</Text>
+            <Text style={[styles.legendText, { color: t.ts }]}>{currentLegend}</Text>
             <View style={[styles.legendDot, styles.legendGap, { backgroundColor: t.ts }]} />
-            <Text style={[styles.legendText, { color: t.ts }]}>Previous Week</Text>
+            <Text style={[styles.legendText, { color: t.ts }]}>{previousLegend}</Text>
           </View>
         ) : null}
       </View>

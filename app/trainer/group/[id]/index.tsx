@@ -71,9 +71,7 @@ import { PROGRAMS_KEY, type SavedProgram } from "../../../../constants/programs"
 import { canCoachGroup, type GroupMember, type GroupRole } from "../../../../constants/groups";
 import { alertMessage } from "../../../../utils/errors";
 import BackButton, { BACK_TOP, BACK_LEFT } from "../../../../components/BackButton";
-
-/** How many member avatars the banner stacks before collapsing to "+N". */
-const AVATAR_STACK = 4;
+import MemberStack from "../../../../components/trainer/MemberStack";
 
 /** Space kept between the bottom of the member search pill and the keyboard.
  *  Not just enough to clear it: the matches appear UNDER the pill, and the
@@ -1275,8 +1273,6 @@ export default function GroupPageScreen() {
    *  was running. */
   const myActiveProgramName = myPrograms.find(p => p.status === "active")?.name;
 
-  const shown = members.slice(0, AVATAR_STACK);
-  const overflow = Math.max(0, members.length - AVATAR_STACK);
 
   /* The group's review queue: programs posted here for a coach to look at, the
       other direction from sharesSection. Anything marked done has left the
@@ -1516,25 +1512,10 @@ export default function GroupPageScreen() {
               large circle heading a row of small ones. */}
           <NeuCard dark={isDark} radius={20}>
             <View style={styles.bannerInner}>
-              <View style={styles.avatarStack}>
-                {shown.map((m, i) => (
-                  <View key={m.id} style={[styles.stackItem, { marginLeft: i === 0 ? 0 : -12, borderColor: t.bg }]}>
-                    <Avatar
-                      uri={m.photoUri}
-                      initials={m.initials}
-                      size={38}
-                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                      textColor={ACCT}
-                      textStyle={[styles.stackText, { color: ACCT }]}
-                    />
-                  </View>
-                ))}
-                {overflow > 0 && (
-                  <View style={[styles.stackItem, styles.overflowChip, { marginLeft: -12, borderColor: t.bg, backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)" }]}>
-                    <Text style={[styles.overflowText, { color: t.ts }]}>+{overflow}</Text>
-                  </View>
-                )}
-              </View>
+              {/* The ring is the page background, so overlapping faces stay
+                  separated. The Trainer tab's card draws the same stack,
+                  smaller and tighter. */}
+              <MemberStack members={members} size={38} overlap={12} isDark={isDark} ringColor={t.bg} countColor={t.ts} />
 
               {/* Sending OUT to the group belongs to the owner and anyone
                   they've made a trainer here, gym user or trainer account
@@ -1876,12 +1857,6 @@ const styles = StyleSheet.create({
   loading:      { flex: 1, alignItems: "center", justifyContent: "center" },
 
   bannerInner:  { padding: 18, gap: 12 },
-  avatarStack:  { flexDirection: "row", alignItems: "center" },
-  // The ring is the page background, so overlapping avatars stay separated.
-  stackItem:    { borderRadius: 21, borderWidth: 2 },
-  stackText:    { fontFamily: FontFamily.bold, fontSize: 13 },
-  overflowChip: { width: 38, height: 38, alignItems: "center", justifyContent: "center" },
-  overflowText: { fontFamily: FontFamily.bold, fontSize: 12 },
   actionRow:    { flexDirection: "row", gap: 10, marginTop: 2 },
   // Layout only. The shadow lives on the variants below, because sharing one
   // shadow meant the white button rendered it with the default BLACK colour at

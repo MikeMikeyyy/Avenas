@@ -26,9 +26,9 @@ import ActiveBadge from "../components/ActiveBadge";
 import { formatStoredDate } from "../utils/dates";
 import { getJSON } from "../utils/storage";
 import { dayIdAt } from "../utils/programDays";
-import { cycleIndexForDate, getEffectiveToday, normalizeDriftDates } from "../utils/workout";
-import { clearShifts } from "../utils/skippedDates";
+import { getEffectiveToday } from "../utils/workout";
 import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
+import { activateProgram, completeProgram, deactivateProgram, setWorkoutDay } from "../utils/programLifecycle";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
@@ -544,45 +544,10 @@ export default function ProgramsScreen() {
   const todayFormatted = () => formatStoredDate(new Date());
 
   const handleMakeActive = async (program: SavedProgram) => {
-    const todayStr = todayFormatted();
-    // The outgoing program, if switching away finishes it (see below).
-    let finished: { program: SavedProgram; week: number } | null = null;
-    const updated = programs.map(p => {
-      if (p.id === program.id) {
-        // A (re-)activation is a fresh run from today: any cycleOffset left over
-        // from a previous run's "set workout day" would shift day 1 arbitrarily.
-        // pausedAt goes for the same reason — a hold belongs to the run it was
-        // taken during, and carrying it over would make the new run start paused.
-        //
-        // The rest/push/pull marks go too, and they matter most: every one of
-        // them is dated BEFORE the new startDate, so all of them would count as
-        // drift against day 1 — landing the fresh run's first day several slots
-        // into the cycle and moving its finish date out by the same amount.
-        return {
-          ...p,
-          status: "active" as const,
-          startDate: todayStr,
-          currentWeek: 1,
-          cycleOffset: undefined,
-          pausedAt: undefined,
-          skippedDates: undefined,
-          pushedDates: undefined,
-          pulledDates: undefined,
-        };
-      }
-      if (p.status === "active") {
-        const week = getCurrentWeek(p);
-        if (week >= p.totalWeeks) {
-          finished = { program: p, week };
-          return { ...p, status: "completed" as const, currentWeek: p.totalWeeks, completedDate: todayStr, pausedAt: undefined };
-        }
-        // Demoting a HELD program: it's inactive now, not on hold. Leaving
-        // pausedAt set would show it as paused in the list and, worse, make it
-        // resume already-paused if it were activated again.
-        return { ...p, status: week > 1 ? "paused" as const : "created" as const, currentWeek: week, pausedAt: undefined };
-      }
-      return p;
-    });
+    // A fresh run from today, the outgoing program demoted by the week it
+    // reached (utils/programLifecycle.ts, shared with the builder's "set it as
+    // your active program").
+    const { programs: updated, finished } = activateProgram(programs, program.id, todayFormatted());
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     // A same-day change-day override belongs to the PREVIOUS active program —
@@ -592,8 +557,7 @@ export default function ProgramsScreen() {
     scheduleCloudPush();
     // Starting a new program after running the old one to its end finishes the
     // old one just as Mark Complete would, so it earns the same achievement.
-    const done = finished as { program: SavedProgram; week: number } | null;
-    if (done) void awardProgramAchievement(done.program, done.week);
+    if (finished) void awardProgramAchievement(finished.program, finished.week);
   };
 
   // Deactivate the active program without completing it — drops it back to paused
@@ -603,21 +567,26 @@ export default function ProgramsScreen() {
   // program can't be both. Once it's out of the active slot the hold is
   // meaningless, and activating it later must give a clean run.
   const handleMakeInactive = async (program: SavedProgram) => {
-    const week = getCurrentWeek(program);
-    const updated = programs.map(p =>
-      p.id === program.id
-        ? { ...p, status: week > 1 ? ("paused" as const) : ("created" as const), currentWeek: week, pausedAt: undefined }
-        : p
-    );
+    const updated = deactivateProgram(programs, program.id);
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    // A day picked for today belonged to the run that just stopped. Left
+    // behind, Home's Today's Workout card kept offering it (Home resolves a pick
+    // with or without an active program) while the Workout tab said No Active
+    // Program.
+    AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
     scheduleCloudPush();
   };
 
   // Put the active program on hold. Unlike Make Inactive it keeps the active
   // slot — nothing is scheduled and the week counter stops until it's resumed.
   const handlePauseProgram = async (program: SavedProgram) => {
-    const updated = pauseProgram(programs, program.id);
+    // From the day the Workout tab is on, which before 3am can still be
+    // yesterday (getEffectiveToday), as Set Workout Date does. Held from the
+    // calendar day, last night's unfinished workout stayed up after pausing,
+    // and a Move to Tomorrow then put it inside the hold, where it vanished.
+    const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+    const updated = pauseProgram(programs, program.id, getEffectiveToday(program, Array.isArray(history) ? history : []));
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     // A change-day override belongs to a running program; it would resurface a
@@ -649,17 +618,11 @@ export default function ProgramsScreen() {
         text: "Complete",
         style: "destructive",
         onPress: async () => {
-          const todayStr = todayFormatted();
-          const weekReached = getCurrentWeek(activeProgram);
-          const updated = programs.map(p =>
-            p.id === activeProgram.id
-              // Completing ends the run, hold and all — a finished program is
-              // never "on hold".
-              ? { ...p, status: "completed" as const, currentWeek: weekReached, completedDate: todayStr, pausedAt: undefined }
-              : p
-          );
+          const { programs: updated, weekReached } = completeProgram(programs, activeProgram.id, todayFormatted());
           setPrograms(updated);
           await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+          // Today's pick goes with the run, as with Make Inactive.
+          AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch(() => {});
           scheduleCloudPush();
           // Only an achievement if it ran its full length (checked inside).
           void awardProgramAchievement(activeProgram, weekReached);
@@ -727,19 +690,13 @@ export default function ProgramsScreen() {
     // still be yesterday (getEffectiveToday), and "today is Push" has to land on
     // the day the user is looking at, or the tab shows the day before the one
     // they picked.
-    const today = getEffectiveToday(activeProgram, Array.isArray(history) ? history : []);
-    // A clean reset. "Today is Push" is the user saying where they are, so every
-    // move that got them here is dropped FIRST — left in, they kept counting,
-    // and the week looked back on plan while the finish date stayed however
-    // many days late. See clearShifts for what survives (past moves become plain
-    // skips so the calendar still says rest).
-    const reset = clearShifts(activeProgram, today);
-    // Then solve against the reset program, asking the shared resolver where
-    // today lands with NO offset rather than recomputing daysPassed here.
-    const naturalDayIndex = cycleIndexForDate({ ...reset, cycleOffset: 0 }, today);
-    if (naturalDayIndex === null) return false;
-    const n = reset.cycleDays;
-    const cycleOffset = ((targetDayIndex - naturalDayIndex) % n + n) % n;
+    const sessions = Array.isArray(history) ? history : [];
+    const today = getEffectiveToday(activeProgram, sessions);
+    // A clean reset of every move, then today solved onto the day picked
+    // (utils/programLifecycle.ts setWorkoutDay, which keeps the app on that day
+    // when it's set between midnight and 3am).
+    const realigned = setWorkoutDay(activeProgram, targetDayIndex, today, sessions);
+    if (!realigned) return false;
 
     // A workout already under way on the Workout tab (the timer started, or
     // anything typed or ticked) is one that tab deliberately never swaps out
@@ -761,9 +718,7 @@ export default function ProgramsScreen() {
       if (!ok) return false;
     }
 
-    const updated = programs.map(p =>
-      p.id === activeProgram.id ? normalizeDriftDates({ ...reset, cycleOffset }) : p
-    );
+    const updated = programs.map(p => (p.id === activeProgram.id ? realigned : p));
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     // Picking today's workout by hand is the most explicit statement there is
