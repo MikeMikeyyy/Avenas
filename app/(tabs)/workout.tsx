@@ -8,6 +8,7 @@ import {
   PanResponder, Easing, useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
@@ -39,6 +40,8 @@ import { programDays, workoutKey } from "../../utils/programDays";
 import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
 import { buildLiveActivityPayload } from "../../utils/liveActivity";
 import { nextSetOf } from "../../utils/nextSet";
+import { firstRows, nextRows, rowsChanged, setRowKey, withoutSet } from "../../utils/setRows";
+import { ABOVE_REST_ON_KEYBOARD, ABOVE_REST_ON_TAB, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP } from "../../constants/floatingBars";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
@@ -78,12 +81,24 @@ function fmtTime(secs: number): string {
   return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
 }
 
+/** How far above the screen's bottom edge list mode pins the notes and +
+ *  buttons: just above the nav bar, which is fixed at bottom 28 and 64 tall
+ *  (top ≈ 92 on every device), so it's a fixed height rather than the safe
+ *  area's, which left a big gap on notched phones and nearly touched on others. */
+const LIST_CLUSTER_BOTTOM = 100;
+
+/** Focus mode's round ‹ › buttons, which set the height of their row (the
+ *  Complete Workout pill beside ‹ on the last exercise is shorter). */
+const FOCUS_NAV_BTN = 56;
+
 // ─── Log types ─────────────────────────────────────────────────────────────────
 
 // `doneAt` is when the set was ticked (epoch ms), set by every tick and cleared
 // by an untick: the set ticked last is where the session is up to
-// (utils/nextSet.ts). It rides in the draft; Finish never copies it.
-type SetLog = { weight: string; reps: string; done: boolean; doneAt?: number; fillKey: number; originWorkingIdx?: number };
+// (utils/nextSet.ts). `id` is the set's own row on the page: rows animate in and
+// out by it, and removing a set removes exactly the one whose row went. Both
+// ride in the draft; Finish copies neither.
+type SetLog = { id?: string; weight: string; reps: string; done: boolean; doneAt?: number; fillKey: number; originWorkingIdx?: number };
 type ExerciseLog = { warmup: SetLog[]; working: SetLog[]; notes: string };
 type WorkoutLog = Record<string, ExerciseLog>;
 
@@ -103,8 +118,21 @@ function withProgramIds(exercises: Exercise[]): SessionExercise[] {
   return exercises.map(e => ({ ...e, programExerciseId: e.id }));
 }
 
+let setSeq = 0;
+const newSetId = () => `set_${Date.now().toString(36)}_${(setSeq++).toString(36)}`;
+
 function makeSet(): SetLog {
-  return { weight: "", reps: "", done: false, fillKey: 0 };
+  return { id: newSetId(), weight: "", reps: "", done: false, fillKey: 0 };
+}
+
+/** Every set with an id, for a draft saved before sets had them. */
+function withSetIds(log: WorkoutLog): WorkoutLog {
+  const out: WorkoutLog = {};
+  for (const [exId, exLog] of Object.entries(log)) {
+    const ided = (sets: SetLog[]) => sets.map(s => (s.id ? s : { ...s, id: newSetId() }));
+    out[exId] = { ...exLog, warmup: ided(exLog.warmup), working: ided(exLog.working) };
+  }
+  return out;
 }
 
 function initLog(exercises: Exercise[]): WorkoutLog {
@@ -953,7 +981,8 @@ interface ExerciseCardProps {
   onUpdateNotes: (exId: string, notes: string) => void;
   exNotes: string;
   onAddSet: (exId: string) => void;
-  onRemoveSet: (exId: string) => void;
+  /** The set whose row was removed, by its row key (setRowKey). */
+  onRemoveSet: (exId: string, rowKey: string) => void;
   onOpenReorder: () => void;
   onChangeExercise: (exId: string) => void;
   onRemoveExercise: (exId: string) => void;
@@ -989,16 +1018,19 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
   const programWarmup = programSets.filter(s => s.type === "warmup");
   const programWorking = programSets.filter(s => s.type === "working");
   const allSets = [
-    ...exLog.warmup.map((s, i) => ({ ...s, type: "warmup" as const, localIdx: i, isWarmup: true, programSet: programWarmup[i] as ProgramSet | undefined })),
-    ...exLog.working.map((s, i) => ({ ...s, type: "working" as const, localIdx: i, isWarmup: false, programSet: programWorking[i] as ProgramSet | undefined })),
+    ...exLog.warmup.map((s, i) => ({ ...s, type: "warmup" as const, localIdx: i, isWarmup: true, rowKey: setRowKey(s, "warmup", i), programSet: programWarmup[i] as ProgramSet | undefined })),
+    ...exLog.working.map((s, i) => ({ ...s, type: "working" as const, localIdx: i, isWarmup: false, rowKey: setRowKey(s, "working", i), programSet: programWorking[i] as ProgramSet | undefined })),
   ];
   const workingCounter = { count: 0 };
 
-  const [collapsingSetIdx, setCollapsingSetIdx] = useState<number | null>(null);
-  const prevSetCount = useRef(allSets.length);
-  const newlyAddedIdx = allSets.length > prevSetCount.current ? allSets.length - 1 : null;
-  const setRowHeight = useRef(0);
-  useEffect(() => { prevSetCount.current = allSets.length; }, [allSets.length]);
+  // Rows come and go by their set's own key, never by position
+  // (utils/setRows.ts). One row closes at a time; a row opens when its set was
+  // just added, to the height the other rows measure.
+  const [collapsingKey, setCollapsingKey] = useState<string | null>(null);
+  const [rowHeight, setRowHeight] = useState(0);
+  const rowKeys = allSets.map(s => s.rowKey);
+  const [drawn, setDrawn] = useState(() => firstRows(rowKeys));
+  if (rowsChanged(drawn, rowKeys)) setDrawn(nextRows(drawn, rowKeys));
 
   return (
     <NeuCard dark={isDark} style={styles.exCard}>
@@ -1082,19 +1114,21 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           const setLabel = set.isWarmup ? "W" : workingCounter.count;
           const isLast = flatIdx === allSets.length - 1;
           const rowIsActive = !editing && flatIdx === activeSetFlatIdx;
+          const isNew = !!drawn.added?.has(set.rowKey) && rowHeight > 0;
+          const isClosing = set.rowKey === collapsingKey;
 
           return (
             <CollapsibleCard
-              key={`${set.type}-${set.localIdx}`}
-              isCollapsing={flatIdx === collapsingSetIdx}
-              onCollapsed={() => { setCollapsingSetIdx(null); onRemoveSet(exercise.id); }}
-              expanding={flatIdx === newlyAddedIdx}
-              naturalHeight={flatIdx === newlyAddedIdx ? setRowHeight.current : undefined}
+              key={set.rowKey}
+              isCollapsing={isClosing}
+              onCollapsed={() => { setCollapsingKey(null); onRemoveSet(exercise.id, set.rowKey); }}
+              expanding={isNew}
+              naturalHeight={isNew ? rowHeight : undefined}
             >
             <SetRow isActive={rowIsActive}>
             <View
               style={styles.dataRow}
-              onLayout={(flatIdx !== newlyAddedIdx && flatIdx !== collapsingSetIdx) ? e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setRowHeight.current = h; } : undefined}
+              onLayout={(!isNew && !isClosing) ? e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setRowHeight(h); } : undefined}
             >
               {/* SET label */}
               {editing ? (
@@ -1202,9 +1236,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                 {editing && isLast && allSets.length > 1 ? (
                   <TouchableOpacity
                     onPress={() => {
-                      if (collapsingSetIdx !== null || allSets.length <= 1) return;
+                      if (collapsingKey !== null || allSets.length <= 1) return;
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setCollapsingSetIdx(allSets.length - 1);
+                      setCollapsingKey(set.rowKey);
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
@@ -1213,22 +1247,29 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     </View>
                   </TouchableOpacity>
                 ) : (
-                  <CheckboxCell
-                    done={set.done}
-                    isDark={isDark}
-                    isActive={rowIsActive}
-                    onToggle={isLocked ? () => {} : () => {
-                      if (!set.done && !set.weight.trim() && !set.reps.trim()) {
-                        const prev = prevSets?.[flatIdx];
-                        if (prev && prev !== "—") {
-                          const parts = prev.split("×");
-                          onUpdateSet(exercise.id, set.type, set.localIdx, "weight", parts[0] ?? "");
-                          onUpdateSet(exercise.id, set.type, set.localIdx, "reps", parts[1] ?? "");
+                  // While the card is being edited its checkboxes rest, dimmed:
+                  // rows come and go under your finger there, and a tap meant
+                  // for − (or for Add Set, moving up as a row closed) ticked
+                  // the set beside it and started a rest. Nor does a row on
+                  // its way out take a tick.
+                  <View style={editing ? styles.checkResting : undefined} pointerEvents={editing || isClosing ? "none" : "auto"}>
+                    <CheckboxCell
+                      done={set.done}
+                      isDark={isDark}
+                      isActive={rowIsActive}
+                      onToggle={isLocked ? () => {} : () => {
+                        if (!set.done && !set.weight.trim() && !set.reps.trim()) {
+                          const prev = prevSets?.[flatIdx];
+                          if (prev && prev !== "—") {
+                            const parts = prev.split("×");
+                            onUpdateSet(exercise.id, set.type, set.localIdx, "weight", parts[0] ?? "");
+                            onUpdateSet(exercise.id, set.type, set.localIdx, "reps", parts[1] ?? "");
+                          }
                         }
-                      }
-                      onToggleDone(exercise.id, set.type, set.localIdx);
-                    }}
-                  />
+                        onToggleDone(exercise.id, set.type, set.localIdx);
+                      }}
+                    />
+                  </View>
                 )}
               </View>
             </View>
@@ -1454,7 +1495,7 @@ export default function WorkoutScreen() {
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isRunning, isPaused, elapsedSeconds, startEpochMs, discardCount, startTimer, startTimerAt, pauseTimer, resumeTimer, stopTimer } = useWorkoutTimer();
-  const { startRestTimer, dismissRestTimer, restEndsAt, restTotal } = useRestTimer();
+  const { startRestTimer, dismissRestTimer, restEndsAt, restTotal, restBannerActive } = useRestTimer();
 
   const [activeProgram, setActiveProgram] = useState<SavedProgram | null>(null);
   const [allPrograms, setAllPrograms] = useState<SavedProgram[]>([]);
@@ -1739,7 +1780,7 @@ export default function WorkoutScreen() {
             // Legacy drafts (pre-unitIsKg) are same-day and predate this — leave
             // the ref at its mount value (current unit), matching an untoggled user.
             if (typeof draft.unitIsKg === "boolean") logUnitRef.current = draft.unitIsKg;
-            setLog(draft.log);
+            setLog(withSetIds(draft.log));
             setIsometricExIds(new Set(draft.isometricExIds ?? []));
             setNotes(draft.notes ?? "");
             // Note: the card's open/closed state (showNotes) is intentionally NOT
@@ -1773,7 +1814,6 @@ export default function WorkoutScreen() {
     if (discardCount > 0 && discardCount !== prevDiscardCount.current) {
       prevDiscardCount.current = discardCount;
       endUpTo();
-      dismissRestTimer();
       setIsFreeWorkout(false);
       setFreeWorkoutAddToProgram(false);
       // The discarded session's sets and note go too. loadData only rebuilds
@@ -1786,7 +1826,7 @@ export default function WorkoutScreen() {
       isWorkoutActiveRef.current = false;
       loadData(true);
     }
-  }, [discardCount, dismissRestTimer, loadData, endUpTo]);
+  }, [discardCount, loadData, endUpTo]);
 
   useFocusEffect(useCallback(() => {
     if (draftRestored) loadData();
@@ -2008,18 +2048,13 @@ export default function WorkoutScreen() {
     });
   }, []);
 
-  const removeSet = useCallback((exId: string) => {
+  // The set whose row just closed, by its key, never "the last set" (see
+  // utils/setRows.ts). An exercise always keeps one set.
+  const removeSet = useCallback((exId: string, rowKey: string) => {
     setLog(prev => {
       const exLog = prev[exId];
-      if (!exLog) return prev;
-      // Remove last working set; if none, remove last warmup set
-      if (exLog.working.length > 0) {
-        return { ...prev, [exId]: { ...exLog, working: exLog.working.slice(0, -1) } };
-      }
-      if (exLog.warmup.length > 1) {
-        return { ...prev, [exId]: { ...exLog, warmup: exLog.warmup.slice(0, -1) } };
-      }
-      return prev;
+      const next = exLog && withoutSet(exLog.warmup, exLog.working, rowKey);
+      return next ? { ...prev, [exId]: { ...exLog, ...next } } : prev;
     });
   }, []);
 
@@ -2288,10 +2323,10 @@ export default function WorkoutScreen() {
       // and the next custom workout starts fresh via confirmCustomWorkout.
       AsyncStorage.removeItem(WORKOUT_DAY_OVERRIDE_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     }
+    // Stopping the workout's timer also ends a rest still counting ("Finish
+    // Anyway" mid-rest), so it doesn't run on over the completed view: a rest
+    // belongs to a workout (RestTimerContext).
     stopTimer();
-    // A rest countdown started before Finish (e.g. "Finish Anyway" mid-rest)
-    // must not keep running over the locked completed view.
-    dismissRestTimer();
     setIsFreeWorkout(false);
     setFreeWorkoutAddToProgram(false);
     // Tear down the live session so it's no longer counted as "in progress"
@@ -2342,8 +2377,7 @@ export default function WorkoutScreen() {
         text: "Discard", style: "destructive",
         onPress: () => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          stopTimer();
-          dismissRestTimer();
+          stopTimer(); // and with it a running rest (RestTimerContext)
           setIsFreeWorkout(false);
           setFreeWorkoutAddToProgram(false);
           clearDraft();
@@ -2468,6 +2502,36 @@ export default function WorkoutScreen() {
     setHasPrev(prevFn !== null);
   }, []);
 
+  // While a rest runs, the rest timer rides above the keyboard's tools
+  // (constants/floatingBars.ts), with focus mode's ‹ › on top of it, right
+  // where the field being typed into can sit. When it would be under them,
+  // the list scrolls it clear, and only that far: on a new field (a tap, the
+  // ‹ › keys), and as the keyboard opens or a rest starts. Only a field in the
+  // list, which the cards report as it focuses: the session notes card lifts
+  // itself (notesLift), and a sheet's field isn't in this list at all.
+  const listFieldRef = useRef<ReturnType<typeof TextInput.State.currentlyFocusedInput> | null>(null);
+  const restCoverRef = useRef({ kbHeight: 0, resting: false, winH, clear: ABOVE_REST_ON_KEYBOARD });
+  const clearFieldOfRest = useCallback(() => {
+    const { kbHeight: kb, resting, winH: screenH, clear } = restCoverRef.current;
+    const field = TextInput.State.currentlyFocusedInput();
+    if (Platform.OS !== "ios" || kb === 0 || !resting || !field || field !== listFieldRef.current) return;
+    field.measureInWindow((_x, y, _w, h) => {
+      if (y + h > screenH - kb - clear) {
+        scrollRef.current?.scrollResponderScrollNativeHandleToKeyboard(field, clear, true);
+      }
+    });
+  }, []);
+  useEffect(() => {
+    const clear = ABOVE_REST_ON_KEYBOARD + (focusMode ? FOCUS_NAV_BTN + BAR_STACK_GAP : 0);
+    restCoverRef.current = { kbHeight, resting: restBannerActive, winH, clear };
+    clearFieldOfRest();
+  }, [kbHeight, restBannerActive, winH, focusMode, clearFieldOfRest]);
+  const handleListFieldFocus = useCallback((fn: (() => void) | null, prevFn: (() => void) | null) => {
+    handleInputFocus(fn, prevFn);
+    listFieldRef.current = TextInput.State.currentlyFocusedInput() ?? null;
+    clearFieldOfRest();
+  }, [handleInputFocus, clearFieldOfRest]);
+
   // ── Lock-screen Live Activity ─────────────────────────────────────────────
   // Same gate as the draft autosave: once the user has engaged with today's
   // session, project it onto the iOS lock screen / Dynamic Island (dev and
@@ -2550,13 +2614,46 @@ export default function WorkoutScreen() {
     setShowNotes(false);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
+  // The rest timer pops up straight above the tab bar here
+  // (constants/floatingBars.ts), right where this page pins its own buttons:
+  // focus mode's ‹ › (Complete Workout on the last exercise), list mode's
+  // notes and +. Under it they couldn't be pressed until the rest was over.
+  // While a rest runs they stand on it instead, rising and settling with it,
+  // and the list's end gets the same room so it still scrolls clear of them.
+  const focusNavBottom = safeBottom + 80;
+  const focusNavLift = Math.max(0, ABOVE_REST_ON_TAB - focusNavBottom);
+  const clusterLift = Math.max(0, ABOVE_REST_ON_TAB - LIST_CLUSTER_BOTTOM);
+  const pinnedLift = restBannerActive ? (focusMode ? focusNavLift : clusterLift) : 0;
+  const restShown = useSharedValue(restBannerActive ? 1 : 0);
+  useEffect(() => {
+    restShown.value = restBannerActive
+      ? withSpring(1, { damping: 32, stiffness: 280, overshootClamping: true })
+      : withTiming(0, { duration: 250 });
+  }, [restBannerActive, restShown]);
+  // Focus mode's ‹ › stand on the rest timer wherever it is: above the tab
+  // bar, or riding the keyboard's tools with the keyboard up, where they follow
+  // the keyboard frame by frame as the rest timer does. With no rest they keep
+  // their place, which the keyboard covers.
+  const { height: keyboardAnim } = useReanimatedKeyboardAnimation();
+  const focusNavStyle = useAnimatedStyle(() => {
+    const onRest = Math.max(ABOVE_REST_ON_TAB, -keyboardAnim.value + ABOVE_REST_ON_KEYBOARD);
+    return { transform: [{ translateY: -Math.max(0, onRest - focusNavBottom) * restShown.value }] };
+  });
+  const clusterStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -clusterLift * restShown.value }] }));
+
   // Cap the notes input so the card never grows past ~3/4 of the screen — and,
   // while the keyboard is up (the card is lifted to sit just above it), never
   // past the top safe area. The tick button lives at the top of the card, so an
   // uncapped card pushes it off-screen on long notes. A bounded multiline
   // TextInput scrolls its overflow natively.
   // 74 = card padding (16×2) + header row (32) + header margin (10).
-  const notesCardBottom = Math.max(safeBottom + 162, kbHeight > 0 ? kbHeight + 12 : 0);
+  // With the keyboard up the card sits just above it, or above the rest timer
+  // while one runs, which rides above the keyboard's tools there
+  // (constants/floatingBars.ts): under it, the note being typed was hidden.
+  // With it down, list mode's card opens out of (and closes into) the notes
+  // button, which stands on the rest timer while one runs.
+  const notesLift = kbHeight > 0 ? kbHeight + (restBannerActive ? ABOVE_REST_ON_KEYBOARD : 12) : 0;
+  const notesCardBottom = Math.max(safeBottom + 162 + (focusMode ? 0 : pinnedLift), notesLift);
   const notesInputMaxH = Math.max(
     72,
     Math.min(winH * 0.78, winH - notesCardBottom - insets.top - 8) - 74,
@@ -2611,19 +2708,18 @@ export default function WorkoutScreen() {
     </View>
   );
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", e => {
-      setKbHeight(e.endCoordinates.height);
-      // Lift the floating notes card above the keyboard as an animated offset so
-      // opening/closing with the keyboard up stays smooth (no layout jump).
-      const base = safeBottom + 162;
-      notesKbShift.value = withTiming(Math.min(0, base - (e.endCoordinates.height + 12)), { duration: e.duration || 250, easing: ReEasing.out(ReEasing.cubic) });
-    });
-    const hide = Keyboard.addListener("keyboardWillHide", e => {
+    const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener("keyboardWillHide", () => {
       setKbHeight(0); setHasNext(false); setHasPrev(false); nextFnRef.current = null; prevFnRef.current = null;
-      notesKbShift.value = withTiming(0, { duration: (e && e.duration) || 250, easing: ReEasing.out(ReEasing.cubic) });
     });
     return () => { show.remove(); hide.remove(); };
-  }, [safeBottom]);
+  }, []);
+  // Lift the floating notes card to `notesCardBottom` as an animated offset, so
+  // opening/closing with the keyboard up stays smooth (no layout jump), and so
+  // it moves when a rest starts or ends as well.
+  useEffect(() => {
+    notesKbShift.value = withTiming(safeBottom + 162 - notesCardBottom, { duration: 250, easing: ReEasing.out(ReEasing.cubic) });
+  }, [notesCardBottom, safeBottom, notesKbShift]);
 
   // Load persisted view mode preference once.
   useEffect(() => {
@@ -2886,7 +2982,7 @@ export default function WorkoutScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         style={{ backgroundColor: t.bg }}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: !todaysCompletedWorkout && workoutInfo ? safeBottom + 150 : 92 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: !todaysCompletedWorkout && workoutInfo ? safeBottom + 150 + pinnedLift : 92 }]}
         onLayout={e => { scrollMetricsRef.current.viewH = e.nativeEvent.layout.height; aimAtUpTo(); }}
         onContentSizeChange={(_w, h) => { scrollMetricsRef.current.contentH = h; aimAtUpTo(); }}
         onTouchStart={endUpTo}
@@ -3034,7 +3130,7 @@ export default function WorkoutScreen() {
                   onChangeExercise={openChangeExercise}
                   onRemoveExercise={startCollapse}
                   onToggleSetType={toggleSetType}
-                  onInputFocus={handleInputFocus}
+                  onInputFocus={handleListFieldFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={nextSet?.exId === exercise.id ? nextSet.flatIdx : null}
                   prevSets={prevHintsById[exercise.id] ?? EMPTY_PREV}
@@ -3070,16 +3166,14 @@ export default function WorkoutScreen() {
 
       </ScrollView>
 
-      {/* List mode: bottom-left action cluster pinned just above the nav bar. Always
+      {/* List mode: bottom-left action cluster pinned just above the nav bar
+          (LIST_CLUSTER_BOTTOM), on the rest timer while one runs. Always
           available while a workout is active (even with 0 exercises) so notes /
-          extra exercises can be added without scrolling. The nav bar is fixed at
-          bottom:28 + height 64 (top ≈ 92 from the screen bottom, device-independent),
-          so pin the cluster to that fixed top rather than the safe-area inset —
-          otherwise notched devices leave a big gap and non-notch phones nearly touch. */}
+          extra exercises can be added without scrolling. */}
       {!focusMode && !todaysCompletedWorkout && workoutInfo && (
-        <View style={{ position: "absolute", left: 20, bottom: 100, zIndex: 6 }}>
+        <Reanimated.View style={[{ position: "absolute", left: 20, bottom: LIST_CLUSTER_BOTTOM, zIndex: 6 }, clusterStyle]}>
           {renderActionCluster()}
-        </View>
+        </Reanimated.View>
       )}
 
       {/* Floating Session Notes card (both modes). Mounted only while open (plus a
@@ -3139,7 +3233,8 @@ export default function WorkoutScreen() {
         </>
       )}
 
-      {/* Focus mode: pinned Prev / Next or Complete Workout above the tab bar */}
+      {/* Focus mode: pinned Prev / Next or Complete Workout above the tab bar,
+          on the rest timer while one runs */}
       {focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
         const total = workoutInfo.exercises.length;
         const idx = Math.min(focusIndex, total - 1);
@@ -3155,7 +3250,7 @@ export default function WorkoutScreen() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         };
         return (
-          <View pointerEvents="box-none" style={{ position: "absolute", left: 20, right: 20, bottom: safeBottom + 80, zIndex: 5 }}>
+          <Reanimated.View pointerEvents="box-none" style={[{ position: "absolute", left: 20, right: 20, bottom: focusNavBottom, zIndex: 5 }, focusNavStyle]}>
             <View style={{ flexDirection: "row", gap: 16, alignItems: "center", justifyContent: isLast ? "flex-start" : "center" }}>
               <BounceButton onPress={isFirst ? undefined : goPrev} accessibilityLabel="Previous exercise">
                 {/* The app's white control button (the pills' surface + soft
@@ -3185,7 +3280,7 @@ export default function WorkoutScreen() {
                 </BounceButton>
               )}
             </View>
-          </View>
+          </Reanimated.View>
         );
       })()}
 
@@ -3380,7 +3475,7 @@ export default function WorkoutScreen() {
       )}
     </KeyboardAvoidingView>
     {kbHeight > 0 && Platform.OS === "ios" && (
-      <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, flexDirection: "row", gap: 8, zIndex: 999 }}>
+      <View style={{ position: "absolute", right: 10, bottom: kbHeight + KEYBOARD_TOOLS_GAP, flexDirection: "row", gap: 8, zIndex: 999 }}>
         {/* The arrows step between set inputs. A notes box (an exercise's or
             the session's) has nowhere to step to, so it gets the dismiss key
             alone rather than two greyed-out arrows. */}
@@ -3470,6 +3565,7 @@ const styles = StyleSheet.create({
   inputHeaderCol:{ flex: 1, alignItems: "center", justifyContent: "flex-end", marginHorizontal: 4 },
   inputCell:     { flex: 1, marginHorizontal: 4, alignItems: "center" },
   checkCol:      { width: 32, alignItems: "center", justifyContent: "center" },
+  checkResting:  { opacity: 0.35 },
 
   // Data rows
   dataRow:       { flexDirection: "row", alignItems: "center", height: 56, paddingHorizontal: 4 },
@@ -3532,10 +3628,10 @@ const styles = StyleSheet.create({
   completedActionText: { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.3, flexShrink: 1 },
 
   // Focus mode Previous button: icon-only circle at the finish button's height.
-  focusPrevBtn:     { width: 56, height: 56, borderRadius: PILL_RADIUS, alignItems: "center", justifyContent: "center", ...PILL_SHADOW },
+  focusPrevBtn:     { width: FOCUS_NAV_BTN, height: FOCUS_NAV_BTN, borderRadius: PILL_RADIUS, alignItems: "center", justifyContent: "center", ...PILL_SHADOW },
   // Focus mode Next button (icon-only circle, matches finish button height)
-  focusBackWrap:    { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowRadius: 8 },
-  focusBackBtn:     { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", borderWidth: 1, shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4 },
+  focusBackWrap:    { borderRadius: FOCUS_NAV_BTN / 2, shadowOffset: { width: 4, height: 4 }, shadowRadius: 8 },
+  focusBackBtn:     { width: FOCUS_NAV_BTN, height: FOCUS_NAV_BTN, borderRadius: FOCUS_NAV_BTN / 2, alignItems: "center", justifyContent: "center", borderWidth: 1, shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4 },
 
   checkCircle:      { width: 24, height: 24, borderRadius: 13, alignItems: "center", justifyContent: "center" },
 

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useRef, useEffect, useCallback } from "react";
 import { AppState } from "react-native";
 import { scheduleRestTimerAlert, cancelRestTimerAlert } from "../utils/notificationScheduler";
+import { useWorkoutTimer } from "./WorkoutTimerContext";
 
 type RestTimerCtx = {
   restDisplay: number;
@@ -33,6 +34,19 @@ export function RestTimerProvider({ children }: { children: React.ReactNode }) {
     // by the handler anyway, this just keeps the pending queue clean).
     cancelRestTimerAlert();
   }, []);
+
+  // A rest belongs to a workout: once the workout's timer stops, however it
+  // ended (finished, discarded from the page or the in-progress bar, replaced
+  // by Set Workout Date), the rest goes with it, here rather than at each of
+  // those. A pause keeps it. Only a stop counts, so a rest the lock screen
+  // brings back before the workout timer has loaded from storage stays.
+  const { isRunning, isPaused } = useWorkoutTimer();
+  const workoutLive = isRunning || isPaused;
+  const wasLive = useRef(workoutLive);
+  useEffect(() => {
+    if (wasLive.current && !workoutLive) dismissRestTimer();
+    wasLive.current = workoutLive;
+  }, [workoutLive, dismissRestTimer]);
 
   useEffect(() => {
     if (!restBannerActive) return;

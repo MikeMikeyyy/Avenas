@@ -7,7 +7,6 @@ import {
   Animated,
   useWindowDimensions,
 } from "react-native";
-import RestTimerBanner from "../../components/RestTimerBanner";
 import DumbbellIcon from "../../components/DumbbellIcon";
 import Svg, { Path, Circle } from "react-native-svg";
 import { useRef, useEffect, useState } from "react";
@@ -252,7 +251,6 @@ export default function TabLayout() {
         <Tabs.Screen name="progress" />
         <Tabs.Screen name="trainer-hub" />
       </Tabs>
-      <RestTimerBanner />
     </View>
   );
 }

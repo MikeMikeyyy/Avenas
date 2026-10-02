@@ -23,6 +23,7 @@ import {
   type LiveActivityPayload,
   type LiveActivityTickAction,
 } from "../modules/avenas-live-activity";
+import { restFromCard } from "../utils/liveActivity";
 
 // Coalesce bursts (typing, cascade fills) into a single ActivityKit update —
 // the OS rate-limits Live Activity updates, so we must not push per keystroke.
@@ -60,6 +61,9 @@ export function useWorkoutLiveActivity(opts: {
   onRemoteRestRef.current = onRemoteRest;
 
   const lastPushed = useRef<string | null>(null);
+  // The rest end the card was last given, once the push has landed (the card's
+  // rest mirror echoes it from then). Null until this session's first push.
+  const lastPushedRestEnd = useRef<number | null>(null);
 
   // ── push / end ──────────────────────────────────────────────────────────────
   const payloadJson = payload ? JSON.stringify(payload) : null;
@@ -71,6 +75,7 @@ export function useWorkoutLiveActivity(opts: {
       // stale card left behind by an app kill whose draft was discarded.
       if (ready && (lastPushed.current !== null || !active)) {
         lastPushed.current = null;
+        lastPushedRestEnd.current = null;
         void endWorkoutActivity();
       }
       return;
@@ -79,7 +84,8 @@ export function useWorkoutLiveActivity(opts: {
     if (payloadJson === lastPushed.current) return;
     const id = setTimeout(() => {
       lastPushed.current = payloadJson;
-      void startOrUpdateWorkoutActivity(JSON.parse(payloadJson) as LiveActivityPayload);
+      const next = JSON.parse(payloadJson) as LiveActivityPayload;
+      void startOrUpdateWorkoutActivity(next).then(() => { lastPushedRestEnd.current = next.restEndMs; });
     }, PUSH_DEBOUNCE_MS);
     return () => clearTimeout(id);
   }, [payloadJson, enabled, active, ready]);
@@ -87,20 +93,23 @@ export function useWorkoutLiveActivity(opts: {
   // ── consume lock-screen actions ─────────────────────────────────────────────
   const consume = useCallback(() => {
     if (!enabledRef.current || !activeRef.current) return;
+    // No card to read back (Expo Go, Android, iOS < 17, Live Activities off):
+    // the bridge answers "no rest running", and taken at its word that
+    // dismissed the rest timer every time the app came back to the front, and
+    // the moment a session's first tick started one.
+    if (!isLiveActivityAvailable()) return;
     void consumeLiveActivityActions().then(res => {
       if (res.actions.length > 0) {
         onRemoteTicksRef.current(res.actions.filter(a => a.kind === "tick"));
       }
-      // Rest sync, idempotent: compare effective ends (past ends count as
-      // "none" on both sides) and only touch the JS timer on a real drift —
-      // otherwise every foreground would reset the banner's progress bar.
-      const now = Date.now();
-      const nativeEnd = res.restEndMs > now + 1000 ? res.restEndMs : 0;
-      const jsRaw = restEndsAtRef.current ?? 0;
-      const jsEnd = jsRaw > now + 1000 ? jsRaw : 0;
-      if (Math.abs(nativeEnd - jsEnd) > 1500) {
-        onRemoteRestRef.current(nativeEnd);
-      }
+      // Only a rest changed ON the card moves the screen's (restFromCard).
+      const end = restFromCard({
+        cardEnd: res.restEndMs,
+        lastPushedEnd: lastPushedRestEnd.current,
+        appEnd: restEndsAtRef.current,
+        now: Date.now(),
+      });
+      if (end !== null) onRemoteRestRef.current(end);
     });
   }, []);
 

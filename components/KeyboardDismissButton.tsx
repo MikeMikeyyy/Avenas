@@ -9,6 +9,7 @@ import { Keyboard, Platform, TouchableOpacity } from "react-native";
 import Svg, { Path } from "react-native-svg";
 
 import { useTheme } from "../contexts/ThemeContext";
+import { KEYBOARD_TOOLS_GAP } from "../constants/floatingBars";
 
 function KeyboardDismissIcon({ color }: { color: string }) {
   return (
@@ -45,9 +46,10 @@ export default function KeyboardDismissButton({ onPress }: {
       accessibilityRole="button"
       accessibilityLabel="Dismiss keyboard"
       style={{
+        // Its height is KEYBOARD_TOOLS_H, which the rest timer clears.
         position: "absolute",
         right: 10,
-        bottom: kbHeight + 8,
+        bottom: kbHeight + KEYBOARD_TOOLS_GAP,
         borderRadius: 12,
         paddingHorizontal: 14,
         paddingVertical: 9,

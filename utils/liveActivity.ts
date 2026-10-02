@@ -88,6 +88,36 @@ export function buildLiveActivityQueue(
   return { queue: queue.slice(0, MAX_QUEUE), doneCount, totalCount };
 }
 
+/**
+ * What a read of the lock-screen card's rest means for the Workout screen's
+ * rest timer: an end to run to (a rest started or re-timed on the card), 0 to
+ * dismiss it (Skip on the card), or null to leave it be.
+ *
+ * Only a change made ON the card counts. Otherwise the card's rest just echoes
+ * what the screen last gave it (`lastPushedEnd`), and a push lags the screen by
+ * its debounce: read back in that moment, the card's old end restarted a rest
+ * just skipped in the app, or dismissed one just started. Before the session's
+ * first push (`lastPushedEnd` null), only a rest still running counts: one left
+ * on the card when the app was killed. Then idempotent: ends within 1.5s of
+ * each other, past ends counting as none, are left alone, or every foreground
+ * would reset the banner's progress bar.
+ */
+export function restFromCard(args: {
+  /** The card's rest end (epoch ms), 0 when none. */
+  cardEnd: number;
+  /** The rest end the card was last given, null before the first push. */
+  lastPushedEnd: number | null;
+  /** The screen's rest end, null when no rest is running. */
+  appEnd: number | null;
+  now: number;
+}): number | null {
+  const { cardEnd, lastPushedEnd, appEnd, now } = args;
+  if (lastPushedEnd !== null ? cardEnd === lastPushedEnd : cardEnd <= now + 1000) return null;
+  const card = cardEnd > now + 1000 ? cardEnd : 0;
+  const app = appEnd != null && appEnd > now + 1000 ? appEnd : 0;
+  return Math.abs(card - app) > 1500 ? card : null;
+}
+
 export function buildLiveActivityPayload(args: {
   workoutName: string;
   exercises: LiveActivityExercise[];

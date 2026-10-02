@@ -19,6 +19,7 @@ import { ConnectivityProvider, useOffline } from "../contexts/ConnectivityContex
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
+import RestTimerBanner from "../components/RestTimerBanner";
 import ForceUpdateGate from "../components/ForceUpdateGate";
 import { flushCloudPush, retryFailedCloudPush } from "../lib/syncManager";
 import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
@@ -164,7 +165,10 @@ function AppShell() {
                   <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
                     <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
                   </Stack>
+                  {/* Over every screen, the rest timer stacked on the workout
+                      bar (constants/floatingBars.ts). */}
                   <WorkoutActiveBar />
+                  <RestTimerBanner />
                 </View>
               </NavThemeProvider>
             </ForceUpdateGate>

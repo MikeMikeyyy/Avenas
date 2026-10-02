@@ -1,13 +1,12 @@
 import React, { useEffect } from "react";
 import { View, Text, Alert, StyleSheet, Pressable } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter, useSegments } from "expo-router";
+import { useRouter } from "expo-router";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
-import { useRestTimer } from "../contexts/RestTimerContext";
 import { useTheme } from "../contexts/ThemeContext";
+import { useFloatingBars } from "../hooks/useFloatingBars";
 import BounceButton from "./BounceButton";
 import TrashIcon from "./TrashIcon";
 import { FontFamily, ACCT, APP_LIGHT, APP_DARK } from "../constants/theme";
@@ -30,22 +29,21 @@ const PRESS_IN = { damping: 30, stiffness: 600 };
 const PRESS_OUT = { damping: 12, stiffness: 250 };
 
 export default function WorkoutActiveBar() {
-  const { isRunning, isPaused, elapsedSeconds, pauseTimer, resumeTimer, discardWorkout } = useWorkoutTimer();
-  const { dismissRestTimer, restBannerActive } = useRestTimer();
+  const { isPaused, elapsedSeconds, pauseTimer, resumeTimer, discardWorkout } = useWorkoutTimer();
   const { isDark } = useTheme();
   const router = useRouter();
-  const segments = useSegments();
-  const insets = useSafeAreaInsets();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
-  const onTabScreen = segments.includes("(tabs)" as never);
-  const onWorkoutTab = segments[segments.length - 1] === "workout";
+  // Where it sits, and whether it shows, come from the same place the rest
+  // timer's do (hooks/useFloatingBars.ts), so the rest timer stacks on top of
+  // it rather than pushing it up over itself. That push was what left it
+  // half on screen on the Workout page during a rest: 76 up from a 200 drop.
+  const { onTabScreen, workoutBarShown: active, workoutBarBottom } = useFloatingBars();
 
-  const bottomSv = useSharedValue(onTabScreen ? 112 : insets.bottom + 16);
+  const bottomSv = useSharedValue(workoutBarBottom);
   useEffect(() => {
-    bottomSv.value = withSpring(onTabScreen ? 112 : insets.bottom + 16, { damping: 32, stiffness: 280, overshootClamping: true });
-  }, [onTabScreen, insets.bottom, bottomSv]);
-  const active = (isRunning || isPaused) && !onWorkoutTab;
+    bottomSv.value = withSpring(workoutBarBottom, { damping: 32, stiffness: 280, overshootClamping: true });
+  }, [workoutBarBottom, bottomSv]);
   const barY = useSharedValue(200);
 
   useEffect(() => {
@@ -54,14 +52,9 @@ export default function WorkoutActiveBar() {
       : withTiming(200, { duration: 220 });
   }, [active, barY]);
 
-  const bottomOffset = useSharedValue(0);
-  useEffect(() => {
-    bottomOffset.value = withSpring(restBannerActive ? -76 : 0, { damping: 32, stiffness: 280 });
-  }, [restBannerActive, bottomOffset]);
-
   const animStyle = useAnimatedStyle(() => ({
     bottom: bottomSv.value,
-    transform: [{ translateY: barY.value + bottomOffset.value }],
+    transform: [{ translateY: barY.value }],
   }));
 
   // A tap on the bar takes you back into the session, on the exercise you're up
@@ -86,7 +79,7 @@ export default function WorkoutActiveBar() {
         text: "Discard", style: "destructive",
         onPress: () => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          dismissRestTimer();
+          // Takes a running rest with it (RestTimerContext).
           discardWorkout();
         },
       },

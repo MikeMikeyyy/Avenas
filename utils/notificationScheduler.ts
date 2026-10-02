@@ -270,31 +270,35 @@ export function resyncScheduledNotifications(): void {
 // ── rest-timer one-shot ───────────────────────────────────────────────────────
 
 let restTimerNotifId: string | null = null;
+// Schedules and cancels run one after another, and each call supersedes the
+// ones before it. Left to overlap, a schedule still checking the prefs when its
+// rest was skipped (or re-timed) landed after the cancel: a "Rest complete" for
+// a rest already gone, or two alerts for one rest with only one cancellable.
+let restAlertChain: Promise<void> = Promise.resolve();
+let restAlertGen = 0;
 
 /** Schedule the "rest complete" alert for `endsAtMs`. Replaces any pending one
  *  (adjusting the timer just calls this again). Foreground-suppressed, so it
  *  only surfaces when the app is backgrounded when the rest ends. */
 export function scheduleRestTimerAlert(endsAtMs: number): void {
   if (!isNative) return;
-  void (async () => {
-    try {
-      await cancelRestTimerAlertAsync();
-      if (!(await isCategoryEnabled("restTimerAlerts"))) return;
-      if (!(await ensureNotificationPermissions(false))) return;
-      if (endsAtMs <= Date.now()) return;
-      restTimerNotifId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: "Rest complete",
-          body: "Time for your next set.",
-          sound: "default",
-          data: { kind: "restTimer", category: "restTimerAlerts" },
-        },
-        trigger: { type: SchedulableTriggerInputTypes.DATE, date: new Date(endsAtMs) },
-      });
-    } catch (e) {
-      warn("restTimer", e);
-    }
-  })();
+  const gen = ++restAlertGen;
+  restAlertChain = restAlertChain.then(async () => {
+    await cancelRestTimerAlertAsync();
+    if (gen !== restAlertGen) return;
+    if (!(await isCategoryEnabled("restTimerAlerts"))) return;
+    if (!(await ensureNotificationPermissions(false))) return;
+    if (gen !== restAlertGen || endsAtMs <= Date.now()) return;
+    restTimerNotifId = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Rest complete",
+        body: "Time for your next set.",
+        sound: "default",
+        data: { kind: "restTimer", category: "restTimerAlerts" },
+      },
+      trigger: { type: SchedulableTriggerInputTypes.DATE, date: new Date(endsAtMs) },
+    });
+  }).catch((e) => warn("restTimer", e));
 }
 
 async function cancelRestTimerAlertAsync(): Promise<void> {
@@ -308,7 +312,8 @@ async function cancelRestTimerAlertAsync(): Promise<void> {
 /** Cancel the pending rest alert (timer dismissed or finished in-app). */
 export function cancelRestTimerAlert(): void {
   if (!isNative) return;
-  void cancelRestTimerAlertAsync().catch((e) => warn("restTimerCancel", e));
+  restAlertGen++;
+  restAlertChain = restAlertChain.then(cancelRestTimerAlertAsync).catch((e) => warn("restTimerCancel", e));
 }
 
 // ── achievements ──────────────────────────────────────────────────────────────
