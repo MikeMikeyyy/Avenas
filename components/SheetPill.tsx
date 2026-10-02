@@ -5,7 +5,9 @@
 //   default  control surface + soft shadow (a choice: a day, "Edit", "Custom Workout")
 //   primary  accent fill + accent glow (the sheet's main action)
 //   danger   red fill + centred halo (Delete)
-//   quiet    translucent fill, no lift (Cancel)
+//   cancel   the app's slate button, near-black in light mode and off-white in
+//            dark, like Complete Workout (Cancel). It was a translucent grey
+//            the sheet nearly swallowed (user decision, 2026-10-02).
 //
 // An on/off SETTING in a sheet is a SheetToggle (below), not one of these.
 
@@ -14,12 +16,12 @@ import { View, Text, StyleSheet, type StyleProp, type ViewStyle, type Accessibil
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import BounceButton from "./BounceButton";
-import { APP_DARK, APP_LIGHT, ACCT, ACCT_DEEP, DANGER_BRIGHT, FontFamily } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT, FontFamily } from "../constants/theme";
 import { haloGlow, pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import AppSwitch from "./AppSwitch";
 
-export type SheetPillVariant = "default" | "primary" | "danger" | "quiet";
+export type SheetPillVariant = "default" | "primary" | "danger" | "cancel";
 
 interface Props {
   label: string;
@@ -56,11 +58,13 @@ export default function SheetPill({
   const t = isDark ? APP_DARK : APP_LIGHT;
 
   const filled = variant === "primary" || variant === "danger";
-  const color = filled ? "#fff" : selected ? ACCT : (tint ?? t.tp);
+  const slate = variant === "cancel";
+  // On the slate, the page's own colours: white on near-black, navy on off-white.
+  const color = filled ? "#fff" : slate ? (isDark ? APP_DARK.bg : "#fff") : selected ? ACCT : (tint ?? t.tp);
   const surface: ViewStyle =
     variant === "primary" ? { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }
     : variant === "danger" ? { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }
-    : variant === "quiet" ? { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }
+    : slate ? { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, ...PILL_SHADOW }
     : { backgroundColor: t.ctrl, ...PILL_SHADOW };
 
   return (

@@ -15,6 +15,7 @@ import * as Haptics from "expo-haptics";
 import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import SheetPill from "../SheetPill";
 import GroupAvatar from "./GroupAvatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, PAUSED_ORANGE } from "../../constants/theme";
 import { pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
@@ -260,11 +261,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
             <Text style={styles.sendText}>{ctaLabel}</Text>
           </View>
         </BounceButton>
-        <BounceButton style={{ marginTop: 8 }} onPress={onClose}>
-          <View style={[styles.cancel, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
-            <Text style={[styles.cancelText, { color: t.tp }]}>Cancel</Text>
-          </View>
-        </BounceButton>
+        <SheetPill label="Cancel" variant="cancel" onPress={onClose} style={{ marginTop: 8 }} />
       </View>
     </SimpleSheet>
   );
@@ -292,6 +289,4 @@ const styles = StyleSheet.create({
   actions:    { paddingHorizontal: 20, paddingTop: 12 },
   send:       { ...pill(PILL_H_SM), backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
   sendText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-  cancel:     { ...pill(PILL_H_SM) },
-  cancelText: { fontFamily: FontFamily.bold, fontSize: 14 },
 });

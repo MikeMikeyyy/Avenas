@@ -7,6 +7,15 @@
 // name each PR and its numbers, with a link to the workout. It used to headline
 // one exercise and say "plus N more", which meant opening the workout and
 // working out for yourself which lifts those were.
+//
+// The records sit on a gold rail down the blank column beside the list: a
+// glowing dot at each record, joined by a line that starts at the first dot
+// and ends at the last, so it runs as far as there are records and a single
+// record is a dot alone. It used to hang from the trophy, starting under the
+// badge (user decision, 2026-10-02). The reveal draws it downward as the card
+// opens. Every piece of it is laid out beside what it marks (the dot centred
+// on its exercise's name line, the line stretched to each row's height)
+// rather than placed by measured numbers, so it holds at any text size.
 
 import { memo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
@@ -37,6 +46,18 @@ const FLAME_SIZE = 26;
  *  still tints the wash behind it). It fills its square edge to edge, so 20
  *  weighs about the same as the 17–18pt glyphs on the other cards. */
 const TROPHY_SIZE = 20;
+
+/** The summary row's geometry, which the PR rail lines up with. */
+const ROW_PAD_X = 14;
+const BADGE = 34;
+const ROW_GAP = 12;
+/** Where the title (and every PR name under it) starts. */
+const TEXT_INSET = ROW_PAD_X + BADGE + ROW_GAP;
+/** The rail runs down the badge's centre line. */
+const RAIL_X = ROW_PAD_X + BADGE / 2;
+const RAIL_W = 2;
+/** A record's dot on the rail. */
+const NODE = 8;
 
 /** "Today", "Yesterday", "3 days ago": calendar days, not 24-hour blocks. */
 function earnedWhen(iso: string): string {
@@ -101,6 +122,16 @@ function AchievementCard({ achievement, isDark, isKg, streakColor, onOpenWorkout
     reveal.setOpen(next);
   };
 
+  // The dots glow like a lit dot on a workout card's session rail, quieter on
+  // dark, where the same bloom reads far stronger (as FavouriteStar's does).
+  const rail = { backgroundColor: badge.color };
+  const node = {
+    backgroundColor: badge.color,
+    shadowColor: badge.color,
+    shadowOpacity: isDark ? 0.5 : 0.8,
+    shadowRadius: isDark ? 2.5 : 3.5,
+  };
+
   const row = (
     <View style={styles.row}>
       {/* The badge colour alone at ~15% for the wash, full strength for the glyph. */}
@@ -144,12 +175,30 @@ function AchievementCard({ achievement, isDark, isKg, streakColor, onOpenWorkout
             {row}
           </TouchableOpacity>
           <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} contentStyle={styles.prList}>
-            {prs.map(pr => (
-              <View key={pr.exerciseName} style={styles.prRow}>
-                <Text style={[styles.prName, { color: t.tp }]} numberOfLines={1}>{pr.exerciseName}</Text>
-                <Text style={[styles.prValue, { color: t.ts }]} numberOfLines={1}>{formatPRLine(pr, isKg)}</Text>
-              </View>
-            ))}
+            {prs.map((pr, i) => {
+              // The line runs from the first dot to the last: up from every
+              // dot but the first, down from every dot but the last.
+              const before = i > 0;
+              const more = i < prs.length - 1;
+              return (
+                <View key={pr.exerciseName}>
+                  <View style={styles.prHead}>
+                    <View style={styles.railCell}>
+                      <View style={[styles.railLine, before && rail]} />
+                      <View style={[styles.node, node]} />
+                      <View style={[styles.railLine, more && rail]} />
+                    </View>
+                    <Text style={[styles.prName, { color: t.tp }]} numberOfLines={1}>{pr.exerciseName}</Text>
+                  </View>
+                  <View style={styles.prFoot}>
+                    <View style={styles.railCell}>
+                      {more && <View style={[styles.railLine, rail]} />}
+                    </View>
+                    <Text style={[styles.prValue, { color: t.ts }]} numberOfLines={1}>{formatPRLine(pr, isKg)}</Text>
+                  </View>
+                </View>
+              );
+            })}
             {/* A real button, not green text: it's the one action on this card,
                 and the app's primary action everywhere else is an ACCT pill
                 with white text and the accent glow. */}
@@ -175,17 +224,26 @@ export default memo(AchievementCard);
 
 const styles = StyleSheet.create({
   wrap:      { marginBottom: 8 },
-  row:       { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 11 },
-  badge:     { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  row:       { flexDirection: "row", alignItems: "center", gap: ROW_GAP, paddingHorizontal: ROW_PAD_X, paddingVertical: 11 },
+  badge:     { width: BADGE, height: BADGE, borderRadius: BADGE / 2, alignItems: "center", justifyContent: "center" },
   trophy:    { width: TROPHY_SIZE, height: TROPHY_SIZE },
   text:      { flex: 1 },
   title:     { fontFamily: FontFamily.semibold, fontSize: 14 },
   detail:    { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
-  // Indented to the title, so the list reads as belonging to the row above.
-  prList:    { paddingLeft: 60, paddingRight: 14, paddingBottom: 12, gap: 6 },
-  prRow:     { gap: 1 },
-  prName:    { fontFamily: FontFamily.semibold, fontSize: 13 },
-  prValue:   { fontFamily: FontFamily.regular, fontSize: 12 },
+  // Indented to the title, so the list reads as belonging to the row above,
+  // with the rail down the indent. No gaps between rows: each row's space is
+  // its own padding, which the rail beside it stretches over, so the line
+  // never breaks.
+  prList:    { paddingRight: ROW_PAD_X, paddingBottom: 12 },
+  prHead:    { flexDirection: "row", alignItems: "center" },
+  prFoot:    { flexDirection: "row" },
+  // As tall as its row. On the name's line the two lengths of rail share the
+  // height either side of the dot, which centres it on the name.
+  railCell:  { width: TEXT_INSET, alignSelf: "stretch" },
+  railLine:  { flex: 1, width: RAIL_W, marginLeft: RAIL_X - RAIL_W / 2 },
+  node:      { width: NODE, height: NODE, borderRadius: NODE / 2, marginLeft: RAIL_X - NODE / 2, shadowOffset: { width: 0, height: 0 } },
+  prName:    { flex: 1, fontFamily: FontFamily.semibold, fontSize: 13 },
+  prValue:   { flex: 1, fontFamily: FontFamily.regular, fontSize: 12, paddingTop: 1, paddingBottom: 6 },
   // Bottom right: the list above is indented to the title, so a left-aligned
   // pill sat in that indent looking like one more PR line. At the right edge it
   // reads as where the card ends and what to do next, the same corner the

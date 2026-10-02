@@ -165,8 +165,10 @@ function AppShell() {
                   <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
                     <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
                   </Stack>
-                  {/* Over every screen, the rest timer stacked on the workout
-                      bar (constants/floatingBars.ts). */}
+                  {/* Over every screen: the workout bar, which grows to hold a
+                      rest off the Workout page, and the rest pill, which shows
+                      it on that page and above the keyboard
+                      (constants/floatingBars.ts). */}
                   <WorkoutActiveBar />
                   <RestTimerBanner />
                 </View>

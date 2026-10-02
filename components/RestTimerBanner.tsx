@@ -1,118 +1,81 @@
-import React, { useEffect } from "react";
-import { View, Text, StyleSheet } from "react-native";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing, SlideInDown, SlideOutDown } from "react-native-reanimated";
+// The rest between sets as a pill of its own: on the Workout page, where
+// there's no workout bar to hold it, and above the keyboard on any page while
+// it's up. Everywhere else a rest shows inside the workout bar
+// (components/WorkoutActiveBar.tsx), which grows to hold it. Both draw the
+// same countdown and buttons (components/RestControls.tsx), and the pill is
+// the workout bar's own shape, surface and size (constants/floatingBars.ts).
+
+import React from "react";
+import { View, StyleSheet } from "react-native";
+import Reanimated, { useAnimatedStyle, SlideInDown, SlideOutDown } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
-import * as Haptics from "expo-haptics";
 import { useRestTimer } from "../contexts/RestTimerContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { useFloatingBars } from "../hooks/useFloatingBars";
-import NeuCard from "./NeuCard";
-import BounceButton from "./BounceButton";
-import { FontFamily, ACCT, APP_LIGHT, APP_DARK } from "../constants/theme";
-import { PILL_RADIUS } from "../constants/buttons";
-import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
-
-function fmtTime(secs: number): string {
-  return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
-}
+import { RestActions, RestLine, RestTime, useRestProgress } from "./RestControls";
+import { APP_LIGHT, APP_DARK } from "../constants/theme";
+import { ABOVE_KEYBOARD_TOOLS, BAR_INSET_X, BAR_SHADOW, REST_PILL_H } from "../constants/floatingBars";
 
 export default function RestTimerBanner() {
-  const { restDisplay, restTotal, restBannerActive, dismissRestTimer, adjustRestTimer } = useRestTimer();
+  const { restDisplay, restBannerActive } = useRestTimer();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const progressPct = useSharedValue(1);
-  const cardWidth = useSharedValue(0);
+  const progress = useRestProgress();
 
-  // A new rest starts full.
-  useEffect(() => {
-    if (restBannerActive) progressPct.value = 1;
-  }, [restBannerActive, progressPct]);
-
-  useEffect(() => {
-    if (restTotal > 0) {
-      const pct = Math.max(0, restDisplay / restTotal);
-      progressPct.value = withTiming(pct, { duration: 950, easing: Easing.linear });
-    }
-  }, [restDisplay, restTotal]);
-
-  const progressFillStyle = useAnimatedStyle(() => ({
-    right: cardWidth.value * (1 - progressPct.value),
-  }));
-
-  // Where it sits (constants/floatingBars.ts): on top of the workout bar while
-  // that shows (the other tabs, a pushed screen), straight above the tab bar on
+  // Where it sits (constants/floatingBars.ts): straight above the tab bar on
   // the Workout page. With the keyboard up it rides above the keyboard's own
   // tools (the down key, and the Workout page's ‹ ›), moving with the keyboard
   // on the UI thread. Its buttons never take focus from a text field, so Skip
   // and ±15s answer with the keyboard up and leave it there.
-  const { restBottom } = useFloatingBars();
+  //
+  // `bottom` is the page's own, never animated, and the keyboard's lift is a
+  // transform on top of it. The slide-in moves the pill's frame to where it
+  // sat as it mounted, and nothing moves that frame while it runs: with a
+  // `bottom` that sprang between pages, a pill coming back to the Workout page
+  // mounted while its `bottom` was still on the way down from the other page's
+  // place (above the workout bar), and the slide-in left it up there.
+  const { restBottom, restPillShown } = useFloatingBars();
   const { height: keyboardHeight } = useReanimatedKeyboardAnimation();
-  const stackBottom = useSharedValue(restBottom);
-  useEffect(() => {
-    stackBottom.value = withSpring(restBottom, { damping: 32, stiffness: 280, overshootClamping: true });
-  }, [restBottom, stackBottom]);
-  const positionStyle = useAnimatedStyle(() => {
+  const liftStyle = useAnimatedStyle(() => {
     const keyboard = -keyboardHeight.value; // 0 closed, the keyboard's height open
-    return { bottom: keyboard > 0 ? Math.max(stackBottom.value, keyboard + ABOVE_KEYBOARD_TOOLS) : stackBottom.value };
+    return { transform: [{ translateY: keyboard > 0 ? -Math.max(0, keyboard + ABOVE_KEYBOARD_TOOLS - restBottom) : 0 }] };
   });
 
-  const handleAdjust = (delta: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    adjustRestTimer(delta);
-  };
-
-  // There only while a rest runs, sliding in and out as it comes and goes. It
-  // used to stay mounted and slide off screen, with whether it took taps set
-  // apart from where it sat: two things that had to agree. Mounted only while
-  // a rest runs, a banner on screen is always the live one, its time moving
-  // and Skip and ±15s answering.
-  if (!restBannerActive) return null;
+  // There only while a rest runs and it's the pill's to show, sliding in and
+  // out as it comes and goes. It used to stay mounted and slide off screen,
+  // with whether it took taps set apart from where it sat: two things that had
+  // to agree. Mounted only while a rest runs, a pill on screen is always the
+  // live one, its time moving and Skip and ±15s answering. Inside the workout
+  // bar, or on a chat (useFloatingBars), it stands aside, the rest still
+  // counting.
+  if (!restBannerActive || !restPillShown) return null;
 
   return (
     <Reanimated.View
-      style={[styles.bannerOuter, positionStyle]}
+      style={[styles.outer, { bottom: restBottom }, liftStyle]}
       entering={SlideInDown.springify().damping(32).stiffness(280).overshootClamping(1)}
       exiting={SlideOutDown.duration(250)}
       pointerEvents="box-none"
     >
-      <NeuCard dark={isDark} style={styles.bannerCard}>
-        <View
-          style={styles.progressTrack}
-          onLayout={e => { cardWidth.value = e.nativeEvent.layout.width; }}
-        >
-          <Reanimated.View style={[styles.progressFill, progressFillStyle]} />
+      <View style={[styles.pill, BAR_SHADOW, { backgroundColor: t.nav, borderColor: t.navEdge }]}>
+        {/* The countdown round the pill's top and through both its ends, its
+            glow clipped to the pill. Its own layer: iOS drops a shadow on a
+            view that clips. */}
+        <View style={styles.clip} pointerEvents="none">
+          <RestLine progress={progress} isDark={isDark} holder="pill" />
         </View>
-        <View style={styles.row}>
-          <Text style={[styles.label, { color: t.tp }]}>REST</Text>
-          <BounceButton onPress={() => handleAdjust(-15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
-            <Text style={[styles.adjText, { color: t.tp }]}>−15s</Text>
-          </BounceButton>
-          <Text style={[styles.time, { color: t.tp }]}>{fmtTime(restDisplay)}</Text>
-          <BounceButton onPress={() => handleAdjust(15)} style={[styles.adjBtn, { backgroundColor: t.div }]}>
-            <Text style={[styles.adjText, { color: t.tp }]}>+15s</Text>
-          </BounceButton>
-          <BounceButton onPress={dismissRestTimer} style={styles.skipBtn}>
-            <Text style={styles.skipText}>Skip</Text>
-          </BounceButton>
-        </View>
-      </NeuCard>
+        <RestTime seconds={restDisplay} size={18} isDark={isDark} />
+        <RestActions isDark={isDark} />
+      </View>
     </Reanimated.View>
   );
 }
 
-// Fixed line heights, so the banner is exactly REST_BANNER_H (64) tall: with
-// the keyboard up, the Workout page keeps its notes card and the field being
-// typed into clear of it by that (ABOVE_REST_ON_KEYBOARD).
 const styles = StyleSheet.create({
-  bannerOuter:   { position: "absolute", left: 12, right: 12 },
-  bannerCard:    { borderRadius: 20 },
-  progressTrack: { height: 4 },
-  progressFill:  { position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.55, shadowRadius: 6 },
-  row:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, gap: 10 },
-  label:       { fontFamily: FontFamily.bold, fontSize: 12, letterSpacing: 1.2, opacity: 0.5 },
-  time:        { fontFamily: FontFamily.bold, fontSize: 28, lineHeight: 34, letterSpacing: 1, flex: 1, textAlign: "center" },
-  adjBtn:      { borderRadius: PILL_RADIUS, paddingHorizontal: 10, paddingVertical: 8 },
-  adjText:     { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
-  skipBtn:     { borderRadius: PILL_RADIUS, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
-  skipText:    { fontFamily: FontFamily.bold, fontSize: 13, lineHeight: 18, color: "#fff" },
+  outer: { position: "absolute", left: BAR_INSET_X, right: BAR_INSET_X },
+  pill:  {
+    height: REST_PILL_H, borderRadius: REST_PILL_H / 2, borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row", alignItems: "center", gap: 14, paddingLeft: 18, paddingRight: 10,
+  },
+  clip:  { ...StyleSheet.absoluteFill, borderRadius: REST_PILL_H / 2, overflow: "hidden" },
 });

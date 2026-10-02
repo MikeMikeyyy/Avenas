@@ -42,7 +42,7 @@ export function ReportReasonList({ title, subtitle, onSubmit, onCancel }: ListPr
         {REPORT_REASONS.map(reason => (
           <SheetPill key={reason} label={reason} onPress={() => onSubmit(reason)} />
         ))}
-        <SheetPill label="Cancel" variant="quiet" onPress={onCancel} />
+        <SheetPill label="Cancel" variant="cancel" onPress={onCancel} />
       </View>
     </>
   );

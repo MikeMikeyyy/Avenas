@@ -157,7 +157,7 @@ function DeleteSheet({ visible, isDark, entryTitle, onConfirm, onClose, title = 
         </View>
         <View style={{ paddingHorizontal: 20, gap: 10 }}>
           <SheetPill label="Delete" variant="danger" onPress={() => { onConfirm(); dismiss(); }} />
-          <SheetPill label="Cancel" variant="quiet" onPress={dismiss} />
+          <SheetPill label="Cancel" variant="cancel" onPress={dismiss} />
         </View>
       </Animated.View>
     </Modal>
@@ -314,7 +314,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
                 onPress={() => { dismiss(); onRestDay(); }}
               />
             )}
-            <SheetPill label="Cancel" variant="quiet" onPress={dismiss} />
+            <SheetPill label="Cancel" variant="cancel" onPress={dismiss} />
           </View>
         </View>
       );

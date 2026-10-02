@@ -41,7 +41,7 @@ import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
 import { buildLiveActivityPayload } from "../../utils/liveActivity";
 import { nextSetOf } from "../../utils/nextSet";
 import { firstRows, nextRows, rowsChanged, setRowKey, withoutSet } from "../../utils/setRows";
-import { ABOVE_REST_ON_KEYBOARD, ABOVE_REST_ON_TAB, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP } from "../../constants/floatingBars";
+import { ABOVE_REST_ON_KEYBOARD, ABOVE_REST_ON_TAB, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP, TAB_BAR_CLEARANCE } from "../../constants/floatingBars";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { todayYMD } from "../../utils/dates";
@@ -90,6 +90,21 @@ const LIST_CLUSTER_BOTTOM = 100;
 /** Focus mode's round ‹ › buttons, which set the height of their row (the
  *  Complete Workout pill beside ‹ on the last exercise is shorter). */
 const FOCUS_NAV_BTN = 56;
+
+/** Where focus mode pins its ‹ › row: in the rest timer's own place over the
+ *  nav bar, so a rest lifts it by exactly the timer and the gap between bars,
+ *  and the timer fits under it. It was 80 above the safe area, which on a
+ *  phone with no home indicator sat over the nav bar's top. */
+const FOCUS_NAV_BOTTOM = TAB_BAR_CLEARANCE;
+
+/** Focus mode's spacing under its one card: card to the notes and + buttons,
+ *  and those to the ‹ › row once the page is scrolled to its end. The end used
+ *  to leave 22 there, under 24 between card and buttons, so the page scrolled
+ *  on well past the card. */
+const FOCUS_STACK_GAP = 12;
+
+/** The space under each exercise card (styles.exCard). */
+const EX_CARD_GAP = 20;
 
 // ─── Log types ─────────────────────────────────────────────────────────────────
 
@@ -542,7 +557,7 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
               value={focusMode}
               onChange={onToggleFocusMode}
             />
-            <SheetPill label="Cancel" variant="quiet" onPress={closeSheet} />
+            <SheetPill label="Cancel" variant="cancel" onPress={closeSheet} />
           </View>
         </Animated.View>
       </View>
@@ -2620,8 +2635,7 @@ export default function WorkoutScreen() {
   // notes and +. Under it they couldn't be pressed until the rest was over.
   // While a rest runs they stand on it instead, rising and settling with it,
   // and the list's end gets the same room so it still scrolls clear of them.
-  const focusNavBottom = safeBottom + 80;
-  const focusNavLift = Math.max(0, ABOVE_REST_ON_TAB - focusNavBottom);
+  const focusNavLift = Math.max(0, ABOVE_REST_ON_TAB - FOCUS_NAV_BOTTOM);
   const clusterLift = Math.max(0, ABOVE_REST_ON_TAB - LIST_CLUSTER_BOTTOM);
   const pinnedLift = restBannerActive ? (focusMode ? focusNavLift : clusterLift) : 0;
   const restShown = useSharedValue(restBannerActive ? 1 : 0);
@@ -2637,7 +2651,7 @@ export default function WorkoutScreen() {
   const { height: keyboardAnim } = useReanimatedKeyboardAnimation();
   const focusNavStyle = useAnimatedStyle(() => {
     const onRest = Math.max(ABOVE_REST_ON_TAB, -keyboardAnim.value + ABOVE_REST_ON_KEYBOARD);
-    return { transform: [{ translateY: -Math.max(0, onRest - focusNavBottom) * restShown.value }] };
+    return { transform: [{ translateY: -Math.max(0, onRest - FOCUS_NAV_BOTTOM) * restShown.value }] };
   });
   const clusterStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -clusterLift * restShown.value }] }));
 
@@ -2982,7 +2996,15 @@ export default function WorkoutScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         style={{ backgroundColor: t.bg }}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: !todaysCompletedWorkout && workoutInfo ? safeBottom + 150 + pinnedLift : 92 }]}
+        // The end leaves room for the pinned controls (on the rest timer while
+        // one runs): in focus mode, exactly enough that the notes and + buttons
+        // stop FOCUS_STACK_GAP above the ‹ › row.
+        contentContainerStyle={[styles.scroll, {
+          paddingTop: insets.top + 50,
+          paddingBottom: todaysCompletedWorkout || !workoutInfo ? 92
+            : focusMode ? FOCUS_NAV_BOTTOM + FOCUS_NAV_BTN + FOCUS_STACK_GAP + pinnedLift
+            : safeBottom + 150 + pinnedLift,
+        }]}
         onLayout={e => { scrollMetricsRef.current.viewH = e.nativeEvent.layout.height; aimAtUpTo(); }}
         onContentSizeChange={(_w, h) => { scrollMetricsRef.current.contentH = h; aimAtUpTo(); }}
         onTouchStart={endUpTo}
@@ -3143,11 +3165,12 @@ export default function WorkoutScreen() {
           })
         )}
 
-        {/* Focus mode: bottom-left action cluster below the exercise / empty card.
-            (In list mode the cluster is pinned instead — see below the ScrollView.)
-            The scroll's bottom padding keeps it clear of the pinned controls. */}
+        {/* Focus mode: bottom-left action cluster FOCUS_STACK_GAP below the
+            exercise / empty card. (In list mode the cluster is pinned instead —
+            see below the ScrollView.) The scroll's bottom padding keeps it
+            clear of the pinned controls. */}
         {focusMode && !todaysCompletedWorkout && workoutInfo && (
-          <View style={{ marginTop: 4, marginBottom: 8 }}>
+          <View style={{ marginTop: FOCUS_STACK_GAP - EX_CARD_GAP }}>
             {renderActionCluster()}
           </View>
         )}
@@ -3250,7 +3273,7 @@ export default function WorkoutScreen() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         };
         return (
-          <Reanimated.View pointerEvents="box-none" style={[{ position: "absolute", left: 20, right: 20, bottom: focusNavBottom, zIndex: 5 }, focusNavStyle]}>
+          <Reanimated.View pointerEvents="box-none" style={[{ position: "absolute", left: 20, right: 20, bottom: FOCUS_NAV_BOTTOM, zIndex: 5 }, focusNavStyle]}>
             <View style={{ flexDirection: "row", gap: 16, alignItems: "center", justifyContent: isLast ? "flex-start" : "center" }}>
               <BounceButton onPress={isFirst ? undefined : goPrev} accessibilityLabel="Previous exercise">
                 {/* The app's white control button (the pills' surface + soft
@@ -3541,7 +3564,7 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: 20 },
 
   // Exercise card
-  exCard:       { marginBottom: 20, borderRadius: 20 },
+  exCard:       { marginBottom: EX_CARD_GAP, borderRadius: 20 },
   exCardInner:  { padding: 16, gap: 10 },
   exHeader:     { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 2 },
   exNumBadge:   { width: 32, height: 32 },

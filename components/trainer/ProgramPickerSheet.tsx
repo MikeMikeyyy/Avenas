@@ -5,8 +5,8 @@ import { View, Text, StyleSheet, ScrollView } from "react-native";
 import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import SheetPill from "../SheetPill";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { SavedProgram } from "../../constants/programs";
 import { unarchivedPrograms } from "../../utils/programArchive";
@@ -75,11 +75,7 @@ export default function ProgramPickerSheet({ visible, title, subtitle, programs:
         )}
       </ScrollView>
       <View style={{ paddingHorizontal: 20, paddingTop: 8 }}>
-        <BounceButton onPress={onClose}>
-          <View style={[styles.cancel, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
-            <Text style={[styles.cancelText, { color: t.tp }]}>Cancel</Text>
-          </View>
-        </BounceButton>
+        <SheetPill label="Cancel" variant="cancel" onPress={onClose} />
       </View>
     </SimpleSheet>
   );
@@ -98,6 +94,4 @@ const styles = StyleSheet.create({
   cycleGrid:  { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   cycleChip:  { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
   cycleChipText: { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
-  cancel:     { ...pill(PILL_H_SM) },
-  cancelText: { fontFamily: FontFamily.bold, fontSize: 15 },
 });

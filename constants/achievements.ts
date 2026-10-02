@@ -19,21 +19,22 @@ export type AchievementCategory = "pr" | "workouts" | "program" | "streak";
 export const WORKOUT_MILESTONES: readonly number[] = [10, 25, 50, 100, 250, 500];
 
 /**
- * App-open streak lengths that earn a milestone (see utils/streak.ts).
- *
- * The early ones are hand-picked, close together while a streak is young and
- * the flame is still changing tier. Past the last tier — where you choose which
- * flame you wear — they settle into every `STREAK_MILESTONE_STEP` days and
- * never run out. The list used to stop at 365, so the longest streaks in the
- * app earned nothing ever again.
+ * App-open streak lengths that earn a milestone (see utils/streak.ts): round
+ * numbers, every `STREAK_EARLY_STEP` days up to `STREAK_MILESTONE_STEP`, then
+ * every `STREAK_MILESTONE_STEP` for as long as the streak runs: 10, 20, 30,
+ * 40, 50, 100, 150, 200 and on (user decision, 2026-10-02). They were 7, 14
+ * and 30, picked to match the flame's tiers, and a 14-day card read as an odd
+ * number to celebrate. Before that the list stopped at 365, so the longest
+ * streaks in the app earned nothing ever again; the 50s never run out.
  */
-export const STREAK_MILESTONES: readonly number[] = [7, 14, 30];
+export const STREAK_EARLY_STEP = 10;
 export const STREAK_MILESTONE_STEP = 50;
 
 /** Whether a streak of `days` earns a milestone. */
 export function isStreakMilestone(days: number): boolean {
-  if (STREAK_MILESTONES.includes(days)) return true;
-  return days >= STREAK_MILESTONE_STEP && days % STREAK_MILESTONE_STEP === 0;
+  if (days <= 0) return false;
+  const step = days <= STREAK_MILESTONE_STEP ? STREAK_EARLY_STEP : STREAK_MILESTONE_STEP;
+  return days % step === 0;
 }
 
 /** How long a card stays on Home after it's earned. */
