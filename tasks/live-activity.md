@@ -1,9 +1,9 @@
 # Workout Live Activity — build & test guide
 
 The lock-screen / Dynamic Island workout card (iOS Live Activity). Shows the
-current exercise with a tick button (marks the set done — no numbers are
-written; the user types them in after unlocking), the workout timer, and the
-rest timer with Skip / ±15s buttons. Settings toggle: **Settings → App → Lock Screen
+current exercise with a tick button (marks the set done and, like the in-app
+checkbox, fills an empty set with last time's numbers: the ones the card
+showed), the workout timer, and the rest timer with Skip / ±15s buttons. Settings toggle: **Settings → App → Lock Screen
 Workout** (ON by default).
 
 **This feature can NEVER run in Expo Go.** It needs a development build (or a
@@ -36,8 +36,11 @@ development is unaffected.
    content state. The card's weight×reps preview is precomputed in
    `utils/liveActivity.ts` (typed values, else the previous-session hint) and
    queued in app-group defaults; intents pop the queue and log actions; the
-   app replays them on foreground as mark-done-only ticks — the preview
-   numbers are never written into the log.
+   app replays them on foreground (`logWithLockScreenTicks`) as the in-app
+   checkbox would tick: an empty set takes last time's numbers from the
+   screen's own previous-set hints (`prevFillFor`, the same values the
+   preview showed), and typed values stay. Until 2026-10-05 a replayed tick
+   only marked the set done, leaving it empty for the user to fill in.
 
 ## One-time setup (before the first build)
 
@@ -83,9 +86,9 @@ eas build --profile development --platform ios
    shows workout name, elapsed timer counting, current exercise, set label and
    the weight × reps preview.
 3. Tap the tick on an **empty** set from the lock screen → card advances to
-   the next set; back in the app the set is **ticked with the inputs still
-   empty**, ready for the real numbers (anything typed before locking is
-   kept — the card's weight×reps preview is guidance only, never committed).
+   the next set; back in the app the set is **ticked with last time's
+   numbers filled in**, the same weight × reps the card showed (anything
+   typed before locking is kept; a set with no previous numbers stays empty).
 4. After a lock-screen tick, the rest countdown + progress bar appear (if that
    exercise has a rest time). Skip and ±15s buttons work; reopening the app
    shows the in-app rest banner in sync.

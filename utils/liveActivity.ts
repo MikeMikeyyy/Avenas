@@ -9,18 +9,19 @@
 //     so its head is the set the Workout screen glows on: after the set ticked
 //     last, with skipped sets at the end. Within an exercise it's the flat
 //     warmup→working order ExerciseCard renders.
-//   - Each entry's weight/reps are a display-only preview for the card: values
-//     the user already typed win; a fully empty set falls back to the
+//   - Each entry's weight/reps are what the card shows for the set: values the
+//     user already typed win; a fully empty set falls back to the
 //     previous-session hint ("80×8", display units, indexed by flat position —
-//     the same `prevSets[flatIdx]` lookup the in-app prev column uses). The
-//     lock-screen tick does NOT commit these numbers — it only marks the set
-//     done; the user types the real values after unlocking.
+//     the same `prevSets[flatIdx]` lookup the in-app prev column uses), which
+//     is what the lock-screen tick then fills in (prevFillFor, the rule the
+//     in-app checkbox follows: the screen applies it as it replays the tick).
 
 import type {
   LiveActivityPayload,
   LiveActivityPendingSet,
 } from "../modules/avenas-live-activity";
 import { pendingSetsInOrder } from "./nextSet";
+import { flatIndexOf, prevFillFor } from "./setRows";
 
 type LiveSet = { weight: string; reps: string; done: boolean; doneAt?: number };
 type LiveExerciseLog = { warmup: LiveSet[]; working: LiveSet[] };
@@ -30,13 +31,9 @@ export type LiveActivityExercise = { id: string; name: string; restSeconds?: num
 // bloat the shared store. Ticking past the cap just re-syncs on next foreground.
 const MAX_QUEUE = 50;
 
-/** The card's weight×reps preview for one set (typed values, else prev hint). */
+/** The card's weight×reps for one set: typed values, else what a tick will fill in. */
 function previewValues(set: LiveSet, prevHint: string | undefined): { weight: string; reps: string } {
-  if (!set.weight.trim() && !set.reps.trim() && prevHint && prevHint !== "—") {
-    const parts = prevHint.split("×");
-    return { weight: parts[0] ?? "", reps: parts[1] ?? "" };
-  }
-  return { weight: set.weight, reps: set.reps };
+  return prevFillFor(set, prevHint) ?? { weight: set.weight, reps: set.reps };
 }
 
 /**
@@ -86,6 +83,40 @@ export function buildLiveActivityQueue(
     queue[queue.length - 1].isFinal = true;
   }
   return { queue: queue.slice(0, MAX_QUEUE), doneCount, totalCount };
+}
+
+/** A lock-screen tick to replay: which set, and when it was ticked (epoch ms). */
+export type LockScreenTick = { exId: string; setType: "warmup" | "working"; setIdx: number; ts: number };
+
+/**
+ * The session's log with the lock-screen ticks replayed into it, each doing
+ * what the card's checkbox does: an empty set takes last time's numbers at its
+ * row (prevFillFor, from the screen's own previous-set hints, which is what the
+ * lock screen showed on it), anything typed before locking stays, and it's
+ * stamped with when it was ticked there so the set ticked last stays right. A
+ * set already ticked, or no longer there, is left alone. It used to come back
+ * ticked but empty (user report, 2026-10-05).
+ */
+export function logWithLockScreenTicks<
+  S extends LiveSet,
+  X extends { warmup: S[]; working: S[] },
+>(
+  log: Record<string, X>,
+  ticks: readonly LockScreenTick[],
+  prevHintsFor: (exerciseId: string) => readonly string[] | undefined,
+): Record<string, X> {
+  let next = log;
+  for (const t of ticks) {
+    const exLog = next[t.exId];
+    const sets = exLog?.[t.setType];
+    const set = sets?.[t.setIdx];
+    if (!exLog || !sets || !set || set.done) continue;
+    const updated = [...sets];
+    const prevHint = prevHintsFor(t.exId)?.[flatIndexOf(exLog.warmup.length, t.setType, t.setIdx)];
+    updated[t.setIdx] = { ...set, ...prevFillFor(set, prevHint), done: true, doneAt: t.ts };
+    next = { ...next, [t.exId]: { ...exLog, [t.setType]: updated } };
+  }
+  return next;
 }
 
 /**

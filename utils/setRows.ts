@@ -11,6 +11,9 @@
 // and the new set was the last one, so it was removed instead, while the closed
 // row stayed in the log as a set you couldn't see or tick.
 //
+// Also what a tick fills into an empty set (prevFillFor), the same however the
+// set is ticked.
+//
 // Pure, so scripts/verify-rest-timer.ts can play the race out.
 
 export type SetType = "warmup" | "working";
@@ -56,3 +59,23 @@ export function nextRows(prev: DrawnRows, keys: string[]): DrawnRows {
 
 /** Whether the card's rows have changed since `drawn`. */
 export const rowsChanged = (drawn: DrawnRows, keys: string[]) => drawn.sig !== sigOf(keys);
+
+/** A set's row on its exercise's card, warmups first: what its previous-set
+ *  hint is indexed by. */
+export function flatIndexOf(warmupCount: number, type: SetType, idx: number): number {
+  return type === "warmup" ? idx : warmupCount + idx;
+}
+
+/** What ticking a still-empty set fills in: last time's numbers at its row
+ *  ("80×8" is 80 and 8; a lone figure is the weight, as the hint shows it).
+ *  Null when the set already has something typed, or there's nothing to copy.
+ *  One rule for every way a set gets ticked: the card's checkbox and the lock
+ *  screen's button (and the card's preview of what that button will tick). A
+ *  lock-screen tick used to leave the set empty for the user to fill in after
+ *  unlocking, until they asked for it to fill in like the app's (2026-10-05). */
+export function prevFillFor(set: { weight: string; reps: string }, prevHint: string | undefined): { weight: string; reps: string } | null {
+  if (set.weight.trim() || set.reps.trim()) return null;
+  if (!prevHint || prevHint === "—") return null;
+  const [weight = "", reps = ""] = prevHint.split("×");
+  return { weight, reps };
+}

@@ -77,8 +77,9 @@ struct PendingSet: Codable {
 }
 
 /// A lock-screen action awaiting replay into the JS workout draft. The replay
-/// only marks the set done; `weight`/`reps` echo the preview shown when the
-/// tick ran (informational — JS ignores them).
+/// marks the set done and fills an empty one with last time's numbers, as an
+/// in-app tick does; `weight`/`reps` echo the preview shown when the tick ran
+/// (informational: JS fills from its own previous-set hints, the same values).
 struct QueuedAction: Codable {
   var kind: String     // "tick"
   var exId: String
@@ -132,8 +133,8 @@ enum WorkoutActivityController {
     await activity.update(ActivityContent(state: state, staleDate: nil))
   }
 
-  /// Lock-screen tick: complete the head pending set (mark-done only — the
-  /// queued action's weight/reps are informational). Starts the exercise's
+  /// Lock-screen tick: complete the head pending set (JS fills an empty set
+  /// with last time's numbers as it replays the tick). Starts the exercise's
   /// rest timer (unless this set finishes the workout — then rest is cleared,
   /// same as startRestAfterSet), and starts the workout timer on the first
   /// tick.

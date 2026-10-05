@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from "react";
-import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, withRepeat, withDelay, Easing as ReEasing, interpolateColor } from "react-native-reanimated";
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, withRepeat, withDelay, Easing as ReEasing } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
@@ -38,14 +38,15 @@ import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { programDays, workoutKey } from "../../utils/programDays";
 import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
-import { buildLiveActivityPayload } from "../../utils/liveActivity";
+import { buildLiveActivityPayload, logWithLockScreenTicks } from "../../utils/liveActivity";
 import { nextSetOf } from "../../utils/nextSet";
-import { firstRows, nextRows, rowsChanged, setRowKey, withoutSet } from "../../utils/setRows";
+import { firstRows, nextRows, prevFillFor, rowsChanged, setRowKey, withoutSet } from "../../utils/setRows";
 import { ABOVE_REST_ON_KEYBOARD, ABOVE_REST_ON_TAB, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP, TAB_BAR_CLEARANCE } from "../../constants/floatingBars";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
-import { todayYMD } from "../../utils/dates";
+import { sessionTimeRange, todayYMD } from "../../utils/dates";
 import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type DayOverride } from "../../utils/workout";
+import { keepsHeldSession } from "../../utils/heldSession";
 import { resumeWithPrompt } from "../../utils/programPause";
 import { exerciseSummaryParams } from "../../utils/customExerciseDetails";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
@@ -171,24 +172,30 @@ function hasWorkoutProgress(log: WorkoutLog): boolean {
 
 // ─── SetRow ────────────────────────────────────────────────────────────────────
 
+// A set row, glowing while it's the set the session is up to (utils/nextSet.ts).
+//
+// The glow is drawn from `isActive` itself, and a transition eases it between
+// the two. It was a spring on a shared value, whose style started from where
+// the value stood when the row first appeared, and the first set of a workout
+// appears glowing (a new session is up to it). Drawn again from that start
+// partway through a session, after a phone came back from the lock screen, it
+// lit up beside the set the session was really up to: two glowing sets.
+const SET_ROW_GLOW = { transitionDuration: 250, transitionTimingFunction: "ease-out" } as const;
+
 function SetRow({ isActive, children }: { isActive: boolean; children: React.ReactNode }) {
-  const glow = useSharedValue(isActive ? 1 : 0);
-  useEffect(() => {
-    glow.value = withSpring(isActive ? 1 : 0, { damping: 20, stiffness: 200, mass: 0.5 });
-  }, [isActive]);
-
-  const containerStyle = useAnimatedStyle(() => ({
-    borderRadius: 14,
-    backgroundColor: interpolateColor(glow.value, [0, 1], ["rgba(0,0,0,0)", `${ACCT}33`]),
-  }));
-  const borderStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
-
   return (
-    <Reanimated.View style={containerStyle}>
+    <Reanimated.View style={[
+      SET_ROW_GLOW,
+      { borderRadius: 14, transitionProperty: "backgroundColor", backgroundColor: isActive ? `${ACCT}33` : `${ACCT}00` },
+    ]}>
       {children}
       <Reanimated.View
         pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { borderWidth: 1, borderColor: ACCT, borderRadius: 14 }, borderStyle]}
+        style={[
+          StyleSheet.absoluteFill,
+          SET_ROW_GLOW,
+          { borderWidth: 1, borderColor: ACCT, borderRadius: 14, transitionProperty: "opacity", opacity: isActive ? 1 : 0 },
+        ]}
       />
     </Reanimated.View>
   );
@@ -1273,13 +1280,12 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                       isDark={isDark}
                       isActive={rowIsActive}
                       onToggle={isLocked ? () => {} : () => {
-                        if (!set.done && !set.weight.trim() && !set.reps.trim()) {
-                          const prev = prevSets?.[flatIdx];
-                          if (prev && prev !== "—") {
-                            const parts = prev.split("×");
-                            onUpdateSet(exercise.id, set.type, set.localIdx, "weight", parts[0] ?? "");
-                            onUpdateSet(exercise.id, set.type, set.localIdx, "reps", parts[1] ?? "");
-                          }
+                        // An empty set takes last time's numbers as it's
+                        // ticked (prevFillFor, the lock screen's rule too).
+                        const fill = set.done ? null : prevFillFor(set, prevSets?.[flatIdx]);
+                        if (fill) {
+                          onUpdateSet(exercise.id, set.type, set.localIdx, "weight", fill.weight);
+                          onUpdateSet(exercise.id, set.type, set.localIdx, "reps", fill.reps);
                         }
                         onToggleDone(exercise.id, set.type, set.localIdx);
                       }}
@@ -1715,10 +1721,16 @@ export default function WorkoutScreen() {
   // Held in a ref so it can short-circuit loadData's reset even when log is still empty
   // (e.g. user reordered or added an exercise but hasn't ticked any sets yet).
   const draftLockedRef = useRef(false);
+  // The training day the session held here was built or restored for, and
+  // whether its workout clock is going: what decides if it's kept when the
+  // day is resolved again (utils/heldSession.ts).
+  const sessionDayRef = useRef<string | null>(null);
+  const liveRef = useRef(false);
   const [draftRestored, setDraftRestored] = useState(false);
   useEffect(() => {
     isWorkoutActiveRef.current = draftLockedRef.current || isRunning || hasWorkoutProgress(log);
-  }, [isRunning, log]);
+    liveRef.current = isRunning || isPaused;
+  }, [isRunning, isPaused, log]);
 
   const loadData = useCallback((forceReload = false) => {
     // Program, history and override are read together so the effective training
@@ -1745,11 +1757,37 @@ export default function WorkoutScreen() {
       setTodaysCompletedWorkout(history.find(w => w.date === effective) ?? null);
       setPrevHistory(history);
 
-      // Re-resolve the scheduled template unless a live session is in progress
-      // (don't clobber a workout the user is mid-way through). A just-finished
-      // session is no longer "in progress" — finalizeComplete clears the log —
-      // so this correctly advances to the new day after a completion.
-      if (found && (!isWorkoutActiveRef.current || forceReload)) {
+      // Re-resolve the scheduled template unless the session held here is
+      // kept (utils/heldSession.ts): one in progress on its own day (don't
+      // clobber a workout the user is mid-way through), or one from another
+      // day whose clock is still going. A just-finished session is no longer
+      // "in progress" — finalizeComplete clears the log — so this correctly
+      // advances to the new day after a completion.
+      const keep = !forceReload && keepsHeldSession({
+        day: sessionDayRef.current,
+        live: liveRef.current,
+        engaged: isWorkoutActiveRef.current,
+      }, effective);
+      if (!keep && sessionDayRef.current !== null && sessionDayRef.current !== effective) {
+        // A session from another day goes, its order, swaps and adds with it,
+        // and its sets, note, custom-workout flags and draft: the day starts
+        // again in the program's own order. Kept whenever it judged itself in
+        // progress, a session left held here carried its swapped order into
+        // the same day a week later.
+        setLog({});
+        setNotes("");
+        setIsometricExIds(new Set());
+        setIsFreeWorkout(false);
+        setFreeWorkoutAddToProgram(false);
+        draftLockedRef.current = false;
+        isWorkoutActiveRef.current = false;
+        AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
+        if (!found) {
+          setWorkoutInfo(null);
+          sessionDayRef.current = null;
+        }
+      }
+      if (found && !keep) {
         // Pass the full program list so a change-day override that picked a day
         // from a NON-active program re-resolves to that program's exercises.
         const workout = resolveWorkoutForDate(found, override, effective, programs);
@@ -1758,6 +1796,7 @@ export default function WorkoutScreen() {
           setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
           setLog(initLog(workout.exercises));
         }
+        sessionDayRef.current = effective;
       }
     }).catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
 
@@ -1790,6 +1829,7 @@ export default function WorkoutScreen() {
           effectiveTodayRef.current = effective;
           if (draft?.date === effective && draft.workoutInfo && draft.log) {
             setWorkoutInfo(draft.workoutInfo);
+            sessionDayRef.current = draft.date;
             // The draft's weight strings are in the unit that was active when it
             // was saved; record it so a later unit toggle converts correctly.
             // Legacy drafts (pre-unitIsKg) are same-day and predate this — leave
@@ -2136,6 +2176,7 @@ export default function WorkoutScreen() {
     setIsFreeWorkout(true);
     // A free workout only belongs to a program when the user opts to add it.
     setWorkoutInfo({ name, exercises: [], programId: addToProgram ? activeProgram?.id : undefined });
+    sessionDayRef.current = effectiveTodayRef.current;
     // Clean slate: a custom workout always starts with no exercises so the user
     // adds their own. Also wipe any leftover log / isometric flags / notes / draft
     // from a just-finished workout or a program session we're switching away from,
@@ -2198,6 +2239,7 @@ export default function WorkoutScreen() {
     const exercises = withProgramIds(src?.workouts[workoutKey(day.index, day.label)] ?? []);
     setWorkoutInfo({ name: day.label, exercises, programId: src?.id, dayId: day.dayId });
     setLog(initLog(exercises));
+    sessionDayRef.current = effectiveTodayRef.current;
     // Record the source program AND slot so re-resolution (tab refocus /
     // relaunch) restores THIS day of THIS program.
     const override: DayOverride = {
@@ -2436,6 +2478,11 @@ export default function WorkoutScreen() {
                 // "previous" (persistCompletedWorkout had set them on finish).
                 setPrevHistory(updated);
                 scheduleCloudPush();
+                // The redo starts from the program, in its own order, like any
+                // new session: a reorder or swap made in the deleted one was
+                // that session's. Once the delete is written, or the reload
+                // would find the session still there and show it again.
+                loadData(true);
               } catch (e) {
                 warnStorage("handleDiscardCompleted", WORKOUT_HISTORY_KEY, e);
               }
@@ -2574,28 +2621,13 @@ export default function WorkoutScreen() {
   }, [workoutInfo, todaysCompletedWorkout, log, prevHintsById, isKg, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
 
   const applyLockScreenTicks = useCallback((actions: LiveActivityTickAction[]) => {
-    setLog(prev => {
-      let next = prev;
-      for (const a of actions) {
-        const exLog = next[a.exId];
-        const sets = exLog?.[a.setType];
-        const set = sets?.[a.setIdx];
-        if (!exLog || !sets || !set || set.done) continue;
-        const updated = [...sets];
-        // Tick only — unlike the in-app checkbox, a lock-screen tick never
-        // writes numbers. Whatever the user typed before locking stays; an
-        // empty set comes back ticked-but-empty for them to fill in after
-        // unlocking (the card's weight×reps preview is guidance only). Stamped
-        // with when it was ticked there, so the set ticked last stays right.
-        updated[a.setIdx] = { ...set, done: true, doneAt: a.ts };
-        next = { ...next, [a.exId]: { ...exLog, [a.setType]: updated } };
-      }
-      return next;
-    });
+    // Each tick does what the card's checkbox does, last time's numbers filling
+    // an empty set (utils/liveActivity.ts).
+    setLog(prev => logWithLockScreenTicks(prev, actions, exId => prevHintsById[exId]));
     // In-app ticks start the workout timer; anchor to when the first
     // lock-screen tick actually happened, not to this reconciliation moment.
     if (actions.length > 0 && !isRunning && !isPaused) startTimerAt(actions[0].ts);
-  }, [isRunning, isPaused, startTimerAt]);
+  }, [isRunning, isPaused, startTimerAt, prevHintsById]);
 
   const applyLockScreenRest = useCallback((endMs: number) => {
     if (endMs > Date.now() + 1000) {
@@ -3051,13 +3083,11 @@ export default function WorkoutScreen() {
               <Ionicons name="checkmark-circle" size={16} color={ACCT} />
               <Text style={[styles.completedBannerText, { color: t.tp }]}>
                 {(() => {
-                  if (todaysCompletedWorkout.durationSeconds > 0) {
-                    const end = new Date(todaysCompletedWorkout.completedAt);
-                    const start = new Date(end.getTime() - todaysCompletedWorkout.durationSeconds * 1000);
-                    const fmt = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
-                    return `Logged · ${fmt(start)} – ${fmt(end)}`;
-                  }
-                  return "Logged";
+                  // When it started and finished, always (utils/dates.ts): a
+                  // session that ended in the minute it began used to read a
+                  // bare "Logged".
+                  const times = sessionTimeRange(todaysCompletedWorkout.completedAt, todaysCompletedWorkout.durationSeconds);
+                  return times ? `Logged · ${times}` : "Logged";
                 })()}
               </Text>
             </View>

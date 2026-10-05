@@ -8,12 +8,15 @@
 //   - Set rows go by each set's own id (utils/setRows.ts): adding a set while
 //     another's row was still closing removed the new set instead, and left the
 //     closed one in the log as a set nobody could see.
+//   - A lock-screen tick does what the card's checkbox does (prevFillFor): an
+//     empty set takes last time's numbers at its row. It came back ticked but
+//     empty.
 //
 // Run:  npx tsx scripts/verify-rest-timer.ts
 // Exits non-zero (throws) if any assertion fails.
 
-import { restFromCard } from "../utils/liveActivity";
-import { firstRows, nextRows, setRowKey, withoutSet } from "../utils/setRows";
+import { buildLiveActivityQueue, logWithLockScreenTicks, restFromCard } from "../utils/liveActivity";
+import { firstRows, flatIndexOf, nextRows, prevFillFor, setRowKey, withoutSet } from "../utils/setRows";
 
 let passed = 0;
 const failures: string[] = [];
@@ -84,6 +87,55 @@ eq(withoutSet([], [s("a"), s("b")], "zz"), null, "a key that isn't there removes
   eq(nextRows(first, ["x", "y", "z", "q"]).added, null, "reset to more sets than before: still nothing opens");
   eq(nextRows(first, ["b", "a", "c"]).added, null, "a set turned warmup (the same sets, reordered): nothing opens");
   eq(keys([s("w")], [s("a"), s("b")]), ["w", "a", "b"], "rows run warmups first, by key");
+}
+
+// ─── a tick fills an empty set with last time's numbers ──────────────────────
+
+{
+  const empty = { weight: "", reps: "" };
+  eq(prevFillFor(empty, "80×8"), { weight: "80", reps: "8" }, "fill: an empty set takes last time's weight and reps");
+  eq(prevFillFor(empty, "80"), { weight: "80", reps: "" }, "fill: a lone figure is the weight, as the hint shows it");
+  eq(prevFillFor(empty, "—"), null, "fill: nothing last time, nothing filled");
+  eq(prevFillFor(empty, undefined), null, "fill: no hint at all, nothing filled");
+  eq(prevFillFor({ weight: "85", reps: "" }, "80×8"), null, "fill: a typed weight is the user's, never overwritten");
+  eq(prevFillFor({ weight: " ", reps: "6" }, "80×8"), null, "fill: typed reps keep the set as typed");
+  eq(flatIndexOf(2, "warmup", 1), 1, "rows: a warmup is its own row");
+  eq(flatIndexOf(2, "working", 0), 2, "rows: working sets come after the warmups");
+
+  type S = { id: string; weight: string; reps: string; done: boolean; doneAt?: number };
+  const set = (id: string, weight = "", reps = "", done = false): S => ({ id, weight, reps, done });
+  const log = {
+    bench: { warmup: [set("w0", "40", "10", true)], working: [set("a"), set("b", "85", ""), set("c")], notes: "" },
+    squat: { warmup: [], working: [set("s0")], notes: "" },
+  };
+  // Last time's numbers, by row: Bench's warmup, then its three working sets.
+  const hints: Record<string, string[]> = { bench: ["40×10", "80×8", "80×8", "—"], squat: ["120×5"] };
+  const after = logWithLockScreenTicks(log, [
+    { exId: "bench", setType: "working", setIdx: 0, ts: 1000 },
+    { exId: "bench", setType: "working", setIdx: 1, ts: 2000 },
+    { exId: "bench", setType: "working", setIdx: 2, ts: 3000 },
+    { exId: "squat", setType: "working", setIdx: 0, ts: 4000 },
+  ], exId => hints[exId]);
+  eq(after.bench.working[0], { id: "a", weight: "80", reps: "8", done: true, doneAt: 1000 },
+    "lock screen: an empty set is ticked with last time's numbers at its row (past the warmup)");
+  eq(after.bench.working[1], { id: "b", weight: "85", reps: "", done: true, doneAt: 2000 },
+    "lock screen: a set typed in before locking keeps what was typed");
+  eq(after.bench.working[2], { id: "c", weight: "", reps: "", done: true, doneAt: 3000 },
+    "lock screen: nothing last time, so it's ticked as it was");
+  eq(after.squat.working[0], { id: "s0", weight: "120", reps: "5", done: true, doneAt: 4000 },
+    "lock screen: each exercise fills from its own previous sets");
+  eq(after.bench.notes, "", "lock screen: the rest of the exercise's log is untouched");
+
+  const again = logWithLockScreenTicks(after, [{ exId: "bench", setType: "working", setIdx: 0, ts: 9000 }], exId => hints[exId]);
+  eq(again.bench.working[0].doneAt, 1000, "lock screen: a set already ticked isn't ticked again (a replay is idempotent)");
+  eq(logWithLockScreenTicks(log, [{ exId: "gone", setType: "working", setIdx: 0, ts: 1 }], exId => hints[exId]), log,
+    "lock screen: a tick for an exercise no longer in the session changes nothing");
+
+  // What the card showed on each set is exactly what the tick fills in.
+  const { queue } = buildLiveActivityQueue(
+    [{ id: "bench", name: "Bench" }, { id: "squat", name: "Squat" }], log, exId => hints[exId]);
+  eq(queue.map(q => `${q.exId}:${q.weight}×${q.reps}`), ["bench:80×8", "bench:85×", "bench:×", "squat:120×5"],
+    "lock screen: the card previews what a tick will fill in, or what was typed");
 }
 
 if (failures.length > 0) {

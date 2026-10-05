@@ -160,3 +160,23 @@ export function fmtDuration(secs: number): string {
   const rem = m % 60;
   return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
 }
+
+/**
+ * When a logged session ran, "6:02 pm – 7:15 pm". A session stores its finish
+ * (`completedAt`) and how long it ran (`durationSeconds`), so the start is the
+ * finish less that. Both always show: one that ended in the minute it began
+ * (no duration) reads that minute twice rather than losing its times. Null
+ * when the finish can't be read.
+ *
+ * The Workout tab's Logged banner and Home's Today's Workout card use this;
+ * the Journal card, workout detail and program page keep their own copies,
+ * which show the finish alone when there's no duration.
+ */
+export function sessionTimeRange(completedAt: string, durationSeconds: number): string | null {
+  const end = new Date(completedAt);
+  if (Number.isNaN(end.getTime())) return null;
+  const secs = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0;
+  const start = new Date(end.getTime() - secs * 1000);
+  const clock = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+  return `${clock(start)} – ${clock(end)}`;
+}

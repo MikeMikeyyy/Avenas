@@ -29,7 +29,7 @@ import {
   getTier,
 } from "../../constants/streakTiers";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek, programFinishDate } from "../../constants/programs";
-import { MONTH_NAMES } from "../../utils/dates";
+import { MONTH_NAMES, sessionTimeRange } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
 import { buildWeekSchedule, weekStartFor, type WeekDayPlan } from "../../utils/weekSchedule";
@@ -355,10 +355,13 @@ export default function HomeScreen() {
   // a day's name got that day's track.
   const workoutInfoOf = useJournalWorkoutInfo(workoutHistory, programs);
 
-  const isTodayCompleted = useMemo(
-    () => workoutHistory.some(w => w.date === effectiveToday),
+  // Today's logged session, found as the Workout tab finds it (the newest
+  // logged for the effective day), so the card's times are its banner's.
+  const todaysSession = useMemo(
+    () => workoutHistory.find(w => w.date === effectiveToday) ?? null,
     [workoutHistory, effectiveToday],
   );
+  const isTodayCompleted = todaysSession !== null;
 
   // What the Workout tab will actually put in front of you for the effective
   // day: the scheduled day, or the one a change-day override picked (possibly
@@ -459,26 +462,58 @@ export default function HomeScreen() {
         </View>
 
         {(() => {
-          const todaysWorkout = resolvedToday
-            ? { name: resolvedToday.name, exerciseCount: resolvedToday.exercises.length }
+          // Once today is logged the card shows the session logged, as the
+          // Workout tab and the week strip do (a custom workout done in place
+          // of the day, or on a rest day, is what today was), so its name,
+          // count and times are all one session's.
+          const todaysWorkout = todaysSession
+            ? { name: todaysSession.workoutName || "Workout", exerciseCount: todaysSession.exercises.length }
+            : resolvedToday
+              ? { name: resolvedToday.name, exerciseCount: resolvedToday.exercises.length }
+              : null;
+          const todaysTimes = todaysSession
+            ? sessionTimeRange(todaysSession.completedAt, todaysSession.durationSeconds)
             : null;
+          // As on the Finishes tag: accent green washes out as small text on
+          // the light card, so it takes the deeper green there.
+          const doneInk = isDark ? ACCT : ACCT_DEEP;
           return (
             <NeuCard dark={isDark} style={styles.workoutCard}>
     <View style={styles.workoutCardInner}>
-                <Text style={[styles.sectionLabel, { color: t.ts }]}>TODAY'S WORKOUT</Text>
+                <View style={styles.sectionRow}>
+                  <Text style={[styles.sectionLabel, { color: t.ts }]}>TODAY'S WORKOUT</Text>
+                  {/* Once today's workout is logged a small tag says so: the
+                      card used to change nothing but its button's words. */}
+                  {isTodayCompleted && (
+                    <View style={[styles.statusTag, styles.doneTag, { backgroundColor: `${ACCT}26` }]} accessible accessibilityLabel="Today's workout is completed">
+                      <Ionicons name="checkmark" size={12} color={doneInk} />
+                      <Text style={[styles.statusTagText, { color: doneInk }]}>Completed</Text>
+                    </View>
+                  )}
+                </View>
                 {todaysWorkout ? (
                   <>
                     <Text style={[styles.workoutName, { color: t.tp }]}>{todaysWorkout.name.toUpperCase()}</Text>
-                    {todaysWorkout.exerciseCount > 0 && (
+                    {(todaysWorkout.exerciseCount > 0 || todaysTimes) && (
                       <View style={[styles.metaRow, { marginTop: -10 }]}>
-                        <View style={styles.metaItem}>
-                          <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                            <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.ts} strokeWidth="1.5" />
-                            <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.ts} strokeWidth="1.5" />
-                            <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.ts} strokeWidth="1.5" />
-                          </Svg>
-                          <Text style={[styles.metaText, { color: t.ts }]}>{todaysWorkout.exerciseCount} exercise{todaysWorkout.exerciseCount !== 1 ? "s" : ""}</Text>
-                        </View>
+                        {todaysWorkout.exerciseCount > 0 && (
+                          <View style={styles.metaItem}>
+                            <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                              <Path d="M15.5 9L15.5 15C15.5 15.465 15.5 15.6975 15.5511 15.8882C15.6898 16.4059 16.0941 16.8102 16.6118 16.9489C16.8025 17 17.035 17 17.5 17C17.965 17 18.1975 17 18.3882 16.9489C18.9059 16.8102 19.3102 16.4059 19.4489 15.8882C19.5 15.6975 19.5 15.465 19.5 15V9C19.5 8.53501 19.5 8.30252 19.4489 8.11177C19.3102 7.59413 18.9059 7.18981 18.3882 7.05111C18.1975 7 17.965 7 17.5 7C17.035 7 16.8025 7 16.6118 7.05111C16.0941 7.18981 15.6898 7.59413 15.5511 8.11177C15.5 8.30252 15.5 8.53501 15.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                              <Path d="M4.5 9L4.5 15C4.5 15.465 4.5 15.6975 4.55111 15.8882C4.68981 16.4059 5.09413 16.8102 5.61177 16.9489C5.80252 17 6.03501 17 6.5 17C6.96499 17 7.19748 17 7.38823 16.9489C7.90587 16.8102 8.31019 16.4059 8.44889 15.8882C8.5 15.6975 8.5 15.465 8.5 15V9C8.5 8.53501 8.5 8.30252 8.44889 8.11177C8.31019 7.59413 7.90587 7.18981 7.38823 7.05111C7.19748 7 6.96499 7 6.5 7C6.03501 7 5.80252 7 5.61177 7.05111C5.09413 7.18981 4.68981 7.59413 4.55111 8.11177C4.5 8.30252 4.5 8.53501 4.5 9Z" stroke={t.ts} strokeWidth="1.5" />
+                              <Path d="M5 10H4C2.89543 10 2 10.8954 2 12C2 13.1046 2.89543 14 4 14H5M9 12H15M19 14H20C21.1046 14 22 13.1046 22 12C22 10.8954 21.1046 10 20 10H19" stroke={t.ts} strokeWidth="1.5" />
+                            </Svg>
+                            <Text style={[styles.metaText, { color: t.ts }]}>{todaysWorkout.exerciseCount} exercise{todaysWorkout.exerciseCount !== 1 ? "s" : ""}</Text>
+                          </View>
+                        )}
+                        {/* When it started and finished, as the Workout tab's
+                            Logged banner says it. */}
+                        {todaysTimes && (
+                          <View style={styles.metaItem}>
+                            <Ionicons name="time-outline" size={16} color={t.ts} />
+                            <Text style={[styles.metaText, { color: t.ts }]}>{todaysTimes}</Text>
+                          </View>
+                        )}
                       </View>
                     )}
                     <StartButton isTodayCompleted={isTodayCompleted} />
@@ -564,9 +599,9 @@ export default function HomeScreen() {
                   end date until it's resumed.
                   Sits at the END of the progress bar, as the finish line it is. */}
               {!paused && finishLabel && (
-                <View style={[styles.programFinish, { backgroundColor: `${accent}26` }]}>
+                <View style={[styles.statusTag, styles.programFinish, { backgroundColor: `${accent}26` }]}>
                   <Ionicons name="flag" size={11} color={finishInk} />
-                  <Text style={[styles.programFinishText, { color: finishInk }]}>Finishes {finishLabel}</Text>
+                  <Text style={[styles.statusTagText, { color: finishInk }]}>Finishes {finishLabel}</Text>
                 </View>
               )}
             </View>
@@ -882,10 +917,22 @@ const styles = StyleSheet.create({
   workoutCardInner: { padding: 20, gap: 18 },
   workoutRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   sectionLabel: { fontFamily: FontFamily.semibold, fontSize: 13, color: TS, letterSpacing: 1.2, textTransform: "uppercase" },
+  sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  // The tags on Home's two top cards, Today's Workout's Completed and the
+  // program's Finishes: one capsule, so the two read as a set (Completed was
+  // the summary rows' squarer card pill).
+  statusTag: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: PILL_RADIUS },
+  statusTagText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  // Completed sits in the section label's line: about 26pt tall against the
+  // label's 18 (13pt Nunito), so its margins lay it out no taller than the
+  // label and the card doesn't grow or shift when it appears.
+  doneTag: { marginVertical: -4.5 },
   badge: { borderRadius: 10 },
   badgeText: { fontFamily: FontFamily.semibold, fontSize: 12, color: ICON, paddingHorizontal: 10, paddingVertical: 5 },
   workoutName: { fontFamily: FontFamily.bold, fontSize: 23, color: TP },
-  metaRow: { flexDirection: "row", gap: 20 },
+  // Wraps rather than overflows: with the times beside the count, a large
+  // accessibility text size can run past the card.
+  metaRow: { flexDirection: "row", flexWrap: "wrap", columnGap: 20, rowGap: 6 },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaText: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
   startBtnDark: { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
@@ -948,6 +995,5 @@ const styles = StyleSheet.create({
   programWeek: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
   progressRow: { flexDirection: "row", gap: 5 },
   progressSegment: { flex: 1, height: 6, borderRadius: 3 },
-  programFinish:     { alignSelf: "flex-end", flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: PILL_RADIUS, marginTop: 2 },
-  programFinishText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  programFinish:     { alignSelf: "flex-end", marginTop: 2 },
 });

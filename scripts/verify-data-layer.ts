@@ -22,12 +22,13 @@ import {
   buildPrevSetsLookup,
   buildPrevSessionNote,
 } from "../utils/workout";
-import { parseStoredDate, formatStoredDate, todayYMD } from "../utils/dates";
+import { parseStoredDate, formatStoredDate, todayYMD, sessionTimeRange } from "../utils/dates";
 import {
   formatWeightForDisplay, parseWeightToKg, migrateWeightLbToKg, trimNumber,
   KG_PER_LB, prescribedWeight, prescribedPlaceholder, stampWeightUnits,
 } from "../utils/units";
 import { migrateHistoryWeights, migrateProgramWeights } from "../utils/weightMigration";
+import { keepsHeldSession } from "../utils/heldSession";
 import { assignProgramDayIds, backfillHistoryDayIds, resolveHistoricDayId } from "../utils/dayIdMigration";
 import {
   canonicalizeWorkouts, dayIdAt, dayLabel, forkChangedDayIds, historicalDays,
@@ -96,6 +97,19 @@ eq(parseStoredDate("01 Xyz 2026"), null, "parseStoredDate bad month -> null");
 eq(parseStoredDate(""), null, "parseStoredDate empty -> null");
 eq(parseStoredDate(undefined), null, "parseStoredDate undefined -> null");
 check(parseStoredDate("01 Jan 2026") instanceof Date, "parseStoredDate valid -> Date");
+
+// ── sessionTimeRange: a session's start and finish, always both ──────────────
+{
+  const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+  const end = new Date(2026, 9, 5, 19, 15).getTime();
+  eq(sessionTimeRange(new Date(end).toISOString(), 73 * 60), `${clock(end - 73 * 60_000)} – ${clock(end)}`,
+    "times: the start is the finish less the duration");
+  eq(sessionTimeRange(new Date(end).toISOString(), 0), `${clock(end)} – ${clock(end)}`,
+    "times: a session with no duration still shows both, the same minute");
+  eq(sessionTimeRange(new Date(end).toISOString(), NaN), `${clock(end)} – ${clock(end)}`,
+    "times: an unreadable duration counts as none");
+  eq(sessionTimeRange("garbage", 3600), null, "times: an unreadable finish shows none");
+}
 
 // ── resolveDayIndex: cycle math ────────────────────────────────────────────────
 const p = makeProgram();
@@ -944,6 +958,27 @@ for (const bw of ["BW", "", "—"]) {
   const [filled] = assignProgramDayIds([makeProgram({ dayIds: undefined })]);
   eq(filled.dayIds, ["d0", "d1", "d2", "d3", "d4", "d5", "d6"], "assignProgramDayIds: fills a legacy program");
   check(assignProgramDayIds([renamed])[0] === renamed, "assignProgramDayIds: a complete program is returned by identity");
+}
+
+// ── the Workout tab's held session belongs to its day ─────────────────────────
+// A session's order, swaps and adds were for the day it was built for. Kept
+// whenever it judged itself in progress, one left held in the app carried its
+// swapped order into the same program day a week later (user report,
+// 2026-10-05). Its notes and numbers follow each exercise by place either way
+// (the "place:" checks above).
+{
+  const MON = "2026-10-05";
+  const NEXT_MON = "2026-10-12";
+  eq(keepsHeldSession({ day: null, live: false, engaged: false }, MON), false, "held: nothing held, the day is built from the program");
+  eq(keepsHeldSession({ day: MON, live: false, engaged: false }, MON), false, "held: an untouched session is rebuilt (a program edit shows)");
+  eq(keepsHeldSession({ day: MON, live: false, engaged: true }, MON), true, "held: a reordered or ticked session is kept on its own day");
+  eq(keepsHeldSession({ day: MON, live: true, engaged: false }, MON), true, "held: a running session is kept on its own day");
+  eq(keepsHeldSession({ day: MON, live: false, engaged: true }, NEXT_MON), false,
+    "held: a week on, last week's reordered session starts again in the program's order");
+  eq(keepsHeldSession({ day: "2026-10-04", live: false, engaged: true }, MON), false,
+    "held: yesterday's unfinished session, its clock stopped, doesn't become today's");
+  eq(keepsHeldSession({ day: "2026-10-04", live: true, engaged: true }, MON), true,
+    "held: a session still running past midnight carries on");
 }
 
 // ── report ─────────────────────────────────────────────────────────────────────
