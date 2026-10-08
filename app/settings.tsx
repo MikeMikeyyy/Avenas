@@ -107,7 +107,10 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
       { icon: "bulb-outline",          label: "Request a Feature", route: "/request-feature"  },
       // Dev-only backend test harness — must never ship to users.
       ...(__DEV__ ? [{ icon: "cloud-outline" as const, label: "Cloud sync (test)", route: "/cloud-test" }] : []),
-      { icon: "star-outline",          label: "Rate Avenas",       onPress: openAppStoreReview },
+      // App Store only: Android copies are sent by hand, with no store listing to rate.
+      ...(Platform.OS === "ios"
+        ? [{ icon: "star-outline", label: "Rate Avenas", onPress: openAppStoreReview } as SettingsItem]
+        : []),
     ],
   },
 ];

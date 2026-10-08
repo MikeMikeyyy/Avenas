@@ -77,6 +77,10 @@ export default function CompleteProfileScreen() {
           setAccountType(profile.accountType);
           setIsKg(profile.unit === "kg");
           completeOnboarding({ name: profile.name, email, photoUri, contactEmail });
+          // The deck and login/signup are still beneath this screen. Clear them,
+          // as account-created does, so Home can't go back into them (Android's
+          // Back button took a signed-in user to "Create your account").
+          if (router.canDismiss()) router.dismissAll();
           router.replace("/home");
           return;
         }

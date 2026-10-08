@@ -2,11 +2,9 @@
 // Supabase's OAuth web flow (works in Expo Go): open the provider in a browser,
 // then exchange the returned PKCE code for a session.
 
-import { Platform } from "react-native";
-import Constants, { ExecutionEnvironment } from "expo-constants";
-import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import * as AppleAuthentication from "expo-apple-authentication";
+import { oauthRedirectTo } from "./authRedirect";
 import { supabase } from "./supabase";
 import { flushCloudPushNow } from "./syncManager";
 import { localCounts } from "./cloud";
@@ -15,23 +13,9 @@ import { unregisterPushToken } from "./push";
 // Lets the in-app browser close cleanly when auth returns.
 WebBrowser.maybeCompleteAuthSession();
 
-// Where the provider sends the user back: avenas://auth-callback, which MUST stay
-// in Supabase -> Authentication -> URL Configuration -> Redirect URLs.
-//
-// A build gets that from createURL. Expo Go on iOS is given it explicitly:
-// createURL there returns exp://<this PC's LAN IP>:8081/--/auth-callback, and
-// Supabase never allow-lists an IP host (not by wildcard, not even exactly), so
-// it fell back to the Site URL and the check below failed with "did not match
-// the expected redirect" whenever the IP wasn't the Site URL's. The address
-// doesn't need to reach Expo Go anyway: iOS's sign-in browser catches the
-// redirect by its scheme and hands it straight back without opening it, so the
-// scheme needn't be registered. Android's browser does open it, so Android keeps
-// createURL.
-const APP_SCHEME = [Constants.expoConfig?.scheme].flat()[0] ?? "avenas";
-export const oauthRedirectTo =
-  Constants.executionEnvironment === ExecutionEnvironment.StoreClient && Platform.OS === "ios"
-    ? `${APP_SCHEME}://auth-callback`
-    : Linking.createURL("auth-callback");
+// Where the provider sends the user back (avenas://auth-callback): see
+// lib/authRedirect.ts, which also tells the router to leave that link alone.
+export { oauthRedirectTo };
 
 export type OAuthProvider = "google" | "apple";
 

@@ -1,4 +1,4 @@
-import { StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 import { StyleProp, ViewStyle } from "react-native";
 import { NEU_BG, NEU_BG_DARK } from "../constants/theme";
 
@@ -8,6 +8,34 @@ export { NEU_BG, NEU_BG_DARK };
 // Light mode shadows
 const SHADOW_LIGHT = "#FFFFFF";
 const SHADOW_DARK  = "#a3afc0";
+
+type IosShadow = {
+  shadowColor?: string;
+  shadowOffset?: { width: number; height: number };
+  shadowOpacity?: number;
+  shadowRadius?: number;
+};
+
+/** "#abc" / "#aabbcc" at `alpha` as rgba(), for a box-shadow colour. */
+function rgba(hex: string, alpha: number): string {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/**
+ * The same shadow as a CSS box-shadow. Android draws none of the iOS shadow
+ * props (offset, opacity, radius), and its `elevation` can't cast a coloured
+ * highlight up and to the left, so light-mode cards came out flat, with only
+ * their border. It draws `boxShadow` (Android 9+) instead. The blur is twice
+ * iOS's shadowRadius, the usual conversion between the two.
+ */
+function toBoxShadow(s: IosShadow): string | null {
+  if (!s.shadowColor || !s.shadowOpacity) return null;
+  const { width = 0, height = 0 } = s.shadowOffset ?? {};
+  return `${width}px ${height}px ${2 * (s.shadowRadius ?? 0)}px ${rgba(s.shadowColor, s.shadowOpacity)}`;
+}
 
 interface NeuCardProps {
   children?: React.ReactNode;
@@ -53,7 +81,7 @@ export default function NeuCard({
   const shadowB = isInset ? SHADOW_DARK  : SHADOW_LIGHT;
 
   // Outer: dark mode = clean single drop shadow; light mode = bottom-right depth
-  const outerShadow = dark
+  const iosOuterShadow: IosShadow & { elevation?: number } = dark
     ? {
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 2 },
@@ -69,7 +97,7 @@ export default function NeuCard({
       };
 
   // Middle: light mode = top-left highlight; dark mode = no highlight (opacity 0)
-  const midShadow = dark
+  const iosMidShadow: IosShadow = dark
     ? { shadowOpacity: 0 }
     : {
         shadowColor: shadowB,
@@ -77,6 +105,14 @@ export default function NeuCard({
         shadowOpacity: 1,
         shadowRadius: isInset ? 5 : sm ? 3 : 4,
       };
+
+  // Android: both shadows as one box-shadow on the outer layer (see toBoxShadow),
+  // built from the iOS values above so the two can't drift apart. The middle
+  // layer casts nothing there; it stays in the tree for its shape (see above).
+  const outerShadow = Platform.OS === "android"
+    ? { boxShadow: [toBoxShadow(iosOuterShadow), toBoxShadow(iosMidShadow)].filter(Boolean).join(", ") }
+    : iosOuterShadow;
+  const midShadow = Platform.OS === "android" ? undefined : iosMidShadow;
 
   const borderColor = dark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)";
 

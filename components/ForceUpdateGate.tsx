@@ -1,6 +1,10 @@
 // Blocks the app when it's running below the minimum version set in Supabase
 // (migration 0020), and sends the user to the App Store.
 //
+// iPhone only. The minimum is the App Store's (`min_ios_version`) and the only
+// way out is the App Store. An Android copy is sent by hand as an APK, with no
+// store behind it, so blocked it would sit behind a button that can't help it.
+//
 // Two layers on purpose:
 //   1. A full-screen view rendered INSTEAD of the app. An iOS alert closes as
 //      soon as its button is tapped, so an alert alone would leave the app
@@ -15,7 +19,7 @@
 // install on a network blip is far worse than one stale build slipping through.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, Linking, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
 import Constants from "expo-constants";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -28,6 +32,9 @@ import { isBelowMinimum } from "../utils/version";
 const TITLE = "Update Required";
 const BODY =
   "A new version of Avenas is available. Update to keep going, this one is out of date.";
+
+/** Whether this platform is gated at all (see the header). */
+const GATED = Platform.OS === "ios";
 
 /** The running app's version, from the build's own config. */
 function currentVersion(): string | null {
@@ -54,10 +61,11 @@ export default function ForceUpdateGate({ children }: { children: React.ReactNod
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   // null = still checking. Children render as soon as we know we're allowed.
-  const [blocked, setBlocked] = useState<boolean | null>(null);
+  const [blocked, setBlocked] = useState<boolean | null>(GATED ? null : false);
   const alerting = useRef(false);
 
   const check = useCallback(async () => {
+    if (!GATED) return;
     const min = await fetchMinIosVersion();
     setBlocked(isBelowMinimum(currentVersion(), min));
   }, []);

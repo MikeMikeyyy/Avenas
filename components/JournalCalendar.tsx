@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, LayoutChangeEvent } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, LayoutChangeEvent, Platform } from "react-native";
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
@@ -181,6 +181,10 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
           isWorkout && s.workoutGlow,
           isToday && s.todayGlow,
           isToday && { borderWidth: 2, borderColor: ACCT },
+          // Android fades a view by drawing each child at the faded alpha rather
+          // than fading the whole cell, so this shadow showed through the faded
+          // day's face as an octagon. A faded day goes flat there instead.
+          isFuture && Platform.OS === "android" && { elevation: 0 },
         ]}>
           {/* Inner layer: light highlight shadow + background */}
           <View style={[s.cellInner, { shadowColor: cellInnerShadow, backgroundColor: cellBg, borderWidth: 1, borderColor: cellBorder }, (isWorkout || isToday) && { shadowOpacity: 0 }, isToday && { borderWidth: 0 }]}>
