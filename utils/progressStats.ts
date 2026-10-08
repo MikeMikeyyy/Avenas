@@ -15,6 +15,7 @@ import { CompletedWorkout, ProgramDayRef, SavedProgram } from "../constants/prog
 import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
 import { MONTH_NAMES, toYMD, parseStoredDate } from "./dates";
 import { historicalDays, markDayRefLabels, programDaysWithExtras } from "./programDays";
+import { runStartYMD } from "./programHolds";
 import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
 import type {
   ExerciseDataPoint,
@@ -75,9 +76,12 @@ function calendarDaysBetween(a: Date, b: Date): number {
 
 // ─── public: per-workout metric aggregators ──────────────────────────────────
 
+/** Kilos moved in completed working sets. A timed hold moves no volume (its
+ *  "reps" are seconds held: CompletedExercise.isIsometric), so it's left out. */
 export function computeWorkoutTonnage(w: CompletedWorkout): number {
   let total = 0;
   for (const ex of w.exercises) {
+    if (ex.isIsometric) continue;
     for (const s of ex.sets) {
       if (s.type !== "working" || !s.done) continue;
       const wt = parsePositive(s.weight);
@@ -89,10 +93,12 @@ export function computeWorkoutTonnage(w: CompletedWorkout): number {
   return total;
 }
 
-/** Total reps across working+done sets. Sets with no parseable reps are skipped. */
+/** Total reps across working+done sets. Sets with no parseable reps are
+ *  skipped, and so is a timed hold, whose "reps" are seconds. */
 export function computeWorkoutReps(w: CompletedWorkout): number {
   let total = 0;
   for (const ex of w.exercises) {
+    if (ex.isIsometric) continue;
     for (const s of ex.sets) {
       if (s.type !== "working" || !s.done) continue;
       total += parsePositive(s.reps);
@@ -156,7 +162,7 @@ export function computeMuscleGroupStats(
         const wt = parsePositive(s.weight);
         const r = parsePositive(s.reps);
         exSets += 1; // a completed working set, regardless of weight (e.g. BW)
-        if (wt > 0 && r > 0) exVolume += wt * r;
+        if (wt > 0 && r > 0 && !ex.isIsometric) exVolume += wt * r; // a hold's "reps" are seconds
       }
       if (exSets === 0) continue; // no completed working sets → didn't train anything
 
@@ -528,8 +534,16 @@ export function bucketVolumeByMonth(
 // ─── public: per-exercise history ────────────────────────────────────────────
 
 /**
- * One ExerciseDataPoint per workout that contains `exerciseName` (case-insensitive trim).
- * Sorted ascending by completedAt so it can feed a left-to-right line chart.
+ * One ExerciseDataPoint per workout that did `exerciseName` (case-insensitive
+ * trim): a working set ticked with its reps in. Sorted ascending by
+ * completedAt so it can feed a left-to-right line chart.
+ *
+ * A set at bodyweight counts: its reps go into `totalReps` and it adds nothing
+ * to the weight figures, so a session done only at bodyweight has a point with
+ * no weight (topWeight 0), which the chart plots on Reps alone
+ * (utils/exerciseChartLayout.ts plottedPoints). It used to need a weight to
+ * count at all, so pull-ups, dips and leg raises done at bodyweight said "No
+ * sessions yet" however often they were done.
  *
  * `day` (optional) restricts the walk to sessions logged on that workout day —
  * the Progress drill-down tracks progress per (day, exercise) pair, so an
@@ -552,20 +566,36 @@ export function collectExerciseHistory(
     let bestSetVolume = 0;
     let bestSetWeight = 0;
     let bestSetReps = 0;
+    let e1rm = 0;
+    let e1rmWeight = 0;
+    let e1rmReps = 0;
     let sessionVolume = 0;
+    let weightedSets = 0;
+    let weightedReps = 0;
     let totalReps = 0;
-    let found = false;
+    let did = false;
+    let isHold = false;
     for (const ex of w.exercises) {
       if (key(ex.name) !== want) continue;
-      found = true;
+      if (ex.isIsometric) isHold = true;
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done) continue;
-        const wt = parsePositive(s.weight);
         const r = parsePositive(s.reps);
-        if (wt === 0 || r === 0) continue;
+        if (r === 0) continue;
+        did = true;
+        totalReps += r;
+        const wt = parsePositive(s.weight);
+        if (wt === 0) continue; // bodyweight: reps, and nothing to weigh
+        if (ex.isIsometric) {
+          // A hold's load is its weight, and its "reps" are seconds: a
+          // heaviest, but no volume.
+          if (wt > topWeight || (wt === topWeight && r > topReps)) { topWeight = wt; topReps = r; }
+          continue;
+        }
         const vol = wt * r;
         sessionVolume += vol;
-        totalReps += r;
+        weightedSets += 1;
+        weightedReps += r;
         if (wt > topWeight) {
           topWeight = wt;
           topReps = r;
@@ -578,9 +608,17 @@ export function collectExerciseHistory(
           bestSetWeight = wt;
           bestSetReps = r;
         }
+        // The session's strength on one scale: the best set by estimated
+        // one-rep max, which is the "Estimated 1RM" record's own formula.
+        const e = epley(wt, r);
+        if (e > e1rm) {
+          e1rm = e;
+          e1rmWeight = wt;
+          e1rmReps = r;
+        }
       }
     }
-    if (!found || sessionVolume === 0) continue;
+    if (!did) continue;
     points.push({
       workoutId: w.id,
       date: w.date,
@@ -590,8 +628,14 @@ export function collectExerciseHistory(
       bestSetVolume,
       bestSetWeight,
       bestSetReps,
+      e1rm,
+      e1rmWeight,
+      e1rmReps,
       sessionVolume,
+      weightedSets,
+      weightedReps,
       totalReps,
+      ...(isHold ? { isHold: true as const } : {}),
     });
   }
   points.sort((a, b) => a.completedAt.localeCompare(b.completedAt));
@@ -617,13 +661,19 @@ function epley(weight: number, reps: number): number {
  *
  * 1RM PR walks the entire set list (not just the session's top set) so that a
  * lighter-but-higher-rep set can take the 1RM crown.
+ *
+ * Every record is of a weight, so a session done at bodyweight (a point with
+ * topWeight 0) never holds one: a pull-up's 0 isn't a "Heaviest", and the
+ * post-workout summary (computeSessionRecords) mustn't call it a first record.
  */
 export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exerciseName: string, day?: ProgramDayRef): PRs {
   const heaviest = history.reduce<{ p: ExerciseDataPoint; reps: number } | null>((acc, p) => {
+    if (p.topWeight <= 0) return acc;
     if (!acc || p.topWeight > acc.p.topWeight) return { p, reps: p.topReps };
     return acc;
   }, null);
   const bestSet = history.reduce<ExerciseDataPoint | null>((acc, p) => {
+    if (p.bestSetVolume <= 0) return acc;
     if (!acc || p.bestSetVolume > acc.bestSetVolume) return p;
     return acc;
   }, null);
@@ -641,7 +691,8 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
   for (const w of workouts) {
     if (day && !workoutMatchesDay(w, day)) continue;
     for (const ex of w.exercises) {
-      if (key(ex.name) !== want) continue;
+      // A hold's "reps" are seconds: no rep max to estimate.
+      if (key(ex.name) !== want || ex.isIsometric) continue;
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done) continue;
         const wt = parsePositive(s.weight);
@@ -659,11 +710,14 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
     heaviest: heaviest
       ? { value: heaviest.p.topWeight, workoutId: heaviest.p.workoutId, date: heaviest.p.date, weight: heaviest.p.topWeight, reps: heaviest.p.topReps }
       : null,
+    // Best Set reads as the set it was ("90 kg × 8"), and Most Volume as
+    // the sets and reps that added up to it ("4 sets · 38 reps"): a bare
+    // tonnage figure said nothing about either (user request, 2026-10-08).
     bestSetVolume: bestSet
-      ? { value: bestSet.bestSetVolume, workoutId: bestSet.workoutId, date: bestSet.date }
+      ? { value: bestSet.bestSetVolume, workoutId: bestSet.workoutId, date: bestSet.date, weight: bestSet.bestSetWeight, reps: bestSet.bestSetReps }
       : null,
     bestSessionVolume: bestSession
-      ? { value: bestSession.sessionVolume, workoutId: bestSession.workoutId, date: bestSession.date }
+      ? { value: bestSession.sessionVolume, workoutId: bestSession.workoutId, date: bestSession.date, sets: bestSession.weightedSets, reps: bestSession.weightedReps }
       : null,
     oneRepMax: oneRm
       ? { value: oneRm.value, workoutId: oneRm.workoutId, date: oneRm.date, weight: oneRm.weight, reps: oneRm.reps }
@@ -688,14 +742,16 @@ export function programIncludes(p: SavedProgram, workoutName: string): boolean {
  *     reuse the same day names never share sessions.
  *   - Legacy record (`programId` undefined — written before the field existed)
  *     → fall back to matching the day name, but ONLY inside `p`'s active date
- *     window [startDate, completedDate]. Without the date bound, a program
- *     created later would wrongly inherit an earlier program's same-named days.
+ *     window [the day its run began, completedDate]. Without the date bound, a
+ *     program created later would wrongly inherit an earlier program's
+ *     same-named days. (From the run's first day, not startDate: a resume moves
+ *     startDate on by the days held.)
  */
 export function workoutBelongsToProgram(w: CompletedWorkout, p: SavedProgram): boolean {
   if (w.programId !== undefined) return w.programId === p.id;
   if (!programIncludes(p, w.workoutName)) return false;
-  const start = parseStoredDate(p.startDate);
-  if (start && w.date < toYMD(start)) return false;
+  const start = runStartYMD(p);
+  if (start && w.date < start) return false;
   if (p.completedDate) {
     const end = parseStoredDate(p.completedDate);
     if (end && w.date > toYMD(end)) return false;
@@ -822,14 +878,28 @@ export function groupDaysByProgram(days: ProgramDayRef[], programs: SavedProgram
  *
  *   - The session recorded a `dayId` → exact slot match. Two days that share a
  *     name never trade sessions, and a renamed day keeps its own.
- *   - No `dayId` (free workout, or a record the backfill couldn't attribute) →
- *     fall back to the day's NAME, but only onto the first day in scope with
- *     that name (`absorbsUnidentified`), so an ambiguous record is counted once
- *     rather than on every same-named row.
+ *   - No `dayId`, but its program (a custom workout added to the program, or a
+ *     record the dayId backfill couldn't place) → the day's NAME, within that
+ *     program only, on its first day of that name (`firstInProgram`). Read
+ *     against the whole scope instead (`absorbsUnidentified`), "All programs"
+ *     gave a second program's "Arms" to the first program's row and left its
+ *     own empty.
+ *   - A free workout ("") belongs to no program, so no program's day counts it
+ *     (attribution is by program, never by name: CLAUDE.md). It used to be
+ *     counted on the first same-named day in scope, so under "All programs"
+ *     every free "Arms" landed on whichever program had an "Arms" extra.
+ *   - A legacy record (no programId at all) → the name, onto the first day in
+ *     scope with it (`absorbsUnidentified`), so it's counted once rather than
+ *     on every same-named row.
  *
  * The programId guard keeps the positional fallback ids (`d0`, `d1`, …, which
  * are only unique within a program) from matching across programs under the
  * "All programs" scope.
+ *
+ * The Workout tab's "Previous" hints (utils/workout.ts sessionIsOnDay) agree on
+ * the slot and program cases. They part on a free workout, whose numbers still
+ * feed a workout of the same name: "what did I lift last time" isn't a
+ * question of which program owns the session.
  */
 export function workoutMatchesDay(w: CompletedWorkout, day: ProgramDayRef): boolean {
   if (w.dayId) {
@@ -837,8 +907,8 @@ export function workoutMatchesDay(w: CompletedWorkout, day: ProgramDayRef): bool
     return !w.programId || !day.programId || w.programId === day.programId;
   }
   if (key(w.workoutName) !== key(day.label)) return false;
-  // "" = free workout: belongs to no program, so it isn't excluded by the guard.
-  if (w.programId && day.programId && w.programId !== day.programId) return false;
+  if (w.programId) return w.programId === day.programId && (day.firstInProgram ?? day.absorbsUnidentified);
+  if (w.programId === "") return false;
   return day.absorbsUnidentified;
 }
 

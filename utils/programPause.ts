@@ -26,8 +26,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert } from "react-native";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { formatStoredDate, parseStoredDate, todayYMD, toYMD } from "./dates";
+import { formatStoredDate, parseStoredDate, todayYMD } from "./dates";
 import { marksAfterHold } from "./skippedDates";
+import { idleDays } from "./programHolds";
 import { getEffectiveToday, resolveDayIndex } from "./workout";
 
 /** Days a program has been held, as of `asOfYMD`. 0 when not paused. */
@@ -104,12 +105,19 @@ export function resumeProgram(
         ? (((p.cycleOffset ?? 0) + held) % p.cycleDays + p.cycleDays) % p.cycleDays
         : p.cycleOffset;
 
+    // The hold itself, kept: the shift above re-dates every day before it, and
+    // this is what lets a past date be read as it was and the run's first day
+    // be found again (utils/programHolds.ts).
+    const holds = held > 0
+      ? [...(p.holds ?? []), { from: p.pausedAt, to: onYMD, shift: held, offsetShift: mode === "today" ? held : 0 }]
+      : p.holds;
+
     // The rest days and moves around the hold, settled for the shifted
     // timeline (marksAfterHold): what the hold swallowed goes, and each move
     // still standing keeps a rest day, so it picks up exactly where it was on
     // the pause day and still finishes on time.
     return marksAfterHold(
-      { ...p, pausedAt: undefined, startDate: formatStoredDate(shifted), cycleOffset: offset },
+      { ...p, pausedAt: undefined, startDate: formatStoredDate(shifted), cycleOffset: offset, holds },
       p.pausedAt,
       onYMD,
     );
@@ -147,14 +155,9 @@ export function dayNameAt(program: SavedProgram, dayIndex: number | null): strin
   return !name || name === "Rest" ? null : name;
 }
 
-/** Days with no workout logged, counting back from today. Falls back to the
- *  program's start when nothing has ever been logged. */
-export function idleDays(program: SavedProgram, workoutDates: string[], today: string = todayYMD()): number {
-  const latest = workoutDates.length > 0 ? workoutDates.slice().sort().at(-1)! : null;
-  if (latest) return daysBetween(latest, today);
-  const start = parseStoredDate(program.startDate);
-  return start ? daysBetween(toYMD(start), today) : 0;
-}
+// How long it's been since anything was done: utils/programHolds.ts (pure, so
+// the verify scripts can pin it).
+export { idleDays } from "./programHolds";
 
 /**
  * Take a program off hold, asking which day to pick up on when the two answers

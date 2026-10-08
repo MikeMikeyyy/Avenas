@@ -11,6 +11,7 @@
 
 import { parseStoredDate, toYMD, todayYMD } from "./dates";
 import { cycleDrift } from "./cycleDrift";
+import { heldOn, programAsOf } from "./programHolds";
 import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
 import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
@@ -61,6 +62,8 @@ export function resolveDayIndex(program: SavedProgram, dateYMD: string): number 
   // when a program is paused. Both sides are "YYYY-MM-DD", so a string compare
   // is a date compare.
   if (program.pausedAt && dateYMD >= program.pausedAt) return null;
+  // And nothing in a hold it has come back from (SavedProgram.holds).
+  if (heldOn(program, dateYMD)) return null;
   // A date the user explicitly marked as rest. Checked HERE and not in
   // cycleIndexForDate for the same reason the hold is: the dayId backfill asks
   // "which slot was this already-logged session performed on", and marking a
@@ -78,14 +81,19 @@ export function resolveDayIndex(program: SavedProgram, dateYMD: string): number 
  * must not erase the answer, so the backfill reads the cycle math directly.
  */
 export function cycleIndexForDate(program: SavedProgram, dateYMD: string): number | null {
-  const daysPassed = daysSinceStart(program, dateYMD);
+  // The timeline the date was on. Resuming a hold moves startDate (and for
+  // "Today" cycleOffset) on, which would re-label every day before the hold:
+  // a past day must read as it did (utils/programHolds.ts). A date after every
+  // hold reads the program as it is.
+  const asOf = programAsOf(program, dateYMD);
+  const daysPassed = daysSinceStart(asOf, dateYMD);
   if (daysPassed === null || daysPassed < 0) return null;
   // Shift the calendar by the net drift: pushed days held the cycle still,
   // pulled days spent a rest to catch it back up. Counting against DATES rather
   // than nudging cycleOffset is what keeps this local — an offset is a phase
   // shift over the whole timeline, which re-labelled days BEFORE the change and
   // swallowed a completed workout. See utils/cycleDrift.ts.
-  return slotFor(program, daysPassed - cycleDrift(program, dateYMD));
+  return slotFor(asOf, daysPassed - cycleDrift(asOf, dateYMD));
 }
 
 /**
@@ -155,7 +163,9 @@ export function normalizeDriftDates(program: SavedProgram): SavedProgram {
   // How far a pull may travel. A cycle with a rest day has one in every cycle,
   // but several pulls can be after the same ones, and each needs its own: a
   // cycle per pull before giving up. One cycle, and a pull crowded out by
-  // another move's was dropped, leaving the program a day late.
+  // another move's was dropped, leaving the program a day late. Counted in
+  // days the cycle moves on: a moved day or a held one holds it still, so
+  // passing one uses none of the reach (utils/skippedDates.ts freeRestDate).
   const reach = program.cycleDays * pulled.length;
 
   for (const ymd of [...pulled].sort()) {
@@ -163,8 +173,13 @@ export function normalizeDriftDates(program: SavedProgram): SavedProgram {
     // moves the start past the days it held: it has no slot to check, and it
     // still pays for the move before it, which still counts (cycleDrift counts
     // every push before a date). Re-targeted or dropped, a long hold left that
-    // move unpaid and the program resumed a day behind where it stopped.
-    const days = daysSinceStart(program, ymd);
+    // move unpaid and the program resumed a day behind where it stopped. With
+    // the hold recorded (SavedProgram.holds), a pull from before it is checked
+    // on the timeline it was made on (cycleIndexForDate reads that), which is
+    // where it still sits on a rest: read on the shifted one, every pull
+    // before a "Carry on" resume looked stale and moved, re-labelling the days
+    // already lived through.
+    const days = daysSinceStart(programAsOf(program, ymd), ymd);
     if (days !== null && days < 0) { next.push(ymd); continue; }
     // A pull can't share a date with a PUSH — the push says "nothing happens
     // here, wait a day", the pull says "a rest was spent here, catch up a day",
@@ -185,13 +200,17 @@ export function normalizeDriftDates(program: SavedProgram): SavedProgram {
     let target: string | null = null;
     // Search from the date itself outward: if the cycle has no rest at all
     // there is none to find, and the pull goes.
-    for (let i = 0; i <= reach; i++) {
-      const candidate = addDaysYMD(ymd, i);
+    let left = reach + 1;
+    for (let candidate: string | null = ymd; left > 0; candidate = addDaysYMD(candidate, 1)) {
       if (candidate === null) break;
-      if (pushed.has(candidate) || next.includes(candidate)) continue;
+      // Never onto a moved day (above), nor a held one: a hold scheduled
+      // nothing, so there's no rest there to spend.
+      if (pushed.has(candidate) || heldOn(program, candidate)) continue;
+      left--;
+      if (next.includes(candidate)) continue;
       // Re-targeting must not LAND a pull on a skipped day; a pull that was
-      // already there when the day got skipped (i === 0) stays put.
-      if (i > 0 && skipped.has(candidate)) continue;
+      // already there when the day got skipped stays put.
+      if (candidate !== ymd && skipped.has(candidate)) continue;
       const slot = cycleIndexForDate(asIs, candidate);
       if (slot === null) continue;
       const name = program.cyclePattern[slot];
@@ -350,9 +369,12 @@ export function normalizeExerciseName(name: string): string {
 /**
  * The workout day a previous-values lookup is scoped to. A narrow view of
  * `ProgramDayRef` so the two screens that build one don't have to synthesize a
- * full ref — but the matching rules are deliberately identical to
- * `workoutMatchesDay` (utils/progressStats.ts), because "which day was this
- * session performed on" must have exactly one answer app-wide.
+ * full ref — but the matching rules follow `workoutMatchesDay`
+ * (utils/progressStats.ts), because "which day was this session performed on"
+ * must have exactly one answer app-wide. One deliberate difference: a free
+ * workout (programId "") still answers for a workout of its name here, since
+ * last time's numbers don't depend on which program owns the session, while
+ * the Progress page counts it on no program's day.
  */
 export type PrevDayScope = {
   /** Display name of the day. The only handle for sessions with no `dayId`. */
@@ -411,7 +433,8 @@ export function prevDayScopeFor(
 
 /**
  * Map of normalized exercise name → that exercise's set list from the most
- * recent prior session, formatted as "weight×reps" (or weight/reps/"—").
+ * recent prior session, formatted as "weight×reps", either side blank when it
+ * was ("×8", "80×"), or "—" for an empty set (formatPrevSets).
  * History is sorted newest-first, so the first time a name is seen wins.
  * When `beforeDate` (a "YYYY-MM-DD") is given, only sessions strictly before it
  * are considered — used when logging a past workout. We compare on the workout's
@@ -502,12 +525,14 @@ function hintSessions(history: CompletedWorkout[], beforeDate?: string, day?: Pr
 const sameExercise = (a?: string, b?: string) =>
   !!a && !!b && normalizeExerciseName(a) === normalizeExerciseName(b);
 
-/** One logged exercise's sets as "weight×reps" hints (or weight / reps / "—"). */
+/** One logged exercise's sets as "weight×reps" hints, either side left blank
+ *  when it was ("×8" a bodyweight set, "80×" one with no reps), or "—" for an
+ *  empty set. Always both sides: a lone "8" couldn't say which it was, so a
+ *  tick (utils/setRows.ts prevFillFor) put a pull-up's 8 reps in the weight
+ *  box, and an lbs screen showed a weight-only set in raw kilos (formatPrevHint
+ *  converts the part before the ×). */
 function formatPrevSets(ex: CompletedWorkout["exercises"][number]): string[] {
-  return ex.sets.map(s => {
-    if (s.weight && s.reps) return `${s.weight}×${s.reps}`;
-    return s.weight || s.reps || "—";
-  });
+  return ex.sets.map(s => (s.weight || s.reps ? `${s.weight}×${s.reps}` : "—"));
 }
 
 /**

@@ -33,6 +33,10 @@ interface Props {
    * the selected range. The previous comparable window has the same length.
    */
   windowDays: number;
+  /** The page's time range in its picker's own words ("This Week", "Last 3
+   *  Months"), named in the caption under the title. A label only: the range
+   *  is changed at the top of the page. */
+  rangeLabel: string;
   /** The legend's names for the two windows, from the page's time range
    *  (RangeOption.currentLegend / previousLegend): "This Week" / "Last Week". */
   currentLegend: string;
@@ -183,6 +187,7 @@ export default function StrengthRadarChart({
   prevStats,
   unit,
   windowDays,
+  rangeLabel,
   currentLegend,
   previousLegend,
   metric,
@@ -339,10 +344,15 @@ export default function StrengthRadarChart({
           />
         </View>
 
-        {/* Just the metric explainer — the period-vs-period comparison is
-            spelled out by the legend below instead. */}
-        <Text style={[styles.caption, { color: t.ts }]} numberOfLines={1}>
-          {METRIC_CAPTIONS[metric]}
+        {/* The metric explainer, and the dates it covers: "Working sets per
+            group (this week)". The range is the page's, changed at the top of
+            the page, so here it's only named; the legend below names it only
+            once there's an earlier window to compare with, so most of the
+            time nothing on the card said which dates it was. The
+            period-vs-period comparison is the legend's. Two lines at most, so
+            a large text size wraps the range rather than cutting it off. */}
+        <Text style={[styles.caption, { color: t.ts }]} numberOfLines={2}>
+          {`${METRIC_CAPTIONS[metric]} (${rangeLabel.toLowerCase()})`}
         </Text>
 
         <View style={[styles.chartWrap, { width: S, height: H }]}>

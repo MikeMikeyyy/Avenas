@@ -94,7 +94,8 @@ eq(withoutSet([], [s("a"), s("b")], "zz"), null, "a key that isn't there removes
 {
   const empty = { weight: "", reps: "" };
   eq(prevFillFor(empty, "80×8"), { weight: "80", reps: "8" }, "fill: an empty set takes last time's weight and reps");
-  eq(prevFillFor(empty, "80"), { weight: "80", reps: "" }, "fill: a lone figure is the weight, as the hint shows it");
+  eq(prevFillFor(empty, "×8"), { weight: "", reps: "8" }, "fill: a bodyweight set's reps go in the reps box, not the weight");
+  eq(prevFillFor(empty, "80×"), { weight: "80", reps: "" }, "fill: a weight with no reps last time stays a weight");
   eq(prevFillFor(empty, "—"), null, "fill: nothing last time, nothing filled");
   eq(prevFillFor(empty, undefined), null, "fill: no hint at all, nothing filled");
   eq(prevFillFor({ weight: "85", reps: "" }, "80×8"), null, "fill: a typed weight is the user's, never overwritten");

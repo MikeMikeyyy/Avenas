@@ -61,6 +61,16 @@ export type CompletedExercise = {
    * own "Previous:" note (utils/workout.ts buildPrevNoteLookup).
    */
   programExerciseId?: string;
+  /**
+   * A timed hold (a plank): its sets' `reps` are SECONDS held. Saved from the
+   * Hold switch on the Workout tab, the Journal's log and workout detail, and
+   * stamped on older sessions from their program's own Hold setting
+   * (utils/holdMigration.ts). Holds count as sets, but not as reps or volume
+   * (computeWorkoutReps / computeWorkoutTonnage): a 60-second plank used to add
+   * 60 reps to the Progress page's Reps bars. Rides in the exercises jsonb, so
+   * it syncs with no column. Absent = a set of reps.
+   */
+  isIsometric?: true;
 };
 
 export type CompletedWorkout = {
@@ -225,6 +235,12 @@ export function programFinishDate(program: SavedProgram): Date | null {
   return end;
 }
 
+/** One hold a program came back from: held from `from` up to (not including)
+ *  `to`, both "YYYY-MM-DD". `shift` is how many days resuming moved startDate
+ *  forward, and `offsetShift` how far it moved cycleOffset (the days held for
+ *  "Today", 0 for "Carry on"). */
+export type ProgramHold = { from: string; to: string; shift: number; offsetShift: number };
+
 export type SavedProgram = {
   id: string;
   name: string;
@@ -244,6 +260,16 @@ export type SavedProgram = {
    *  remaining weeks and lands the cycle back on the paused day — see
    *  utils/programPause.ts. */
   pausedAt?: string;
+  /**
+   * The holds this run of the program has come back from, oldest first
+   * (resumeProgram adds one; activation, a fresh run, clears them). Resuming
+   * moves startDate forward by the days held, which re-dates every day before
+   * the hold: the program page (utils/programHistory.ts) dropped every session
+   * before startDate, and drew the hold's own days as missed. These undo that
+   * for a past date (utils/programPause.ts runStartYMD / programAsOf / heldOn).
+   * Synced (migration 0043).
+   */
+  holds?: ProgramHold[];
   /**
    * "YYYY-MM-DD" the program was archived from My Programs; absent means it's
    * in the list. Archiving hides it from My Programs, the send / review
@@ -358,6 +384,12 @@ export type ProgramDayRef = {
    *  `dayId` (legacy / pre-backfill) attach here and nowhere else, so they can
    *  never be counted twice across same-named days. */
   absorbsUnidentified: boolean;
+  /** True for the first day of its OWN program carrying this label. A session
+   *  that names its program but no slot (a custom workout added to it, or one
+   *  the dayId backfill couldn't place) attaches here: under "All programs" the
+   *  first "Arms" in scope can be another program's. Absent on a ref built by
+   *  hand, which then reads `absorbsUnidentified`. */
+  firstInProgram?: boolean;
   /** True when another day in scope shares this label, so the UI knows to
    *  qualify the row (e.g. with the cycle-day number) instead of showing two
    *  rows that read identically. */

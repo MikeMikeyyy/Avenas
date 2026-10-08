@@ -28,6 +28,7 @@ import { getJSON } from "../utils/storage";
 import { dayIdAt } from "../utils/programDays";
 import { getEffectiveToday } from "../utils/workout";
 import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
+import { runStartDate } from "../utils/programHolds";
 import { activateProgram, completeProgram, deactivateProgram, setWorkoutDay } from "../utils/programLifecycle";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
@@ -281,7 +282,7 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
           </Text>
 
           <View style={styles.dateChipRow}>
-            <DateChip icon="calendar" label={`Started ${program.startDate}`} isDark={isDark} />
+            <DateChip icon="calendar" label={`Started ${runStartDate(program)}`} isDark={isDark} />
             {/* The other end of the timeline. Moves out when a day is pushed and
                 back when a rest day is spent, which is the only place that trade
                 is visible. Not shown while held — a hold has no finish date until
@@ -372,7 +373,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
           </View>
           <Text style={[styles.weekLabel, { color: t.ts }]}>{weekText}</Text>
           <View style={styles.dateChipRow}>
-            <DateChip icon="calendar" label={`${dateLabel} ${program.startDate}`} isDark={isDark} />
+            <DateChip icon="calendar" label={`${dateLabel} ${runStartDate(program)}`} isDark={isDark} />
             {program.status === "completed" && program.completedDate && (
               <DateChip icon="flag" label={`Completed ${program.completedDate}`} isDark={isDark} accent />
             )}
@@ -646,6 +647,7 @@ export default function ProgramsScreen() {
       // and neither do the days the user rested, pushed or spent during it —
       // those are dated before this copy exists and would all count as drift.
       pausedAt: undefined,
+      holds: undefined,
       skippedDates: undefined,
       pushedDates: undefined,
       pulledDates: undefined,
@@ -703,9 +705,11 @@ export default function ProgramsScreen() {
     // underneath the user, so without this the new day was written and the tab
     // kept showing the old one: typically a day picked with Change Workout Day
     // and then started. Ask, and discard it only on a yes. No need when it's
-    // already the day being set.
-    const draft = await getJSON<{ date?: string; workoutInfo?: { name?: string; programId?: string; dayId?: string } } | null>(WORKOUT_DRAFT_KEY, null);
-    const started = draft?.date === today ? draft.workoutInfo ?? null : null;
+    // already the day being set. A session only SHAPED before starting
+    // (`planned`: reordered, swapped, sets added) isn't under way: the tab lets
+    // it go by itself once today schedules another day (utils/heldSession.ts).
+    const draft = await getJSON<{ date?: string; planned?: boolean; workoutInfo?: { name?: string; programId?: string; dayId?: string } } | null>(WORKOUT_DRAFT_KEY, null);
+    const started = draft?.date === today && !draft.planned ? draft.workoutInfo ?? null : null;
     const underWay = isRunning || isPaused || started !== null;
     const alreadyOnIt = !!started && started.programId === activeProgram.id && started.dayId === dayIdAt(activeProgram, targetDayIndex);
     const replaceStarted = underWay && !alreadyOnIt;

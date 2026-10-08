@@ -3,6 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
+  Pressable,
   TouchableOpacity,
   useWindowDimensions,
 } from "react-native";
@@ -18,8 +19,12 @@ import DumbbellIcon from "./DumbbellIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { pill, pillGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
-import { niceAxis } from "../utils/niceAxis";
 import { MONTH_NAMES } from "../utils/dates";
+import {
+  CHART_HEIGHT, GIFTED_TOP_PAD, TOOLTIP_W, Y_AXIS_LABEL_WIDTH,
+  changeFromPrevious, chartChange, dotX, dotY, exerciseChartAxis, exerciseChartKey, exerciseChartLabels, exerciseChartLayout,
+  fmtChange, metricValue, plottedPoints, tooltipLeft,
+} from "../utils/exerciseChartLayout";
 import type {
   ExerciseDataPoint,
   ExerciseMetricKey,
@@ -39,6 +44,9 @@ interface Props {
   /** Stable id of that day, forwarded alongside the label so the full-history
    *  page can scope to THIS day rather than to everything sharing its name. */
   dayId?: string;
+  /** ...and its program, since every program's days are d0, d1…: without it
+   *  the full-history page listed other programs' first days too. */
+  programId?: string;
   history: ExerciseDataPoint[];
   prs: PRs;
   /** "kg" | "lbs" */
@@ -60,93 +68,73 @@ function fmtShortDate(ymd: string): string {
   return `${d} ${MONTH_NAMES[(m - 1) % 12]}`;
 }
 
-function fmtAxisDate(ymd: string): string {
-  // Compact x-axis label: "3/14"
-  const [, m, d] = ymd.split("-").map(Number);
-  if (!Number.isFinite(d) || !Number.isFinite(m)) return ymd;
-  return `${m}/${d}`;
-}
-
 function fmtNum(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   if (Number.isInteger(n)) return n.toLocaleString();
   return n.toFixed(1);
 }
 
-// Per-metric y-value lookup so axis / data / focused-header all read from a
-// single source of truth.
-function metricValue(p: ExerciseDataPoint, m: ExerciseMetricKey): number {
-  switch (m) {
-    case "topWeight":     return p.topWeight;
-    case "bestSetVolume": return p.bestSetVolume;
-    case "sessionVolume": return p.sessionVolume;
-    case "totalReps":     return p.totalReps;
-  }
+// A total moved (a session's, or a set's weight × reps), to the kilo:
+// "4,560", never "10053.3".
+function fmtTotal(n: number): string {
+  return Number.isFinite(n) && n > 0 ? Math.round(n).toLocaleString() : "0";
 }
 
-// Build an axis pinned to an EXACT max (not rounded up to a "nice" number) —
-// the progression chart's first-point-centered scaling needs precise point
-// placement, and niceAxis's round-up would leave the line anywhere between
-// 50% and ~100% depending on where the value falls under the next nice
-// ceiling. Tick labels mirror niceAxis's "k"-suffix rules so the two styles
-// read the same.
-function exactAxis(exactMax: number) {
-  const stepValue = exactMax / 4;
-  const fmtTick = (v: number): string => {
-    if (v === 0) return "0";
-    if (exactMax >= 1000) {
-      const n = v / 1000;
-      return Number.isInteger(n) ? `${n}k` : `${n.toFixed(1)}k`;
-    }
-    if (exactMax >= 10) return Number.isInteger(v) ? `${v}` : `${Math.round(v)}`;
-    return Number.isInteger(v) ? `${v}` : v.toFixed(1);
-  };
-  return {
-    max: exactMax,
-    stepValue,
-    labels: [0, 1, 2, 3, 4].map(i => fmtTick(stepValue * i)),
-  };
+// "4 sets", "1 rep".
+function counted(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-// Main line of the focused-point tooltip, per metric. The weight-based
-// metrics show the weight × reps pair that produced the value; totalReps
-// shows a "reps" suffix instead of the unit.
+// Main line of the focused-point tooltip, per metric. Heaviest shows the
+// weight × reps of the set it was; Est. 1RM the estimate, rounded as the
+// Estimated 1RM record is, with the set it came from on a line of its own
+// (tooltipSource); totalReps shows a "reps" suffix instead of the unit. A
+// timed hold's "reps" are seconds (ExerciseDataPoint.isHold), so it says so.
 function tooltipValue(p: ExerciseDataPoint, m: ExerciseMetricKey, unit: string): string {
   switch (m) {
     case "topWeight":
-      return `${fmtNum(p.topWeight)} ${unit} × ${p.topReps}`;
-    case "bestSetVolume":
-      return `${fmtNum(p.bestSetWeight)} ${unit} × ${p.bestSetReps}`;
+      return p.isHold ? `${fmtNum(p.topWeight)} ${unit} for ${p.topReps}s` : `${fmtNum(p.topWeight)} ${unit} × ${p.topReps}`;
+    case "e1rm":
+      return `${fmtNum(Math.round(p.e1rm))} ${unit}`;
     case "sessionVolume":
       return `${fmtNum(p.sessionVolume)} ${unit}`;
     case "totalReps":
-      return `${p.totalReps} reps`;
+      return p.isHold ? `${p.totalReps}s held` : `${p.totalReps} reps`;
   }
 }
 
-// "2026-09-09" → "Sep 9, 2026" — the tooltip's date line.
+// The set an estimate came from, under it in the tooltip: an Est. 1RM is a
+// number nobody lifted, so it says which set it's worked out from.
+function tooltipSource(p: ExerciseDataPoint, m: ExerciseMetricKey, unit: string): string | null {
+  return m === "e1rm" ? `from ${fmtNum(p.e1rmWeight)} ${unit} × ${p.e1rmReps}` : null;
+}
+
+// The arrow before a change: ▲ up, ▼ down, none when it rounds to nothing.
+function changeArrow(dir: "up" | "down" | "flat"): string {
+  return dir === "up" ? "▲ " : dir === "down" ? "▼ " : "";
+}
+
+// "2026-09-09" → "9 Sep 2026", the tooltip's date line: day first, like the
+// axis under it and the rest of the app.
 function fmtTooltipDate(ymd: string): string {
   const [y, m, d] = ymd.split("-").map(Number);
   if (![y, m, d].every(Number.isFinite)) return ymd;
-  return `${MONTH_NAMES[(m - 1) % 12]} ${d}, ${y}`;
+  return `${d} ${MONTH_NAMES[(m - 1) % 12]} ${y}`;
 }
 
 // Focused-dot ring and tooltip geometry. The tooltip is a near-black floating
 // card (same in both themes, like iOS chart callouts) with a caret pointing
-// down at the focused dot.
+// down at the focused dot. Its width and where it sits: utils/exerciseChartLayout.ts.
 const FOCUSED_DOT_SIZE = 18;
-const TOOLTIP_W = 140;
 const TOOLTIP_BG = "#1C1D24";
-// gifted-charts pads the top of its plot: point y = (height + 10) − the
-// value's share of `height` (extendedContainerHeight = height + overflowTop(0)
-// + 10 in gifted-charts-core). Keep in sync if the library changes.
-const GIFTED_TOP_PAD = 10;
+// A point's touch target reaches this far from its dot each way (a 48pt box,
+// over Apple's 44pt minimum), less where neighbouring points are closer.
+const HIT_HALF = 24;
 
 /**
  * Per-exercise weight-progression line chart with PR tiles below.
- * - Y-axis uses first-point-centered exact scaling (see `axis`): the first
- *   visible session sits on the middle gridline until the trend outgrows it,
- *   then the peak anchors at 90% of the plot.
+ * - The y-axis is zoomed to the sessions plotted (see `axis`), so the change
+ *   between them fills the plot, never squeezed below a fifth of the top value.
  * - Tapping a point highlights it and shows date/weight/reps above the chart.
  * - Tapping a PR tile routes to that PR's source workout via /workout-detail.
  */
@@ -154,6 +142,7 @@ export default function ExerciseProgressionChart({
   exerciseName,
   dayName,
   dayId,
+  programId,
   history,
   prs,
   unit,
@@ -171,51 +160,34 @@ export default function ExerciseProgressionChart({
   // The parent already scopes `history` to the selected program (bounded by
   // its start/completed dates) and workout day, and the whole point of this
   // chart is the full progression across that program's duration. Neither the
-  // page-level Volume range nor any local dropdown should slice it.
+  // page-level Volume range nor any local dropdown should slice it. What the
+  // metric leaves out is a session with no weight to plot: Reps plots every
+  // session, the weight metrics those with weight on the bar (plottedPoints).
+  const plotted = useMemo(() => plottedPoints(history, metric), [history, metric]);
 
   // Clear focus when the underlying data slice or active metric changes.
   useEffect(() => {
     setFocusedIndex(null);
-  }, [exerciseName, dayName, history.length, metric]);
+  }, [exerciseName, dayName, plotted.length, metric]);
 
-  // Label style: compact "M/D" for short spans; once the plotted history
-  // crosses ~3 calendar months, month names read better.
-  const monthLabels = useMemo(() => {
-    if (history.length < 2) return false;
-    const [y1, m1] = history[0].date.split("-").map(Number);
-    const [y2, m2] = history[history.length - 1].date.split("-").map(Number);
-    if (![y1, m1, y2, m2].every(Number.isFinite)) return false;
-    return (y2 - y1) * 12 + (m2 - m1) >= 3;
-  }, [history]);
+  // Where the plot, the dots and the pop-up sit, for this many sessions on
+  // this screen: one dot in the card's middle, up to five centred as a group,
+  // six or more spread edge to edge. Then the dates under the dots ("5 Oct"
+  // for short spans, each month's name once past about three months) and the
+  // y-axis the values scale to (zoomed to them, from a round bottom that
+  // needn't be zero). All utils/exerciseChartLayout.ts.
+  const layout = useMemo(() => exerciseChartLayout(plotted.length, screenWidth), [plotted.length, screenWidth]);
+  const { chartWidth: CHART_WIDTH, initialSpacing, endSpacing, spacing } = layout;
+  const labels = useMemo(() => exerciseChartLabels(plotted.map(p => p.date), spacing), [plotted, spacing]);
+  const axis = useMemo(() => exerciseChartAxis(plotted.map(p => metricValue(p, metric))), [plotted, metric]);
 
-  const axis = useMemo(() => {
-    const max = history.reduce((m, p) => {
-      const v = metricValue(p, metric);
-      return v > m ? v : m;
-    }, 0);
+  const focused = focusedIndex != null ? plotted[focusedIndex] ?? null : null;
 
-    // Empty history → niceAxis's default empty axis (clean 0–100 grid).
-    if (max <= 0) return niceAxis(max, 4);
-
-    // First-point-centered scaling, uniform across all four metrics (each has
-    // its own scale — kg, reps, kg·reps — so only an exact axis can place
-    // them consistently; niceAxis's round-up left the line anywhere from the
-    // middle to flush with the top depending on the value):
-    //   - The FIRST session anchors the middle gridline (axis max =
-    //     2× its value): a lone dot sits dead-center, a flat run stays
-    //     centered, and later, higher sessions climb from the center toward
-    //     the top — the incline reads immediately.
-    //   - Once the trend outgrows that anchor (peak > 2× first), the peak
-    //     takes over and sits at 90% of the plot, with earlier sessions
-    //     falling to the middle/bottom. The 0.9 also hands the regimes over
-    //     smoothly: at peak = 2×first the first point reads 50% → 45%.
-    // Every point is positive here (collectExerciseHistory drops zero-volume
-    // sessions), so `first` can't be 0.
-    const first = metricValue(history[0], metric);
-    return exactAxis(max <= first * 2 ? first * 2 : max / 0.9);
-  }, [history, metric]);
-
-  const focused = focusedIndex != null ? history[focusedIndex] ?? null : null;
+  // How the line moved across the chart, its last dot against its first: the
+  // header's "▲ 18% since 12 Sep" (utils/exerciseChartLayout.ts). A tapped
+  // dot says how that session went against the one before, in its pop-up.
+  const change = useMemo(() => chartChange(history, metric), [history, metric]);
+  const focusedChange = focusedIndex != null ? changeFromPrevious(plotted, focusedIndex, metric) : null;
 
   // Day context leads the subline (e.g. "Push · Sessions logged · 4") so two
   // day-scoped charts for the same exercise name are visually distinct. The
@@ -227,27 +199,14 @@ export default function ExerciseProgressionChart({
     return `${day}Sessions logged · ${history.length}`;
   })();
 
-  // Target ~5 visible x-axis labels regardless of how many points exist.
-  // Stride 1 → every point labelled; larger strides space them out.
-  const stride = Math.max(1, Math.ceil(history.length / 5));
-
   const data = useMemo(
     () =>
-      history.map((p, i) => {
-        // Month-spanning history labels with the short month name (e.g.
-        // "Mar"); shorter spans use compact "M/D".
-        const labelText = (() => {
-          if (i % stride !== 0) return "";
-          if (monthLabels) {
-            const [, m] = p.date.split("-").map(Number);
-            if (!Number.isFinite(m)) return "";
-            return MONTH_NAMES[(m - 1) % 12].slice(0, 3);
-          }
-          return fmtAxisDate(p.date);
-        })();
+      plotted.map((p, i) => {
         return {
-          value: metricValue(p, metric),
-          label: labelText,
+          // From the axis' bottom: gifted-charts plots from zero, and the
+          // axis reads from `axis.min` (its labels are the real values).
+          value: metricValue(p, metric) - axis.min,
+          label: labels[i],
           showStrip: i === focusedIndex,
           dataPointColor: `${ACCT}E6`,
           dataPointRadius: 3,
@@ -267,65 +226,8 @@ export default function ExerciseProgressionChart({
           },
         };
       }),
-    [history, focusedIndex, stride, monthLabels, metric],
+    [plotted, focusedIndex, labels, metric, axis],
   );
-
-  const cardWidth = Math.min(screenWidth - 40, 420);
-
-  // Layout constants — kept in sync with the LineChart props below so we can
-  // compute the available data area where the dots actually live.
-  const Y_AXIS_LABEL_WIDTH = 32;
-  const CHART_HEIGHT = 170;
-  const CHART_WIDTH = cardWidth - 80;
-  const DATA_AREA_WIDTH = CHART_WIDTH - Y_AXIS_LABEL_WIDTH;
-  // NeuCard inner content area = cardWidth minus the card's 16px horizontal
-  // padding on each side. This is the visual "center" the user perceives.
-  const WRAPPER_WIDTH = cardWidth - 32;
-
-  // Dynamic spacing so the points always feel balanced inside the chart:
-  //   • 1 point  → at the wrapper's true horizontal midpoint (= the card's
-  //                visual center). Robust regardless of whether gifted-charts
-  //                stretches the chart to fill the wrapper or honors its
-  //                `width` prop, because the dot sits where the user reads
-  //                "the middle of the card" either way.
-  //   • 2..5 pts → constant per-point gap (same as the filled 6-point gap),
-  //                with the group centered around that same midpoint.
-  //   • 6+ pts   → edge-to-edge of the plot zone: first point near left,
-  //                last near right.
-  //   • >6 pts   → spacing shrinks naturally so all points fit.
-  //
-  // `endSpacing` is ALWAYS pinned to MIN_PAD — a large endSpacing makes
-  // gifted-charts render the chart wider than the `width` prop suggests
-  // (its x-axis line stretches to fit the reserved right margin), which
-  // re-extends the chart to the card's right edge.
-  const { initialSpacing, endSpacing, spacing } = useMemo(() => {
-    const MIN_PAD = 12;
-    const FILL_AT_N = 6;
-    const n = data.length;
-    // For the dot to sit AT the wrapper's horizontal midpoint, expressed as
-    // an `initialSpacing` offset from the y-axis line:
-    //   dot_x_in_wrapper = Y_AXIS_LABEL_WIDTH + initialSpacing = WRAPPER_WIDTH/2
-    //   → initialSpacing = WRAPPER_WIDTH/2 - Y_AXIS_LABEL_WIDTH
-    const cardCenterInPlotCoords = WRAPPER_WIDTH / 2 - Y_AXIS_LABEL_WIDTH;
-    if (n <= 1) {
-      return {
-        initialSpacing: cardCenterInPlotCoords,
-        endSpacing: MIN_PAD,
-        spacing: 0,
-      };
-    }
-    if (n >= FILL_AT_N) {
-      return {
-        initialSpacing: MIN_PAD,
-        endSpacing: MIN_PAD,
-        spacing: (DATA_AREA_WIDTH - 2 * MIN_PAD) / (n - 1),
-      };
-    }
-    const filledSpacing = (DATA_AREA_WIDTH - 2 * MIN_PAD) / (FILL_AT_N - 1);
-    const groupWidth = (n - 1) * filledSpacing;
-    const initialSpacing = cardCenterInPlotCoords - groupWidth / 2;
-    return { initialSpacing, endSpacing: MIN_PAD, spacing: filledSpacing };
-  }, [data.length, WRAPPER_WIDTH, Y_AXIS_LABEL_WIDTH, DATA_AREA_WIDTH]);
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -343,6 +245,24 @@ export default function ExerciseProgressionChart({
               {headerLabel}
             </Text>
           </View>
+          {change ? (() => {
+            // Up in the accent, down in grey, as the Strength radar's
+            // arrows: a lighter week isn't a warning.
+            const c = fmtChange(change.pct);
+            const since = fmtShortDate(change.sinceYMD);
+            return (
+              <View
+                style={styles.changeBlock}
+                accessible
+                accessibilityLabel={c.dir === "flat" ? `No change since ${since}` : `${c.dir === "up" ? "Up" : "Down"} ${c.text} since ${since}`}
+              >
+                <Text style={[styles.changeValue, { color: c.dir === "up" ? ACCT : t.ts }]} numberOfLines={1}>
+                  {`${changeArrow(c.dir)}${c.text}`}
+                </Text>
+                <Text style={[styles.changeSince, { color: t.ts }]} numberOfLines={1}>{`since ${since}`}</Text>
+              </View>
+            );
+          })() : null}
         </View>
 
         {history.length === 0 ? (
@@ -352,13 +272,31 @@ export default function ExerciseProgressionChart({
               No working sets logged for this exercise yet.
             </Text>
           </View>
+        ) : plotted.length === 0 ? (
+          // Done, but only at bodyweight: nothing to weigh on this metric.
+          <View style={styles.empty}>
+            <DumbbellIcon size={28} color={t.ts} />
+            <Text style={[styles.emptyText, { color: t.ts }]}>
+              {history.length === 1
+                ? "Done at bodyweight so far. Reps, below, shows the session."
+                : `Done at bodyweight so far. Reps, below, shows all ${history.length} sessions.`}
+            </Text>
+          </View>
         ) : (
             <View style={{ marginTop: 10, alignSelf: "stretch", position: "relative" }}>
               <LineChart
+                // A new chart for every series it draws: gifted-charts opens
+                // the line's width once, to the data it mounted with, and a
+                // chart kept through a longer series cut it off there
+                // (utils/exerciseChartLayout.ts exerciseChartKey).
+                key={exerciseChartKey(exerciseName, dayId ?? dayName ?? "", data.length, layout)}
                 data={data}
                 color={ACCT}
                 thickness={2.5}
-                curved
+                // Straight from one session to the next, never `curved`:
+                // nothing happens between two sessions, and a curve through a
+                // climb and a drop bulged past the real peak and trough,
+                // drawing values never lifted (user decision, 2026-10-08).
                 areaChart
 
                 // Custom under-line gradient. A single linear gradient spans
@@ -391,7 +329,7 @@ export default function ExerciseProgressionChart({
                 dashWidth={3}
                 dashGap={4}
                 yAxisLabelTexts={axis.labels}
-                maxValue={axis.max}
+                maxValue={axis.max - axis.min}
                 stepValue={axis.stepValue}
                 noOfSections={4}
                 // We render x-axis labels ourselves below; suppress the
@@ -419,25 +357,36 @@ export default function ExerciseProgressionChart({
               />
 
               {/*
-                Touch overlay. The visible dots are tiny (radius 3), so relying
-                on gifted-charts' per-point hit area makes them very hard to
-                tap. Instead we tile transparent full-height columns across the
-                plot — one per point, centered on the same dot x the custom
-                x-labels use — so a tap anywhere in a point's vertical band
-                focuses it. The dots/line below stay visible; these are tap-only
-                targets so vertical scrolling still passes through to the
-                ScrollView.
+                A tap anywhere on the chart that isn't on a point hides the
+                pop-up: this lies over the whole chart, under the points' own
+                targets, so the empty plot, the axes and the dates all land
+                here (user request, 2026-10-08). Every tap used to choose a
+                point, since each point's target was a full-height column and
+                together they tiled the chart, so only the point or its pop-up
+                hid it again.
               */}
-              <View
-                pointerEvents="box-none"
-                style={[styles.hitOverlay, { height: CHART_HEIGHT }]}
-              >
-                {data.map((_, i) => {
-                  const dotX = Y_AXIS_LABEL_WIDTH + initialSpacing + i * spacing;
-                  const left = i === 0 ? 0 : dotX - spacing / 2;
-                  const right = i === data.length - 1 ? CHART_WIDTH : dotX + spacing / 2;
-                  const width = Math.max(0, right - left);
-                  const p = history[i];
+              <Pressable
+                accessible={false}
+                onPress={() => setFocusedIndex(null)}
+                style={StyleSheet.absoluteFill}
+              />
+
+              {/*
+                Each point's touch target: a box around its dot, HIT_HALF
+                either side, narrowed to the gap between points where they sit
+                closer than that, so along the line they tile without
+                overlapping. (The dots are radius 3; gifted-charts' own hit
+                area is too small to tap.) Another point's box shows its stat;
+                the focused one's hides it again. Tap-only, so vertical
+                scrolling still passes through to the ScrollView.
+              */}
+              <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+                {plotted.map((p, i) => {
+                  const x = dotX(layout, i);
+                  const y = dotY(metricValue(p, metric), axis);
+                  const half = plotted.length > 1 ? Math.min(HIT_HALF, spacing / 2) : HIT_HALF;
+                  const top = Math.max(0, y - HIT_HALF);
+                  const bottom = Math.min(y + HIT_HALF, GIFTED_TOP_PAD + CHART_HEIGHT + 12);
                   return (
                     <TouchableOpacity
                       key={`hit-${i}`}
@@ -446,9 +395,9 @@ export default function ExerciseProgressionChart({
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         setFocusedIndex(prev => (prev === i ? null : i));
                       }}
-                      style={{ position: "absolute", top: 0, height: CHART_HEIGHT, left, width }}
+                      style={{ position: "absolute", left: x - half, width: half * 2, top, height: bottom - top }}
                       accessibilityRole="button"
-                      accessibilityLabel={p ? `Show ${exerciseName} on ${fmtShortDate(p.date)}` : undefined}
+                      accessibilityLabel={`Show ${exerciseName} on ${fmtShortDate(p.date)}`}
                     />
                   );
                 })}
@@ -464,12 +413,11 @@ export default function ExerciseProgressionChart({
               <View pointerEvents="none" style={styles.xLabelsRow}>
                 {data.map((d, i) => {
                   if (!d.label) return null;
-                  const dotX = Y_AXIS_LABEL_WIDTH + initialSpacing + i * spacing;
                   return (
                     <Text
                       key={i}
                       numberOfLines={1}
-                      style={[styles.xLabel, { color: t.ts, left: dotX - 20 }]}
+                      style={[styles.xLabel, { color: t.ts, left: dotX(layout, i) - 20 }]}
                     >
                       {d.label}
                     </Text>
@@ -485,31 +433,46 @@ export default function ExerciseProgressionChart({
                 placement — see GIFTED_TOP_PAD) and the card hangs above it.
                 The card clamps to the wrapper's edges so edge dots don't push
                 it outside the NeuCard; the caret stays centered on the dot.
+                Tapping the card hides it, as a tap anywhere off a point does.
               */}
               {focused && focusedIndex != null ? (() => {
-                const dotX = Y_AXIS_LABEL_WIDTH + initialSpacing + focusedIndex * spacing;
-                const dotY =
-                  GIFTED_TOP_PAD +
-                  CHART_HEIGHT -
-                  (metricValue(focused, metric) / axis.max) * CHART_HEIGHT;
-                const cardLeft = Math.min(
-                  Math.max(dotX - TOOLTIP_W / 2, -6),
-                  WRAPPER_WIDTH - TOOLTIP_W + 6,
-                );
+                const x = dotX(layout, focusedIndex);
+                const y = dotY(metricValue(focused, metric), axis);
+                const cardLeft = tooltipLeft(layout, x);
                 return (
                   <View
-                    pointerEvents="none"
-                    style={[styles.tooltipAnchor, { left: dotX, top: dotY }]}
+                    pointerEvents="box-none"
+                    style={[styles.tooltipAnchor, { left: x, top: y }]}
                   >
-                    <View style={[styles.tooltipCard, { left: cardLeft - dotX }]}>
+                    <Pressable
+                      onPress={() => setFocusedIndex(null)}
+                      style={[styles.tooltipCard, { left: cardLeft - x }]}
+                      accessibilityRole="button"
+                      accessibilityHint="Hides this"
+                    >
                       <Text style={styles.tooltipValue} numberOfLines={1}>
                         {tooltipValue(focused, metric, unit)}
                       </Text>
+                      {tooltipSource(focused, metric, unit) ? (
+                        <Text style={styles.tooltipDate} numberOfLines={1}>
+                          {tooltipSource(focused, metric, unit)}
+                        </Text>
+                      ) : null}
                       <Text style={styles.tooltipDate} numberOfLines={1}>
                         {fmtTooltipDate(focused.date)}
+                        {focusedChange !== null ? (() => {
+                          // Against the session before it, in the
+                          // header's colours (the first dot has none).
+                          const c = fmtChange(focusedChange);
+                          return (
+                            <Text style={c.dir === "up" ? { color: ACCT } : null}>
+                              {`  ·  ${changeArrow(c.dir)}${c.text}`}
+                            </Text>
+                          );
+                        })() : null}
                       </Text>
-                    </View>
-                    <View style={styles.tooltipCaret} />
+                    </Pressable>
+                    <View pointerEvents="none" style={styles.tooltipCaret} />
                   </View>
                 );
               })() : null}
@@ -517,7 +480,7 @@ export default function ExerciseProgressionChart({
         )}
 
         {/* Metric selector — iOS-style segmented control with a sliding
-            thumb (Heaviest / Best Set / Volume / Reps). Same control as
+            thumb (Heaviest / Est. 1RM / Volume / Reps). Same control as
             VolumeBarChart's metric row so the two charts feel consistent. */}
         <SegmentedControl<ExerciseMetricKey>
           options={EXERCISE_METRIC_OPTIONS}
@@ -544,12 +507,15 @@ export default function ExerciseProgressionChart({
           textPrimary={t.tp}
           textSecondary={t.ts}
         />
+        {/* An estimate, never a lift: worked out from the set under it
+            (weight × (1 + reps / 30)), so it isn't called a best (user
+            request, 2026-10-08). */}
         <PRTile
-          label="Best 1RM"
+          label="Estimated 1RM"
           value={prs.oneRepMax ? `${fmtNum(Math.round(prs.oneRepMax.value))} ${unit}` : "—"}
           sub={
             prs.oneRepMax
-              ? `${fmtShortDate(prs.oneRepMax.date)}  ·  ${fmtNum(prs.oneRepMax.weight ?? 0)}×${prs.oneRepMax.reps ?? 0}`
+              ? `${fmtShortDate(prs.oneRepMax.date)} · ${fmtNum(prs.oneRepMax.weight ?? 0)}×${prs.oneRepMax.reps ?? 0}`
               : "—"
           }
           onPress={prs.oneRepMax ? () => goToWorkout(prs.oneRepMax!.workoutId) : null}
@@ -559,19 +525,26 @@ export default function ExerciseProgressionChart({
         />
       </View>
       <View style={styles.prRow}>
+        {/* The set it was, "90 kg × 8", with what made it the best
+            (weight × reps) and when underneath. It showed only the product,
+            "720 kg", which read as a weight nobody lifted (user request,
+            2026-10-08). */}
         <PRTile
           label="Best Set"
-          value={prs.bestSetVolume ? `${fmtNum(prs.bestSetVolume.value)} ${unit}` : "—"}
-          sub={prs.bestSetVolume ? fmtShortDate(prs.bestSetVolume.date) : "—"}
+          value={prs.bestSetVolume ? `${fmtNum(prs.bestSetVolume.weight ?? 0)} ${unit} × ${prs.bestSetVolume.reps ?? 0}` : "—"}
+          sub={prs.bestSetVolume ? `${fmtTotal(prs.bestSetVolume.value)} ${unit} · ${fmtShortDate(prs.bestSetVolume.date)}` : "—"}
           onPress={prs.bestSetVolume ? () => goToWorkout(prs.bestSetVolume!.workoutId) : null}
           dark={isDark}
           textPrimary={t.tp}
           textSecondary={t.ts}
         />
+        {/* The most weight moved on this exercise in one session, with the
+            sets and reps that added up to it. As "Best Session" with only
+            the total, it said nothing about what the number was. */}
         <PRTile
-          label="Best Session"
-          value={prs.bestSessionVolume ? `${fmtNum(prs.bestSessionVolume.value)} ${unit}` : "—"}
-          sub={prs.bestSessionVolume ? fmtShortDate(prs.bestSessionVolume.date) : "—"}
+          label="Most Volume"
+          value={prs.bestSessionVolume ? `${fmtTotal(prs.bestSessionVolume.value)} ${unit}` : "—"}
+          sub={prs.bestSessionVolume ? `${counted(prs.bestSessionVolume.sets ?? 0, "set")} · ${counted(prs.bestSessionVolume.reps ?? 0, "rep")} · ${fmtShortDate(prs.bestSessionVolume.date)}` : "—"}
           onPress={prs.bestSessionVolume ? () => goToWorkout(prs.bestSessionVolume!.workoutId) : null}
           dark={isDark}
           textPrimary={t.tp}
@@ -588,7 +561,7 @@ export default function ExerciseProgressionChart({
       onPress={() => {
         router.navigate({
           pathname: "/exercise-history",
-          params: { exerciseName, ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}), ...(clientId ? { clientId } : {}) },
+          params: { exerciseName, ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}), ...(programId ? { programId } : {}), ...(clientId ? { clientId } : {}) },
         });
       }}
       accessibilityRole="button"
@@ -646,6 +619,9 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: "row", alignItems: "flex-start" },
   title: { fontFamily: FontFamily.bold, fontSize: 18 },
   headerValue: { fontFamily: FontFamily.semibold, fontSize: 13, marginTop: 2 },
+  changeBlock: { alignItems: "flex-end", marginLeft: 12 },
+  changeValue: { fontFamily: FontFamily.bold, fontSize: 16 },
+  changeSince: { fontFamily: FontFamily.regular, fontSize: 11, marginTop: 2 },
 
   empty: {
     alignItems: "center",
@@ -703,15 +679,6 @@ const styles = StyleSheet.create({
   // label absolutely positioned at its data point's x coordinate. marginTop
   // matches the horizontal gap gifted-charts puts between the y-axis line
   // and its y-axis labels, so the two axes feel visually consistent.
-  // Transparent tap-target layer sized to the LineChart's plot. Columns are
-  // absolutely positioned children, so this just needs to pin to the top-left
-  // of the chart; its height is set inline to CHART_HEIGHT.
-  hitOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-  },
   xLabelsRow: {
     position: "relative",
     height: 14,

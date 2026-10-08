@@ -32,7 +32,7 @@ import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERR
 import { MONTH_NAMES, sessionTimeRange } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
-import { buildWeekSchedule, weekStartFor, type WeekDayPlan } from "../../utils/weekSchedule";
+import { buildWeekSchedule, weekStartFor, weekTotals, type WeekDayPlan } from "../../utils/weekSchedule";
 import { applyRestDay, clearRestDay } from "../../utils/restDay";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../../components/journal/JournalWorkoutCard";
 import { useDayRollover } from "../../hooks/useDayRollover";
@@ -386,13 +386,7 @@ export default function HomeScreen() {
       allPrograms: programs,
     });
 
-    const totalMinutes = Math.round(
-      schedule.sessions.reduce((sum, w) => sum + w.durationSeconds, 0) / 60
-    );
-    const totalVolumeKg = schedule.sessions.reduce((sum, w) =>
-      sum + w.exercises.reduce((es, ex) =>
-        es + ex.sets.reduce((ss, s) =>
-          ss + (s.type === "working" && s.done ? (parseFloat(s.weight) || 0) * (parseFloat(s.reps) || 0) : 0), 0), 0), 0);
+    const { totalMinutes, totalVolumeKg } = weekTotals(schedule.sessions);
 
     const weekDays: WeekDay[] = activeProgram
       ? schedule.days.map(day => ({ ...day, label: SHORT_DAY_NAMES[weekdayIndex(day.dateYMD)] }))

@@ -23,12 +23,14 @@ import {
   buildPrevSessionNote,
 } from "../utils/workout";
 import { parseStoredDate, formatStoredDate, todayYMD, sessionTimeRange } from "../utils/dates";
+import { stampSession, timeValFromDate } from "../utils/sessionTime";
 import {
   formatWeightForDisplay, parseWeightToKg, migrateWeightLbToKg, trimNumber,
-  KG_PER_LB, prescribedWeight, prescribedPlaceholder, stampWeightUnits,
+  KG_PER_LB, prescribedWeight, prescribedPlaceholder, stampWeightUnits, formatPrevHint,
 } from "../utils/units";
 import { migrateHistoryWeights, migrateProgramWeights } from "../utils/weightMigration";
-import { keepsHeldSession } from "../utils/heldSession";
+import { keepsHeldSession, sameWorkout } from "../utils/heldSession";
+import { stampHolds } from "../utils/holdMigration";
 import { assignProgramDayIds, backfillHistoryDayIds, resolveHistoricDayId } from "../utils/dayIdMigration";
 import {
   canonicalizeWorkouts, dayIdAt, dayLabel, forkChangedDayIds, historicalDays,
@@ -98,6 +100,38 @@ eq(parseStoredDate(""), null, "parseStoredDate empty -> null");
 eq(parseStoredDate(undefined), null, "parseStoredDate undefined -> null");
 check(parseStoredDate("01 Jan 2026") instanceof Date, "parseStoredDate valid -> Date");
 
+// ── stampHolds: older sessions learn which exercises were timed holds ────────
+{
+  const program = makeProgram({
+    id: "ph", cyclePattern: ["Core", "Rest"], cycleDays: 2, dayIds: ["d0", "d1"],
+    workouts: { "0:Core": [
+      { id: "plank", name: "Plank", isIsometric: true, sets: [{ type: "working", reps: "60" }] },
+      { id: "crunch", name: "Crunch", sets: [{ type: "working", reps: "15" }] },
+    ] },
+  });
+  const ex = (name: string, extra: Record<string, string> = {}) => ({ name, notes: "", sets: [{ type: "working" as const, weight: "", reps: "60", done: true }], ...extra });
+  const old: CompletedWorkout[] = [
+    // By place, done as itself.
+    { id: "a", date: "2026-01-01", completedAt: "2026-01-01T08:00:00.000Z", workoutName: "Core", programId: "ph", dayId: "d0", durationSeconds: 0,
+      exercises: [ex("Plank", { programExerciseId: "plank" }), ex("Crunch", { programExerciseId: "crunch" })] },
+    // Saved before places: by name on its day.
+    { id: "b", date: "2026-01-03", completedAt: "2026-01-03T08:00:00.000Z", workoutName: "Core", programId: "ph", dayId: "d0", durationSeconds: 0,
+      exercises: [ex("Plank")] },
+    // The plank's place, swapped for another exercise: that one isn't a hold.
+    { id: "c", date: "2026-01-05", completedAt: "2026-01-05T08:00:00.000Z", workoutName: "Core", programId: "ph", dayId: "d0", durationSeconds: 0,
+      exercises: [ex("Hanging Leg Raise", { programExerciseId: "plank", swappedFrom: "Plank" })] },
+    // A free workout: nothing says what its exercises were.
+    { id: "d", date: "2026-01-06", completedAt: "2026-01-06T08:00:00.000Z", workoutName: "Abs", programId: "", durationSeconds: 0,
+      exercises: [ex("Plank")] },
+  ];
+  const stamped = stampHolds(old, [program]);
+  eq(stamped[0].exercises.map(e => !!e.isIsometric), [true, false], "holds: the program's plank, by its place, is a hold; the crunch isn't");
+  eq(stamped[1].exercises.map(e => !!e.isIsometric), [true], "holds: a session saved before places finds it by name on its day");
+  eq(stamped[2].exercises.map(e => !!e.isIsometric), [false], "holds: a swap into the plank's place isn't a plank");
+  check(stamped[3] === old[3], "holds: a free workout is left alone");
+  check(stampHolds(stamped, [program])[0] === stamped[0], "holds: running it again changes nothing");
+}
+
 // ── sessionTimeRange: a session's start and finish, always both ──────────────
 {
   const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
@@ -109,6 +143,45 @@ check(parseStoredDate("01 Jan 2026") instanceof Date, "parseStoredDate valid -> 
   eq(sessionTimeRange(new Date(end).toISOString(), NaN), `${clock(end)} – ${clock(end)}`,
     "times: an unreadable duration counts as none");
   eq(sessionTimeRange("garbage", 3600), null, "times: an unreadable finish shows none");
+}
+
+// ── stampSession: the real finish, from the wheels and the training day ──────
+// It was the end time on the training day's date, so a session finished at
+// 12:30am and counted as the day before was saved a whole day early.
+{
+  const at = (d: number, h: number, m: number) => new Date(2026, 9, d, h, m);
+  const tv = (h: number, m: number) => timeValFromDate(at(5, h, m));
+  const finish = (s: { completedAt: string }) => new Date(s.completedAt).getTime();
+  const D = "2026-10-05";
+  const later = at(9, 12, 0);
+
+  // Complete Workout: 11pm to 12:30am, counted as the 5th.
+  const late = stampSession(D, tv(23, 0), tv(0, 30), at(5, 23, 0), at(6, 0, 31));
+  eq([finish(late), late.durationSeconds], [at(6, 0, 30).getTime(), 90 * 60], "stamp: finished after midnight, the day after its training day");
+  // Started after midnight too, still the 5th's.
+  eq(finish(stampSession(D, tv(0, 10), tv(1, 0), at(6, 0, 10), at(6, 1, 1))), at(6, 1, 0).getTime(),
+    "stamp: started after midnight for the day before, both on the day after");
+  // The tab had rolled over to the 5th already (the 4th was trained): its own
+  // small hours.
+  eq(finish(stampSession(D, tv(0, 10), tv(1, 0), at(5, 0, 10), at(5, 1, 1))), at(5, 1, 0).getTime(),
+    "stamp: a session in the small hours of its own day stays there");
+  eq(finish(stampSession(D, tv(18, 0), tv(19, 15), at(5, 18, 0), at(5, 19, 16))), at(5, 19, 15).getTime(),
+    "stamp: an evening session is on its day");
+
+  // The Journal, no stamp to go by: a late session for the day picked.
+  eq(finish(stampSession(D, tv(0, 20), tv(1, 30), null, later)), at(6, 1, 30).getTime(),
+    "stamp, journal: small hours are the night after the day picked");
+  eq(finish(stampSession(D, tv(23, 20), tv(0, 40), null, later)), at(6, 0, 40).getTime(),
+    "stamp, journal: an end before the start ran past midnight");
+  eq(finish(stampSession(D, tv(0, 20), tv(1, 30), null, at(5, 15, 0))), at(5, 1, 30).getTime(),
+    "stamp, journal: ...unless that night hasn't come yet");
+  eq(finish(stampSession(D, tv(7, 0), tv(8, 0), null, later)), at(5, 8, 0).getTime(), "stamp, journal: a morning session is on its day");
+
+  // Editing the time of one saved a day early: an evening start is the
+  // training day's, whatever the stamp said.
+  const early = new Date(at(5, 0, 30).getTime() - 90 * 60_000);
+  eq(finish(stampSession(D, tv(23, 0), tv(0, 30), early, later)), at(6, 0, 30).getTime(),
+    "stamp, edit: a session saved a day early comes right when its time is saved");
 }
 
 // ── resolveDayIndex: cycle math ────────────────────────────────────────────────
@@ -465,7 +538,12 @@ const fmtHist: CompletedWorkout[] = [{
     ],
   }],
 }];
-eq(buildPrevByName(fmtHist)["var"], ["100×5", "100", "8", "—"], "prev: set formatting variants");
+// Both sides always, either blank: a lone "8" couldn't say whether it was the
+// weight or the reps, so ticking an empty set put a pull-up's 8 reps in the
+// weight box (found by scripts/verify-training-months.ts).
+eq(buildPrevByName(fmtHist)["var"], ["100×5", "100×", "×8", "—"], "prev: set formatting variants");
+eq(["100×5", "100×", "×8", "—"].map(t => formatPrevHint(t, false)), ["220.5×5", "220.5×", "×8", "—"],
+  "prev: an lbs screen converts a weight with no reps too (it showed the stored kilos)");
 
 // ── Reorder / multi-session "previous figures" invariants ──────────────────────
 // Two program weeks with the SAME exercises in DIFFERENT orders, plus exercises
@@ -965,20 +1043,40 @@ for (const bw of ["BW", "", "—"]) {
 // whenever it judged itself in progress, one left held in the app carried its
 // swapped order into the same program day a week later (user report,
 // 2026-10-05). Its notes and numbers follow each exercise by place either way
-// (the "place:" checks above).
+// (the "place:" checks above). And one shaped before it started (reordered,
+// swapped, sets added) is kept too, while its day still schedules it: those
+// edits went the moment the user left the tab (user report, 2026-10-07).
 {
   const MON = "2026-10-05";
   const NEXT_MON = "2026-10-12";
-  eq(keepsHeldSession({ day: null, live: false, engaged: false }, MON), false, "held: nothing held, the day is built from the program");
-  eq(keepsHeldSession({ day: MON, live: false, engaged: false }, MON), false, "held: an untouched session is rebuilt (a program edit shows)");
-  eq(keepsHeldSession({ day: MON, live: false, engaged: true }, MON), true, "held: a reordered or ticked session is kept on its own day");
-  eq(keepsHeldSession({ day: MON, live: true, engaged: false }, MON), true, "held: a running session is kept on its own day");
-  eq(keepsHeldSession({ day: MON, live: false, engaged: true }, NEXT_MON), false,
+  const push = { name: "Push", programId: "P", dayId: "d0" };
+  const legs = { name: "Legs", programId: "P", dayId: "d2" };
+  const held = (over: Partial<Parameters<typeof keepsHeldSession>[0]>) =>
+    ({ day: MON, live: false, started: false, shaped: false, workout: push, ...over });
+  eq(keepsHeldSession(held({ day: null, workout: null }), MON, push), false, "held: nothing held, the day is built from the program");
+  eq(keepsHeldSession(held({}), MON, push), false, "held: an untouched session is rebuilt (a program edit shows)");
+  eq(keepsHeldSession(held({ started: true }), MON, push), true, "held: a ticked session is kept on its own day");
+  eq(keepsHeldSession(held({ live: true }), MON, push), true, "held: a running session is kept on its own day");
+  eq(keepsHeldSession(held({ started: true }), NEXT_MON, push), false,
     "held: a week on, last week's reordered session starts again in the program's order");
-  eq(keepsHeldSession({ day: "2026-10-04", live: false, engaged: true }, MON), false,
+  eq(keepsHeldSession(held({ day: "2026-10-04", started: true }), MON, push), false,
     "held: yesterday's unfinished session, its clock stopped, doesn't become today's");
-  eq(keepsHeldSession({ day: "2026-10-04", live: true, engaged: true }, MON), true,
+  eq(keepsHeldSession(held({ day: "2026-10-04", live: true, started: true }), MON, push), true,
     "held: a session still running past midnight carries on");
+
+  // Shaped before starting.
+  eq(keepsHeldSession(held({ shaped: true }), MON, push), true, "held: reordered before starting, it's kept on its day");
+  eq(keepsHeldSession(held({ shaped: true }), MON, { ...push, name: "Push A" }), true,
+    "held: ...through a rename of its day in the builder (the day keeps its id, and the edit waits)");
+  eq(keepsHeldSession(held({ shaped: true }), MON, legs), false,
+    "held: ...but not once the day schedules another workout (Change Workout Day, Set Workout Date)");
+  eq(keepsHeldSession(held({ shaped: true }), MON, null), false, "held: ...or none (Make Rest Day, Move to Tomorrow)");
+  eq(keepsHeldSession(held({ shaped: true }), MON, { ...push, programId: "Q" }), false,
+    "held: ...or the same day id in another program (every program's ids run d0, d1…)");
+  eq(keepsHeldSession(held({ shaped: true }), NEXT_MON, push), false, "held: a week on, it starts in the program's order");
+  eq(keepsHeldSession(held({ started: true }), MON, legs), true,
+    "held: a started session stays whatever the day now schedules: it's never swapped out underneath");
+  eq(sameWorkout({ name: "Upper" }, { name: " upper " }), true, "held: a workout with no day id is matched by name");
 }
 
 // ── report ─────────────────────────────────────────────────────────────────────

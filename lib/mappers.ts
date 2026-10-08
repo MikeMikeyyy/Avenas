@@ -63,6 +63,7 @@ export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
     skipped_dates: p.skippedDates ?? [],
     pushed_dates: p.pushedDates ?? [],
     pulled_dates: p.pulledDates ?? [],
+    holds: p.holds && p.holds.length > 0 ? p.holds : null,
     workouts: p.workouts as Record<string, unknown>,
     extra_workouts: p.extraWorkouts ?? [],
   };
@@ -93,6 +94,9 @@ export function programFromRow(r: ProgramRow): SavedProgram {
     skippedDates: r.skipped_dates && r.skipped_dates.length > 0 ? r.skipped_dates : undefined,
     pushedDates: r.pushed_dates && r.pushed_dates.length > 0 ? r.pushed_dates : undefined,
     pulledDates: r.pulled_dates && r.pulled_dates.length > 0 ? r.pulled_dates : undefined,
+    // Absent on a row from a server without 0043: no holds recorded, which is
+    // how every program read before it.
+    holds: Array.isArray(r.holds) && r.holds.length > 0 ? r.holds : undefined,
     workouts: r.workouts as unknown as WorkoutMap,
     extraWorkouts: r.extra_workouts,
   };

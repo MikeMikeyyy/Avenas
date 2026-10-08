@@ -22,7 +22,7 @@ import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
-import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, type WorkoutTime } from "../components/TimeWheelPicker";
+import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, stampSession, type WorkoutTime } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
@@ -1201,18 +1201,14 @@ export default function LogWorkoutScreen() {
     setSaving(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    // Compute completedAt and durationSeconds from selected times.
-    // completedAt = end time on the SELECTED date (always), so formatWorkoutDate
-    // shows the correct date even for midnight-crossing workouts.
+    // completedAt and durationSeconds from the times picked: the real finish,
+    // which for a late session is the day after the one picked
+    // (utils/sessionTime.ts). The card shows the day picked, `date`. With no
+    // times, midday on that day.
     let completedAt = new Date(`${date}T12:00:00`).toISOString();
     let durationSeconds = 0;
     if (workoutTime) {
-      const { start, end } = workoutTime;
-      const endH24 = end.hour % 12 + (end.period === "PM" ? 12 : 0);
-      completedAt = new Date(
-        `${date}T${String(endH24).padStart(2, "0")}:${String(end.minute).padStart(2, "0")}:00`
-      ).toISOString();
-      durationSeconds = computeDurationMins(start, end) * 60;
+      ({ completedAt, durationSeconds } = stampSession(date ?? "", workoutTime.start, workoutTime.end));
     }
 
     // The program this session belongs to: the day's program (`programId`), or
@@ -1242,6 +1238,8 @@ export default function LogWorkoutScreen() {
         notes: ex.notes,
         ...(ex.swappedFrom ? { swappedFrom: ex.swappedFrom } : {}),
         ...(ex.programExerciseId ? { programExerciseId: ex.programExerciseId } : {}),
+        // The Hold switch (CompletedExercise.isIsometric).
+        ...(ex.isIsometric ? { isIsometric: true as const } : {}),
       })),
     };
 

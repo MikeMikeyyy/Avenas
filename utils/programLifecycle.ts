@@ -11,9 +11,10 @@
 // plays the app's own logic rather than a copy of it.
 
 import { getCurrentWeek, type CompletedWorkout, type SavedProgram } from "../constants/programs";
-import { addDaysYMD, formatStoredDate, parseStoredDate } from "./dates";
+import { addDaysYMD, formatStoredDate } from "./dates";
 import { clearShifts, repairMoves, skipDate } from "./skippedDates";
 import { cycleIndexForDate, getEffectiveToday, normalizeDriftDates } from "./workout";
+import { runStartYMD } from "./programHolds";
 
 /** The program that was active, when making another one active finished it. */
 export type FinishedProgram = { program: SavedProgram; week: number };
@@ -49,6 +50,8 @@ export function activateProgram(
         currentWeek: 1,
         cycleOffset: undefined,
         pausedAt: undefined,
+        // The last run's holds belong to it: this run starts unmoved.
+        holds: undefined,
         skippedDates: undefined,
         pushedDates: undefined,
         pulledDates: undefined,
@@ -184,13 +187,23 @@ export function programsAfterPastLog(
       next = { ...next, extraWorkouts: [...(next.extraWorkouts ?? []), workoutName] };
       changed = true;
     }
-    const start = parseStoredDate(next.startDate);
+    // Against the day the run BEGAN, not startDate: resuming a hold moves
+    // startDate on by the days held, so a session from before the hold,
+    // logged after it, read as earlier than the start and moved it back,
+    // re-dating the whole running cycle (utils/programHolds.ts).
+    const runStart = runStartYMD(next);
+    const [ry, rm, rd] = (runStart ?? "").split("-").map(Number);
+    const start = runStart ? new Date(ry, rm - 1, rd) : null;
     if (isProgramDay && loggedDate && (!start || loggedDate.getTime() < start.getTime())) {
       // Moving the start re-dates every day of the cycle, so the rest day a
       // move spent can now hold a workout (a pull there would take a session
       // out of the plan), or no longer be the one that move would take: pair
-      // each move with a rest day again on the new timeline (repairMoves).
-      next = repairMoves({ ...next, startDate: formatStoredDate(loggedDate) });
+      // each move with a rest day again on the new timeline (repairMoves). The
+      // holds stay as they were, so startDate sits as far past the new first
+      // day as they moved it.
+      const anchor = new Date(loggedDate);
+      anchor.setDate(anchor.getDate() + (next.holds ?? []).reduce((n, h) => n + h.shift, 0));
+      next = repairMoves({ ...next, startDate: formatStoredDate(anchor) });
       changed = true;
     }
     return next;

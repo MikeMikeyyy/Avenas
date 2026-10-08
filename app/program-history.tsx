@@ -31,6 +31,7 @@ import {
 import { useTheme } from "../contexts/ThemeContext";
 import { loadCachedClientData } from "../utils/trainerStore";
 import { parseStoredDate } from "../utils/dates";
+import { runStartDate } from "../utils/programHolds";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 
@@ -108,7 +109,7 @@ export default function ProgramHistoryScreen() {
     // Except a client's copy (a trainer reading it): every backup rewrites all
     // of a client's programs in one statement, so the order they arrive in
     // means nothing. There the start date is the best "newest" there is.
-    const startMs = (p: SavedProgram) => parseStoredDate(p.startDate)?.getTime() ?? -Infinity;
+    const startMs = (p: SavedProgram) => parseStoredDate(runStartDate(p))?.getTime() ?? -Infinity;
     const ranked = clientId
       ? [...programs].sort((a, b) => startMs(a) - startMs(b))
       : programs;
@@ -266,7 +267,7 @@ export default function ProgramHistoryScreen() {
                       <View style={{ gap: 4, marginTop: 4 }}>
                         <View style={styles.progDatesRow}>
                           <Ionicons name="calendar-outline" size={13} color={t.ts} />
-                          <Text style={[styles.progDates, { color: t.ts }]}>Started {prog.startDate}</Text>
+                          <Text style={[styles.progDates, { color: t.ts }]}>Started {runStartDate(prog)}</Text>
                         </View>
                         {prog.status === "completed" && prog.completedDate && (
                           <View style={styles.progDatesRow}>

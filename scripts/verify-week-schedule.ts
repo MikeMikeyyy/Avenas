@@ -179,6 +179,13 @@ const names = (s: ReturnType<typeof strip>) => s.schedule.days.map(d => d.workou
     now, override,
   );
   eq(row(twice, FRI).workoutName, "Custom", "two sessions on a date: the newest is shown");
+  // The ring counts DAYS, as its plan does: counting sessions, two on one day
+  // read 5/4.
+  eq([twice.schedule.completedCount, twice.schedule.sessions.length], [1, 2],
+    "two sessions on a date: one day trained on the ring, both in the week's totals");
+  const busy = strip([session(MON, "Upper"), session(TUE, "Lower"), session(TUE, "Arms", "extra"), session(THU, "Upper")],
+    new Date("2026-09-18T08:00:00"));
+  eq([busy.schedule.completedCount, busy.schedule.plannedCount], [3, 4], "the ring never reads more done than planned");
 }
 
 // ─── days marked off still behave ────────────────────────────────────────────

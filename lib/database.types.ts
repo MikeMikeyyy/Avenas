@@ -185,6 +185,9 @@ export type ProgramRow = {
    *  program written before the column existed, which is also what "nothing
    *  spent" looks like. See SavedProgram.pulledDates. */
   pulled_dates: string[];
+  /** The holds this run came back from (migration 0043), oldest first; null
+   *  for none, and on a row written before the column. See SavedProgram.holds. */
+  holds: { from: string; to: string; shift: number; offsetShift: number }[] | null;
   workouts: Record<string, unknown>;  // WorkoutMap — Exercise[] per "idx:Name" key
   extra_workouts: string[];
   created_at: string;

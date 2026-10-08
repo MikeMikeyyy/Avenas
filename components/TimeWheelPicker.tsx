@@ -2,6 +2,14 @@ import { useRef, useEffect } from "react";
 import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
+import type { TimeVal } from "../utils/sessionTime";
+
+// The time maths is pure and lives in utils/sessionTime.ts, so scripts can
+// stamp a session exactly as these sheets do; re-exported for the screens.
+export {
+  computeDurationMins, fmtDurationMins, fmtTimeVal, stampSession, timeValFromDate, toTotalMins,
+  type TimeVal, type WorkoutTime,
+} from "../utils/sessionTime";
 
 // ─── Shared 12-hour time wheel ───────────────────────────────────────────────────
 // The flat fade-style scroll wheel used by the journal "Workout Time" picker and
@@ -10,43 +18,6 @@ import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 export const WHEEL_H = 46;
 export const HOURS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
 export const PERIODS = ["AM", "PM"];
-
-export type TimeVal = { hour: number; minute: number; period: "AM" | "PM" };
-export type WorkoutTime = { start: TimeVal; end: TimeVal };
-
-export function toTotalMins(tv: TimeVal): number {
-  const h24 = (tv.hour % 12) + (tv.period === "PM" ? 12 : 0);
-  return h24 * 60 + tv.minute;
-}
-
-export function computeDurationMins(start: TimeVal, end: TimeVal): number {
-  const s = toTotalMins(start);
-  const e = toTotalMins(end);
-  return e >= s ? e - s : 24 * 60 - s + e;
-}
-
-export function fmtTimeVal(tv: TimeVal): string {
-  return `${tv.hour}:${String(tv.minute).padStart(2, "0")} ${tv.period}`;
-}
-
-export function fmtDurationMins(mins: number): string {
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
-}
-
-export function timeValFromDate(d: Date): TimeVal {
-  const h = d.getHours();
-  return { hour: h % 12 || 12, minute: d.getMinutes(), period: h < 12 ? "AM" : "PM" };
-}
-
-// completedAt ISO on the given calendar date (YYYY-MM-DD), stamped at `end`.
-export function completedAtISO(ymd: string, end: TimeVal): string {
-  const endH24 = (end.hour % 12) + (end.period === "PM" ? 12 : 0);
-  return new Date(`${ymd}T${String(endH24).padStart(2, "0")}:${String(end.minute).padStart(2, "0")}:00`).toISOString();
-}
 
 // ─── WheelPicker ──────────────────────────────────────────────────────────────
 // IMPORTANT: Must be a module-level component (not defined inside another

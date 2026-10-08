@@ -15,6 +15,7 @@ import BounceButton from "../BounceButton";
 import ActiveBadge from "../ActiveBadge";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { getCurrentWeek, type SavedProgram } from "../../constants/programs";
+import { runStartDate } from "../../utils/programHolds";
 
 export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProgram, onOpenAllPrograms }: {
   activeProgram: SavedProgram | null;
@@ -56,7 +57,7 @@ export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProg
               </Text>
               <View style={styles.apDateRow}>
                 <Ionicons name="calendar-outline" size={13} color={t.ts} />
-                <Text style={[styles.apDate, { color: t.ts }]}>Started {activeProgram.startDate}</Text>
+                <Text style={[styles.apDate, { color: t.ts }]}>Started {runStartDate(activeProgram)}</Text>
               </View>
               <View style={styles.apProgressRow}>
                 {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => {

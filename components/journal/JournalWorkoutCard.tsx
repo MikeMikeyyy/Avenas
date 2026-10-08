@@ -14,7 +14,7 @@ import BounceButton from "../BounceButton";
 import SessionTrack from "../SessionTrack";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, REPLACED_ORANGE } from "../../constants/theme";
 import type { CompletedWorkout, SavedProgram } from "../../constants/programs";
-import { fmtDuration } from "../../utils/dates";
+import { fmtDuration, fromYMD } from "../../utils/dates";
 import { indexOfDayId } from "../../utils/programDays";
 import { workoutBelongsToProgram } from "../../utils/progressStats";
 import { buildSessionTracks } from "../../utils/sessionTrack";
@@ -24,9 +24,13 @@ import { ordinal } from "../../utils/workoutSummary";
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_FULL    = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
-function formatWorkoutDate(completedIso: string, durationSeconds: number): string {
+/** The day is the session's TRAINING day (`date`), never completedAt's: a
+ *  session finished after midnight is the day before's, and completedAt is
+ *  the real finish (utils/sessionTime.ts). */
+function formatWorkoutDate(dateYMD: string, completedIso: string, durationSeconds: number): string {
   const d = new Date(completedIso);
-  const dateStr = `${DAY_FULL[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
+  const day = fromYMD(dateYMD) ?? d;
+  const dateStr = `${DAY_FULL[day.getDay()]} ${day.getDate()} ${MONTH_SHORT[day.getMonth()]}`;
   const endTime = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
   if (durationSeconds > 0) {
     const startTime = new Date(d.getTime() - durationSeconds * 1000)
@@ -154,7 +158,7 @@ function JournalWorkoutCard({ workout, info, isDark, onPress }: {
           <View style={styles.topRow}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.name, { color: t.tp }]}>{workout.workoutName}</Text>
-              <Text style={[styles.date, { color: t.ts }]}>{formatWorkoutDate(workout.completedAt, workout.durationSeconds)}</Text>
+              <Text style={[styles.date, { color: t.ts }]}>{formatWorkoutDate(workout.date, workout.completedAt, workout.durationSeconds)}</Text>
               {/* In the orange of the dot it explains: that day's track shows
                   this date orange, and this is what stood in for it. */}
               {info.insteadOf ? (

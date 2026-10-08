@@ -41,6 +41,11 @@ import {
   sessionCountForDay,
 } from "../utils/progressStats";
 import { historicalDays, markDayRefLabels, programDays, programDaysWithExtras } from "../utils/programDays";
+import {
+  CHART_HEIGHT, GIFTED_TOP_PAD, changeFromPrevious, chartChange, dotY, exerciseChartAxis, exerciseChartLabels, fmtChange,
+  percentChange, plottedPoints,
+} from "../utils/exerciseChartLayout";
+import type { ExerciseDataPoint } from "../constants/progress";
 import type { CompletedWorkout, CompletedSet, ProgramDayRef, SavedProgram } from "../constants/programs";
 import type { CustomExercise } from "../constants/exercises";
 
@@ -377,11 +382,46 @@ if (observesDST) {
   eq(p2.bestSetReps, 8, "exHistory: bestSetReps tracks the best-volume set");
   eq(p2.sessionVolume, 1520, "exHistory: sessionVolume = sum of working set volumes");
   eq(p2.totalReps, 16, "exHistory: totalReps = sum of reps (3+8+5)");
+  // Est. 1RM, the chart line that took Best Set's place: the best set by
+  // weight × (1 + reps / 30). 100×5 = 116.7 beats 90×8 = 114 and 100×3 = 110,
+  // where Best Set (by weight × reps) picked the lighter 90×8.
+  approx(p2.e1rm, 100 * (1 + 5 / 30), "exHistory: e1rm = the session's best Epley estimate");
+  eq([p2.e1rmWeight, p2.e1rmReps], [100, 5], "exHistory: e1rm remembers the set it came from");
+  eq(pts[0].e1rm, 80 * (1 + 5 / 30), "exHistory: one set, its own estimate");
 }
 {
-  // A session with only BW (zero-volume) sets is excluded (sessionVolume === 0).
-  const hist = [workout({ id: "bw", exercises: [ex("Pullups", [set("BW", "10")])] })];
-  eq(collectExerciseHistory(hist, "Pullups"), [], "exHistory: zero-volume session excluded");
+  // Est. 1RM and Heaviest part ways when the reps change: the same 100 kg for
+  // 10 reps instead of 8 is no heavier, but it's stronger.
+  const reps = collectExerciseHistory([
+    workout({ id: "r8", date: "2026-05-01", completedAt: "2026-05-01T10:00:00.000Z", exercises: [ex("Row", [set("100", "8")])] }),
+    workout({ id: "r10", date: "2026-05-08", completedAt: "2026-05-08T10:00:00.000Z", exercises: [ex("Row", [set("100", "10")])] }),
+  ], "Row");
+  eq(reps.map(p => p.topWeight), [100, 100], "e1rm: more reps at the same weight leave Heaviest flat");
+  check(reps[1].e1rm > reps[0].e1rm, "e1rm: ...and show on Est. 1RM as progress");
+}
+{
+  // A session done at bodyweight is on the chart: its reps, and no weight. It
+  // used to be dropped, so a pull-up done every week said "No sessions yet"
+  // (found by verify-training-months). Records stay weights only.
+  const hist = [workout({ id: "bw", exercises: [ex("Pullups", [set("BW", "10"), set("", "8")])] })];
+  const pts = collectExerciseHistory(hist, "Pullups");
+  eq(pts.map(p => [p.workoutId, p.totalReps, p.topWeight, p.sessionVolume]), [["bw", 18, 0, 0]], "exHistory: a bodyweight session is a point with its reps and no weight");
+  const prs = computePRs(pts, hist, "Pullups");
+  eq([prs.heaviest, prs.bestSetVolume, prs.bestSessionVolume, prs.oneRepMax], [null, null, null, null], "PR: a bodyweight session holds no weight record");
+  // A timed hold: its "reps" are seconds, so they're not reps or volume, and
+  // its chart point says it's a hold (found by verify-training-months).
+  const plank = workout({ id: "pl", exercises: [
+    { ...ex("Plank", [set("", "60"), set("10", "45")]), isIsometric: true },
+    ex("Crunch", [set("", "15")]),
+  ] });
+  eq(computeWorkoutReps(plank), 15, "holds: a plank's seconds aren't reps");
+  eq(computeWorkoutTonnage(plank), 0, "holds: a weighted plank moves no volume");
+  const plankPts = collectExerciseHistory([plank], "Plank");
+  eq(plankPts.map(p => [p.isHold, p.totalReps, p.topWeight, p.sessionVolume, p.e1rm]), [[true, 105, 10, 0, 0]], "holds: the chart's point is seconds held, its load, and no volume or 1RM");
+  eq(computePRs(plankPts, [plank], "Plank").oneRepMax, null, "holds: no rep max from seconds");
+  // Mixed: a weighted session and a bodyweight one. Heaviest is the weighted.
+  const mixed = [...hist, workout({ id: "w10", date: "2026-05-08", completedAt: "2026-05-08T10:00:00.000Z", exercises: [ex("Pullups", [set("10", "6")])] })];
+  eq(computePRs(collectExerciseHistory(mixed, "Pullups"), mixed, "Pullups").heaviest?.workoutId, "w10", "PR: heaviest skips the bodyweight session");
 }
 
 // ── computePRs ────────────────────────────────────────────────────────────────
@@ -402,8 +442,14 @@ if (observesDST) {
   // best single-set volume = 90x8 = 720 in p1
   eq(prs.bestSetVolume?.value, 720, "PR bestSetVolume: max single-set volume");
   eq(prs.bestSetVolume?.workoutId, "p1", "PR bestSetVolume: correct session");
+  // The tile shows the set itself, "90 kg × 8", not just 720 (user request,
+  // 2026-10-08).
+  eq([prs.bestSetVolume?.weight, prs.bestSetVolume?.reps], [90, 8], "PR bestSetVolume: the set it was, for '90 kg × 8'");
   // best session volume = 1020 in p1
   eq(prs.bestSessionVolume?.value, 1020, "PR bestSessionVolume: max session tonnage");
+  // Most Volume shows what added up to it: 2 sets, 11 reps (100×3 + 90×8).
+  eq([prs.bestSessionVolume?.sets, prs.bestSessionVolume?.reps], [2, 11], "PR Most Volume: the sets and reps that made it");
+  eq([points[0].weightedSets, points[0].weightedReps], [2, 11], "exHistory: a session's weighted sets and reps");
   // 1RM walks raw sets: epley(100,5)=116.67 beats epley(90,8)=114 and epley(100,3)=110
   approx(prs.oneRepMax!.value, 100 * (1 + 5 / 30), "PR 1RM: Epley picks the best single set across sessions");
   eq(prs.oneRepMax?.weight, 100, "PR 1RM: source set weight");
@@ -479,6 +525,23 @@ function dayRef(partial: Partial<ProgramDayRef> & { label: string }): ProgramDay
   // Positional ids are only unique within a program, so the guard matters.
   const otherProgram = dayRef({ label: "Upper A", dayId: "d0", programId: "pB" });
   check(!workoutMatchesDay(a, otherProgram), "matchesDay: same positional id in another program does not match");
+}
+{
+  // Custom workouts under "All programs" (found by verify-training-months):
+  // two programs each with an "Arms" workout added, and a free one never added.
+  const pA = { id: "pA", name: "Upper Lower", totalWeeks: 6, currentWeek: 1, status: "completed" as const, startDate: "01 Jan 2026", trainingDays: 1, cycleDays: 2, cyclePattern: ["Upper", "Rest"], dayIds: ["d0", "d1"], workouts: {}, extraWorkouts: ["Arms"] };
+  const pB = { ...pA, id: "pB", name: "Push Pull Legs", status: "active" as const, cyclePattern: ["Push", "Rest"] };
+  const armsA = workout({ id: "aA", programId: "pA", workoutName: "Arms", exercises: [ex("Barbell Curl", [set("30", "10")])] });
+  const armsB = workout({ id: "aB", programId: "pB", workoutName: "Arms", exercises: [ex("Barbell Curl", [set("32", "10")])] });
+  const free = workout({ id: "f", programId: "", workoutName: "Arms", exercises: [ex("Barbell Curl", [set("34", "10")])] });
+  const days = scopedProgramDays({ kind: "all" }, [pA, pB], [armsA, armsB, free]);
+  const rowA = days.find(d => d.programId === "pA" && d.label === "Arms")!;
+  const rowB = days.find(d => d.programId === "pB" && d.label === "Arms")!;
+  eq(collectExerciseHistory([armsA, armsB, free], "Barbell Curl", rowA).map(p => p.workoutId), ["aA"],
+    "matchesDay: a program's custom workout counts on its own program's row, not a free one of the same name");
+  eq(collectExerciseHistory([armsA, armsB, free], "Barbell Curl", rowB).map(p => p.workoutId), ["aB"],
+    "matchesDay: under All programs, the second program's own custom workouts still count on its row");
+  check(!workoutMatchesDay(free, rowA) && !workoutMatchesDay(free, rowB), "matchesDay: a free workout belongs to no program's day");
 }
 
 // ── program scope helpers ─────────────────────────────────────────────────────
@@ -696,6 +759,69 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
     "groups: which row absorbs a session with no dayId is still decided across the whole scope",
   );
   eq(groupDaysByProgram([], [running]), [], "groups: no days, no groups");
+}
+
+// ── the exercise chart's dates ────────────────────────────────────────────────
+// Day first, the month by name: "10/5" read as the 10th of May to anyone who
+// writes the day first, as the app does everywhere else.
+{
+  eq(exerciseChartLabels(["2026-10-05", "2026-10-07", "2026-10-12"]), ["5 Oct", "7 Oct", "12 Oct"],
+    "chart dates: day first, the month by name");
+  eq(exerciseChartLabels(["2026-06-02", "2026-07-02", "2026-09-30", "2026-10-01"]), ["Jun", "Jul", "Sep", "Oct"],
+    "chart dates: past three months, each month's name once");
+}
+
+// ── the exercise chart's y-axis ───────────────────────────────────────────────
+// Zoomed to the sessions, never squeezed below a fifth of the top value. From
+// zero with the first session on the middle line, every metric drew as its
+// ratio to the first session: a 10% gain moved a dot 5% of the plot, and
+// Heaviest and Best Set landed on the same dots (user report, 2026-10-08).
+{
+  // Where a value sits, as a share of the plot's height from the bottom.
+  const at = (v: number, values: number[]) => {
+    const a = exerciseChartAxis(values);
+    return (CHART_HEIGHT + GIFTED_TOP_PAD - dotY(v, a)) / CHART_HEIGHT;
+  };
+  const climb = [60, 62.5, 65, 66];
+  check(at(66, climb) - at(60, climb) >= 0.25, "axis: 60 → 66 kg climbs a quarter of the plot or more");
+  eq(at(60, [60]), 0.5, "axis: a lone session sits in the middle");
+  eq([60, 60, 60].map(v => at(v, [60, 60, 60])), [0.5, 0.5, 0.5], "axis: so does a flat run");
+  check(at(61, [60, 61, 60]) - at(60, [60, 61, 60]) <= 0.1, "axis: a 1 kg wobble on 60 stays small");
+  const wide = [5, 100];
+  check(at(5, wide) >= 0 && at(100, wide) <= 1, "axis: every session inside the plot");
+  check(exerciseChartAxis(wide).min === 0, "axis: never below zero");
+  eq(exerciseChartAxis([60, 62.5, 65, 66]).labels, ["55", "60", "65", "70", "75"], "axis: round steps from a round bottom");
+  check(exerciseChartAxis([24, 30]).labels.every(l => !l.includes(".")), "axis: reps step in whole numbers");
+  eq(exerciseChartAxis([2000, 2300, 2600]).labels, ["1.75k", "2k", "2.25k", "2.5k", "2.75k"], "axis: thousands read as k");
+  eq(exerciseChartAxis([]).min, 0, "axis: nothing to plot, a clean grid from zero");
+}
+
+// ── the exercise chart's % change ─────────────────────────────────────────────
+// The header: the last dot against the first ("▲ 18% since 12 Sep"). A tapped
+// dot: that session against the one before (user request, 2026-10-08).
+{
+  eq(fmtChange(18.2), { text: "18%", dir: "up" }, "change: whole from 10%");
+  eq(fmtChange(2.54), { text: "2.5%", dir: "up" }, "change: one decimal under 10%");
+  eq(fmtChange(2.0), { text: "2%", dir: "up" }, "change: no trailing .0");
+  eq(fmtChange(-3.21), { text: "3.2%", dir: "down" }, "change: down, unsigned (the arrow says which way)");
+  eq(fmtChange(0.04), { text: "0%", dir: "flat" }, "change: rounds to nothing, flat");
+  eq(fmtChange(9.96), { text: "10%", dir: "up" }, "change: 9.96 reads as 10");
+  eq(percentChange(0, 5), null, "change: nothing to measure from");
+
+  const pt = (id: string, date: string, top: number, reps: number): ExerciseDataPoint => ({
+    workoutId: id, date, completedAt: `${date}T10:00:00.000Z`, topWeight: top, topReps: reps,
+    bestSetVolume: top * reps, bestSetWeight: top, bestSetReps: reps, e1rm: top * (1 + reps / 30), e1rmWeight: top, e1rmReps: reps,
+    sessionVolume: top * reps, weightedSets: top > 0 ? 1 : 0, weightedReps: top > 0 ? reps : 0, totalReps: reps,
+  });
+  const pts = [pt("a", "2026-09-12", 60, 8), pt("bw", "2026-09-15", 0, 10), pt("b", "2026-09-19", 62.5, 8), pt("c", "2026-09-26", 66, 8)];
+  const change = chartChange(pts, "topWeight");
+  approx(change?.pct ?? NaN, 10, "change: the last dot against the first (60 → 66 kg)");
+  eq(change?.sinceYMD, "2026-09-12", "change: since the first dot's date");
+  approx(chartChange(pts, "totalReps")?.pct ?? NaN, 0, "change: per metric (Reps plots the bodyweight session too)");
+  eq(chartChange([pts[0]], "topWeight"), null, "change: one dot, nothing to compare");
+  const plotted = plottedPoints(pts, "topWeight");
+  eq(changeFromPrevious(plotted, 0, "topWeight"), null, "change: the first dot has none before it");
+  approx(changeFromPrevious(plotted, 1, "topWeight") ?? NaN, (62.5 - 60) / 60 * 100, "change: a dot against the one before it, skipping the bodyweight session");
 }
 
 // ── report ────────────────────────────────────────────────────────────────────

@@ -178,9 +178,30 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
   eq(t.missed, [], "and invents no missed sessions for the days it used to hold");
 }
 
-// ─── a resumed hold ──────────────────────────────────────────────────────────
-// Resuming moves startDate, so occurrences before the hold can't be re-derived.
-// What must hold regardless: numbers stay distinct and in date order.
+// ─── a hold it came back from ────────────────────────────────────────────────
+// Resuming moves startDate on by the days held. The hold is kept
+// (SavedProgram.holds), so the walk begins on the day the run began and steps
+// over the days held. Walked from the moved start, week 1's Upper was left out,
+// and a held Wednesday replayed Monday's slot as an occurrence nobody could
+// have trained.
+{
+  // Held Tuesday 15 to Thursday 17, carrying on: the next Upper is Wed 23.
+  const resumed: SavedProgram = {
+    ...program, startDate: "9 Sep 2026",
+    holds: [{ from: "2026-09-15", to: "2026-09-17", shift: 2, offsetShift: 0 }],
+  };
+  const WED_W3 = "2026-09-23";
+  eq(occurrencesOfDay(resumed, "d0", WED_W3), [MON_W1, MON_W2, WED_W3],
+    "after a resume: every occurrence from the run's first day, and none in the hold");
+  const t = track([session("w1", MON_W1), session("w2", MON_W2), session("w3", WED_W3)], WED_W3, resumed);
+  eq(["w1", "w2", "w3"].map(id => t.numberById[id]), [1, 2, 3], "after a resume: each session is its own occurrence");
+  eq(t.missed, [], "after a resume: the hold invents no missed one");
+}
+
+// ─── a hold resumed before holds were kept ───────────────────────────────────
+// That resume moved startDate with nothing to undo it, so occurrences before
+// the hold can't be re-derived. What must hold regardless: numbers stay
+// distinct and in date order.
 {
   const resumed: SavedProgram = { ...program, startDate: "14 Sep 2026" }; // start shifted a week
   const t = track([session("w1", MON_W1), session("w2", MON_W2), session("w3", MON_W3)], MON_W3, resumed);

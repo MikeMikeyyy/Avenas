@@ -190,6 +190,31 @@ const states = (h: ReturnType<typeof buildProgramHistory>, monday: string) =>
     "an unreadable start date has no weeks (never a year-0 program)");
 }
 
+// ─── a hold the program came back from ───────────────────────────────────────
+// Resuming moves the start on by the days held. Read through that, the weeks
+// before the pause were "off" and their sessions outside the program; the hold
+// is kept (SavedProgram.holds) and each day read as it was lived.
+{
+  // Held Thursday 17 to Monday 21, carrying on: Monday 21 is Thursday's Legs.
+  const resumed: SavedProgram = {
+    ...program, startDate: "11 Sep 2026",
+    holds: [{ from: "2026-09-17", to: "2026-09-21", shift: 4, offsetShift: 0 }],
+  };
+  const lived = [
+    session("2026-09-07", "Push"), session("2026-09-08", "Pull"), session("2026-09-10", "Legs"),
+    session("2026-09-14", "Push"), session("2026-09-15", "Pull"), session("2026-09-21", "Legs"),
+  ];
+  const h = buildProgramHistory(resumed, lived, TODAY);
+  eq(h.weeks.map(w => w.startYMD), [W3, W2, W1], "hold: every week from the start, the ones before the pause included");
+  eq(states(h, W1), ["trained", "trained", "rest", "trained", "rest", "missed", "rest"],
+    "hold: the weeks before it read as they were lived");
+  eq(states(h, W2), ["trained", "trained", "rest", "held", "held", "held", "held"], "hold: the days held are held");
+  eq(states(h, W3), ["trained", "rest", "today", "rest", "upcoming", "upcoming", "rest"],
+    "hold: from the resume day the cycle carries on where it stopped");
+  eq([weekOf(h, W2).done, weekOf(h, W2).planned], [2, 2], "hold: a held day isn't a planned one");
+  eq(h.totals.sessions, 6, "hold: every session is the program's");
+}
+
 // ─── a legacy session ────────────────────────────────────────────────────────
 {
   const legacy = session("2026-09-07", "Push", { id: "legacy", programId: undefined });

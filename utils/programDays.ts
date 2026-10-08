@@ -405,16 +405,20 @@ export function programDaysWithExtras(program: SavedProgram): ProgramDayRef[] {
 }
 
 /**
- * Finalize `absorbsUnidentified` / `duplicateLabel` across a complete day list.
- * First occurrence of a label absorbs the sessions that carry no `dayId`; every
- * occurrence after the first marks the label as duplicated so both rows can be
- * qualified in the UI.
+ * Finalize `absorbsUnidentified` / `duplicateLabel` / `firstInProgram` across a
+ * complete day list. First occurrence of a label absorbs the sessions that
+ * carry no `dayId` (and no program); the first in each program takes that
+ * program's own; every occurrence after the first marks the label as
+ * duplicated so both rows can be qualified in the UI.
  */
 export function markDayRefLabels(refs: ProgramDayRef[]): ProgramDayRef[] {
   const firstOf = new Map<string, number>();
+  const firstInProgramOf = new Map<string, number>();
   refs.forEach((r, i) => {
     const k = normalizeDayName(r.label);
     if (!firstOf.has(k)) firstOf.set(k, i);
+    const pk = `${r.programId}|${k}`;
+    if (!firstInProgramOf.has(pk)) firstInProgramOf.set(pk, i);
   });
   const counts = new Map<string, number>();
   for (const r of refs) {
@@ -426,6 +430,7 @@ export function markDayRefLabels(refs: ProgramDayRef[]): ProgramDayRef[] {
     return {
       ...r,
       absorbsUnidentified: firstOf.get(k) === i,
+      firstInProgram: firstInProgramOf.get(`${r.programId}|${k}`) === i,
       duplicateLabel: (counts.get(k) ?? 0) > 1,
     };
   });

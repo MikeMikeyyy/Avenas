@@ -24,9 +24,14 @@
 //      the same detect functions against everything completed before it, the
 //      way utils/clientAchievements.ts rebuilds a client's cards.
 //
-// Sessions dated before the program's start date are left out, as they always
-// were: resuming from a hold moves startDate forward, and a re-activated
-// program keeps its id, so such a session can't be told from an earlier run.
+// The page is this RUN of the program, from the day it began (runStartYMD):
+// a re-activated program keeps its id, so sessions from before its run are an
+// earlier run's and are left out. It used to read the run's start from
+// startDate, which resuming a hold moves forward by the days held, so after a
+// holiday every session before it fell off the page. The holds the run came
+// back from (SavedProgram.holds) read as held, and a day before one is read
+// with the program as it stood then (programAsOf): the shift had re-labelled
+// those days, so a hold's own days showed as missed.
 
 import { programFinishDate, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import { EMPTY_ACHIEVEMENTS, type Achievement } from "../constants/achievements";
@@ -35,6 +40,7 @@ import { addDaysYMD, parseStoredDate, toYMD } from "./dates";
 import { computeWorkoutTonnage, workoutBelongsToProgram } from "./progressStats";
 import { weekStartFor } from "./weekSchedule";
 import { getWorkoutForDate } from "./workout";
+import { heldOn, runStartYMD } from "./programHolds";
 
 /**
  * What one day of a week was.
@@ -125,9 +131,8 @@ export function buildProgramHistory(
   history: CompletedWorkout[],
   todayYMD: string,
 ): ProgramHistory {
-  const start = parseStoredDate(program.startDate);
-  if (!start) return EMPTY;
-  const startYMD = toYMD(start);
+  const startYMD = runStartYMD(program);
+  if (!startYMD) return EMPTY;
   const finish = programFinishDate(program);
   const finishYMD = finish ? toYMD(finish) : startYMD;
 
@@ -165,7 +170,9 @@ export function buildProgramHistory(
     if (mineDates.has(ymd)) return "trained";
     if (ymd < startYMD) return "off";
     if (program.pausedAt && ymd >= program.pausedAt) return "held";
+    if (heldOn(program, ymd)) return "held";
     if (ymd > (runEndYMD ?? finishYMD)) return "off";
+    // getWorkoutForDate reads a past date on the timeline it was on.
     if (!getWorkoutForDate(program, ymd)) return "rest";
     if (ymd < todayYMD) return otherDates.has(ymd) ? "replaced" : "missed";
     return ymd === todayYMD ? "today" : "upcoming";

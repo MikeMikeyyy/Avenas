@@ -462,6 +462,7 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
     // moving their finish date out by the same amount. Same reasoning as
     // re-activating a program in app/programs.tsx.
     pausedAt: undefined,
+    holds: undefined,
     skippedDates: undefined,
     pushedDates: undefined,
     pulledDates: undefined,

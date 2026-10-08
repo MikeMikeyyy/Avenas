@@ -30,7 +30,7 @@ import StopwatchIcon from "../../components/StopwatchIcon";
 import SquarePenIcon from "../../components/SquarePenIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
-import { computeDurationMins, completedAtISO } from "../../components/TimeWheelPicker";
+import { stampSession } from "../../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -1716,21 +1716,59 @@ export default function WorkoutScreen() {
   const notesBackdropStyle = useAnimatedStyle(() => ({ opacity: notesAnim.value * 0.5 }));
 
   const pendingChangingExId = useRef<string | null>(null);
-  const isWorkoutActiveRef = useRef(false);
   // Draft persistence — survives full app exit so sets/notes/exercise edits aren't lost.
-  // Held in a ref so it can short-circuit loadData's reset even when log is still empty
-  // (e.g. user reordered or added an exercise but hasn't ticked any sets yet).
+  // Locked once the session holds something to keep: it has started, or it was
+  // shaped before starting (markShaped). Held in a ref so it can short-circuit
+  // loadData's reset even when log is still empty (e.g. user reordered or added
+  // an exercise but hasn't ticked any sets yet).
   const draftLockedRef = useRef(false);
-  // The training day the session held here was built or restored for, and
-  // whether its workout clock is going: what decides if it's kept when the
-  // day is resolved again (utils/heldSession.ts).
+  // The draft restored here had started. Its clock comes back separately (the
+  // timer restores itself), so until it does this is what says so.
+  const [restoredStarted, setRestoredStarted] = useState(false);
+  // The training day the session held here was built or restored for, whether
+  // its workout clock is going, whether it has started, and which workout it
+  // is: what decides if it's kept when the day is resolved again
+  // (utils/heldSession.ts).
   const sessionDayRef = useRef<string | null>(null);
   const liveRef = useRef(false);
+  const startedRef = useRef(false);
+  const workoutInfoRef = useRef(workoutInfo);
   const [draftRestored, setDraftRestored] = useState(false);
+  // Started: the clock is going, a set has numbers or a tick, a session note is
+  // written, a custom workout is begun, or the draft it came from had started.
+  // Shaping it beforehand (moving, swapping, adding or removing exercises and
+  // sets) doesn't start it: no clock, no in-progress bar, no lock-screen card.
+  const sessionStarted = restoredStarted || isRunning || isPaused
+    || hasWorkoutProgress(log) || notes.trim().length > 0 || isFreeWorkout;
   useEffect(() => {
-    isWorkoutActiveRef.current = draftLockedRef.current || isRunning || hasWorkoutProgress(log);
+    startedRef.current = sessionStarted;
     liveRef.current = isRunning || isPaused;
-  }, [isRunning, isPaused, log]);
+    workoutInfoRef.current = workoutInfo;
+  }, [sessionStarted, isRunning, isPaused, workoutInfo]);
+
+  // The debounced draft write (see the autosave below): what's waiting to be
+  // written, and its timer.
+  const pendingDraftRef = useRef<object | null>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The session held here is let go: nothing of it is kept or restored.
+  const clearDraft = useCallback(() => {
+    draftLockedRef.current = false;
+    setRestoredStarted(false);
+    // Drop any queued write too — a debounced save landing AFTER the clear
+    // would resurrect the draft the user just finished/discarded.
+    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    pendingDraftRef.current = null;
+    AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
+  }, []);
+
+  // An edit to the session before it has started (an exercise moved, swapped,
+  // added or removed, a set added or removed, a Hold switched, an exercise
+  // note): from here on it's saved as a draft and kept on its day, without
+  // starting (utils/heldSession.ts). Nothing marked it, so the day was rebuilt
+  // from the program the moment the user left the tab (user report,
+  // 2026-10-07). The autosave writes it, since every edit changes the session.
+  const markShaped = useCallback(() => { draftLockedRef.current = true; }, []);
 
   const loadData = useCallback((forceReload = false) => {
     // Program, history and override are read together so the effective training
@@ -1757,40 +1795,48 @@ export default function WorkoutScreen() {
       setTodaysCompletedWorkout(history.find(w => w.date === effective) ?? null);
       setPrevHistory(history);
 
+      // What the day schedules now: the template a rebuild uses, and what a
+      // session shaped before starting has to still be to stay. Pass the full
+      // program list so a change-day override that picked a day from a
+      // NON-active program re-resolves to that program's exercises.
+      const workout = found ? resolveWorkoutForDate(found, override, effective, programs) : null;
+
       // Re-resolve the scheduled template unless the session held here is
-      // kept (utils/heldSession.ts): one in progress on its own day (don't
-      // clobber a workout the user is mid-way through), or one from another
-      // day whose clock is still going. A just-finished session is no longer
-      // "in progress" — finalizeComplete clears the log — so this correctly
+      // kept (utils/heldSession.ts): one started on its own day (don't
+      // clobber a workout the user is mid-way through), one shaped before
+      // starting while the day still schedules it, or one from another day
+      // whose clock is still going. A just-finished session is no longer
+      // started — finalizeComplete clears the log — so this correctly
       // advances to the new day after a completion.
+      const started = startedRef.current;
+      const shaped = draftLockedRef.current && !started;
       const keep = !forceReload && keepsHeldSession({
         day: sessionDayRef.current,
         live: liveRef.current,
-        engaged: isWorkoutActiveRef.current,
-      }, effective);
-      if (!keep && sessionDayRef.current !== null && sessionDayRef.current !== effective) {
+        started,
+        shaped,
+        workout: workoutInfoRef.current,
+      }, effective, workout);
+      if (!keep && sessionDayRef.current !== null && (sessionDayRef.current !== effective || shaped)) {
         // A session from another day goes, its order, swaps and adds with it,
         // and its sets, note, custom-workout flags and draft: the day starts
         // again in the program's own order. Kept whenever it judged itself in
         // progress, a session left held here carried its swapped order into
-        // the same day a week later.
+        // the same day a week later. One shaped before it started goes the
+        // same way once its day schedules another workout, or none: its edits
+        // were for that one.
         setLog({});
         setNotes("");
         setIsometricExIds(new Set());
         setIsFreeWorkout(false);
         setFreeWorkoutAddToProgram(false);
-        draftLockedRef.current = false;
-        isWorkoutActiveRef.current = false;
-        AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
+        clearDraft();
         if (!found) {
           setWorkoutInfo(null);
           sessionDayRef.current = null;
         }
       }
       if (found && !keep) {
-        // Pass the full program list so a change-day override that picked a day
-        // from a NON-active program re-resolves to that program's exercises.
-        const workout = resolveWorkoutForDate(found, override, effective, programs);
         setWorkoutInfo(workout ? { name: workout.name, exercises: withProgramIds(workout.exercises), programId: workout.programId, dayId: workout.dayId } : null);
         if (workout) {
           setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
@@ -1805,7 +1851,7 @@ export default function WorkoutScreen() {
       const parsed: unknown = JSON.parse(v);
       if (Array.isArray(parsed)) setCustomExercises(parsed as CustomExercise[]);
     }).catch((e) => warnStorage("getItem", CUSTOM_KEY, e));
-  }, []);
+  }, [clearDraft]);
 
   // Restore an in-progress workout draft (if any) before loadData runs, so the
   // template loader doesn't clobber a workout the user was mid-way through.
@@ -1845,7 +1891,9 @@ export default function WorkoutScreen() {
             setIsFreeWorkout(!!draft.isFreeWorkout);
             setFreeWorkoutAddToProgram(!!draft.freeWorkoutAddToProgram);
             draftLockedRef.current = true;
-            isWorkoutActiveRef.current = true;
+            // `planned`: only shaped, never started (the autosave). Every draft
+            // from before it was a started one.
+            setRestoredStarted(!draft.planned);
             upToRef.current = { target: upToTargetOf(draft.workoutInfo.exercises ?? [], draft.log), animated: false };
           } else {
             // Stale draft from a previous day — discard
@@ -1877,11 +1925,12 @@ export default function WorkoutScreen() {
       // session in progress; and a leftover note re-saved itself as a draft.
       setLog({});
       setNotes("");
-      draftLockedRef.current = false;
-      isWorkoutActiveRef.current = false;
+      // And a draft write still queued from just before, which landing after
+      // the discard would bring the session back.
+      clearDraft();
       loadData(true);
     }
-  }, [discardCount, loadData, endUpTo]);
+  }, [discardCount, loadData, endUpTo, clearDraft]);
 
   useFocusEffect(useCallback(() => {
     if (draftRestored) loadData();
@@ -1920,9 +1969,7 @@ export default function WorkoutScreen() {
   // JSON.stringify + AsyncStorage.setItem coalesces to one write ~400ms after
   // the last change. flushDraft() runs the pending write NOW — called when the
   // app backgrounds so a swipe-kill can't lose more than the debounce window.
-  const pendingDraftRef = useRef<object | null>(null);
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  // (pendingDraftRef and draftTimerRef are declared with clearDraft, above.)
   const flushDraft = useCallback(() => {
     if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
     const payload = pendingDraftRef.current;
@@ -1940,17 +1987,15 @@ export default function WorkoutScreen() {
   }, [flushDraft]);
 
   // Autosave draft on any change after restoration. Skip while a completed workout
-  // is shown (nothing to save), and skip the empty pre-start baseline (saving only
-  // when the user has actually engaged: running timer, real progress, or notes).
+  // is shown (nothing to save), and skip the untouched pre-start baseline, so a
+  // program edit still shows: it saves once the session has started, or once it
+  // was shaped before starting (markShaped).
   useEffect(() => {
     if (!draftRestored) return;
     if (!workoutInfo) return;
     if (todaysCompletedWorkout) return;
-    const hasContent =
-      isRunning || hasWorkoutProgress(log) || notes.trim().length > 0 || isFreeWorkout;
-    if (!hasContent && !draftLockedRef.current) return;
+    if (!sessionStarted && !draftLockedRef.current) return;
     draftLockedRef.current = true;
-    isWorkoutActiveRef.current = true;
     pendingDraftRef.current = {
       date: effectiveTodayRef.current,
       workoutInfo,
@@ -1962,20 +2007,15 @@ export default function WorkoutScreen() {
       notes,
       isFreeWorkout,
       freeWorkoutAddToProgram,
+      // Shaped but not started: no workout under way, which Set Workout Date
+      // reads (app/programs.tsx). Absent once started, and on every draft
+      // from before, which were all started ones.
+      ...(sessionStarted ? {} : { planned: true }),
     };
     if (!draftTimerRef.current) {
       draftTimerRef.current = setTimeout(() => { draftTimerRef.current = null; flushDraft(); }, 400);
     }
-  }, [draftRestored, todaysCompletedWorkout, isRunning, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram, isKg, flushDraft]);
-
-  const clearDraft = useCallback(() => {
-    draftLockedRef.current = false;
-    // Drop any queued write too — a debounced save landing AFTER the clear
-    // would resurrect the draft the user just finished/discarded.
-    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
-    pendingDraftRef.current = null;
-    AsyncStorage.removeItem(WORKOUT_DRAFT_KEY).catch((e) => warnStorage("removeItem", WORKOUT_DRAFT_KEY, e));
-  }, []);
+  }, [draftRestored, todaysCompletedWorkout, sessionStarted, workoutInfo, log, isometricExIds, notes, isFreeWorkout, freeWorkoutAddToProgram, isKg, flushDraft]);
 
   // `cascade` is true only for TYPED input (onChangeText). Programmatic fills
   // (the checkbox's copy-from-prev) stay single-set, or ticking one empty set
@@ -2068,14 +2108,16 @@ export default function WorkoutScreen() {
   }, [startTimer, startRestAfterSet]);
 
   const addSet = useCallback((exId: string) => {
+    markShaped();
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
       return { ...prev, [exId]: { ...exLog, working: [...exLog.working, makeSet()] } };
     });
-  }, []);
+  }, [markShaped]);
 
   const toggleSetType = useCallback((exId: string, type: "warmup" | "working", localIdx: number) => {
+    markShaped();
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
@@ -2101,29 +2143,31 @@ export default function WorkoutScreen() {
         }};
       }
     });
-  }, []);
+  }, [markShaped]);
 
   // The set whose row just closed, by its key, never "the last set" (see
   // utils/setRows.ts). An exercise always keeps one set.
   const removeSet = useCallback((exId: string, rowKey: string) => {
+    markShaped();
     setLog(prev => {
       const exLog = prev[exId];
       const next = exLog && withoutSet(exLog.warmup, exLog.working, rowKey);
       return next ? { ...prev, [exId]: { ...exLog, ...next } } : prev;
     });
-  }, []);
+  }, [markShaped]);
 
   // Reuse and Undo both land here: the notes field offers last time's note only
   // while the box is empty, so reusing is just setting it, and undoing is
   // setting it back to empty. (There used to be a separate append-style reuse
   // for a box that already had text; the field no longer offers Reuse then.)
   const updateExNotes = useCallback((exId: string, notes: string) => {
+    markShaped();
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
       return { ...prev, [exId]: { ...exLog, notes } };
     });
-  }, []);
+  }, [markShaped]);
 
   // A swap starts the new exercise clean (its numbers and note were written for
   // the old one) and remembers what it replaced, so next week the original's
@@ -2131,6 +2175,7 @@ export default function WorkoutScreen() {
   // its programExerciseId: the place in the program is the same, only the
   // exercise in it changed.
   const changeExercise = (exId: string, newName: string) => {
+    markShaped();
     setWorkoutInfo(prev => prev ? {
       ...prev,
       exercises: prev.exercises.map(e => e.id === exId ? { ...e, name: newName, swappedFrom: swapOrigin(e, newName) } : e),
@@ -2143,6 +2188,7 @@ export default function WorkoutScreen() {
   };
 
   const removeExercise = (exId: string) => {
+    markShaped();
     setWorkoutInfo(prev => prev ? { ...prev, exercises: prev.exercises.filter(e => e.id !== exId) } : prev);
     setLog(prev => { const next = { ...prev }; delete next[exId]; return next; });
     setCollapsingIds(prev => { const next = new Set(prev); next.delete(exId); return next; });
@@ -2154,17 +2200,21 @@ export default function WorkoutScreen() {
   // render site would re-create per keystroke and defeat the memo).
   const openReorder = useCallback(() => setReorderOpen(true), []);
   const openChangeExercise = useCallback((exId: string) => setChangingExId(exId), []);
-  const toggleIsometricEx = useCallback((exId: string) => setIsometricExIds(prev => {
-    const next = new Set(prev);
-    if (next.has(exId)) next.delete(exId);
-    else next.add(exId);
-    return next;
-  }), []);
+  const toggleIsometricEx = useCallback((exId: string) => {
+    markShaped();
+    setIsometricExIds(prev => {
+      const next = new Set(prev);
+      if (next.has(exId)) next.delete(exId);
+      else next.add(exId);
+      return next;
+    });
+  }, [markShaped]);
 
   const [reorderOpen, setReorderOpen] = useState(false);
   const reorderExercises = useCallback((exercises: Exercise[]) => {
+    markShaped();
     setWorkoutInfo(prev => prev ? { ...prev, exercises } : prev);
-  }, []);
+  }, [markShaped]);
 
   const openCustomWorkoutNaming = () => {
     setCustomWorkoutNamingOpen(true);
@@ -2205,6 +2255,8 @@ export default function WorkoutScreen() {
       // here. A day already off only needs a pick made on it since replaced,
       // which is what the "Rest" override is for.
       const clearScreen = () => {
+        // Edits made before starting were for the workout being let go.
+        if (!startedRef.current) clearDraft();
         setWorkoutInfo(null);
         setLog({});
       };
@@ -2237,8 +2289,14 @@ export default function WorkoutScreen() {
     // returned the first day of that name and so loaded the wrong exercises for
     // the second one.
     const exercises = withProgramIds(src?.workouts[workoutKey(day.index, day.label)] ?? []);
+    // Edits made to the day being left, before it started, were for that day:
+    // the one picked starts in its program's order, unshaped
+    // (utils/heldSession.ts).
+    if (!startedRef.current) clearDraft();
     setWorkoutInfo({ name: day.label, exercises, programId: src?.id, dayId: day.dayId });
     setLog(initLog(exercises));
+    // Its holds marked as the program marks them, as a day built on load is.
+    setIsometricExIds(new Set(exercises.filter(e => e.isIsometric).map(e => e.id)));
     sessionDayRef.current = effectiveTodayRef.current;
     // Record the source program AND slot so re-resolution (tab refocus /
     // relaunch) restores THIS day of THIS program.
@@ -2259,9 +2317,10 @@ export default function WorkoutScreen() {
       // The pick just written replaces any a move carried to tomorrow.
       void clearRestDay(activeProgram.id, effectiveTodayRef.current, false);
     }
-  }, [activeProgram, loadData]);
+  }, [activeProgram, loadData, clearDraft]);
 
   const addExercise = (name: string, idOffset = 0) => {
+    markShaped();
     const id = `session_${Date.now() + idOffset}`;
     const ex: Exercise = { id, name, sets: Array.from({ length: 3 }, () => ({ type: "working" as const })) };
     setWorkoutInfo(prev => prev ? { ...prev, exercises: [...prev.exercises, ex] } : prev);
@@ -2320,6 +2379,9 @@ export default function WorkoutScreen() {
           notes: exLog?.notes ?? "",
           ...(ex.swappedFrom ? { swappedFrom: ex.swappedFrom } : {}),
           ...(ex.programExerciseId ? { programExerciseId: ex.programExerciseId } : {}),
+          // The card's Hold switch: its reps are seconds, kept out of reps
+          // and volume totals (CompletedExercise.isIsometric).
+          ...(isometricExIds.has(ex.id) ? { isIsometric: true as const } : {}),
         };
       }),
     };
@@ -2386,14 +2448,13 @@ export default function WorkoutScreen() {
     stopTimer();
     setIsFreeWorkout(false);
     setFreeWorkoutAddToProgram(false);
-    // Tear down the live session so it's no longer counted as "in progress"
-    // (the locked view renders from todaysCompletedWorkout, not from `log`).
-    // Without this the leftover log keeps isWorkoutActiveRef true, which would
-    // stop loadData from advancing to the next day after the date rolls over.
+    // Tear down the live session so it's no longer counted as started (the
+    // locked view renders from todaysCompletedWorkout, not from `log`).
+    // Without this the leftover log keeps it started, which would stop
+    // loadData from advancing to the next day after the date rolls over.
     setLog({});
     setNotes("");
     setIsometricExIds(new Set());
-    isWorkoutActiveRef.current = false;
     clearDraft();
   };
 
@@ -2595,14 +2656,12 @@ export default function WorkoutScreen() {
   }, [handleInputFocus, clearFieldOfRest]);
 
   // ── Lock-screen Live Activity ─────────────────────────────────────────────
-  // Same gate as the draft autosave: once the user has engaged with today's
-  // session, project it onto the iOS lock screen / Dynamic Island (dev and
+  // Once today's session has STARTED (shaping it beforehand isn't starting it),
+  // project it onto the iOS lock screen / Dynamic Island (dev and
   // production builds only — silently inert in Expo Go). Lock-screen ticks and
   // rest changes made while the app was backgrounded replay into the log and
   // timers on foreground via the two appliers below.
-  const sessionActiveForActivity =
-    !!workoutInfo && !todaysCompletedWorkout &&
-    (isRunning || isPaused || hasWorkoutProgress(log) || isFreeWorkout || notes.trim().length > 0);
+  const sessionActiveForActivity = !!workoutInfo && !todaysCompletedWorkout && sessionStarted;
 
   const liveActivityPayload = useMemo(() => {
     if (!workoutInfo || todaysCompletedWorkout) return null;
@@ -3504,8 +3563,11 @@ export default function WorkoutScreen() {
           startDate={new Date(new Date(pendingComplete.completedAt).getTime() - pendingComplete.durationSeconds * 1000)}
           endDate={new Date(pendingComplete.completedAt)}
           onConfirm={(start, end) => {
-            const completedAt = completedAtISO(pendingComplete.date, end);
-            const durationSeconds = computeDurationMins(start, end) * 60;
+            // Read against the start as it was stamped: finished after
+            // midnight, a session counted as the day before finished the day
+            // after it (utils/sessionTime.ts).
+            const stamped = new Date(new Date(pendingComplete.completedAt).getTime() - pendingComplete.durationSeconds * 1000);
+            const { completedAt, durationSeconds } = stampSession(pendingComplete.date, start, end, stamped);
             finalizeComplete({ ...pendingComplete, completedAt, durationSeconds });
             setCompleteSheetOpen(false);
             setPendingComplete(null);

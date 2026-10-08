@@ -38,7 +38,7 @@ import { useClientUnit } from "../hooks/useClientUnit";
 import { getJSON } from "../utils/storage";
 import { loadCachedClientData } from "../utils/trainerStore";
 import { MONTH_NAMES } from "../utils/dates";
-import { programIncludes } from "../utils/progressStats";
+import { exerciseHistoryRows } from "../utils/exerciseHistory";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // Day-of-week strings — local format, not from a library to avoid extra deps.
@@ -53,11 +53,6 @@ function fmtSessionDate(ymd: string): string {
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return ymd;
   const date = new Date(y, m - 1, d);
   return `${DAY_SHORT[date.getDay()]} ${d} ${MONTH_NAMES[(m - 1) % 12]}`;
-}
-
-// Lowercase-trim match used across the codebase for exercise names.
-function key(s: string): string {
-  return s.trim().toLowerCase();
 }
 
 interface SessionRow {
@@ -79,7 +74,7 @@ export default function ExerciseHistoryScreen() {
   // client's Progress tab: it reads the copy the client page loaded (never your
   // own storage, where none of their sessions exist) and a card opens the
   // session read-only, exactly as tapping it on their journal does.
-  const { exerciseName, dayName, dayId, clientId } = useLocalSearchParams<{ exerciseName: string; dayName?: string; dayId?: string; clientId?: string }>();
+  const { exerciseName, dayName, dayId, programId, clientId } = useLocalSearchParams<{ exerciseName: string; dayName?: string; dayId?: string; programId?: string; clientId?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg: ownIsKg } = useUnit();
@@ -124,55 +119,12 @@ export default function ExerciseHistoryScreen() {
     }, [clientId]),
   );
 
+  // Which sessions, and their sets: utils/exerciseHistory.ts.
   const sessions: SessionRow[] = useMemo(() => {
     if (!exerciseName) return [];
-    const want = key(exerciseName);
-    const wantDay = typeof dayName === "string" && dayName.trim() ? key(dayName) : null;
-    // The slot id when we have it. Sessions that recorded one are matched on it
-    // (so a renamed day keeps its history, and two same-named days don't pool);
-    // sessions without one still fall back to the day name.
-    const wantDayId = typeof dayId === "string" && dayId.trim() ? dayId : null;
-    // Date cutoff for the active range — sessions older than this are dropped.
-    const cutoff = new Date();
-    cutoff.setHours(0, 0, 0, 0);
-    cutoff.setDate(cutoff.getDate() - rangeOption.days);
-    const cutoffMs = cutoff.getTime();
-
-    const rows: SessionRow[] = [];
-    for (const w of history) {
-      if (wantDayId !== null && w.dayId) {
-        if (w.dayId !== wantDayId) continue;
-      } else if (wantDay !== null && key(w.workoutName) !== wantDay) continue;
-      // Filter by date window first (cheaper than walking exercises).
-      const [yy, mm, dd] = w.date.split("-").map(Number);
-      if (!Number.isFinite(yy) || !Number.isFinite(mm) || !Number.isFinite(dd)) continue;
-      if (new Date(yy, mm - 1, dd).getTime() < cutoffMs) continue;
-      // Find the matching exercise inside this workout (case-insensitive trim).
-      const ex = w.exercises.find(e => key(e.name) === want);
-      if (!ex) continue;
-      // Include warmup + working — drop only un-done sets. Warmups render
-      // with a neutral chip below so the user can still tell them apart.
-      const doneSets = ex.sets.filter(s => s.done);
-      if (doneSets.length === 0) continue;
-      // Resolve the owning program: by stamped id for new records (""/no match
-      // → "Free workout"), else the legacy day-name match for old records.
-      const owningProgram = w.programId !== undefined
-        ? programs.find(p => p.id === w.programId)
-        : programs.find(p => programIncludes(p, w.workoutName));
-      rows.push({
-        workoutId: w.id,
-        date: w.date,
-        completedAt: w.completedAt,
-        displayDate: fmtSessionDate(w.date),
-        workoutName: w.workoutName,
-        programName: owningProgram?.name ?? "Free workout",
-        sets: doneSets,
-      });
-    }
-    // Newest first.
-    rows.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
-    return rows;
-  }, [history, programs, exerciseName, dayName, dayId, rangeOption.days]);
+    return exerciseHistoryRows(history, programs, { exerciseName, dayName, dayId, programId, days: rangeOption.days })
+      .map(r => ({ ...r, displayDate: fmtSessionDate(r.date) }));
+  }, [history, programs, exerciseName, dayName, dayId, programId, rangeOption.days]);
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

@@ -61,6 +61,7 @@ function workout(id: string, date: string, exercises: CompletedExercise[]): Comp
   eq(recs[0], { exerciseName: "Bench Press", kind: "heaviest", valueKg: 105, prevKg: 100 }, "heaviest record carries new and prior kg");
   check(Math.abs(recs[1].valueKg - 105 * (1 + 6 / 30)) < 1e-9, "1RM record uses Epley on the session's best set");
   eq(recs[2].valueKg, 630, "best-set-volume record is weight × reps");
+  eq([recs[2].weightKg, recs[2].reps], [105, 6], "best-set record carries the set it was, shown as 105 kg × 6");
 }
 
 // Ties are NOT records (strict >).

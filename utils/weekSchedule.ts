@@ -53,8 +53,11 @@ export type WeekDayPlan = {
 
 export type WeekSchedule = {
   days: WeekDayPlan[];
-  /** Sessions logged inside this week, for the ring and the week's totals. */
+  /** Sessions logged inside this week, for the week's totals. */
   sessions: CompletedWorkout[];
+  /** DAYS trained this week, the ring's count: a day with two sessions is one
+   *  day trained, as it's one day in `plannedCount`. Counting sessions, the
+   *  ring read 5/4. */
   completedCount: number;
   /** Workouts the week holds: planned days plus any day trained anyway. */
   plannedCount: number;
@@ -144,7 +147,21 @@ export function buildWeekSchedule({
     });
   }
 
-  return { days, sessions, completedCount: sessions.length, plannedCount };
+  return { days, sessions, completedCount: days.filter(d => d.completed).length, plannedCount };
+}
+
+/** The totals under Home's ring for a week's sessions (WeekSchedule.sessions):
+ *  minutes trained, and the kilos moved in completed working sets (a timed
+ *  hold moves none: its "reps" are seconds). */
+export function weekTotals(sessions: CompletedWorkout[]): { totalMinutes: number; totalVolumeKg: number } {
+  const totalMinutes = Math.round(
+    sessions.reduce((sum, w) => sum + w.durationSeconds, 0) / 60
+  );
+  const totalVolumeKg = sessions.reduce((sum, w) =>
+    sum + w.exercises.reduce((es, ex) => ex.isIsometric ? es :
+      es + ex.sets.reduce((ss, s) =>
+        ss + (s.type === "working" && s.done ? (parseFloat(s.weight) || 0) * (parseFloat(s.reps) || 0) : 0), 0), 0), 0);
+  return { totalMinutes, totalVolumeKg };
 }
 
 /** The Monday of `ymd`'s week, as "YYYY-MM-DD". */

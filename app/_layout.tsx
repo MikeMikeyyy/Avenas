@@ -26,6 +26,7 @@ import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
 import { runDayIdMigrationIfNeeded } from "../utils/dayIdMigration";
+import { runHoldMigrationIfNeeded } from "../utils/holdMigration";
 import { autoPauseIfIdle } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 
@@ -188,14 +189,16 @@ export default function RootLayout() {
     Nunito_700Bold,
   });
 
-  // One-shot data migrations, run in sequence (both rewrite @avenas/programs and
-  // @avenas/workout_history, so they must not interleave). The whole app is
-  // gated on them: no screen may render pre-migration data through the new
-  // kg-canonical display lens, or read a program day before it has a stable id.
+  // One-shot data migrations, run in sequence (each rewrites
+  // @avenas/workout_history, and the first two @avenas/programs too, so they
+  // must not interleave). The whole app is gated on them: no screen may render
+  // pre-migration data through the new kg-canonical display lens, read a
+  // program day before it has a stable id, or count a plank's seconds as reps.
   const [migrated, setMigrated] = useState(false);
   useEffect(() => {
     runWeightUnitMigrationIfNeeded()
       .then(runDayIdMigrationIfNeeded)
+      .then(runHoldMigrationIfNeeded)
       .finally(() => setMigrated(true));
   }, []);
 

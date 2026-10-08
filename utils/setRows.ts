@@ -67,7 +67,8 @@ export function flatIndexOf(warmupCount: number, type: SetType, idx: number): nu
 }
 
 /** What ticking a still-empty set fills in: last time's numbers at its row
- *  ("80×8" is 80 and 8; a lone figure is the weight, as the hint shows it).
+ *  ("80×8" is 80 and 8, "×8" a bodyweight set's 8 reps, "80×" a weight with no
+ *  reps: utils/workout.ts formatPrevSets always writes both sides).
  *  Null when the set already has something typed, or there's nothing to copy.
  *  One rule for every way a set gets ticked: the card's checkbox and the lock
  *  screen's button (and the card's preview of what that button will tick). A

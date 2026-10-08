@@ -21,8 +21,9 @@
 //
 // Pure and RN-free (verified by scripts/verify-session-track.ts).
 
-import { addDaysYMD, parseStoredDate, toYMD } from "./dates";
+import { addDaysYMD, toYMD } from "./dates";
 import { cycleIndexForDate } from "./workout";
+import { heldOn, runStartYMD } from "./programHolds";
 import { isDatePushed } from "./skippedDates";
 import { workoutBelongsToProgram } from "./progressStats";
 import { dayIdAt, indexOfDayId, normalizeDayName } from "./programDays";
@@ -48,7 +49,12 @@ const MAX_WALK_DAYS = 800;
  *
  *   A HOLD schedules nothing. `cycleIndexForDate` deliberately ignores `pausedAt`
  *   (it is also the dayId backfill's tool), so walking across a hold would invent
- *   occurrences that never came round.
+ *   occurrences that never came round. The hold the program is on ends the walk;
+ *   one it came back from (SavedProgram.holds) is stepped over, and the walk
+ *   begins on the day the run began (runStartYMD). Resuming moved startDate on
+ *   by the days held: walked from there, the run's first days were left out,
+ *   and the held days replayed the days before the hold as occurrences nobody
+ *   could have trained.
  */
 export function occurrencesOfDay(program: SavedProgram, dayId: string, throughYMD: string): string[] {
   // The slot is resolved ONCE, and every date is compared against that index.
@@ -61,7 +67,9 @@ export function occurrencesOfDay(program: SavedProgram, dayId: string, throughYM
   const label = program.cyclePattern[slot];
   if (!label || normalizeDayName(label) === "rest") return [];
 
-  const startYMD = startOf(program);
+  // Null when startDate can't be read: no schedule to count, never a
+  // fallback date.
+  const startYMD = runStartYMD(program);
   if (!startYMD) return [];
 
   const finish = programFinishDate(program);
@@ -72,7 +80,7 @@ export function occurrencesOfDay(program: SavedProgram, dayId: string, throughYM
   let ymd = startYMD;
   for (let i = 0; i < MAX_WALK_DAYS && ymd <= lastYMD; i++, ymd = addDaysYMD(ymd, 1)) {
     if (program.pausedAt && ymd >= program.pausedAt) break;
-    if (isDatePushed(program, ymd)) continue;
+    if (isDatePushed(program, ymd) || heldOn(program, ymd)) continue;
     if (cycleIndexForDate(program, ymd) !== slot) continue;
     out.push(ymd);
   }
@@ -273,8 +281,9 @@ export function buildSessionTracks(
   }
 
   // No schedule to place it against (a free workout, no slot, a start date moved
-  // by a resumed hold): the dot sits where the count says, and nothing is
-  // greyed — an unknown schedule can't claim anything was missed.
+  // by a hold resumed before holds were kept): the dot sits where the count
+  // says, and nothing is greyed — an unknown schedule can't claim anything was
+  // missed.
   for (const w of history) {
     if (positionById[w.id] === undefined) positionById[w.id] = numberById[w.id];
   }
@@ -300,13 +309,6 @@ export function buildSessionTracks(
   }
 
   return { numberById, positionById, missedById, replacedById, insteadOfById };
-}
-
-/** The program's start as "YYYY-MM-DD", or null when it can't be parsed — which
- *  callers must treat as "no schedule to count", never as a fallback date. */
-function startOf(program: SavedProgram): string | null {
-  const d = parseStoredDate(program.startDate);
-  return d ? toYMD(d) : null;
 }
 
 function minYMD(a: string, b: string): string {

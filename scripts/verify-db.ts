@@ -102,6 +102,9 @@ const fullProgram: Required<SavedProgram> = {
   completedDate: "20 Oct 2026",
   cycleOffset: 2,
   pausedAt: "2026-09-18",
+  // A hold it came back from (0043): without it the program page loses every
+  // session before the hold once a backup is restored.
+  holds: [{ from: "2026-09-05", to: "2026-09-09", shift: 4, offsetShift: 4 }],
   archivedAt: "2026-09-20",
   trainingDays: 3,
   cycleDays: 4,
@@ -171,6 +174,14 @@ const fullWorkout: Required<CompletedWorkout> = {
     sets: [{ type: "working", weight: "14", reps: "12", done: true }],
     swappedFrom: "Cable Fly",
     programExerciseId: "e3",
+  }, {
+    // A timed hold: its reps are seconds, and the flag that says so must
+    // survive a backup or a restored plank counts as reps again.
+    name: "Plank",
+    notes: "",
+    sets: [{ type: "working", weight: "", reps: "60", done: true }],
+    programExerciseId: "e4",
+    isIsometric: true,
   }],
   sessionNotes: "Good session",
   programId: "program_1",

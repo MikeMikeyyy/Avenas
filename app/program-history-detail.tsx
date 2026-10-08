@@ -62,6 +62,7 @@ import { fmtDuration, fromYMD, MONTH_NAMES, parseStoredDate } from "../utils/dat
 import { getJSON } from "../utils/storage";
 import { toDisplayWeight } from "../utils/units";
 import { getEffectiveToday } from "../utils/workout";
+import { runStartDate } from "../utils/programHolds";
 import { ordinal } from "../utils/workoutSummary";
 import {
   buildProgramHistory,
@@ -145,7 +146,7 @@ function OverviewCard({ program, totals, isDark, isKg }: {
     }
     return null;
   })();
-  const started = parseStoredDate(program.startDate);
+  const started = parseStoredDate(runStartDate(program));
 
   const stats = [
     { value: String(totals.sessions), label: totals.sessions === 1 ? "session" : "sessions" },

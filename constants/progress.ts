@@ -107,22 +107,44 @@ export type ExerciseDataPoint = {
   bestSetVolume: number; // max(weight × reps) for any single working set in the session
   bestSetWeight: number; // weight of the set that produced bestSetVolume
   bestSetReps: number;   // reps of the set that produced bestSetVolume
+  /** The session's estimated one-rep max: the best Epley estimate, weight ×
+   *  (1 + reps / 30), over its working sets (the "Estimated 1RM" record's
+   *  formula).
+   *  0 for a session with no weight on the bar, and for a hold. */
+  e1rm: number;
+  e1rmWeight: number;    // weight of the set that produced e1rm
+  e1rmReps: number;      // reps of the set that produced e1rm
   sessionVolume: number; // total tonnage of this exercise in the session
+  /** The working sets with weight on the bar (not a hold), and their reps:
+   *  what sessionVolume adds up, for the Most Volume record ("4 sets · 38
+   *  reps"). */
+  weightedSets: number;
+  weightedReps: number;
   totalReps: number;     // Σ reps across working+done sets in the session
+  /** A timed hold (CompletedExercise.isIsometric): `totalReps` and `topReps`
+   *  are seconds held, and it moves no volume. */
+  isHold?: true;
 };
 
 // Which metric the per-exercise line chart is currently plotting.
 export type ExerciseMetricKey =
   | "topWeight"
-  | "bestSetVolume"
+  | "e1rm"
   | "sessionVolume"
   | "totalReps";
 
 export type ExerciseMetricOption = { key: ExerciseMetricKey; label: string };
 
+// Est. 1RM took Best Set's place (user decision, 2026-10-08). Best Set, the
+// best set's weight × reps, is Heaviest times the reps for anyone who does the
+// same reps every week, so the two lines drew the same dots; and it rewarded
+// light sets of many reps (60 × 20 beat 100 × 8). An estimated one-rep max
+// counts reps as well as weight on one strength scale, so more reps at the same
+// weight reads as progress where Heaviest stays flat. Best Set is still a
+// record tile under the chart.
 export const EXERCISE_METRIC_OPTIONS: ExerciseMetricOption[] = [
   { key: "topWeight",     label: "Heaviest" },
-  { key: "bestSetVolume", label: "Best Set" },
+  { key: "e1rm",          label: "Est. 1RM" },
   { key: "sessionVolume", label: "Volume"   },
   { key: "totalReps",     label: "Reps"     },
 ];
@@ -148,16 +170,21 @@ export type PRSet = {
   value: number;
   workoutId: string;
   date: string;          // YYYY-MM-DD
-  // For 1RM PRs we also need reps to display "80 × 8 → 101 kg" if we ever want to.
+  /** The set a record is (Heaviest, Best Set) or comes from (Estimated 1RM):
+   *  shown as "90 kg × 8". */
   weight?: number;
+  /** That set's reps; for Most Volume, the session's reps in all. */
   reps?: number;
+  /** Most Volume only: the session's working sets with weight on the bar,
+   *  which together lifted `value` ("4 sets · 38 reps"). */
+  sets?: number;
 };
 
 export type PRs = {
   heaviest: PRSet | null;          // max weight in a single working set
-  bestSetVolume: PRSet | null;     // max(weight × reps) in a single working set
-  bestSessionVolume: PRSet | null; // max total exercise tonnage across all sessions
-  oneRepMax: PRSet | null;         // Epley: weight × (1 + reps/30), reps >= 1
+  bestSetVolume: PRSet | null;     // max(weight × reps) in a single working set ("Best Set")
+  bestSessionVolume: PRSet | null; // max total exercise tonnage across all sessions ("Most Volume")
+  oneRepMax: PRSet | null;         // Epley: weight × (1 + reps/30), reps >= 1 ("Estimated 1RM")
 };
 
 // Synthetic sentinel — never used as a real program id, currently reserved for

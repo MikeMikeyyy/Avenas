@@ -52,6 +52,7 @@
 import { programFinishDate, type SavedProgram } from "../constants/programs";
 import { toYMD } from "./dates";
 import { cycleIndexForDate, getWorkoutForDate, normalizeDriftDates, type DayOverride } from "./workout";
+import { heldOn } from "./programHolds";
 
 type SkipFields = Pick<SavedProgram, "skippedDates" | "pushedDates" | "pulledDates">;
 
@@ -314,14 +315,23 @@ export function nextRestDate(program: SavedProgram, fromYMD: string): string | n
  * be holding the nearest ones, so the search looks a cycle further for each.
  * Limited to one cycle, a move with its rest day taken by another's came out
  * "extended" (the program a day late) with a free rest day just beyond.
+ *
+ * Counted in days the cycle moves on, not calendar days: a moved day and a day
+ * in a hold the program came back from hold the cycle still, so passing them
+ * uses none of the search. Counted as calendar days, two moves and a hold
+ * between a move and its rest day used up a 3-day cycle's search, and the move
+ * was left with no rest day at all.
  */
 function freeRestDate(program: SavedProgram, fromYMD: string, allowed: ReadonlySet<string>): string | null {
-  const reach = program.cycleDays * (1 + (program.pulledDates?.length ?? 0));
-  for (let i = 0; i <= reach; i++) {
-    const ymd = addDays(fromYMD, i);
+  let left = program.cycleDays * (1 + (program.pulledDates?.length ?? 0)) + 1;
+  for (let ymd: string | null = fromYMD; left > 0; ymd = addDays(ymd, 1)) {
     if (!ymd) return null;
     if (program.pausedAt && ymd >= program.pausedAt) return null;
-    if (isDatePulled(program, ymd) || isDatePushed(program, ymd)) continue;
+    // A hold it came back from scheduled nothing: no rest there to spend
+    // (normalizeDriftDates won't leave a pull on one either).
+    if (heldOn(program, ymd) || isDatePushed(program, ymd)) continue;
+    left--;
+    if (isDatePulled(program, ymd)) continue;
     if (isDateSkipped(program, ymd) && !allowed.has(ymd)) continue;
     // The cycle's own slot: a day marked off still rests or trains underneath.
     const idx = cycleIndexForDate(program, ymd);

@@ -36,7 +36,7 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import TimeEditSheet from "../components/TimeEditSheet";
 import WorkoutAchievements from "../components/WorkoutAchievements";
-import { computeDurationMins, completedAtISO } from "../components/TimeWheelPicker";
+import { stampSession } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT } from "../constants/theme";
 import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
@@ -53,6 +53,7 @@ import { formatWeightForDisplay, parseWeightToKg, unitLabel, unitOf } from "../u
 import { useTheme } from "../contexts/ThemeContext";
 import { loadCachedClientData } from "../utils/trainerStore";
 import { swapOrigin } from "../utils/workout";
+import { fromYMD } from "../utils/dates";
 import { achievementsForWorkout } from "../utils/achievements";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -71,9 +72,13 @@ function fmtDuration(secs: number): string {
   return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
 }
 
-function workoutMetaParts(completedIso: string, durationSeconds: number): { date: string; time: string; duration: string | null } {
+// The day is the session's TRAINING day (`date`), never completedAt's: a
+// session finished after midnight is the day before's, and completedAt is the
+// real finish (utils/sessionTime.ts).
+function workoutMetaParts(dateYMD: string, completedIso: string, durationSeconds: number): { date: string; time: string; duration: string | null } {
   const d = new Date(completedIso);
-  const dateStr = `${DAY_SHORT[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
+  const day = fromYMD(dateYMD) ?? d;
+  const dateStr = `${DAY_SHORT[day.getDay()]} ${day.getDate()} ${MONTH_SHORT[day.getMonth()]}`;
   const endTime = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
   if (durationSeconds > 0) {
     const startTime = new Date(d.getTime() - durationSeconds * 1000)
@@ -88,11 +93,11 @@ function workoutMetaParts(completedIso: string, durationSeconds: number): { date
 // pills tint ACCT and a solid green Edit chip joins them, so "tap to change the
 // time" is unmistakable (the old treatment was small text that merely turned
 // green).
-function WorkoutMetaRow({ completedIso, durationSeconds, isDark, editable = false }: {
-  completedIso: string; durationSeconds: number; isDark: boolean; editable?: boolean;
+function WorkoutMetaRow({ dateYMD, completedIso, durationSeconds, isDark, editable = false }: {
+  dateYMD: string; completedIso: string; durationSeconds: number; isDark: boolean; editable?: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const parts = workoutMetaParts(completedIso, durationSeconds);
+  const parts = workoutMetaParts(dateYMD, completedIso, durationSeconds);
   const chipBg = editable
     ? `${ACCT}22`
     : isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)";
@@ -533,7 +538,7 @@ export default function WorkoutDetailScreen() {
       setWorkout(found);
       if (found) {
         setEditedExercises(exToDisplay(found.exercises));
-        setEditedIsIsometric(found.exercises.map(() => false));
+        setEditedIsIsometric(found.exercises.map(e => !!e.isIsometric));
         const keys = newKeys(found.exercises.length);
         setEditedKeys(keys);
         savedKeys.current = keys;
@@ -594,12 +599,18 @@ export default function WorkoutDetailScreen() {
       // working sets, and this edit view has no checkbox (sets added here or
       // via Add Set start done:false and would otherwise never count). A set
       // left empty stays not-done and is ignored by stats.
-      exercises: exToKg(editedExercises).map(ex => ({
-        ...ex,
-        sets: ex.sets.map(s =>
-          !s.done && (s.weight.trim() || s.reps.trim()) ? { ...s, done: true } : s,
-        ),
-      })),
+      exercises: exToKg(editedExercises).map((ex, i) => {
+        // The Hold switch, saved (CompletedExercise.isIsometric): it used to
+        // open off and be forgotten on save.
+        const { isIsometric: _was, ...rest } = ex;
+        return {
+          ...rest,
+          ...(editedIsIsometric[i] ? { isIsometric: true as const } : {}),
+          sets: ex.sets.map(s =>
+            !s.done && (s.weight.trim() || s.reps.trim()) ? { ...s, done: true } : s,
+          ),
+        };
+      }),
       completedAt: editedCompletedAt || workout.completedAt,
       durationSeconds: editedDurationSeconds,
     };
@@ -618,7 +629,7 @@ export default function WorkoutDetailScreen() {
   const handleCancel = () => {
     if (workout) {
       setEditedExercises(exToDisplay(workout.exercises));
-      setEditedIsIsometric(workout.exercises.map(() => false));
+      setEditedIsIsometric(workout.exercises.map(e => !!e.isIsometric));
       setEditedKeys(savedKeys.current);
       setEditedCompletedAt(workout.completedAt);
       setEditedDurationSeconds(workout.durationSeconds);
@@ -845,10 +856,10 @@ export default function WorkoutDetailScreen() {
                   activeOpacity={0.7}
                   style={{ alignSelf: "flex-start" }}
                 >
-                  <WorkoutMetaRow completedIso={editedCompletedAt || workout.completedAt} durationSeconds={editedDurationSeconds} isDark={isDark} editable />
+                  <WorkoutMetaRow dateYMD={workout.date} completedIso={editedCompletedAt || workout.completedAt} durationSeconds={editedDurationSeconds} isDark={isDark} editable />
                 </TouchableOpacity>
               ) : (
-                <WorkoutMetaRow completedIso={workout.completedAt} durationSeconds={workout.durationSeconds} isDark={isDark} />
+                <WorkoutMetaRow dateYMD={workout.date} completedIso={workout.completedAt} durationSeconds={workout.durationSeconds} isDark={isDark} />
               )}
               {clientIsKg !== undefined && clientIsKg !== ownIsKg && (
                 <Text style={[styles.unitNote, { color: t.ts }]}>
@@ -1241,8 +1252,11 @@ export default function WorkoutDetailScreen() {
           startDate={new Date(new Date(editedCompletedAt).getTime() - editedDurationSeconds * 1000)}
           endDate={new Date(editedCompletedAt)}
           onConfirm={(start, end) => {
-            setEditedCompletedAt(completedAtISO(workout.date, end));
-            setEditedDurationSeconds(computeDurationMins(start, end) * 60);
+            // Read against the start as it stands (utils/sessionTime.ts).
+            const stamped = new Date(new Date(editedCompletedAt).getTime() - editedDurationSeconds * 1000);
+            const times = stampSession(workout.date, start, end, stamped);
+            setEditedCompletedAt(times.completedAt);
+            setEditedDurationSeconds(times.durationSeconds);
             setTimeSheetOpen(false);
           }}
           onClose={() => setTimeSheetOpen(false)}

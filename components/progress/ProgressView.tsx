@@ -310,6 +310,8 @@ function ProgressBody({
       topWeight: dw(p.topWeight),
       bestSetVolume: dw(p.bestSetVolume),
       bestSetWeight: dw(p.bestSetWeight),
+      e1rm: dw(p.e1rm),
+      e1rmWeight: dw(p.e1rmWeight),
       sessionVolume: dw(p.sessionVolume),
     })),
     [exerciseHistory, isKg],
@@ -465,6 +467,7 @@ function ProgressBody({
               prevStats={displayPrevMuscleStats}
               unit={unit}
               windowDays={radarWindowDays}
+              rangeLabel={rangeOpt.label}
               currentLegend={rangeOpt.currentLegend}
               previousLegend={rangeOpt.previousLegend}
               metric={strengthMetric}
@@ -496,6 +499,7 @@ function ProgressBody({
               exerciseName={selectedExercise.name}
               dayName={selectedDay.label}
               dayId={selectedDay.dayId}
+              programId={selectedDay.programId}
               history={displayExerciseHistory}
               prs={displayPrs}
               unit={unit}

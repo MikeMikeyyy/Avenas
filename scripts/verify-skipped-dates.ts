@@ -24,7 +24,8 @@ import {
   unskipDate,
 } from "../utils/skippedDates";
 import { cycleDrift } from "../utils/cycleDrift";
-import { formatStoredDate } from "../utils/dates";
+import { formatStoredDate, parseStoredDate } from "../utils/dates";
+import { heldOn, idleDays, programAsOf, runStartYMD } from "../utils/programHolds";
 import { programsAfterPastLog, setWorkoutDay } from "../utils/programLifecycle";
 import { getEffectiveToday, getWorkoutForDate, resolveDayIndex, resolveWorkoutForDate, cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
 import { sessionCountForDay, workoutMatchesDay } from "../utils/progressStats";
@@ -531,14 +532,16 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
 }
 
 // ─── resuming from a hold: each move keeps its rest day ─────────────────────
-// utils/programPause.ts resumeProgram shifts the start by the days held (it
-// can't be imported here: it pulls in React Native), then settles the marks
-// with marksAfterHold, which is what's tested. "Carry on where I left off": the
-// resume day must be on the cycle and week the pause day was.
+// utils/programPause.ts resumeProgram shifts the start by the days held and
+// records the hold (it can't be imported here: it pulls in React Native), then
+// settles the marks with marksAfterHold, which is what's tested. "Carry on
+// where I left off": the resume day must be on the cycle and week the pause day
+// was.
 {
   const resume = (p: SavedProgram, pausedAt: string, on: string) => {
     const held = Math.round((asDate(on).getTime() - asDate(pausedAt).getTime()) / 86400000);
-    return marksAfterHold({ ...p, startDate: formatStoredDate(new Date(2026, 8, 7 + held)) }, pausedAt, on);
+    const holds = [...(p.holds ?? []), { from: pausedAt, to: on, shift: held, offsetShift: 0 }];
+    return marksAfterHold({ ...p, startDate: formatStoredDate(new Date(2026, 8, 7 + held)), holds }, pausedAt, on);
   };
   const daysLater = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime();
 
@@ -848,6 +851,106 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
   eq(plan.program.pulledDates, undefined, "no rest day: no rest day is invented");
 }
 
+// ─── a hold the program came back from ───────────────────────────────────────
+// Resuming moves the start on by the days held (and, picking up today, the
+// cycle with it). That keeps the cycle and the finish right from then on, but
+// it re-labelled every day BEFORE the hold: the program page lost the weeks
+// before a pause, and a rest day a move had spent before it could look like a
+// workout and be moved. So the hold is kept (SavedProgram.holds) and a past
+// date is read as it stood then (utils/programHolds.ts programAsOf).
+// resumeProgram itself pulls in React Native; this does what it does.
+{
+  const resumeAt = (p: SavedProgram, pausedAt: string, on: string, mode: "today" | "whereILeftOff"): SavedProgram => {
+    const held = Math.round((asDate(on).getTime() - asDate(pausedAt).getTime()) / 86400000);
+    const start = parseStoredDate(p.startDate)!;
+    start.setDate(start.getDate() + held);
+    const cycleOffset = mode === "today" ? ((p.cycleOffset ?? 0) + held) % p.cycleDays : p.cycleOffset;
+    const holds = [...(p.holds ?? []), { from: pausedAt, to: on, shift: held, offsetShift: mode === "today" ? held : 0 }];
+    return marksAfterHold({ ...p, pausedAt: undefined, startDate: formatStoredDate(start), cycleOffset, holds }, pausedAt, on);
+  };
+  const MON2 = plus(MON, 7);
+
+  // Held Thursday to Monday, carrying on: Monday is Thursday's Upper.
+  const carryOn = resumeAt(base, THU, MON2, "whereILeftOff");
+  eq(carryOn.startDate, "11 Sep 2026", "hold: the start moves on by the days held");
+  eq(carryOn.holds, [{ from: THU, to: MON2, shift: 4, offsetShift: 0 }], "hold: ...and the hold is kept");
+  eq(runStartYMD(carryOn), MON, "hold: the run still began the day it did");
+  eq(schedule(carryOn, MON, 3), schedule(base, MON, 3), "hold: the days before it read as they did");
+  eq(schedule({ ...carryOn, holds: undefined }, MON, 3), ["Rest", "Rest", "Rest"],
+    "hold: ...where the moved start alone put them before the program");
+  eq([THU, FRI, plus(MON, 5), plus(MON, 6)].map(d => heldOn(carryOn, d)), [true, true, true, true], "hold: the days held are held");
+  eq([WED, MON2].map(d => heldOn(carryOn, d)), [false, false], "hold: ...and only those");
+  eq(schedule(carryOn, THU, 4), ["Rest", "Rest", "Rest", "Rest"], "hold: ...and schedule nothing");
+  eq(getWorkoutForDate(carryOn, MON2)?.name, getWorkoutForDate(base, THU)?.name, "hold: the resume day is the pause day's workout");
+  const asOf = programAsOf(carryOn, WED);
+  eq([asOf.startDate, asOf.cycleOffset, asOf.holds], ["07 Sep 2026", undefined, undefined], "hold: before it, the program as it stood then");
+  eq(programAsOf(asOf, WED), asOf, "hold: ...and reading it again changes nothing");
+  eq(programAsOf(carryOn, MON2) === carryOn, true, "hold: after it, the program as it is");
+
+  // Picking up today: the cycle carries on with the calendar.
+  const today = resumeAt(base, THU, MON2, "today");
+  eq(today.holds, [{ from: THU, to: MON2, shift: 4, offsetShift: 4 }], "hold, today: the offset it moved is kept too");
+  eq(schedule(today, MON, 3), schedule(base, MON, 3), "hold, today: the days before it read as they did");
+  eq(getWorkoutForDate(today, MON2)?.name, getWorkoutForDate(base, MON2)?.name, "hold, today: the resume day is the calendar's");
+
+  // Two holds: each stretch reads as it was lived.
+  const THU2 = plus(MON, 10), SUN2 = plus(MON, 13);
+  const twice = resumeAt(carryOn, THU2, SUN2, "whereILeftOff");
+  eq(runStartYMD(twice), MON, "two holds: the run still began the day it did");
+  eq(schedule(twice, MON, 3), schedule(base, MON, 3), "two holds: the days before the first read as they did");
+  eq(schedule(twice, MON2, 3), schedule(carryOn, MON2, 3), "two holds: the days between them too");
+  eq(getWorkoutForDate(twice, SUN2)?.name, getWorkoutForDate(carryOn, THU2)?.name, "two holds: the second resume day is its pause day's workout");
+
+  // A rest day a move spent before the hold stays where it was, and the days
+  // already lived through keep their workouts.
+  const moved = planDoItTomorrow(base, TUE).program;
+  const resumed = resumeAt(moved, FRI, MON2, "whereILeftOff");
+  eq([resumed.pushedDates, resumed.pulledDates], [[TUE], [THU]], "hold: a move and its rest day before it stay as they were");
+  eq(schedule(resumed, MON, 4), schedule(moved, MON, 4), "hold: ...and so do the days before it");
+  eq(getWorkoutForDate(resumed, MON2)?.name, getWorkoutForDate(moved, FRI)?.name, "hold: carrying on from the pause day");
+
+  // A week with nothing done holds the program by itself (autoPauseIfIdle):
+  // counted from the last workout alone, it held itself again the morning
+  // after every resume from a holiday.
+  eq(idleDays(carryOn, [], plus(MON, 13)), 6, "idle: from the resume day, not the run's start");
+  eq(idleDays(carryOn, [TUE], plus(MON, 8)), 1, "idle: a workout before the hold doesn't count against a fresh resume");
+  eq(idleDays(carryOn, [plus(MON, 8)], plus(MON, 13)), 5, "idle: a workout after it does");
+  eq(idleDays({ ...base, startDate: "14 Sep 2026" }, ["2026-09-01"], "2026-09-15"), 1,
+    "idle: a program made active since the last workout counts from its start");
+
+  // A session from before the hold, logged from the Journal after it, is
+  // inside the run: the start stays. Against the moved start, it moved the
+  // start back and re-dated the whole running cycle.
+  const logged = programsAfterPastLog([carryOn], { owningProgramId: "P", programId: "P", date: TUE, workoutName: "Lower" });
+  eq([logged.changed, logged.programs[0].startDate], [false, "11 Sep 2026"], "hold: a session logged from before it doesn't move the start");
+  const earlier = programsAfterPastLog([carryOn], { owningProgramId: "P", programId: "P", date: plus(MON, -1), workoutName: "Upper" }).programs[0];
+  eq([earlier.startDate, runStartYMD(earlier), earlier.holds], ["10 Sep 2026", plus(MON, -1), carryOn.holds],
+    "hold: one from before the run moves its start back a day, and keeps the hold");
+}
+
+// ─── a rest day for a move, past held days and other moves ──────────────────
+// The search counts days the cycle moves on: a moved day or a held one holds it
+// still. Counted as calendar days, two moves and a hold between a move and its
+// rest day used up a 3-day cycle's search, so a back-dated start left two moves
+// with no rest day, and putting the next move straight back paired them up and
+// moved the finish (found by verify-solo-flows --deep).
+{
+  const ulr: SavedProgram = {
+    id: "S", name: "ULR", totalWeeks: 3, currentWeek: 1, status: "active",
+    startDate: "12 Oct 2026", trainingDays: 2, cycleDays: 3,
+    cyclePattern: ["Upper", "Lower", "Rest"], dayIds: ["s0", "s1", "s2"], workouts: {},
+    holds: [{ from: "2026-10-15", to: "2026-10-16", shift: 1, offsetShift: 0 }],
+    skippedDates: ["2026-10-12", "2026-10-13", "2026-10-16"],
+    pushedDates: ["2026-10-12", "2026-10-13", "2026-10-16"],
+    pulledDates: ["2026-10-17", "2026-10-19", "2026-10-21"],
+  };
+  const [logged] = programsAfterPastLog([ulr], { owningProgramId: "S", programId: "S", date: "2026-10-06", workoutName: "Upper" }).programs;
+  eq(logged.pulledDates?.length, 3, "search: a back-dated start leaves every move a rest day");
+  const trip = unskipDate(planDoItTomorrow(logged, "2026-10-17").program, "2026-10-17");
+  eq([trip.pushedDates, trip.pulledDates], [logged.pushedDates, logged.pulledDates], "search: ...so a move put straight back leaves them as they were");
+  eq(programFinishDate(trip)!.getTime(), programFinishDate(logged)!.getTime(), "search: ...finish and all");
+}
+
 // ─── it survives a round trip to the cloud ───────────────────────────────────
 {
   const withSkips = pushDate(skipDate(base, TUE), THU);
@@ -880,6 +983,12 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
     schedule(withPull, MON, 14),
     "sync: the resolved fortnight survives the round trip",
   );
+
+  // The holds too, or a restore re-labels every day before the last pause.
+  const held: SavedProgram = { ...base, startDate: "11 Sep 2026", holds: [{ from: THU, to: plus(MON, 7), shift: 4, offsetShift: 0 }] };
+  const heldRow: ProgramRow = { ...programToRow(held, "u1"), id: "P", created_at: "t", updated_at: "t" };
+  eq(programFromRow(heldRow).holds, held.holds, "sync: holds come back intact");
+  eq(programFromRow({ ...heldRow, holds: null }).holds, undefined, "sync: a row from before the column reads as no holds");
 }
 
 if (failures.length > 0) {

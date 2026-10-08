@@ -16,6 +16,10 @@ export type SessionRecord = {
   kind: SessionRecordKind;
   valueKg: number;      // the new best, canonical kg (kg×reps for bestSetVolume)
   prevKg: number | null; // the beaten prior best; null = first time ever logged
+  /** bestSetVolume only: the set it was, which the summary shows as "90 kg
+   *  × 8" rather than the product (canonical kg). */
+  weightKg?: number;
+  reps?: number;
 };
 
 /**
@@ -67,7 +71,10 @@ export function computeSessionRecords(
       records.push({ exerciseName: ex.name, kind: "oneRepMax", valueKg: session.oneRepMax.value, prevKg: prior.oneRepMax.value });
     }
     if (session.bestSetVolume && prior.bestSetVolume && session.bestSetVolume.value > prior.bestSetVolume.value) {
-      records.push({ exerciseName: ex.name, kind: "bestSetVolume", valueKg: session.bestSetVolume.value, prevKg: prior.bestSetVolume.value });
+      records.push({
+        exerciseName: ex.name, kind: "bestSetVolume", valueKg: session.bestSetVolume.value, prevKg: prior.bestSetVolume.value,
+        weightKg: session.bestSetVolume.weight, reps: session.bestSetVolume.reps,
+      });
     }
   }
 

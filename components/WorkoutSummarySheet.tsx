@@ -34,10 +34,14 @@ import { toDisplayWeight, trimNumber } from "../utils/units";
 // visible Done button. Stats only — deliberately no sharing, usernames, or
 // branding.
 
+// The one-rep max is an estimate worked out from a set, never a lift anyone
+// did, so it says so: "Best One Rep Max" read as a max actually lifted (user
+// request, 2026-10-08). Best Set shows the set it was ("90 kg × 8"), not
+// its weight × reps. The same names as the Progress page's record tiles.
 const RECORD_LABELS: Record<SessionRecord["kind"], string> = {
   heaviest: "Heaviest Weight",
-  oneRepMax: "Best One Rep Max",
-  bestSetVolume: "Best Set Volume",
+  oneRepMax: "Estimated 1RM",
+  bestSetVolume: "Best Set",
 };
 
 const MAX_EXERCISE_ROWS = 8;
@@ -156,7 +160,11 @@ export default function WorkoutSummarySheet({
   const fmtRecordValue = (r: SessionRecord): string => {
     const disp = toDisplayWeight(r.valueKg, isKg);
     if (r.kind === "oneRepMax") return `${Math.round(disp)} ${unit}`;
-    if (r.kind === "bestSetVolume") return `${Math.round(disp).toLocaleString()} ${unit}`;
+    if (r.kind === "bestSetVolume") {
+      return r.weightKg != null && r.reps != null
+        ? `${trimNumber(toDisplayWeight(r.weightKg, isKg), 1)} ${unit} × ${r.reps}`
+        : `${Math.round(disp).toLocaleString()} ${unit}`;
+    }
     return `${trimNumber(disp, 1)} ${unit}`;
   };
 
