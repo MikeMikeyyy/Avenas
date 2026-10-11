@@ -3,16 +3,17 @@
 // Programs and workouts store exercises by `name` (a plain string), but the
 // bundled image maps are keyed by the catalogue `id` slug. This bridges the
 // two so any screen holding only a name can still render <ExerciseImage>.
+//
+// Names go through exerciseKey, so a name the catalogue has since renamed
+// still finds its exercise, and the retired (hidden) entries are included so
+// an old workout's exercise keeps its muscles and steps.
 
 import { EXERCISES } from "../constants/exerciseData";
 import type { Exercise } from "../constants/exercises";
+import { exerciseKey } from "./exerciseNames";
 
-const ID_BY_NAME = new Map<string, string>(
-  EXERCISES.map(e => [e.name.trim().toLowerCase(), e.id]),
-);
-
-const EXERCISE_BY_NAME = new Map<string, Exercise>(
-  EXERCISES.map(e => [e.name.trim().toLowerCase(), e]),
+const EXERCISE_BY_KEY = new Map<string, Exercise>(
+  EXERCISES.map(e => [exerciseKey(e.name), e]),
 );
 
 /**
@@ -21,7 +22,7 @@ const EXERCISE_BY_NAME = new Map<string, Exercise>(
  * <ExerciseImage exerciseId={...}> — it falls back to a tile when unmatched.
  */
 export function exerciseIdByName(name: string): string | undefined {
-  return ID_BY_NAME.get(name.trim().toLowerCase());
+  return EXERCISE_BY_KEY.get(exerciseKey(name))?.id;
 }
 
 /**
@@ -29,5 +30,5 @@ export function exerciseIdByName(name: string): string | undefined {
  * or `undefined` for custom exercises not in the bundled set.
  */
 export function exerciseByName(name: string): Exercise | undefined {
-  return EXERCISE_BY_NAME.get(name.trim().toLowerCase());
+  return EXERCISE_BY_KEY.get(exerciseKey(name));
 }

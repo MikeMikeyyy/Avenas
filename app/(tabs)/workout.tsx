@@ -2667,17 +2667,20 @@ export default function WorkoutScreen() {
     if (!workoutInfo || todaysCompletedWorkout) return null;
     return buildLiveActivityPayload({
       workoutName: workoutInfo.name,
-      exercises: workoutInfo.exercises.map(e => ({ id: e.id, name: e.name, restSeconds: e.restSeconds })),
+      exercises: workoutInfo.exercises.map(e => ({
+        id: e.id, name: e.name, restSeconds: e.restSeconds, isHold: isometricExIds.has(e.id),
+      })),
       log,
       // Exactly the prevSets lookup ExerciseCard feeds its checkboxes.
       prevHintsFor: exId => prevHintsById[exId] ?? EMPTY_PREV,
       isKg,
+      isDark,
       timerStartMs: startEpochMs,
       pausedElapsedSec: isPaused ? elapsedSeconds : 0,
       restEndsAt,
       restTotalSec: restTotal,
     });
-  }, [workoutInfo, todaysCompletedWorkout, log, prevHintsById, isKg, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
+  }, [workoutInfo, todaysCompletedWorkout, log, isometricExIds, prevHintsById, isKg, isDark, startEpochMs, isPaused, elapsedSeconds, restEndsAt, restTotal]);
 
   const applyLockScreenTicks = useCallback((actions: LiveActivityTickAction[]) => {
     // Each tick does what the card's checkbox does, last time's numbers filling

@@ -8,7 +8,9 @@
 //   - Weight & reps are stored as strings in CompletedSet. We parseFloat; NaN
 //     and weight<=0 are skipped from tonnage / PR math. ("BW" / "" / "0".)
 //   - Only working sets with done===true contribute to tonnage and PRs.
-//   - Exercise name match is case-insensitive trim across the whole module.
+//   - Exercise names match through `exerciseKey` (case-insensitive, trimmed, and
+//     a renamed exercise's former name counts as its current one); day and
+//     workout names through the plain `key`.
 //   - Date math always uses Date objects + toYMD; never string arithmetic.
 
 import { CompletedWorkout, ProgramDayRef, SavedProgram } from "../constants/programs";
@@ -17,6 +19,7 @@ import { MONTH_NAMES, toYMD, parseStoredDate } from "./dates";
 import { historicalDays, markDayRefLabels, programDaysWithExtras } from "./programDays";
 import { runStartYMD } from "./programHolds";
 import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
+import { currentExerciseName, exerciseKey } from "./exerciseNames";
 import type {
   ExerciseDataPoint,
   LoggedExerciseRow,
@@ -557,7 +560,7 @@ export function collectExerciseHistory(
   exerciseName: string,
   day?: ProgramDayRef,
 ): ExerciseDataPoint[] {
-  const want = key(exerciseName);
+  const want = exerciseKey(exerciseName);
   const points: ExerciseDataPoint[] = [];
   for (const w of workouts) {
     if (day && !workoutMatchesDay(w, day)) continue;
@@ -576,7 +579,7 @@ export function collectExerciseHistory(
     let did = false;
     let isHold = false;
     for (const ex of w.exercises) {
-      if (key(ex.name) !== want) continue;
+      if (exerciseKey(ex.name) !== want) continue;
       if (ex.isIsometric) isHold = true;
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done) continue;
@@ -686,13 +689,13 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
   // 1RM walks raw sets. Same optional day scoping as collectExerciseHistory —
   // `history` arrives already day-filtered, so the raw walk must match or a
   // set from the other day's session could take the 1RM crown.
-  const want = key(exerciseName);
+  const want = exerciseKey(exerciseName);
   let oneRm: { value: number; workoutId: string; date: string; weight: number; reps: number; completedAt: string } | null = null;
   for (const w of workouts) {
     if (day && !workoutMatchesDay(w, day)) continue;
     for (const ex of w.exercises) {
       // A hold's "reps" are seconds: no rep max to estimate.
-      if (key(ex.name) !== want || ex.isIsometric) continue;
+      if (exerciseKey(ex.name) !== want || ex.isIsometric) continue;
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done) continue;
         const wt = parsePositive(s.weight);
@@ -947,14 +950,16 @@ export function collectLoggedExercisesForDay(
     // For each exercise in this workout, find the latest "working+done" set
     // to use as the "lastWeight × lastReps" preview.
     for (const ex of w.exercises) {
-      const ek = key(ex.name);
+      const ek = exerciseKey(ex.name);
       if (!ek) continue;
       const lastWorking = [...ex.sets].reverse().find(s => s.type === "working" && s.done);
       const prev = acc.get(ek);
       const isNewer = !prev || w.completedAt > prev.lastCompletedAt;
       if (!prev) {
         acc.set(ek, {
-          name: ex.name,
+          // The name it goes by now, so sessions logged before a rename share
+          // one row under the new name.
+          name: currentExerciseName(ex.name),
           lastWeight: lastWorking?.weight ?? "",
           lastReps: lastWorking?.reps ?? "",
           lastDate: w.date,
@@ -986,7 +991,7 @@ export function collectLoggedExercisesForDay(
       lastReps: r.lastReps,
       lastDate: r.lastDate,
       sessionCount: r.sessionCount,
-      inProgram: !comparable || programmed.has(key(r.name)),
+      inProgram: !comparable || programmed.has(exerciseKey(r.name)),
     }));
 }
 

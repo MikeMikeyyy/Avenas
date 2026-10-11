@@ -6,6 +6,17 @@ checkbox, fills an empty set with last time's numbers: the ones the card
 showed), the workout timer, and the rest timer with Skip / ±15s buttons. Settings toggle: **Settings → App → Lock Screen
 Workout** (ON by default).
 
+**Its look (redesigned 2026-10-11, from a review canvas the user approved):**
+the set's weight × reps big, the exercise's working sets as dots (done, the
+one up glowing, to come), the workout bar's dot (green, amber paused); while
+resting, the countdown with REST beside it and −15s +15s Skip as in the app's
+rest bar, a line draining above, and the next set with its own tick. It's in
+the APP's Dark Mode, never the phone's: a white card in light mode
+(`ContentState.isDark`, from ThemeContext via the payload). SF Rounded stands
+in for Nunito. **Every state must fit in 160pt**, the most iOS shows of a
+lock-screen card: the old card, resting, was about 186pt and lost its rest
+buttons. On the always-on display its green fills become outlines.
+
 **This feature can NEVER run in Expo Go.** It needs a development build (or a
 production build). In Expo Go everything silently no-ops, so day-to-day Expo Go
 development is unaffected.
@@ -84,14 +95,18 @@ eas build --profile development --platform ios
 1. Settings → App → **Lock Screen Workout** exists, ON by default.
 2. Start a workout (tick a set or type a value), lock the phone → the card
    shows workout name, elapsed timer counting, current exercise, set label and
-   the weight × reps preview.
+   the weight × reps preview, with a dot per working set. In the app's light
+   mode it's white, in its dark mode navy, whatever the phone is set to;
+   switching the app's Dark Mode mid-workout changes it.
 3. Tap the tick on an **empty** set from the lock screen → card advances to
    the next set; back in the app the set is **ticked with last time's
    numbers filled in**, the same weight × reps the card showed (anything
    typed before locking is kept; a set with no previous numbers stays empty).
-4. After a lock-screen tick, the rest countdown + progress bar appear (if that
-   exercise has a rest time). Skip and ±15s buttons work; reopening the app
-   shows the in-app rest banner in sync.
+4. After a lock-screen tick, the rest takes the card (if that exercise has a
+   rest time): countdown, line, −15s +15s Skip, and the next set below, none
+   of it cut off. Skip and ±15s work; reopening the app shows the in-app rest
+   banner in sync. Left alone, the rest ends and the card goes back to the set
+   by itself.
 5. Finish or discard the workout → card disappears. Toggle OFF in Settings →
    card disappears mid-workout and stays gone.
 6. Dynamic Island: compact shows the rest countdown while resting, elapsed
@@ -108,5 +123,10 @@ eas build --profile development --platform ios
   developer.apple.com → Membership).
 - **Card never appears:** confirm iOS 17+, and iPhone Settings → Avenas →
   Live Activities is allowed; then check `isLiveActivityAvailable()` logs.
-- **Rest hits 0:00 and lingers:** expected — ActivityKit can't self-update at
-  expiry; the next tick/update clears it.
+- **Rest hits 0:00 and lingers:** it shouldn't any more. A card with a rest
+  running goes stale when the rest ends (`WorkoutActivityController.content`),
+  iOS redraws a card when it goes stale, and the card shows the rest only
+  while it isn't (`showsRest`). If it lingers, that redraw isn't happening.
+- **New card fields are optional** (`ContentState` / `PendingSet` from
+  `isWarmup` on): a card an older build put up must still decode after an
+  update, so never add a required field to either.

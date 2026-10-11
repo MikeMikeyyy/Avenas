@@ -88,11 +88,13 @@ eq(trainerProgram.workouts["0:Push"][1].customDetails, undefined, "send: the tra
 // ─── The client accepts ──────────────────────────────────────────────────────
 // Accepting copies the snapshot's workouts as they are (trainerStore
 // materialiseSnapshot), so the client's program IS the sent one.
-const clientOwn: CustomExercise[] = [{ name: "Band Pull-Apart", muscles: ["Back"] }];
+// A name the catalogue doesn't have: a catalogue exercise carries no custom
+// details ("Band Pull-Apart", used here before, joined the catalogue).
+const clientOwn: CustomExercise[] = [{ name: "Towel Pull-Apart", muscles: ["Back"] }];
 const accepted = program("accepted", "active", sent);
 const clientKnown = knownCustomExercises(clientOwn, carriedExercises([accepted]));
 eq(clientOwn.length, 1, "slots: the client's own list is untouched, so no slot is taken");
-eq(clientKnown.map(c => c.name), ["Band Pull-Apart", "Landmine Twist"], "lookup: the client can look up the trainer's exercise by name");
+eq(clientKnown.map(c => c.name), ["Towel Pull-Apart", "Landmine Twist"], "lookup: the client can look up the trainer's exercise by name");
 eq(clientKnown.find(c => c.name === "Landmine Twist")?.imageUri, URL("exercise_icon_1.jpg"),
   "lookup: ...and gets the trainer's photo (the exercise screen's hero)");
 eq(musclesForExercise("landmine twist", clientKnown), ["Core", "Shoulders"], "lookup: ...and the trainer's muscles");
@@ -124,7 +126,7 @@ eq(sharedExercises([], [{ name: "Barbell Bench Press", muscles: ["Chest"], by: T
 
 // The client picks it into their own program. The builder's save stamps it
 // from what their programs carry (not their own list: stampOwn is off).
-const clientBuild: WorkoutMap = { "0:Legs": [ex("c1", "Landmine Twist"), ex("c2", "Band Pull-Apart")] };
+const clientBuild: WorkoutMap = { "0:Legs": [ex("c1", "Landmine Twist"), ex("c2", "Towel Pull-Apart")] };
 const saved = stampCustomDetails(clientBuild, { own: clientOwn, stampOwn: false, carried: carriedExercises([accepted]) });
 eq(saved["0:Legs"][0].customDetails, sentTwist.customDetails, "builder: a picked trainer exercise is saved with the trainer's details");
 eq(saved["0:Legs"][1].customDetails, undefined, "builder: the client's own custom exercise isn't stamped (their list has it)");

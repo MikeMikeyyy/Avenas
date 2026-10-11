@@ -146,6 +146,22 @@ eq(
   eq([queue[1].weight, queue[1].reps], ["60", "8"], "lock screen: an empty set previews last time's numbers for its row");
   eq([queue[2].weight, queue[2].reps], ["70", ""], "lock screen: anything typed wins over the hint");
 }
+{
+  // The card's dots: the lock screen ticks the queue in order, so each set
+  // carries its exercise's working sets as they'll stand when it's up.
+  const exercises = [
+    { id: "A", name: "Bench Press" },
+    { id: "B", name: "Plank", isHold: true },
+  ];
+  const log = { A: ex([t(1), o(), o()], [o()]), B: ex([o()]) };
+  const { queue } = buildLiveActivityQueue(exercises, log, () => []);
+  eq(queue.map(q => `${q.exId}${q.setType === "warmup" ? "w" : ""}${q.setIdx + 1}`), ["A2", "A3", "B1", "Aw1"],
+    "lock screen dots: the queue they're read along, the skipped warmup last");
+  eq(queue.map(q => q.setDone), [[true, false, false], [true, true, false], [false], [true, true, true]],
+    "lock screen dots: each set shows its exercise's working sets as they'll stand when it's up");
+  eq(queue.map(q => q.isHold), [false, false, true, false], "lock screen: a timed hold says so, so its reps read as seconds");
+  eq(log.A.working.map(s => s.done), [true, false, false], "lock screen dots: the log itself is left alone");
+}
 
 if (failures.length > 0) {
   console.error(failures.join("\n"));

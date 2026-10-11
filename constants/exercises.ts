@@ -75,4 +75,12 @@ export type Exercise = {
   instructions?: string[];
   /** True for the curated "main" set — surfaced first in the picker. */
   featured?: boolean;
+  /** Retired from the list: never offered in the picker, kept so workouts and
+   *  programs that used it still resolve its muscles and steps. */
+  hidden?: boolean;
+  /** Names it used to have. Anything stored under one of these counts as this
+   *  exercise (utils/exerciseNames.ts). */
+  formerNames?: string[];
+  /** Extra words search matches: other common names and the muscles worked. */
+  searchTerms?: string[];
 };

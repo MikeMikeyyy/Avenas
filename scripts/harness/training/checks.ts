@@ -27,6 +27,7 @@ import {
 import { programFinishDate, type CompletedWorkout, type ProgramDayRef, type SavedProgram } from "../../../constants/programs";
 import type { ExerciseDataPoint, MetricKey, ProgramScope, RangeKey } from "../../../constants/progress";
 import { EXERCISE_METRIC_OPTIONS } from "../../../constants/progress";
+import { EXERCISES } from "../../../constants/exerciseData";
 import { exerciseHistoryRows } from "../../../utils/exerciseHistory";
 import {
   CHART_HEIGHT, GIFTED_TOP_PAD, Y_AXIS_LABEL_WIDTH,
@@ -97,6 +98,15 @@ const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
 const tolFor = (sessions: LedgerSession[]) => 0.01 + 0.001 * sessions.reduce((n, s) => n + repsDone(s, true), 0);
 
 const norm = (s: string) => s.trim().toLowerCase();
+
+/** Which exercise a typed name is now. A renamed exercise keeps its former
+ *  names in the catalogue (`formerNames`), and a session logged under one of
+ *  them is that exercise's, shown under its current name. Read from the
+ *  catalogue's data, not the app's lookup. Day names never go through this. */
+const CURRENT = new Map<string, string>();
+for (const e of EXERCISES) for (const f of e.formerNames ?? []) CURRENT.set(norm(f), norm(e.name));
+const liftKey = (s: string) => CURRENT.get(norm(s)) ?? norm(s);
+const kindOf = (name: string) => Object.entries(LIFTS).find(([n]) => liftKey(n) === liftKey(name))?.[1].kind ?? "weighted";
 
 /** The sessions logged on a program day, by the ledger: its program, and its
  *  slot (or for a custom workout added to it, its name). */
@@ -275,12 +285,13 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
       const rows = collectLoggedExercisesForDay(scoped, day);
       const names = new Map<string, { name: string; sessions: number }>();
       for (const s of logged) {
-        for (const n of new Set(s.exercises.map(e => norm(e.name)))) {
-          const e = s.exercises.find(x => norm(x.name) === n)!;
+        for (const n of new Set(s.exercises.map(e => liftKey(e.name)))) {
+          const e = s.exercises.find(x => liftKey(x.name) === n)!;
           names.set(n, { name: e.name, sessions: (names.get(n)?.sessions ?? 0) + 1 });
         }
       }
       // (Only the names show: a row's sessionCount and last set aren't drawn.)
+      // Read as shown, so a row for a renamed exercise must carry its new name.
       const shownNames = rows.map(r => norm(r.name)).sort().join(", ");
       if (shownNames !== [...names.keys()].sort().join(", ")) {
         out.push({ code: "progress/exercise-rows", what: `${where}: lists ${shownNames || "nothing"}; logged ${[...names.keys()].sort().join(", ") || "nothing"}` });
@@ -311,17 +322,17 @@ function checkChart(
 ): Problem[] {
   const out: Problem[] = [];
   const at = `${where} › ${name}`;
-  const kind = LIFTS[name]?.kind ?? "weighted";
+  const kind = kindOf(name);
   // Sessions that did it: a working set done with reps. (A timed hold's chart
   // isn't held to this: its "reps" are seconds, see hold-seconds-as-reps.)
   const did = logged
-    .filter(s => s.exercises.some(e => norm(e.name) === norm(name) && workingDone(s, e).some(x => x.reps && x.reps > 0)))
+    .filter(s => s.exercises.some(e => liftKey(e.name) === liftKey(name) && workingDone(s, e).some(x => x.reps && x.reps > 0)))
     .sort((a, b) => a.finishedAt - b.finishedAt);
   const plotted = points.map(p => p.workoutId);
   if (kind !== "hold") {
     const missing = did.filter(s => !plotted.includes(s.id));
     if (missing.length > 0) {
-      const bodyweight = missing.every(s => s.exercises.filter(e => norm(e.name) === norm(name))
+      const bodyweight = missing.every(s => s.exercises.filter(e => liftKey(e.name) === liftKey(name))
         .every(e => workingDone(s, e).every(x => !x.kg || x.kg <= 0)));
       out.push(bodyweight
         ? { code: "progress/chart-bodyweight", what: `${at}: ${missing.length} of ${did.length} sessions done at bodyweight have no dot (the chart says "${points.length === 0 ? "No sessions yet" : `Sessions logged · ${points.length}`}")` }
@@ -338,7 +349,7 @@ function checkChart(
   for (const p of points) {
     const s = l.sessions.find(x => x.id === p.workoutId);
     if (!s) continue;
-    const sets = s.exercises.filter(e => norm(e.name) === norm(name)).flatMap(e => workingDone(s, e))
+    const sets = s.exercises.filter(e => liftKey(e.name) === liftKey(name)).flatMap(e => workingDone(s, e))
       .filter(x => x.kg && x.kg > 0 && x.reps && x.reps > 0) as { kg: number; reps: number }[];
     const top = Math.max(0, ...sets.map(x => x.kg));
     const volume = sets.reduce((n, x) => n + x.kg * x.reps, 0);
@@ -355,7 +366,7 @@ function checkChart(
 
   // Each metric's dots: Reps every session it was done in, the weight metrics
   // the sessions with weight on the bar.
-  const weighted = did.filter(s => s.exercises.some(e => norm(e.name) === norm(name)
+  const weighted = did.filter(s => s.exercises.some(e => liftKey(e.name) === liftKey(name)
     && workingDone(s, e).some(x => x.kg && x.kg > 0 && x.reps && x.reps > 0)));
   for (const metric of ["topWeight", "totalReps"] as const) {
     const want = (metric === "totalReps" ? did : weighted).map(s => s.id).join(",");
@@ -391,7 +402,7 @@ function checkChart(
   if (kind !== "hold") {
     const rows = did.map(s => ({
       s,
-      sets: s.exercises.filter(e => norm(e.name) === norm(name)).flatMap(e => workingDone(s, e))
+      sets: s.exercises.filter(e => liftKey(e.name) === liftKey(name)).flatMap(e => workingDone(s, e))
         .filter(x => x.kg && x.kg > 0 && x.reps && x.reps > 0) as { kg: number; reps: number }[],
     })).filter(r => r.sets.length > 0);
     if (rows.length > 0) {
@@ -432,7 +443,7 @@ function checkChart(
     exerciseName: name, dayName: day.label, dayId: day.dayId, programId: day.programId, days: 365, today: snap.now,
   });
   const cutoff = addDaysYMD(snap.calendarToday, -365);
-  const shouldList = logged.filter(s => s.date >= cutoff && s.exercises.some(e => norm(e.name) === norm(name) && e.sets.some(x => x.done)));
+  const shouldList = logged.filter(s => s.date >= cutoff && s.exercises.some(e => liftKey(e.name) === liftKey(name) && e.sets.some(x => x.done)));
   if (ids(page.map(r => ({ id: r.workoutId }))) !== ids(shouldList)) {
     const others = page.filter(r => !shouldList.some(s => s.id === r.workoutId));
     const fromOther = others.map(r => l.sessions.find(s => s.id === r.workoutId)).filter(Boolean) as LedgerSession[];
@@ -713,14 +724,14 @@ export function checkHints(b: BeforeLog): Problem[] {
     let want: string[] | undefined;
     const byName = () => {
       for (const s of day) {
-        const e = s.exercises.find(x => norm(x.name) === norm(card.name));
+        const e = s.exercises.find(x => liftKey(x.name) === liftKey(card.name));
         if (e) return e.sets.map(x => hintToken(x, s.unit, isKg));
       }
       return undefined;
     };
     if (card.programExerciseId && !card.swappedFrom) {
       for (const s of day) {
-        const e = s.exercises.find(x => x.place === card.programExerciseId && norm(x.name) === norm(card.name));
+        const e = s.exercises.find(x => x.place === card.programExerciseId && liftKey(x.name) === liftKey(card.name));
         if (e) { want = e.sets.map(x => hintToken(x, s.unit, isKg)); break; }
       }
       want ??= byName();
@@ -742,7 +753,7 @@ export function checkHints(b: BeforeLog): Problem[] {
       let note: string | undefined;
       for (const s of day) {
         const e = s.exercises.find(x => x.place === card.programExerciseId
-          && (norm(x.name) === norm(card.name) || (x.swappedFrom && norm(x.swappedFrom) === norm(card.name))));
+          && (liftKey(x.name) === liftKey(card.name) || (x.swappedFrom && liftKey(x.swappedFrom) === liftKey(card.name))));
         if (e) { note = e.note.trim() || undefined; break; }
       }
       const shownNote = noteOf({ name: card.name, programExerciseId: card.programExerciseId });
@@ -777,7 +788,7 @@ export function checkSave(a: AfterSave): Problem[] {
   const topOf = (sessions: { exercises: { name: string; sets: { type: string; weight: string; reps: string; done: boolean }[] }[] }[], n: string) => {
     let top = 0;
     for (const s of sessions) for (const e of s.exercises) {
-      if (norm(e.name) !== n) continue;
+      if (liftKey(e.name) !== n) continue;
       for (const x of e.sets) {
         const kg = num(x.weight);
         const reps = num(x.reps);
@@ -786,14 +797,14 @@ export function checkSave(a: AfterSave): Problem[] {
     }
     return top;
   };
-  const names = [...new Set(saved.exercises.map(e => norm(e.name)))];
+  const names = [...new Set(saved.exercises.map(e => liftKey(e.name)))];
   const want = names.filter(n => {
     const before = topOf(prior, n);
     return before > 0 && topOf([saved], n) > before;
   });
   const earned = detectWorkoutAchievements(saved, prior, EMPTY_ACHIEVEMENTS, new Date());
   const pr = earned.find(x => x.category === "pr");
-  const got = pr && "prs" in pr ? pr.prs.map(r => norm(r.exerciseName)) : [];
+  const got = pr && "prs" in pr ? pr.prs.map(r => liftKey(r.exerciseName)) : [];
   if (got.sort().join(", ") !== want.sort().join(", ")) {
     out.push({ code: "save/pr", what: `${ledger.workoutName} ${ledger.date}: the PR card lists ${got.join(", ") || "nothing"}; beaten were ${want.join(", ") || "none"}` });
   }

@@ -4,8 +4,8 @@
 //   2. Building the "previous values" map (last logged sets per exercise) from
 //      completed-workout history.
 //
-// This module is RN-free: it imports only pure date helpers and *types*, so it
-// can be unit-tested under plain node/tsx (see scripts/verify-data-layer.ts).
+// This module is RN-free: it imports only pure helpers, plain data and *types*,
+// so it can be unit-tested under plain node/tsx (see scripts/verify-data-layer.ts).
 // Previously this logic was copy-pasted across home.tsx, workout.tsx and
 // log-workout.tsx; keeping one copy stops the screens from drifting.
 
@@ -13,6 +13,7 @@ import { parseStoredDate, toYMD, todayYMD } from "./dates";
 import { cycleDrift } from "./cycleDrift";
 import { heldOn, programAsOf } from "./programHolds";
 import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
+import { exerciseKey } from "./exerciseNames";
 import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
@@ -361,9 +362,11 @@ export function getEffectiveToday(
 }
 
 /** Canonical key for matching an exercise across sessions — trimmed + lowercased
- *  so "Bench Press" and "bench press" resolve to the same previous values. */
+ *  so "Bench Press" and "bench press" resolve to the same previous values, and
+ *  a name the catalogue has since renamed resolves to the new one, so a session
+ *  logged as "Dumbbell Lateral Raise" feeds "Lateral Raise" (utils/exerciseNames.ts). */
 export function normalizeExerciseName(name: string): string {
-  return name.trim().toLowerCase();
+  return exerciseKey(name);
 }
 
 /**

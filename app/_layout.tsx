@@ -27,6 +27,7 @@ import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
 import { runDayIdMigrationIfNeeded } from "../utils/dayIdMigration";
 import { runHoldMigrationIfNeeded } from "../utils/holdMigration";
+import { runExerciseRenames } from "../utils/exerciseRenameMigration";
 import { autoPauseIfIdle } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 
@@ -60,7 +61,7 @@ const NAV_DARK: Theme = {
 };
 
 function AppShell() {
-  const { isDark } = useTheme();
+  const { isDark, loaded: themeLoaded } = useTheme();
   const { loaded: profileLoaded } = useUserProfile();
   const { loaded: authLoaded } = useAuth();
   const router = useRouter();
@@ -83,12 +84,13 @@ function AppShell() {
     if (typeof url === "string" && url.startsWith("/")) router.navigate(url as Href);
   }, [notifResponse, router]);
 
-  // Hold the native splash until both the profile flag and the auth session are
+  // Hold the native splash until the profile flag and the auth session are
   // read, so app/index.tsx can redirect to the right first screen (login vs
-  // home) without a blank flash or flicker.
+  // home) without a blank flash or flicker, and the saved theme, so that
+  // screen isn't drawn light for a frame before turning dark.
   useEffect(() => {
-    if (profileLoaded && authLoaded) SplashScreen.hideAsync();
-  }, [profileLoaded, authLoaded]);
+    if (profileLoaded && authLoaded && themeLoaded) SplashScreen.hideAsync();
+  }, [profileLoaded, authLoaded, themeLoaded]);
 
   // Repair accounts whose server-side account_type drifted from the one this
   // device uses (the Profile toggle was local-only before migration 0015). Until
@@ -194,11 +196,14 @@ export default function RootLayout() {
   // must not interleave). The whole app is gated on them: no screen may render
   // pre-migration data through the new kg-canonical display lens, read a
   // program day before it has a stable id, or count a plank's seconds as reps.
+  // Then the catalogue's exercise renames, on every launch (programs and
+  // favourites only; utils/exerciseRenameMigration.ts).
   const [migrated, setMigrated] = useState(false);
   useEffect(() => {
     runWeightUnitMigrationIfNeeded()
       .then(runDayIdMigrationIfNeeded)
       .then(runHoldMigrationIfNeeded)
+      .then(runExerciseRenames)
       .finally(() => setMigrated(true));
   }, []);
 

@@ -1,18 +1,23 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback } from "react";
+import { Appearance, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SystemUI from "expo-system-ui";
 
 import { APP_DARK, APP_LIGHT } from "../constants/theme";
+import { saveLaunchTheme } from "../modules/avenas-appearance";
 
 const THEME_KEY = "@avenas/theme";
 
 interface ThemeContextValue {
   isDark: boolean;
+  /** The saved choice has been read. Until then isDark is the light default. */
+  loaded: boolean;
   toggleDark: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   isDark: false,
+  loaded: false,
   toggleDark: () => {},
 });
 
@@ -21,6 +26,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // device's system theme — a fresh install starts light and only goes dark once
   // the user has explicitly turned dark mode on (persisted at THEME_KEY).
   const [isDark, setIsDark] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   // Apply the saved preference on mount; stay light when none is saved.
   useEffect(() => {
@@ -30,9 +36,23 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         if (saved !== null) setIsDark(saved === "dark");
       } catch {
         // keep light on read failure
+      } finally {
+        setLoaded(true);
       }
     })();
   }, []);
+
+  // Native UI in the app's theme too, never the phone's: alerts, the keyboard,
+  // menus, and the next launch's splash (modules/avenas-appearance). Following
+  // the phone, a phone in dark mode opened a light app on a dark splash; and
+  // as iOS now starts light for everyone, without this a dark app would get
+  // light alerts. Only once the saved choice is read: "light" before it would
+  // turn a dark user's splash light. (react-native-web has no setColorScheme.)
+  useEffect(() => {
+    if (!loaded) return;
+    if (Platform.OS !== "web") Appearance.setColorScheme(isDark ? "dark" : "light");
+    saveLaunchTheme(isDark);
+  }, [isDark, loaded]);
 
   // Paint the NATIVE root view behind every screen. Left alone it stays the
   // platform default (white), and any frame where a screen isn't painted yet
@@ -57,7 +77,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const value = useMemo(() => ({ isDark, toggleDark }), [isDark, toggleDark]);
+  const value = useMemo(() => ({ isDark, loaded, toggleDark }), [isDark, loaded, toggleDark]);
 
   return (
     <ThemeContext.Provider value={value}>

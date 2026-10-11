@@ -25,7 +25,7 @@ import { flatIndexOf, prevFillFor } from "./setRows";
 
 type LiveSet = { weight: string; reps: string; done: boolean; doneAt?: number };
 type LiveExerciseLog = { warmup: LiveSet[]; working: LiveSet[] };
-export type LiveActivityExercise = { id: string; name: string; restSeconds?: number };
+export type LiveActivityExercise = { id: string; name: string; restSeconds?: number; isHold?: boolean };
 
 // App-group defaults hold the whole queue; cap it so a monster session can't
 // bloat the shared store. Ticking past the cap just re-syncs on next foreground.
@@ -57,12 +57,24 @@ export function buildLiveActivityQueue(
     }
   }
 
+  // Each exercise's working sets, done or not, as they'll stand when each
+  // queued set comes up (the card's dots): the lock screen ticks the queue in
+  // order, so every set ahead of one is done by the time it's next.
+  const workingDone = new Map<string, boolean[]>();
+  for (const ex of exercises) {
+    const exLog = log[ex.id];
+    if (exLog) workingDone.set(ex.id, exLog.working.map(s => s.done));
+  }
+
   const queue: LiveActivityPendingSet[] = pendingSetsInOrder(exercises.map(e => e.id), log).flatMap(p => {
     const ex = exercises[p.exIndex];
     const exLog = log[p.exId];
     const set = exLog?.[p.setType][p.setIdx];
     if (!exLog || !set) return [];
     const { weight, reps } = previewValues(set, prevHintsFor(p.exId)[p.flatIdx]);
+    const done = workingDone.get(p.exId) ?? [];
+    const setDone = [...done];
+    if (p.setType === "working") done[p.setIdx] = true;
     return [{
       exId: p.exId,
       setType: p.setType,
@@ -76,6 +88,8 @@ export function buildLiveActivityQueue(
       reps,
       restSeconds: ex.restSeconds ?? 0,
       isFinal: false, // patched below once the full queue is known
+      isHold: !!ex.isHold,
+      setDone,
     }];
   });
 
@@ -156,6 +170,8 @@ export function buildLiveActivityPayload(args: {
   /** Previous-set hints for a session exercise, by its id. */
   prevHintsFor: (exerciseId: string) => string[];
   isKg: boolean;
+  /** The app's Dark Mode, which the card follows. */
+  isDark: boolean;
   /** Effective timer start (epoch ms) while running, null when stopped/paused. */
   timerStartMs: number | null;
   /** Elapsed seconds to show frozen while paused (0 when running/stopped). */
@@ -179,6 +195,7 @@ export function buildLiveActivityPayload(args: {
   return {
     workoutName: args.workoutName,
     unit: args.isKg ? "kg" : "lbs",
+    isDark: args.isDark,
     startedAtMs: args.timerStartMs ?? 0,
     pausedElapsedSec: args.pausedElapsedSec,
     restStartMs,

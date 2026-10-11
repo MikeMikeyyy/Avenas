@@ -12,6 +12,7 @@
 
 import { EXERCISES } from "../constants/exerciseData";
 import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
+import { exerciseKey } from "./exerciseNames";
 
 // Canonical axis order for the Strength radar. The hexagon is flat-topped:
 // Chest sits top-left, then clockwise — Back (top-right), Legs (right),
@@ -27,9 +28,11 @@ export const RADAR_GROUPS: SelectableMuscle[] = [
   "Arms",
 ];
 
-// Same normalization as utils/exerciseLookup.ts so the two stay in lockstep.
+// Same key as utils/exerciseLookup.ts so the two stay in lockstep: a name the
+// catalogue has since renamed resolves to its exercise, and retired (hidden)
+// entries are included so old workouts still count toward their muscle.
 const PRIMARY_BY_NAME = new Map<string, SelectableMuscle>(
-  EXERCISES.map(e => [e.name.trim().toLowerCase(), e.primaryMuscle]),
+  EXERCISES.map(e => [exerciseKey(e.name), e.primaryMuscle]),
 );
 
 /**
@@ -46,9 +49,10 @@ export function musclesForExercise(
   name: string,
   customExercises: CustomExercise[],
 ): SelectableMuscle[] {
-  const key = name.trim().toLowerCase();
-  const primary = PRIMARY_BY_NAME.get(key);
+  const primary = PRIMARY_BY_NAME.get(exerciseKey(name));
   if (primary) return [primary];
+  // A custom exercise is the user's own name: matched as typed, never renamed.
+  const key = name.trim().toLowerCase();
   const custom = customExercises.find(c => c.name.trim().toLowerCase() === key);
   if (custom && custom.muscles.length > 0) {
     return Array.from(new Set(custom.muscles));

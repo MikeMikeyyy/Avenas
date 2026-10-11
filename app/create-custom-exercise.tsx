@@ -36,6 +36,7 @@ import BounceButton from "../components/BounceButton";
 import { useTheme } from "../contexts/ThemeContext";
 import AppSwitch from "../components/AppSwitch";
 import { alertMessage } from "../utils/errors";
+import { exerciseByName } from "../utils/exerciseLookup";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const SELECTABLE = MUSCLE_GROUPS.filter(g => g !== "All") as SelectableMuscle[];
@@ -245,6 +246,15 @@ export default function CreateCustomExerciseScreen() {
   const handleSave = async () => {
     const name = exerciseName.trim();
     if (!name || selectedMuscles.length === 0) return;
+    // A name in the exercise list, or one it used to have, would be read as that
+    // exercise everywhere (its muscles, history and records). A removed one's
+    // name is free: making it your own brings it back. An existing custom whose
+    // name isn't changing is left alone.
+    const taken = exerciseByName(name);
+    if (taken && !taken.hidden && (!isEditMode || name !== editName)) {
+      Alert.alert("That name is taken", `"${taken.name}" is already in the exercise list. Pick it from there, or give yours a different name.`);
+      return;
+    }
     setSaving(true);
     try {
       const raw = await AsyncStorage.getItem(CUSTOM_KEY);

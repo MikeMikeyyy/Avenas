@@ -1,27 +1,31 @@
-# Drop the free-exercise-db repo contents here
+# Exercise library sources
 
-This folder is the **raw source** for the exercise-library build. It is
-git-ignored — nothing in here ships in the app or gets committed; the build
-script processes it into optimized assets under `assets/`.
+This folder holds the **raw picture sources** for the exercise-library build.
+It is git-ignored: nothing in here ships in the app or gets committed. The
+build script (`node scripts/build-exercises.mjs`) reads it and writes the
+optimized pictures into `assets/exercises/`.
+
+The list itself is **not** here: it's `scripts/exercise-library.json`
+(committed), and the photos kept from the old library are in
+`scripts/exercise-photos/` (committed).
 
 ## What to put here
 
-Download [free-exercise-db](https://github.com/yuhonas/free-exercise-db)
+Download [Open Exercise Illustrations](https://github.com/hitmanrepo/open-exercise-illustrations)
 (green **Code** button → **Download ZIP**, or `git clone`) and place its
-contents directly in this folder, so you end up with:
+contents in `open-exercise-illustrations/`, so you end up with:
 
 ```
 scripts/exercise-source/
-  dist/exercises.json        ← the full dataset (metadata)
-  exercises/                 ← the JPG images, in per-exercise subfolders
-  site/                      ← (their demo site — unused, fine to leave or delete)
+  open-exercise-illustrations/
+    exercises.json      ← metadata: names, other names, muscles, frames
+    images/             ← start/end (or hold) frames as WebP, per exercise
 ```
 
-The build script (`scripts/build-exercises.mjs`) reads `dist/exercises.json`
-and the `exercises/` image folder, then generates:
+An exercise in `exercise-library.json` points at an illustration by its id
+there: `"picture": { "library": "<id>" }`.
 
-- `constants/exerciseData.ts` — the bundled catalogue
-- `assets/exercises/` — optimized images
-- `assets/exerciseImages.ts` — the require-maps
+`free-exercise-db-main/` was the old photo source; the build no longer reads it.
 
-License: free-exercise-db is released under the Unlicense (public domain).
+License: Open Exercise Illustrations is released under CC0 1.0 (public domain).
+No attribution is required.

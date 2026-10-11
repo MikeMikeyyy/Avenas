@@ -61,6 +61,12 @@ export type AppTheme = typeof APP_LIGHT;
 // The single source for the app's green accent — import this, never hardcode.
 export const ACCT = "#1deca0";
 
+// The exercise illustrations' own studio backdrop, top to bottom (sampled from
+// their corners). Laid behind an illustration fitted whole into a square, so
+// the space beside it reads as more of the same studio. Same in both themes:
+// it's the picture's background, not the app's.
+export const EXERCISE_STUDIO = ["#08090c", "#111317"] as const;
+
 // Deeper green for small text/lines that sit over aurora-tinted LIGHT
 // backgrounds — ACCT itself washes out over the mint glow. Dark mode keeps ACCT.
 export const ACCT_DEEP = "#0c9f6e";

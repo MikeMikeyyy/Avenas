@@ -2,7 +2,7 @@
   "expo": {
     "name": "avenas",
     "slug": "avenas",
-    "version": "2.10.2",
+    "version": "2.10.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon-transparent.png",
     "scheme": "avenas",
@@ -26,12 +26,12 @@
       },
       "bundleIdentifier": "com.avenas.app",
       "appleTeamId": "8X55YH783A",
-      "buildNumber": "48",
+      "buildNumber": "49",
       "usesAppleSignIn": true
     },
     "android": {
       "package": "com.avenas.app",
-      "versionCode": 2,
+      "versionCode": 3,
       "icon": "./assets/images/icon-light.png",
       "adaptiveIcon": {
         "backgroundColor": "#E6F9F2",
@@ -47,6 +47,7 @@
     },
     "plugins": [
       "expo-router",
+      "./modules/avenas-appearance/app.plugin.js",
       [
         "expo-splash-screen",
         {

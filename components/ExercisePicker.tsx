@@ -17,6 +17,7 @@ import {
 } from "../constants/exercises";
 import { EXERCISES } from "../constants/exerciseData";
 import { isFavourite as isFav, sortByMuscleThenName, toggleFavourite } from "../utils/exerciseFavourites";
+import { exerciseSearchDoc, matchScore, queryWords, searchDoc } from "../utils/exerciseSearch";
 import { sharedExercises } from "../utils/customExerciseDetails";
 import { loadCarriedExercises } from "../lib/exerciseMedia";
 import ExerciseImage from "./ExerciseImage";
@@ -24,6 +25,13 @@ import FavouriteStar from "./FavouriteStar";
 import TrashIcon from "./TrashIcon";
 import SquarePenIcon from "./SquarePenIcon";
 import BounceButton from "./BounceButton";
+
+// The exercises on offer: the catalogue less the retired ones, which stay in
+// EXERCISES only so old workouts keep their muscles and steps. Searchable by
+// name, former names, other common names, muscles and equipment
+// (utils/exerciseSearch.ts), indexed once since the catalogue never changes.
+const CATALOGUE = EXERCISES.filter(e => !e.hidden);
+const CATALOGUE_DOCS = new Map(CATALOGUE.map(e => [e.id, exerciseSearchDoc(e)]));
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -229,19 +237,24 @@ export default function ExercisePicker({
     [customExercises, carried],
   );
   const { listData, layout } = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = queryWords(search);
     const muscleOk = (m: SelectableMuscle) => selectedMuscles.size === 0 || selectedMuscles.has(m);
 
     const customMatch = (e: CustomExercise) =>
-      (q === "" || e.name.toLowerCase().includes(q)) &&
+      (q === null || matchScore(search, q, searchDoc(e.name, e.muscles)) !== null) &&
       (selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m)));
     const customs = customExercises.filter(customMatch);
     const shareds = shared.filter(customMatch);
-    // EXERCISES is the curated catalogue, already sorted alphabetically.
-    const matched = EXERCISES.filter(e =>
-      (q === "" || e.name.toLowerCase().includes(q) || e.equipment.toLowerCase().includes(q)) &&
-      muscleOk(e.primaryMuscle)
-    );
+    // The catalogue is already alphabetical. A search ranks it by how well the
+    // name matches (the name starting with what was typed first), then A to Z.
+    const scored: { e: Exercise; score: number }[] = [];
+    for (const e of CATALOGUE) {
+      if (!muscleOk(e.primaryMuscle)) continue;
+      const score = q === null ? 0 : matchScore(search, q, CATALOGUE_DOCS.get(e.id)!);
+      if (score !== null) scored.push({ e, score });
+    }
+    if (q !== null) scored.sort((a, b) => a.score - b.score || a.e.name.localeCompare(b.e.name));
+    const matched = scored.map(x => x.e);
 
     const favCustoms = customs.filter(e => isFav(favourites, e.name));
     const favShared = shareds.filter(e => isFav(favourites, e.name));

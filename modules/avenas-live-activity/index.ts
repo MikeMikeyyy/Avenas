@@ -28,11 +28,19 @@ export type LiveActivityPendingSet = {
   reps: string;
   restSeconds: number; // rest started after ticking this set
   isFinal: boolean; // ticking this completes the workout → no rest
+  isHold: boolean; // a timed hold: `reps` are seconds
+  /** Its exercise's working sets, done or not, as they'll stand when this set
+   *  is up (the card's dots). The lock screen ticks the queue in order, so
+   *  every set ahead of it is done by then. */
+  setDone: boolean[];
 };
 
 export type LiveActivityPayload = {
   workoutName: string;
   unit: string; // "kg" | "lbs"
+  /** The app's own Dark Mode (ThemeContext), which the card follows: a white
+   *  card in light mode, the app's navy in dark. Never the phone's setting. */
+  isDark: boolean;
   startedAtMs: number; // effective timer start (epoch ms); 0 = not running
   pausedElapsedSec: number; // shown frozen while startedAtMs === 0
   restStartMs: number; // 0 = no rest running

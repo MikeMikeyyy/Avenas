@@ -17,11 +17,14 @@ struct PendingSetRecord: Record {
   @Field var reps: String = ""
   @Field var restSeconds: Int = 0
   @Field var isFinal: Bool = false
+  @Field var isHold: Bool = false
+  @Field var setDone: [Bool] = []
 }
 
 struct ActivityPayloadRecord: Record {
   @Field var workoutName: String = ""
   @Field var unit: String = "kg"
+  @Field var isDark: Bool = false
   @Field var startedAtMs: Double = 0
   @Field var pausedElapsedSec: Int = 0
   @Field var restStartMs: Double = 0
@@ -52,7 +55,8 @@ public class AvenasLiveActivityModule: Module {
           exId: $0.exId, setType: $0.setType, setIdx: $0.setIdx,
           exerciseName: $0.exerciseName, setLabel: $0.setLabel,
           weight: $0.weight, reps: $0.reps,
-          restSeconds: $0.restSeconds, isFinal: $0.isFinal)
+          restSeconds: $0.restSeconds, isFinal: $0.isFinal,
+          isHold: $0.isHold, setDone: $0.setDone)
       }
       WorkoutActivityController.saveQueue(queue)
       WorkoutActivityController.defaults?.set(payload.restEndMs, forKey: AvenasSharedKeys.restEnd)
@@ -70,7 +74,12 @@ public class AvenasLiveActivityModule: Module {
         pausedElapsedSec: payload.pausedElapsedSec,
         restStartMs: payload.restStartMs,
         restEndMs: payload.restEndMs,
-        allDone: head == nil && payload.totalCount > 0)
+        allDone: head == nil && payload.totalCount > 0,
+        isWarmup: head?.setType == "warmup",
+        isHold: head?.isHold,
+        setIdx: head?.setIdx,
+        setDone: head?.setDone,
+        isDark: payload.isDark)
 
       // A workout-name change means a different session — replace the card.
       if let activity = WorkoutActivityController.currentActivity(),
@@ -87,7 +96,7 @@ public class AvenasLiveActivityModule: Module {
         do {
           _ = try Activity.request(
             attributes: WorkoutActivityAttributes(workoutName: payload.workoutName),
-            content: ActivityContent(state: state, staleDate: nil))
+            content: WorkoutActivityController.content(state))
         } catch {
           NSLog("[avenas] Live Activity request failed: %@", error.localizedDescription)
         }

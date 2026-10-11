@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["AvenasAppearanceModule"],
+    "appDelegateSubscribers": ["AvenasAppearanceAppDelegateSubscriber"]
+  },
+  "android": {
+    "modules": ["expo.modules.avenasappearance.AvenasAppearanceModule"]
+  }
+}

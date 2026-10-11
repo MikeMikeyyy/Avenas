@@ -17,16 +17,18 @@
 // (see scripts/verify-exercise-favourites.ts).
 
 import { MUSCLE_GROUPS, type SelectableMuscle } from "../constants/exercises";
+import { exerciseKey } from "./exerciseNames";
 
 /** Muscle groups in the order the picker lists them, "All" stripped. */
 export const MUSCLE_ORDER: SelectableMuscle[] = MUSCLE_GROUPS.filter(
   (m): m is SelectableMuscle => m !== "All",
 );
 
-/** Canonical form for matching a favourite across sessions. Matches the
- *  trim + lowercase convention used for exercise names everywhere else. */
+/** Canonical form for matching a favourite across sessions: the exercise key
+ *  (trim + lowercase, a renamed exercise's former name counting as its current
+ *  one), so a star saved before a rename still marks the exercise. */
 export function normalizeFavourite(name: string): string {
-  return name.trim().toLowerCase();
+  return exerciseKey(name);
 }
 
 /** Is `name` starred? */

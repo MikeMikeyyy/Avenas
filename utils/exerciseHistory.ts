@@ -8,6 +8,7 @@
 
 import type { CompletedSet, CompletedWorkout, SavedProgram } from "../constants/programs";
 import { programIncludes } from "./progressStats";
+import { exerciseKey } from "./exerciseNames";
 
 export type ExerciseHistoryRow = {
   workoutId: string;
@@ -18,7 +19,8 @@ export type ExerciseHistoryRow = {
   sets: CompletedSet[];  // the exercise's done sets in this session, warmups included
 };
 
-// Lowercase-trim match used across the codebase for exercise names.
+// Lowercase-trim match for day names. Exercise names go through exerciseKey,
+// so sessions logged under a since-renamed name still list.
 function key(s: string): string {
   return s.trim().toLowerCase();
 }
@@ -41,7 +43,7 @@ export function exerciseHistoryRows(
     today?: Date;
   },
 ): ExerciseHistoryRow[] {
-  const want = key(exerciseName);
+  const want = exerciseKey(exerciseName);
   const wantDay = typeof dayName === "string" && dayName.trim() ? key(dayName) : null;
   // The slot id when we have it. Sessions that recorded one are matched on it
   // (so a renamed day keeps its history, and two same-named days don't pool);
@@ -69,7 +71,7 @@ export function exerciseHistoryRows(
     if (!Number.isFinite(yy) || !Number.isFinite(mm) || !Number.isFinite(dd)) continue;
     if (new Date(yy, mm - 1, dd).getTime() < cutoffMs) continue;
     // Find the matching exercise inside this workout (case-insensitive trim).
-    const ex = w.exercises.find(e => key(e.name) === want);
+    const ex = w.exercises.find(e => exerciseKey(e.name) === want);
     if (!ex) continue;
     // Include warmup + working — drop only un-done sets. Warmups render
     // with a neutral chip so the user can still tell them apart.

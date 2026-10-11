@@ -24,10 +24,12 @@ import {
   type SavedProgram,
 } from "../constants/programs";
 import { indexOfDayId, workoutKey } from "./programDays";
+import { exerciseKey } from "./exerciseNames";
 
 export const HOLD_MIGRATION_KEY = "@avenas/hold_migration_done";
 
-const norm = (s: string) => s.trim().toLowerCase();
+// Exercise names compare through exerciseKey, so a renamed exercise matches.
+const norm = exerciseKey;
 
 /** The exercises a program prescribes on the slot `dayId`. */
 function exercisesOn(program: SavedProgram, dayId: string): Exercise[] {

@@ -1,19 +1,28 @@
 // Build the bundled exercise library.
 //
-// The catalogue is the *authored* curated list (scripts/curated-exercises.json)
-// — a Hevy-equivalent ~270 set, so it has no gaps and no junk. free-exercise-db
-// is used only as a photo source: each curated exercise is token-matched to a
-// free-exercise-db entry and, when found, that photo is bundled. Curated
-// exercises with no match ship photo-less (ExerciseImage shows a fallback tile)
-// until a photo is added later.
+// The catalogue is scripts/exercise-library.json, kept by hand: each exercise's
+// name, muscle group, equipment, steps, picture, and the names it used to have.
+// Pictures come from two places:
+//   - { "library": "<id>" }  Open Exercise Illustrations (CC0): its frames
+//     (start and end, or a single hold), resized here. Source folder:
+//     scripts/exercise-source/open-exercise-illustrations (git-ignored; see
+//     scripts/exercise-source/README.md).
+//   - { "photo": "<file>" }  a photo kept from the old library, in
+//     scripts/exercise-photos/.
+// "hidden": true marks a retired exercise: never offered in the picker, kept so
+// workouts and programs that used it still resolve its muscles and steps.
 //
-// Reads:
-//   scripts/curated-exercises.json
-//   scripts/exercise-source/free-exercise-db-main/dist/exercises.json
-//   scripts/exercise-source/free-exercise-db-main/exercises/<id>/0.jpg
+// Renaming an exercise: change its "name" and add the old name to its
+// "formerNames" (keep every earlier one too). Anything logged under the old
+// name then counts as the new one everywhere (utils/exerciseNames.ts), and the
+// app renames it in saved programs, favourites and drafts on the next launch
+// (utils/exerciseRenameMigration.ts). A former name can never also be a live
+// exercise's name: every new session under it would be counted as the renamed
+// exercise. The build refuses that, and the other mistakes below.
 //
 // Writes:
-//   assets/exercises/<slug>.jpg
+//   assets/exercises/<id>-thumb.webp, <id>-<frame>.webp   (illustrations)
+//   assets/exercises/<id>.jpg                              (kept photos)
 //   assets/exerciseImages.ts
 //   constants/exerciseData.ts
 //
@@ -22,173 +31,135 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SOURCE = path.join(ROOT, "scripts/exercise-source/free-exercise-db-main");
-const SRC_JSON = path.join(SOURCE, "dist/exercises.json");
-const SRC_IMAGES = path.join(SOURCE, "exercises");
-const CURATED_JSON = path.join(ROOT, "scripts/curated-exercises.json");
-const OVERRIDES_JSON = path.join(ROOT, "scripts/curated-image-overrides.json");
+const CATALOGUE = path.join(ROOT, "scripts/exercise-library.json");
+const PHOTOS = path.join(ROOT, "scripts/exercise-photos");
+const LIBRARY = path.join(ROOT, "scripts/exercise-source/open-exercise-illustrations");
 const OUT_IMAGES = path.join(ROOT, "assets/exercises");
 const OUT_IMAGE_MAP = path.join(ROOT, "assets/exerciseImages.ts");
 const OUT_DATA = path.join(ROOT, "constants/exerciseData.ts");
 
-// Words dropped before token-matching — equipment labels + free-exercise-db's
-// stock modifiers ("- Medium Grip" etc.). What's left is the actual movement.
-const FILLER = new Set([
-  "barbell", "dumbbell", "cable", "machine", "smith", "bar", "body", "weight",
-  "plate", "band", "banded", "kettlebell", "kettlebells", "medium", "grip",
-  "the", "with", "and",
-]);
+const GROUPS = new Set(["Chest", "Back", "Shoulders", "Legs", "Arms", "Core"]);
+// Frames for the exercise screen: sharp on a phone, small in the bundle (the
+// dark studio backgrounds compress well). Thumbnails for lists are their own
+// small square files, so a scrolling list never decodes a full frame.
+const FRAME_WIDTH = 720;
+const THUMB_SIZE = 192;
 
-const slugify = (s) =>
-  s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const norm = (s) => String(s || "").trim().toLowerCase();
 
-// Movement tokens: word-split, drop short words + equipment/filler noise.
-const tokens = (s) =>
-  s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !FILLER.has(w));
-
-// A loose, order-independent token relation that tolerates plurals
-// (tricep/triceps) by allowing either token to contain the other.
-const tokenRel = (a, b) => a.includes(b) || b.includes(a);
-
-// A free-exercise-db candidate is usable as a photo for a curated exercise if
-// it covers every curated movement token. Returns the count of *extra*
-// candidate tokens (lower = closer match), or null when it isn't a match.
-function matchExtras(curatedTokens, candTokens) {
-  if (curatedTokens.length === 0 || candTokens.length === 0) return null;
-  const covered = curatedTokens.every((x) => candTokens.some((y) => tokenRel(x, y)));
-  if (!covered) return null;
-  return candTokens.filter((y) => !curatedTokens.some((x) => tokenRel(x, y))).length;
+function fail(msg) {
+  console.error(`✗ ${msg}`);
+  process.exit(1);
 }
 
-function equipGroup(s) {
-  s = (s || "").toLowerCase();
-  if (s.includes("barbell")) return "barbell";
-  if (s.includes("dumbbell")) return "dumbbell";
-  if (s.includes("cable")) return "cable";
-  if (s.includes("smith") || s.includes("machine")) return "machine";
-  if (s.includes("body")) return "body";
-  if (s.includes("e-z") || s.includes("ez ")) return "ez";
-  if (s.includes("kettlebell")) return "kettlebell";
-  if (s.includes("band")) return "band";
-  return "other";
-}
+async function main() {
+  const catalogue = JSON.parse(fs.readFileSync(CATALOGUE, "utf8"));
+  const libJson = path.join(LIBRARY, "exercises.json");
+  const hasLibrary = fs.existsSync(libJson);
+  if (!hasLibrary) fail(`Illustration source not found: ${libJson}\n  See scripts/exercise-source/README.md.`);
+  const library = new Map(JSON.parse(fs.readFileSync(libJson, "utf8")).exercises.map((e) => [e.id, e]));
 
-function main() {
-  if (!fs.existsSync(SRC_JSON)) {
-    console.error(`✗ Source not found: ${SRC_JSON}\n  Drop free-exercise-db into scripts/exercise-source/ first.`);
-    process.exit(1);
+  // ── Check the catalogue ──
+  const names = new Map();
+  for (const e of catalogue) {
+    if (!e.name || !e.name.trim()) fail("an exercise has no name");
+    if (names.has(norm(e.name))) fail(`two exercises are called "${e.name}"`);
+    names.set(norm(e.name), e);
+    if (!GROUPS.has(e.primaryMuscle)) fail(`"${e.name}": unknown primaryMuscle "${e.primaryMuscle}"`);
+    if (/—/.test([e.name, e.equipment, ...(e.instructions || [])].join(" "))) fail(`"${e.name}": em dash in its text`);
+    if (e.hidden) continue;
+    if (!e.picture) fail(`"${e.name}": no picture`);
+    if (!e.instructions || !e.instructions.length) fail(`"${e.name}": no steps`);
+    if (e.picture.library && !library.has(e.picture.library)) fail(`"${e.name}": unknown illustration "${e.picture.library}"`);
+    if (e.picture.photo && !fs.existsSync(path.join(PHOTOS, e.picture.photo))) fail(`"${e.name}": photo not found: ${e.picture.photo}`);
+  }
+  const formerOwner = new Map();
+  for (const e of catalogue) {
+    for (const f of e.formerNames || []) {
+      if (names.has(norm(f))) fail(`"${f}" is a former name of "${e.name}" but also a live exercise`);
+      if (formerOwner.has(norm(f))) fail(`"${f}" is a former name of both "${formerOwner.get(norm(f))}" and "${e.name}"`);
+      formerOwner.set(norm(f), e.name);
+    }
   }
 
-  const curated = JSON.parse(fs.readFileSync(CURATED_JSON, "utf8"));
-  const fdb = JSON.parse(fs.readFileSync(SRC_JSON, "utf8")).map((e) => ({
-    name: e.name,
-    tokens: tokens(e.name),
-    equipGroup: equipGroup(e.equipment),
-    image: e.images && e.images[0] ? e.images[0] : null,
-    instructions: e.instructions || [],
-    secondaryMuscles: e.secondaryMuscles || [],
-  }));
-
-  // Hand-curated photo picks for exercises the token matcher misses or would
-  // mismatch (keyed by curated slug → exact free-exercise-db name). The leading
-  // `_comment` key is documentation, not a mapping. fdbByName resolves a pick to
-  // its photo/metadata; an unresolved pick is a hard error (bad name in the JSON).
-  const overrides = JSON.parse(fs.readFileSync(OVERRIDES_JSON, "utf8"));
-  const fdbByName = new Map(fdb.map((f) => [f.name, f]));
-
+  // ── Images ──
   fs.rmSync(OUT_IMAGES, { recursive: true, force: true });
   fs.mkdirSync(OUT_IMAGES, { recursive: true });
-
+  const usedIds = new Set();
   const records = [];
-  const imageEntries = [];
-  const usedSlugs = new Set();
-  let withPhoto = 0;
+  const thumbs = [];
+  const frames = [];
+  for (const e of [...catalogue].sort((a, b) => a.name.localeCompare(b.name))) {
+    let id = slugify(e.name);
+    for (let i = 2; usedIds.has(id); i++) id = `${slugify(e.name)}-${i}`;
+    usedIds.add(id);
 
-  for (const ex of curated) {
-    let slug = slugify(ex.name);
-    if (usedSlugs.has(slug)) {
-      let i = 2;
-      while (usedSlugs.has(`${slug}-${i}`)) i++;
-      slug = `${slug}-${i}`;
-    }
-    usedSlugs.add(slug);
-
-    // A hand-curated override wins outright. Otherwise pick the closest
-    // free-exercise-db photo: it must cover every curated movement token
-    // (≤ 2 extra tokens to stay relevant), then rank by equipment match →
-    // fewest extras → shortest name.
-    const ct = tokens(ex.name);
-    const want = equipGroup(ex.equipment);
-    let match = null, matchScore = null;
-    if (overrides[slug] !== undefined) {
-      match = fdbByName.get(overrides[slug]) ?? null;
-      if (!match) {
-        console.error(`✗ override for "${slug}" points at unknown free-exercise-db entry: "${overrides[slug]}"`);
-        process.exit(1);
+    if (e.picture?.library) {
+      const src = library.get(e.picture.library);
+      const files = [];
+      for (const frame of src.frames) {
+        const file = `${id}-${frame}.webp`;
+        await sharp(path.join(LIBRARY, src.images[frame]))
+          .resize({ width: FRAME_WIDTH, withoutEnlargement: true })
+          .webp({ quality: 74, effort: 5 })
+          .toFile(path.join(OUT_IMAGES, file));
+        files.push(file);
       }
-    } else {
-      for (const f of fdb) {
-        if (!f.image) continue;
-        const extras = matchExtras(ct, f.tokens);
-        if (extras === null || extras > 2) continue;
-        const score = [f.equipGroup === want ? 0 : 1, extras, f.name.length];
-        if (!matchScore ||
-            score[0] < matchScore[0] ||
-            (score[0] === matchScore[0] && score[1] < matchScore[1]) ||
-            (score[0] === matchScore[0] && score[1] === matchScore[1] && score[2] < matchScore[2])) {
-          match = f;
-          matchScore = score;
-        }
-      }
-    }
-
-    if (match) {
-      const srcImg = path.join(SRC_IMAGES, match.image);
-      if (fs.existsSync(srcImg)) {
-        fs.copyFileSync(srcImg, path.join(OUT_IMAGES, `${slug}.jpg`));
-        imageEntries.push(`  "${slug}": require("./exercises/${slug}.jpg"),`);
-        withPhoto++;
-      }
+      await sharp(path.join(LIBRARY, src.images[src.frames[0]]))
+        .resize(THUMB_SIZE, THUMB_SIZE, { fit: "cover", position: sharp.strategy.attention })
+        .webp({ quality: 74, effort: 5 })
+        .toFile(path.join(OUT_IMAGES, `${id}-thumb.webp`));
+      thumbs.push(`  "${id}": require("./exercises/${id}-thumb.webp"),`);
+      frames.push(`  "${id}": [${files.map((f) => `require("./exercises/${f}")`).join(", ")}],`);
+    } else if (e.picture?.photo) {
+      // One picture, used as both the list still and the exercise screen's
+      // (ExerciseImage fills the square with it, as photos always have).
+      fs.copyFileSync(path.join(PHOTOS, e.picture.photo), path.join(OUT_IMAGES, `${id}.jpg`));
+      thumbs.push(`  "${id}": require("./exercises/${id}.jpg"),`);
     }
 
     records.push({
-      id: slug,
-      name: ex.name,
-      primaryMuscle: ex.primaryMuscle,
-      equipment: ex.equipment,
-      secondaryMuscles: match ? match.secondaryMuscles : [],
-      instructions: match ? match.instructions : [],
+      id,
+      name: e.name,
+      primaryMuscle: e.primaryMuscle,
+      equipment: e.equipment,
+      ...(e.hidden ? { hidden: true } : {}),
+      ...(e.formerNames?.length ? { formerNames: e.formerNames } : {}),
+      ...(e.searchTerms?.length ? { searchTerms: e.searchTerms } : {}),
+      secondaryMuscles: e.secondaryMuscles || [],
+      instructions: e.instructions || [],
     });
   }
 
-  records.sort((a, b) => a.name.localeCompare(b.name));
-
-  const dataFile =
+  fs.writeFileSync(OUT_DATA,
     `// AUTO-GENERATED by scripts/build-exercises.mjs — do not edit by hand.\n` +
-    `// Catalogue: scripts/curated-exercises.json. Photos: free-exercise-db (public domain).\n\n` +
+    `// Catalogue: scripts/exercise-library.json. Illustrations: Open Exercise Illustrations (CC0).\n\n` +
     `import type { Exercise } from "./exercises";\n\n` +
     `export const EXERCISES: Exercise[] = [\n` +
     records.map((r) => `  ${JSON.stringify(r)},`).join("\n") +
-    `\n];\n`;
-  fs.writeFileSync(OUT_DATA, dataFile);
+    `\n];\n`);
 
-  const mapFile =
+  fs.writeFileSync(OUT_IMAGE_MAP,
     `// AUTO-GENERATED by scripts/build-exercises.mjs — do not edit by hand.\n` +
-    `// See assets/exerciseImages.ts header for how these maps are used.\n\n` +
+    `//   EXERCISE_THUMBS: a still per exercise for lists (an illustration's small\n` +
+    `//   square crop, or a kept photo).\n` +
+    `//   EXERCISE_FRAMES: an illustration's full positions for the exercise screen\n` +
+    `//   (start and end, or one hold). Kept photos have none: their still is it.\n\n` +
     `import type { ImageSourcePropType } from "react-native";\n\n` +
-    `export const EXERCISE_THUMBS: Record<string, ImageSourcePropType> = {\n` +
-    imageEntries.join("\n") +
-    `\n};\n\n` +
-    `// No animated GIFs bundled yet — populated later if GymVisual GIFs are added.\n` +
-    `export const EXERCISE_GIFS: Record<string, ImageSourcePropType> = {};\n`;
-  fs.writeFileSync(OUT_IMAGE_MAP, mapFile);
+    `export const EXERCISE_THUMBS: Record<string, ImageSourcePropType> = {\n` + thumbs.join("\n") + `\n};\n\n` +
+    `export const EXERCISE_FRAMES: Record<string, ImageSourcePropType[]> = {\n` + frames.join("\n") + `\n};\n`);
 
-  console.log(`✓ ${records.length} curated exercises  →  constants/exerciseData.ts`);
-  console.log(`✓ ${withPhoto} with photos  →  assets/exercises/  (${records.length - withPhoto} photo-less)`);
+  const visible = records.filter((r) => !r.hidden).length;
+  const bytes = fs.readdirSync(OUT_IMAGES).reduce((s, f) => s + fs.statSync(path.join(OUT_IMAGES, f)).size, 0);
+  console.log(`✓ ${records.length} exercises (${visible} in the picker, ${records.length - visible} retired)  →  constants/exerciseData.ts`);
+  console.log(`✓ ${thumbs.length} pictures, ${(bytes / 1048576).toFixed(1)} MB  →  assets/exercises/`);
+  console.log(`✓ ${formerOwner.size} former names`);
   console.log(`\n⚠  Images were rewritten — cold-restart Metro to pick them up:`);
   console.log(`   stop the bundler, then:  npx expo start --clear`);
 }
 
-main();
+main().catch((e) => fail(e.stack || String(e)));

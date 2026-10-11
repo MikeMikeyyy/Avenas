@@ -51,6 +51,13 @@ struct WorkoutActivityAttributes: ActivityAttributes {
     var restStartMs: Double    // 0 = no rest running
     var restEndMs: Double      // 0 = no rest running
     var allDone: Bool
+    // Added with the card's redesign (2026-10-11). Optional, so a card an
+    // older build put up still decodes after an update.
+    var isWarmup: Bool? = nil  // the current set is a warmup: none of the dots is its own
+    var isHold: Bool? = nil    // a timed hold: `reps` are seconds
+    var setIdx: Int? = nil     // the current set's place among its kind (its dot)
+    var setDone: [Bool]? = nil // its exercise's working sets, done or not (the dots)
+    var isDark: Bool? = nil    // the app's own Dark Mode, which the card follows
   }
 
   var workoutName: String
@@ -74,6 +81,8 @@ struct PendingSet: Codable {
   var reps: String
   var restSeconds: Int // rest to start after ticking this set
   var isFinal: Bool    // ticking this completes the workout → no rest
+  var isHold: Bool? = nil     // a timed hold: `reps` are seconds
+  var setDone: [Bool]? = nil  // its exercise's working sets as they'll stand when it's up
 }
 
 /// A lock-screen action awaiting replay into the JS workout draft. The replay
@@ -130,7 +139,18 @@ enum WorkoutActivityController {
 
   static func update(_ activity: Activity<WorkoutActivityAttributes>,
                      _ state: WorkoutActivityAttributes.ContentState) async {
-    await activity.update(ActivityContent(state: state, staleDate: nil))
+    await activity.update(content(state))
+  }
+
+  /// The card's content. A running rest goes stale when it ends, and iOS draws
+  /// a card again when it goes stale, so the card turns from the rest back to
+  /// the set by itself. Without it, nothing redrew it and it sat at 0:00, the
+  /// set hidden, until the next update.
+  static func content(_ state: WorkoutActivityAttributes.ContentState)
+    -> ActivityContent<WorkoutActivityAttributes.ContentState> {
+    let nowMs = Date().timeIntervalSince1970 * 1000
+    let restEnd = state.restEndMs > nowMs ? Date(timeIntervalSince1970: state.restEndMs / 1000) : nil
+    return ActivityContent(state: state, staleDate: restEnd)
   }
 
   /// Lock-screen tick: complete the head pending set (JS fills an empty set
@@ -157,6 +177,10 @@ enum WorkoutActivityController {
       state.setLabel = next.setLabel
       state.weight = next.weight
       state.reps = next.reps
+      state.isWarmup = next.setType == "warmup"
+      state.isHold = next.isHold
+      state.setIdx = next.setIdx
+      state.setDone = next.setDone
       state.allDone = false
     } else {
       state.allDone = true
