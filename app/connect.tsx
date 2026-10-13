@@ -28,6 +28,7 @@ import Scanner from "../components/connect/Scanner";
 import SimpleSheet from "../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
 import SheetPill from "../components/SheetPill";
 import UserRoundMinusIcon from "../components/icons/UserRoundMinusIcon";
 import FlagIcon from "../components/icons/FlagIcon";
@@ -360,7 +361,7 @@ export default function ConnectScreen() {
       <BackButton />
 
       <KeyboardAwareScrollView
-        bottomOffset={24}
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 32 }]}

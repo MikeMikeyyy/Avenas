@@ -31,6 +31,7 @@ import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../components/journal/JournalWorkoutCard";
 import JournalProgramsBlock from "../components/journal/JournalProgramsBlock";
+import SessionFilter, { SessionGroupHeading, useSessionFilter } from "../components/journal/SessionFilter";
 import SheetPill from "../components/SheetPill";
 import SquarePenIcon from "../components/SquarePenIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
@@ -42,7 +43,7 @@ import { programDays } from "../utils/programDays";
 import { getEffectiveToday, getWorkoutForDate } from "../utils/workout";
 import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../utils/restDay";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
-import { buildJournalFeed } from "../utils/journalFeed";
+import { buildJournalFeed, type JournalFeedItem } from "../utils/journalFeed";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { useTheme } from "../contexts/ThemeContext";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
@@ -549,6 +550,60 @@ export default function JournalScreen() {
     [entries, workoutHistory],
   );
 
+  // Recent Activity narrowed to the session numbers picked (several at once),
+  // read off the same info the cards show. Shared with a client's journal.
+  const sessionOf = useCallback(
+    (w: CompletedWorkout) => workoutInfoOf(w).program?.sessionNum ?? null,
+    [workoutInfoOf],
+  );
+  const sessions = useSessionFilter(workoutHistory, sessionOf);
+
+  const renderItem = (item: JournalFeedItem) => {
+    if (item.kind === "workout") {
+      const w = item.data;
+      return (
+        <JournalWorkoutCard
+          key={w.id}
+          workout={w}
+          info={workoutInfoOf(w)}
+          isDark={isDark}
+          onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}
+        />
+      );
+    }
+
+    const entry = item.data;
+    return (
+      <BounceButton key={entry.id} style={{ marginBottom: 12 }}>
+        <NeuCard dark={isDark} style={[styles.entryCard, { marginBottom: 0 }]}>
+          <View style={styles.entryInner}>
+            <View style={styles.entryMain}>
+              <View style={styles.entryTopRow}>
+                <Text style={[styles.entryTitle, { color: t.tp }]} numberOfLines={1}>{entry.title}</Text>
+                <TouchableOpacity
+                  onPress={() => setDeleteTarget(entry)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  activeOpacity={0.7}
+                >
+                  <TrashIcon size={18} color={t.ts} />
+                </TouchableOpacity>
+              </View>
+              {entry.body.length > 0 && (
+                <Text style={[styles.entryPreview, { color: t.ts }]} numberOfLines={2}>{entry.body}</Text>
+              )}
+              <View style={[styles.entryMeta, { borderTopColor: t.div }]}>
+                <Ionicons name="time-outline" size={13} color={t.ts} />
+                <Text style={[styles.entryMetaText, { color: t.ts }]}>{formatTimeAgo(entry.createdAt)}</Text>
+                <Text style={[styles.entryDot, { color: t.div }]}>·</Text>
+                <Text style={[styles.entryMetaText, { color: t.ts }]}>{formatEntryDate(entry.createdAt)}</Text>
+              </View>
+            </View>
+          </View>
+        </NeuCard>
+      </BounceButton>
+    );
+  };
+
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
       {/* Pastel glow matching the blush Journal orb on Home */}
@@ -602,13 +657,24 @@ export default function JournalScreen() {
           onOpenAllPrograms={() => router.navigate("/program-history")}
         />
 
-        {/* Recent activity heading */}
-        {timeline.length > 0 && (
+        {/* Recent activity heading, and the session filter whenever there's a
+            program session to filter to (it reaches past the fortnight, so it
+            shows even when the fortnight is empty) */}
+        {(timeline.length > 0 || sessions.numbers.length > 0) && (
           <Text style={[styles.sectionHeading, { color: t.tp }]}>Recent Activity</Text>
+        )}
+        {sessions.numbers.length > 0 && (
+          <SessionFilter
+            numbers={sessions.numbers}
+            selected={sessions.selected}
+            onToggle={sessions.toggle}
+            onClear={sessions.clear}
+            isDark={isDark}
+          />
         )}
 
         {/* Empty state */}
-        {timeline.length === 0 && (
+        {timeline.length === 0 && !sessions.groups && (
           <NeuCard dark={isDark} style={styles.emptyCard}>
             <View style={styles.emptyInner}>
               <View style={[styles.emptyOrbGlow, {
@@ -635,52 +701,15 @@ export default function JournalScreen() {
           </NeuCard>
         )}
 
-        {/* Unified timeline */}
-        {timeline.map(item => {
-          if (item.kind === "workout") {
-            const w = item.data;
-            return (
-              <JournalWorkoutCard
-                key={w.id}
-                workout={w}
-                info={workoutInfoOf(w)}
-                isDark={isDark}
-                onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: w.id } })}
-              />
-            );
-          }
-
-          const entry = item.data;
-          return (
-            <BounceButton key={entry.id} style={{ marginBottom: 12 }}>
-              <NeuCard dark={isDark} style={[styles.entryCard, { marginBottom: 0 }]}>
-                <View style={styles.entryInner}>
-                  <View style={styles.entryMain}>
-                    <View style={styles.entryTopRow}>
-                      <Text style={[styles.entryTitle, { color: t.tp }]} numberOfLines={1}>{entry.title}</Text>
-                      <TouchableOpacity
-                        onPress={() => setDeleteTarget(entry)}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        activeOpacity={0.7}
-                      >
-                        <TrashIcon size={18} color={t.ts} />
-                      </TouchableOpacity>
-                    </View>
-                    {entry.body.length > 0 && (
-                      <Text style={[styles.entryPreview, { color: t.ts }]} numberOfLines={2}>{entry.body}</Text>
-                    )}
-                    <View style={[styles.entryMeta, { borderTopColor: t.div }]}>
-                      <Ionicons name="time-outline" size={13} color={t.ts} />
-                      <Text style={[styles.entryMetaText, { color: t.ts }]}>{formatTimeAgo(entry.createdAt)}</Text>
-                      <Text style={[styles.entryDot, { color: t.div }]}>·</Text>
-                      <Text style={[styles.entryMetaText, { color: t.ts }]}>{formatEntryDate(entry.createdAt)}</Text>
-                    </View>
-                  </View>
-                </View>
-              </NeuCard>
-            </BounceButton>
-          );
-        })}
+        {/* Unified timeline, or the picked session numbers in order */}
+        {sessions.groups
+          ? sessions.groups.map(g => (
+              <View key={g.session}>
+                {sessions.groups!.length > 1 && <SessionGroupHeading session={g.session} isDark={isDark} />}
+                {g.items.map(renderItem)}
+              </View>
+            ))
+          : timeline.map(renderItem)}
       </ScrollView>
 
       <DeleteSheet

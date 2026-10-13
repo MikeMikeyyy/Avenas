@@ -149,8 +149,16 @@ export type GroupInviteRow = {
 };
 
 export type ProgramRow = {
+  /** Minted afresh by every backup: never the program's id in the app. */
   id: string;
   user_id: string;
+  /** The app's own id for the program (migration 0044): a restore reads it
+   *  back as the program's id (mappers.snapshotFromRows). Null on a row from
+   *  an app before it, which then keeps the row's id. */
+  local_id: string | null;
+  /** A received copy's origin, "<sender uid>|<sender program id>" (migration
+   *  0044). See SavedProgram.shareOrigin. */
+  share_origin: string | null;
   name: string;
   total_weeks: number;
   current_week: number;
@@ -213,6 +221,9 @@ export type WorkoutRow = {
   duration_seconds: number;
   exercises: unknown[];           // CompletedExercise[]
   session_notes: string | null;
+  /** The program day as the session was set up from it (migration 0046), or
+   *  null. See CompletedWorkout.plan. */
+  plan: unknown[] | null;         // PlannedExercise[]
   created_at: string;
   updated_at: string;
 };

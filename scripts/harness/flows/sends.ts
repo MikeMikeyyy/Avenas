@@ -3,11 +3,13 @@
 // it). From then on: Tara archives, restores, deletes, sends an update or
 // takes it back from one client; Cole does what a group trainer can; Cara
 // and Cody accept (from the list or the program's page), remove the card,
-// and delete / archive / restore their copy.
+// and delete / archive / restore their copy; Cara restores her backup onto a
+// new phone.
 
 import { on } from "../app";
 import { OK, pressed, type Action, type Flow, type Outcome, type Press, type View } from "../explore";
-import { CARA, CODY, COLE, db, GROUP, resetWorld, TARA, type Person } from "../world";
+import { restoreOntoNewPhone } from "../restore";
+import { CARA, CARA_OWN, CODY, COLE, db, GROUP, resetWorld, TARA, type Person } from "../world";
 import type { SharedProgram } from "../../../utils/trainerStore";
 import { groupAlertCounts } from "../../../utils/groupAlerts";
 import { archiveProgram, restoreProgram } from "../../../utils/programArchive";
@@ -42,6 +44,10 @@ type Recipient = {
   /** Their row still exists (not deleted, not taken back from them). */
   row: boolean;
   accepted: boolean;
+  /** Their phone knows its accept made the copy, so deleting the copy tells
+   *  Tara. A restore learns it again from the copy, for an accept that still
+   *  stands (an update since reads like a send never accepted). */
+  linked: boolean;
   /** They accepted once and deleted their copy since (deleted_by_recipient_at). */
   deletedCopy: boolean;
   /** The version they removed the card at, or null. */
@@ -164,6 +170,7 @@ function clientActions(c: Person): Action<Model>[] {
     const r = me(m);
     if (!r.row || m.archived) return "refused";
     r.accepted = true;
+    r.linked = true;
     r.deletedCopy = false;
     r.copy = "present";
     r.copyVersion = m.version;
@@ -219,7 +226,8 @@ function clientActions(c: Person): Action<Model>[] {
         const r = me(m);
         if (r.copy === "none") return OK; // gone already (another screen)
         r.copy = "none";
-        if (r.row) { r.deletedCopy = true; r.accepted = false; }
+        if (r.row && r.linked) { r.deletedCopy = true; r.accepted = false; }
+        r.linked = false;
         return OK;
       },
     },
@@ -321,6 +329,23 @@ const trainerActions: Action<Model>[] = [
     },
     apply: m => { m.r[c.name].row = false; return OK; },
   })),
+  {
+    // A new phone, or the app deleted and installed again (scripts/harness/restore.ts).
+    label: "Cara restores onto a new phone",
+    kinds: ["direct", "group"],
+    enabled: () => true,
+    alone: true,
+    draw: async () => async () => { await restoreOntoNewPhone(CARA); return OK; },
+    apply: m => {
+      const r = m.r[CARA.name];
+      // Her copy comes back as it was, under its own id. The cards she removed
+      // were this phone's alone; and the restore links her copy back to the
+      // send while her accept of it still stands.
+      r.removedAt = null;
+      r.linked = r.row && r.accepted;
+      return OK;
+    },
+  },
   ...[TARA, COLE].flatMap((t): Action<Model>[] => [
     {
       label: `${t.name} archives it (group page)`,
@@ -352,7 +377,7 @@ export function sendFlow(kind: Kind): Flow<Model> {
     kind,
     start: async () => {
       TARA.programs = [BLOCK];
-      CARA.programs = [];
+      CARA.programs = [CARA_OWN];
       CODY.programs = [];
       await resetWorld();
       await on(TARA, () => TARA.app.appendSharedPrograms(recipientsOf(kind).map((r, i) => ({
@@ -367,7 +392,7 @@ export function sendFlow(kind: Kind): Flow<Model> {
     },
     fresh: () => {
       const r: Record<string, Recipient> = {};
-      for (const p of recipientsOf(kind)) r[p.name] = { row: true, accepted: false, deletedCopy: false, removedAt: null, copy: "none", copyVersion: 0 };
+      for (const p of recipientsOf(kind)) r[p.name] = { row: true, accepted: false, linked: false, deletedCopy: false, removedAt: null, copy: "none", copyVersion: 0 };
       return { kind, archived: false, version: 0, r };
     },
     expected,
@@ -384,6 +409,13 @@ export function sendFlow(kind: Kind): Flow<Model> {
       // showing that, and accepting again makes one new copy.
       ["Cody accepts", "Tara archives it (Trainer tab)", "Cody deletes their copy", "Tara restores it (Trainer tab archive)",
         "Cody accepts", "Tara deletes it (Trainer tab, or its archive)", "Cody deletes their copy"],
+      // The reported case: accepted, restored onto a new phone, then an update
+      // accepted. One copy, updated, not a second beside it (user report,
+      // 2026-10-13). Then deleting it still tells Tara.
+      ["Cara accepts", "Cara restores onto a new phone", "Tara sends an update", "Cara accepts",
+        "Cara restores onto a new phone", "Cara deletes their copy"],
+      // A card removed on the old phone is back on the new one.
+      ["Cara removes the card", "Cara restores onto a new phone", "Cara accepts on the program's page"],
       ...(kind === "group" ? [
         // Two trainers of the group taking turns.
         ["Cole archives it (group page)", "Tara restores it (group archive)", "Cara accepts", "Tara archives it (Trainer tab)",

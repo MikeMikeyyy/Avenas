@@ -48,7 +48,8 @@ export function runStartDate(program: SavedProgram): string {
  * before the holiday was still a week back), and again after every resume,
  * until a workout was logged on the very day of one; and one made active a
  * week after the last workout of the program before it held itself on its
- * second day. Found by scripts/verify-training-months.ts.
+ * second day. Found by scripts/verify-training-months.ts. A resume the same
+ * day as its pause is a hold of no days, kept for this (resumeProgram).
  */
 export function idleDays(program: SavedProgram, workoutDates: string[], today: string = todayYMD()): number {
   const marks = [...workoutDates];

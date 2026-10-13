@@ -22,7 +22,7 @@ import { exerciseHistoryRows } from "../utils/exerciseHistory";
 import { computeSessionRecords } from "../utils/workoutSummary";
 import { isFavourite } from "../utils/exerciseFavourites";
 import { renameFavourites, renameProgramExercises } from "../utils/exerciseRenameMigration";
-import { exerciseSearchDoc, matchScore, queryWords, stem } from "../utils/exerciseSearch";
+import { exerciseSearchDoc, parseQuery, rankMatch, searchDoc, stem } from "../utils/exerciseSearch";
 
 let passed = 0;
 const failures: string[] = [];
@@ -127,33 +127,76 @@ function program(names: { name: string; custom?: boolean }[]): SavedProgram {
 // ─── search ──────────────────────────────────────────────────────────────────
 
 const LISTED = EXERCISES.filter(e => !e.hidden);
-function search(query: string): string[] {
-  const q = queryWords(query);
-  if (!q) return LISTED.map(e => e.name);
+const DOCS = new Map(LISTED.map(e => [e.id, exerciseSearchDoc(e)]));
+/** The picker's catalogue results for what's typed, closest first. */
+function search(text: string): string[] {
+  const query = parseQuery(text);
+  if (!query) return LISTED.map(e => e.name);
   return LISTED
-    .map(e => ({ e, s: matchScore(query, q, exerciseSearchDoc(e)) }))
+    .map(e => ({ e, s: rankMatch(query, DOCS.get(e.id)!) }))
     .filter((x): x is { e: typeof x.e; s: number } => x.s !== null)
-    .sort((a, b) => a.s - b.s || a.e.name.localeCompare(b.e.name))
+    .sort((a, b) => b.s - a.s || a.e.name.localeCompare(b.e.name))
     .map(x => x.e.name);
 }
-eq([stem("curls"), stem("presses"), stem("flyes"), stem("raises"), stem("press")], ["curl", "press", "fly", "raise", "press"], "plural endings strip");
-ok(search("lateral raise")[0] === "Lateral Raise", "'lateral raise' finds Lateral Raise first");
+const first = (text: string) => search(text)[0];
+const before = (list: string[], a: string, b: string) => list.includes(a) && list.includes(b) && list.indexOf(a) < list.indexOf(b);
+
+eq([stem("curls"), stem("presses"), stem("flyes"), stem("raises"), stem("press"), stem("traps")], ["curl", "press", "fly", "raise", "press", "traps"], "plural endings strip (not 'traps', the muscle)");
+eq(first("lateral raise"), "Lateral Raise", "'lateral raise' finds Lateral Raise first");
 ok(search("lateral raises").includes("Lateral Raise"), "a plural still finds it");
 ok(search("raise lateral").includes("Lateral Raise"), "word order doesn't matter");
 ok(search("dumbbell lateral raise").includes("Lateral Raise"), "the old name finds the renamed exercise");
 {
   const curls = search("bicep curl");
-  ok(curls.includes("Biceps Curl") && curls.includes("Barbell Curl") && curls.includes("Hammer Curl"), "'bicep curl' finds the curls, whatever they're called");
-  ok(!curls.includes("Leg Curl") && !curls.includes("Wrist Curl"), "...but not leg or wrist curls");
-  ok(curls.indexOf("Biceps Curl") < curls.indexOf("Barbell Curl"), "a name with both words ranks above one matched by muscle");
+  eq(curls[0], "Biceps Curl", "'bicep curl' finds Biceps Curl first");
+  ok(curls.includes("Barbell Curl") && curls.includes("Hammer Curl"), "...and the other curls, whatever they're called");
+  ok(before(curls, "Hammer Curl", "Leg Curl") && before(curls, "Barbell Curl", "Wrist Curl"), "...with leg and wrist curls only below every biceps curl");
 }
 ok(search("curls").includes("Biceps Curl"), "'curls' finds curls");
 ok(search("db press").includes("Dumbbell Chest Press"), "'db' means dumbbell");
-ok(search("pushup").includes("Push-Up"), "hyphens and spaces don't matter");
+ok(search("pushup").includes("Push-Up") && search("pushups").includes("Push-Up"), "hyphens and spaces don't matter");
+eq(first("pull down"), "Lat Pulldown", "two words typed apart find a name that's one word");
 ok(search("tri pushdown").includes("Tricep Pushdown"), "'tri' means triceps");
 ok(search("squats").includes("Barbell Back Squat"), "'squats' finds squats");
-eq(search("cuban press"), [], "a retired exercise isn't offered");
+ok(!search("cuban press").includes("Cuban Press"), "a retired exercise isn't offered");
 eq(search("zzz"), [], "nonsense finds nothing");
+
+// One wrong or mixed-up word adds possible answers instead of emptying the
+// list (user report, 2026-10-12: "inner hip abduction" found nothing).
+{
+  const hips = search("inner hip abduction");
+  eq(hips[0], "Inner Hip Adduction", "'inner hip abduction' finds the inner one first (one word a typo of its name)");
+  ok(hips.includes("Outer Hip Abduction"), "...and the abduction one, two words of three");
+  ok(!hips.includes("Hip Thrust"), "...but not an exercise with one word of three");
+}
+eq(first("inner thigh"), "Inner Hip Adduction", "what it's known as finds it");
+eq(first("outer thigh"), "Outer Hip Abduction", "...and the other");
+ok(!search("leg press").includes("Front Squat"), "short of every word, a match must be in a name (Front Squat only works the 'Legs')");
+eq(first("lateral rasie"), "Lateral Raise", "a typo still finds it");
+eq(first("dumbel row"), "Dumbbell Row", "...a missing letter too");
+eq(first("benhc press"), "Barbell Bench Press", "...and swapped letters");
+eq(first("squat with dumbbells"), "Dumbbell Squat", "'with' and plurals don't get in the way");
+
+// The closest first: the name as typed, then one ending with it, then
+// starting with it, then the staple lifts.
+eq(first("shrug"), "Shrug", "the exercise called what was typed comes first");
+eq(first("leg press"), "Leg Press", "...over ones holding it");
+ok(before(search("leg press"), "Single Leg Leg Press", "Leg Press Calf Raise"), "a name ending with it (a leg press) beats one starting with it (a calf raise)");
+eq(first("military press"), "Overhead Press", "another of its names as typed comes first");
+ok(before(search("squat"), "Barbell Back Squat", "Band Squat") && !search("squat").slice(0, 5).includes("Squat to Stand"), "'squat' leads with the staple squats, not Squat to Stand");
+eq(first("bench press"), "Barbell Bench Press", "'bench press' finds the flat barbell one first");
+eq(first("t bar row"), "Chest-Supported T-Bar Row", "'t bar row' finds the T-bar row first");
+ok(!search("abs").includes("Outer Hip Abduction"), "shorthand means whole words ('abs' isn't 'abduction')");
+ok(search("abs").includes("Crunch"), "...and 'abs' means the core");
+ok(search("traps")[0] !== "Trap Bar Deadlift" && search("traps").includes("Shrug"), "'traps' means the muscle");
+eq(first("gravitron"), "Assisted Pull-Up", "a machine's brand name finds it");
+eq(first("machine pulldown"), "Lat Pulldown", "a retired exercise's name finds what replaced it");
+ok(search("cardio").includes("Treadmill Run") && search("cardio").includes("Rowing Machine"), "'cardio' finds the cardio machines");
+{
+  // Custom exercises are searched the same way, by name and muscles.
+  const custom = searchDoc("Towel Pull-Apart", [], ["Back"]);
+  ok(rankMatch(parseQuery("towel pull apart")!, custom) !== null && rankMatch(parseQuery("back")!, custom) !== null, "a custom exercise is found by its name and its muscles");
+}
 
 // ─── result ──────────────────────────────────────────────────────────────────
 

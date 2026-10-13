@@ -35,17 +35,20 @@ import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSE
 import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, normaliseSets, getCurrentWeek } from "../../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, type PlannedExercise, normaliseSets, getCurrentWeek } from "../../constants/programs";
 import { programDays, workoutKey } from "../../utils/programDays";
 import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
 import { buildLiveActivityPayload, logWithLockScreenTicks } from "../../utils/liveActivity";
 import { nextSetOf } from "../../utils/nextSet";
 import { firstRows, nextRows, prevFillFor, rowsChanged, setRowKey, withoutSet } from "../../utils/setRows";
-import { ABOVE_REST_ON_KEYBOARD, ABOVE_REST_ON_TAB, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP, TAB_BAR_CLEARANCE } from "../../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, ABOVE_REST_ON_KEYBOARD, ABOVE_REST_ON_TAB, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP, TAB_BAR_CLEARANCE } from "../../constants/floatingBars";
+import { useFieldAboveKeyboard } from "../../hooks/useFieldAboveKeyboard";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { sessionTimeRange, todayYMD } from "../../utils/dates";
-import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type DayOverride } from "../../utils/workout";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, lastSessionOfDay, prevDayScopeFor, swapOrigin, type DayOverride } from "../../utils/workout";
+import { lastTimeCues, lastWhen, planForDay, planOf, sessionChanges, type LastTimeCue, type SessionCue } from "../../utils/exerciseChanges";
+import { LastTimeCueLine, SessionCueLine, SkippedRow } from "../../components/ChangeCue";
 import { keepsHeldSession } from "../../utils/heldSession";
 import { resumeWithPrompt } from "../../utils/programPause";
 import { exerciseSummaryParams } from "../../utils/customExerciseDetails";
@@ -1020,9 +1023,18 @@ interface ExerciseCardProps {
   prevNote?: string;
   hideIndexLabel?: boolean;
   numberBadge?: number;
+  /** What the last session of the day did with this exercise ("Last week: done
+   *  1st"), shown as one line under the name; absent when it did nothing
+   *  different (utils/exerciseChanges.ts). One object per exercise from a
+   *  memoized map, so it keeps its identity across keystrokes. */
+  changeCue?: { cue: LastTimeCue; when: string };
+  /** On today's FINISHED session: what it did with this exercise against its
+   *  plan ("Planned 2nd", "Instead of Cable Fly", "Added"), the Journal's own
+   *  line, since it's the session the Journal shows a minute later. */
+  sessionCue?: SessionCue | null;
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -1103,6 +1115,25 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
             </TouchableOpacity>
           )}
         </View>
+
+        {/* ── What last time did with it ── (or, on today's finished
+            session, what it did) One line, lined up with the name (past the
+            number badge in list mode, flush in focus mode), tucked up under
+            it. Only on a card whose exercise changed. */}
+        {changeCue ? (
+          <LastTimeCueLine
+            cue={changeCue.cue}
+            when={changeCue.when}
+            isDark={isDark}
+            style={[styles.changeCue, numberBadge != null && styles.changeCueBesideBadge]}
+          />
+        ) : sessionCue ? (
+          <SessionCueLine
+            cue={sessionCue}
+            isDark={isDark}
+            style={[styles.changeCue, numberBadge != null && styles.changeCueBesideBadge]}
+          />
+        ) : null}
 
         {/* ── Program notes ── */}
         {exercise.programNotes ? (
@@ -1539,7 +1570,11 @@ export default function WorkoutScreen() {
   // Finish writes them onto its CompletedExercise: `swappedFrom` (see
   // changeExercise) and `programExerciseId`, which program exercise it is, set
   // where the session is built from the program (see withProgramIds).
-  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: SessionExercise[]; programId?: string; dayId?: string } | null>(null);
+  // `plan` is the program day as the session was set up from it, its exercises
+  // in order (CompletedWorkout.plan): saved with the session, it's what the
+  // Journal's "Planned 2nd" and next week's "Last week:" lines read against.
+  // It rides in the draft with the rest, so a restored session keeps it.
+  const [workoutInfo, setWorkoutInfo] = useState<{ name: string; exercises: SessionExercise[]; programId?: string; dayId?: string; plan?: PlannedExercise[] } | null>(null);
   const [log, setLog] = useState<WorkoutLog>({});
   // Latest committed log for reads inside the stable set-handlers below. Updated
   // in an effect (post-commit), so handlers fired from user events always see
@@ -1691,6 +1726,14 @@ export default function WorkoutScreen() {
     });
     return { exercises, log: lockedLog };
   }, [todaysCompletedWorkout, isKg]);
+  // What today's finished session did with its plan, read the way its Journal
+  // page reads it (utils/exerciseChanges.ts): a line under each card it moved,
+  // swapped or added, and a dashed row where it left an exercise out (user
+  // decision, 2026-10-14). Index-aligned with lockedData's cards.
+  const lockedChanges = useMemo(
+    () => (todaysCompletedWorkout ? sessionChanges(todaysCompletedWorkout) : null),
+    [todaysCompletedWorkout],
+  );
 
   // ── Timer modal ──────────────────────────────────────────────────────────────
   // The interval Timer / Stopwatch and all its state live in <IntervalTimerModal/>;
@@ -1837,7 +1880,13 @@ export default function WorkoutScreen() {
         }
       }
       if (found && !keep) {
-        setWorkoutInfo(workout ? { name: workout.name, exercises: withProgramIds(workout.exercises), programId: workout.programId, dayId: workout.dayId } : null);
+        setWorkoutInfo(workout ? {
+          name: workout.name,
+          exercises: withProgramIds(workout.exercises),
+          programId: workout.programId,
+          dayId: workout.dayId,
+          ...(workout.dayId ? { plan: planOf(workout.exercises) } : {}),
+        } : null);
         if (workout) {
           setIsometricExIds(new Set(workout.exercises.filter(e => e.isIsometric).map(e => e.id)));
           setLog(initLog(workout.exercises));
@@ -2293,7 +2342,7 @@ export default function WorkoutScreen() {
     // the one picked starts in its program's order, unshaped
     // (utils/heldSession.ts).
     if (!startedRef.current) clearDraft();
-    setWorkoutInfo({ name: day.label, exercises, programId: src?.id, dayId: day.dayId });
+    setWorkoutInfo({ name: day.label, exercises, programId: src?.id, dayId: day.dayId, ...(day.dayId ? { plan: planOf(exercises) } : {}) });
     setLog(initLog(exercises));
     // Its holds marked as the program marks them, as a day built on load is.
     setIsometricExIds(new Set(exercises.filter(e => e.isIsometric).map(e => e.id)));
@@ -2362,6 +2411,8 @@ export default function WorkoutScreen() {
       // The cycle slot this session was performed on. Absent for a free workout
       // (no slot to point at); Progress falls back to the name for those.
       dayId: workoutInfo.dayId,
+      // What the program planned for the day, as the session was set up.
+      ...(workoutInfo.plan ? { plan: workoutInfo.plan } : {}),
       durationSeconds: elapsedSeconds,
       // sessionNotes always saves whatever text was written — opening, leaving
       // open, or ticking the notes card all persist it. It's only dropped when
@@ -2599,6 +2650,26 @@ export default function WorkoutScreen() {
     () => buildPrevSessionNote(prevHistory, undefined, prevDayScope),
     [prevHistory, prevDayScope],
   );
+  // What that same last session did with each of today's exercises: one line
+  // under the name of each card it moved, swapped or skipped ("Last week: done
+  // 1st"), by session exercise id (utils/exerciseChanges.ts). Read against the
+  // plan today's session was set up from, so a day changed in the builder since
+  // says nothing until it's been done once as it is now. One object per card,
+  // rebuilt only when the session or history changes, never on typing.
+  const changeCueById = useMemo(() => {
+    const out: Record<string, { cue: LastTimeCue; when: string }> = {};
+    if (!workoutInfo || !prevDayScope) return out;
+    const last = lastSessionOfDay(prevHistory, undefined, prevDayScope);
+    const src = workoutInfo.programId ? allPrograms.find(p => p.id === workoutInfo.programId) : undefined;
+    const cues = lastTimeCues(last, workoutInfo.plan ?? planForDay(src, workoutInfo.dayId));
+    if (!last) return out;
+    const when = lastWhen(last.date, effectiveToday);
+    for (const ex of workoutInfo.exercises) {
+      const cue = ex.programExerciseId ? cues[ex.programExerciseId] : undefined;
+      if (cue) out[ex.id] = { cue, when };
+    }
+    return out;
+  }, [workoutInfo, prevDayScope, prevHistory, allPrograms, effectiveToday]);
   // Pre-formatted "prev" hint strings per session exercise, by its id: the
   // card's placeholders and checkbox copy, and the Live Activity, all read this
   // one map. Memoized so each card's `prevSets` prop keeps its identity across
@@ -2625,35 +2696,25 @@ export default function WorkoutScreen() {
     setHasPrev(prevFn !== null);
   }, []);
 
-  // While a rest runs, the rest timer rides above the keyboard's tools
-  // (constants/floatingBars.ts), with focus mode's ‹ › on top of it, right
-  // where the field being typed into can sit. When it would be under them,
-  // the list scrolls it clear, and only that far: on a new field (a tap, the
-  // ‹ › keys), and as the keyboard opens or a rest starts. Only a field in the
-  // list, which the cards report as it focuses: the session notes card lifts
-  // itself (notesLift), and a sheet's field isn't in this list at all.
-  const listFieldRef = useRef<ReturnType<typeof TextInput.State.currentlyFocusedInput> | null>(null);
-  const restCoverRef = useRef({ kbHeight: 0, resting: false, winH, clear: ABOVE_REST_ON_KEYBOARD });
-  const clearFieldOfRest = useCallback(() => {
-    const { kbHeight: kb, resting, winH: screenH, clear } = restCoverRef.current;
-    const field = TextInput.State.currentlyFocusedInput();
-    if (Platform.OS !== "ios" || kb === 0 || !resting || !field || field !== listFieldRef.current) return;
-    field.measureInWindow((_x, y, _w, h) => {
-      if (y + h > screenH - kb - clear) {
-        scrollRef.current?.scrollResponderScrollNativeHandleToKeyboard(field, clear, true);
-      }
-    });
-  }, []);
-  useEffect(() => {
-    const clear = ABOVE_REST_ON_KEYBOARD + (focusMode ? FOCUS_NAV_BTN + BAR_STACK_GAP : 0);
-    restCoverRef.current = { kbHeight, resting: restBannerActive, winH, clear };
-    clearFieldOfRest();
-  }, [kbHeight, restBannerActive, winH, focusMode, clearFieldOfRest]);
+  // The field being typed into ends clear of the keyboard and what floats on
+  // it (hooks/useFieldAboveKeyboard.ts): the keyboard's tools, and while a
+  // rest runs the rest timer riding above them, with focus mode's ‹ › on top
+  // of it. It used to be scrolled clear only during a rest, so with none
+  // running, notes low on the page stayed behind the keyboard (user report,
+  // 2026-10-13). Only a field in the list, which the cards report as it
+  // focuses: the session notes card lifts itself (notesLift), and a sheet's
+  // field isn't in this list at all.
+  const listFieldFocused = useFieldAboveKeyboard(
+    scrollRef,
+    kbHeight,
+    restBannerActive
+      ? ABOVE_REST_ON_KEYBOARD + (focusMode ? FOCUS_NAV_BTN + BAR_STACK_GAP : 0)
+      : ABOVE_KEYBOARD_TOOLS,
+  );
   const handleListFieldFocus = useCallback((fn: (() => void) | null, prevFn: (() => void) | null) => {
     handleInputFocus(fn, prevFn);
-    listFieldRef.current = TextInput.State.currentlyFocusedInput() ?? null;
-    clearFieldOfRest();
-  }, [handleInputFocus, clearFieldOfRest]);
+    listFieldFocused();
+  }, [handleInputFocus, listFieldFocused]);
 
   // ── Lock-screen Live Activity ─────────────────────────────────────────────
   // Once today's session has STARTED (shaping it beforehand isn't starting it),
@@ -3178,25 +3239,34 @@ export default function WorkoutScreen() {
               </BounceButton>
             </View>
 
-            {/* Locked exercise cards */}
+            {/* Locked exercise cards, with a Skipped row in the place of each
+                planned exercise the session left out */}
             {lockedData.exercises.map((exercise, i) => (
-              <ExerciseCard
-                key={exercise.id}
-                exercise={exercise as Exercise}
-                exIndex={i}
-                totalExercises={lockedData.exercises.length}
-                exLog={lockedData.log[exercise.id] ?? { warmup: [], working: [], notes: "" }}
-                isDark={isDark}
-                isLocked
-                hideIndexLabel
-                numberBadge={i + 1}
-                onUpdateSet={() => {}} onToggleDone={() => {}} onAutoTick={() => {}}
-                exNotes={lockedData.log[exercise.id]?.notes ?? ""}
-                onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
-                onOpenReorder={() => {}} onChangeExercise={() => {}}
-                onRemoveExercise={() => {}} isIsometric={false} onToggleIsometric={() => {}}
-                onToggleSetType={() => {}} onInputFocus={() => {}} activeSetFlatIdx={null}
-              />
+              <React.Fragment key={exercise.id}>
+                {lockedChanges?.skipped.filter(s => s.before === i).map(s => (
+                  <SkippedRow key={s.id} name={s.name} isDark={isDark} style={styles.skippedGap} />
+                ))}
+                <ExerciseCard
+                  exercise={exercise as Exercise}
+                  exIndex={i}
+                  totalExercises={lockedData.exercises.length}
+                  exLog={lockedData.log[exercise.id] ?? { warmup: [], working: [], notes: "" }}
+                  isDark={isDark}
+                  isLocked
+                  hideIndexLabel
+                  numberBadge={i + 1}
+                  sessionCue={lockedChanges?.cues[i]}
+                  onUpdateSet={() => {}} onToggleDone={() => {}} onAutoTick={() => {}}
+                  exNotes={lockedData.log[exercise.id]?.notes ?? ""}
+                  onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
+                  onOpenReorder={() => {}} onChangeExercise={() => {}}
+                  onRemoveExercise={() => {}} isIsometric={false} onToggleIsometric={() => {}}
+                  onToggleSetType={() => {}} onInputFocus={() => {}} activeSetFlatIdx={null}
+                />
+              </React.Fragment>
+            ))}
+            {lockedChanges?.skipped.filter(s => s.before === lockedData.exercises.length).map(s => (
+              <SkippedRow key={s.id} name={s.name} isDark={isDark} style={styles.skippedGap} />
             ))}
 
           </>
@@ -3250,6 +3320,7 @@ export default function WorkoutScreen() {
                   prevSets={prevHintsById[exercise.id] ?? EMPTY_PREV}
                   hideIndexLabel
                   numberBadge={focusMode ? undefined : i + 1}
+                  changeCue={changeCueById[exercise.id]}
                   onToggleIsometric={toggleIsometricEx}
                 />
               </CollapsibleCard>
@@ -3463,6 +3534,7 @@ export default function WorkoutScreen() {
         <ExercisePicker
           visible
           subtitle="CHANGE EXERCISE"
+          changing={workoutInfo?.exercises.find(e => e.id === changingExId)?.name ?? ""}
           customExercises={customExercises}
           onSelectMultiple={names => { changeExercise(changingExId, names[0]); setChangingExId(null); }}
           onDeleteCustom={deleteCustomExercise}
@@ -3667,6 +3739,12 @@ const styles = StyleSheet.create({
   exNumText:    { fontFamily: FontFamily.bold, fontSize: 13 },
   exTitleBlock: { flex: 1, justifyContent: "center", gap: 6 },
   exNumLabel:   { fontFamily: FontFamily.semibold, fontSize: 13 },
+  // The card's gap is 10; the cue sits 4 under the name, as the design has it.
+  changeCue:    { marginTop: -6 },
+  // Past the number badge (32) and the header's gap (10), under the name.
+  changeCueBesideBadge: { paddingLeft: 42 },
+  // A Skipped row on the finished session keeps the cards' own gap.
+  skippedGap:   { marginBottom: EX_CARD_GAP },
   exName:       { fontFamily: FontFamily.bold, fontSize: 22, flex: 1 },
   exNotesRow:    { borderTopWidth: 1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
   // The notes box itself — label, input, Reuse/Undo chip — is

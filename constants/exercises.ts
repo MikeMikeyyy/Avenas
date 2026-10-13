@@ -83,4 +83,8 @@ export type Exercise = {
   formerNames?: string[];
   /** Extra words search matches: other common names and the muscles worked. */
   searchTerms?: string[];
+  /** A staple lift most people mean by a word: in a search it wins a tie with
+   *  an exercise just as close ("squat" puts Barbell Back Squat above Band
+   *  Squat; utils/exerciseSearch.ts). */
+  common?: boolean;
 };

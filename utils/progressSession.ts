@@ -33,7 +33,7 @@ export type ProgressSelections = {
   expandedProgram: string | null;
   /** The day row open in the Exercise Progress list (ProgramDayRef.key). */
   expandedDay: string | null;
-  /** The exercise chart's metric (Heaviest / Best Set / Volume / Reps). */
+  /** The exercise chart's tab (Strength / Sets / Volume). */
   exerciseMetric: ExerciseMetricKey;
 };
 
@@ -45,7 +45,7 @@ export const DEFAULT_PROGRESS_SELECTIONS: ProgressSelections = {
   selectedExercise: null,
   expandedProgram: null,
   expandedDay: null,
-  exerciseMetric: "topWeight",
+  exerciseMetric: "strength",
 };
 
 const sessions = new Map<string, ProgressSelections>();

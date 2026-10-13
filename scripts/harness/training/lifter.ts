@@ -19,8 +19,9 @@ import { getJSON, removeKey, setJSON } from "../../../utils/storage";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY,
   normaliseSets, programFinishDate,
-  type CompletedExercise, type CompletedWorkout, type Exercise, type SavedProgram,
+  type CompletedExercise, type CompletedWorkout, type Exercise, type PlannedExercise, type SavedProgram,
 } from "../../../constants/programs";
+import { planOf } from "../../../utils/exerciseChanges";
 import { LB_PER_KG, UNIT_KEY, parseWeightToKg, trimNumber } from "../../../utils/units";
 import { addDaysYMD, formatStoredDate, toYMD } from "../../../utils/dates";
 import { getEffectiveToday, getWorkoutForDate, resolveWorkoutForDate, swapOrigin, type DayOverride } from "../../../utils/workout";
@@ -72,6 +73,10 @@ export type LedgerSession = {
   via: "workout" | "journal";
   /** The order sessions were saved in. */
   savedSeq: number;
+  /** The program day as the session was set up from it, in order: what the
+   *  lifter was given before doing anything to it. Absent for a free or custom
+   *  workout. */
+  plan?: PlannedExercise[];
 };
 
 /** One run of a program: from activation to completion or shelving. */
@@ -91,6 +96,8 @@ export type BeforeLog = {
   workout: { name: string; programId?: string; dayId?: string };
   cards: SessionCard[];
   isKg: boolean;
+  /** Today's plan for the day, as the Workout tab set the session up. */
+  plan?: PlannedExercise[];
 };
 
 export type AfterSave = {
@@ -526,6 +533,21 @@ export class Lifter {
       const extra = this.pick(EXTRA_LIFTS.filter(n => !cards.some(c => c.name === n)));
       if (extra) cards.push({ name: extra, kind: LIFTS[extra].kind, template: null });
     }
+    // A machine taken: one exercise done first (Move exercise). Or one left
+    // out (Remove). What the Journal's "Planned 2nd" and "Skipped" are about.
+    const reordered: string[] = [];
+    if (cards.length > 2 && this.chance(0.05)) {
+      const [moved] = cards.splice(this.between(1, cards.length - 1), 1);
+      cards.unshift(moved);
+      reordered.push(`did ${moved.name} first`);
+    }
+    if (cards.length > 2 && this.chance(0.03)) {
+      const [left] = cards.splice(this.between(1, cards.length - 1), 1);
+      reordered.push(`skipped ${left.name}`);
+    }
+    // The plan as the Workout tab set the session up: the day's exercises, in
+    // the program's order (workout.tsx `planOf`, saved as CompletedWorkout.plan).
+    const plan = day.dayId ? planOf(day.exercises) : undefined;
     const tab = await this.workoutTab();
     const history = await this.readHistory();
     this.hooks.beforeLog?.({
@@ -535,6 +557,7 @@ export class Lifter {
       workout: { name: day.name, programId: day.programId, dayId: day.dayId },
       cards: cards.map(({ template: _t, ...c }) => c),
       isKg: this.unit === "kg",
+      plan,
     });
 
     const exercises: LedgerExercise[] = cards.map(c => ({
@@ -558,9 +581,10 @@ export class Lifter {
       dayId: day.dayId,
       exercises,
       sessionNote: this.chance(0.2) ? this.pick(["good session", "tired today", "gym was packed"]) : "",
+      plan,
     });
     for (const c of cards) if (!c.swappedFrom) this.progress(c.name);
-    this.note(date, `logs ${day.name}${day.dayId ? ` (${day.dayId})` : ""} on ${tab.today}, done ${hm(finish)}${cards.some(c => c.swappedFrom) ? `, swapped ${cards.filter(c => c.swappedFrom).map(c => `${c.swappedFrom}→${c.name}`).join(", ")}` : ""}`);
+    this.note(date, `logs ${day.name}${day.dayId ? ` (${day.dayId})` : ""} on ${tab.today}, done ${hm(finish)}${cards.some(c => c.swappedFrom) ? `, swapped ${cards.filter(c => c.swappedFrom).map(c => `${c.swappedFrom}→${c.name}`).join(", ")}` : ""}${reordered.length ? `, ${reordered.join(", ")}` : ""}`);
   }
 
   /** The Workout tab's custom workout: named, exercises picked, maybe added
@@ -623,6 +647,8 @@ export class Lifter {
       dayId: day.dayId,
       exercises,
       sessionNote: "",
+      // log-workout reads the plan off the program as it saves (planForDay).
+      plan: day.dayId ? planOf(day.exercises) : undefined,
     });
     for (const e of day.exercises) this.progress(e.name);
     this.note(toYMD(new Date()), `logs ${day.name} for ${date} from the Journal${withTime ? `, done ${hm(end)}${late ? " that night" : ""}` : " (no time)"}`);
@@ -640,6 +666,7 @@ export class Lifter {
     dayId?: string;
     exercises: LedgerExercise[];
     sessionNote: string;
+    plan?: PlannedExercise[];
   }) {
     const isKg = this.unit === "kg";
     const exercises: CompletedExercise[] = s.exercises.map(e => ({
@@ -672,6 +699,7 @@ export class Lifter {
       workoutName: s.workoutName,
       programId: s.programId,
       dayId: s.dayId,
+      ...(s.plan ? { plan: s.plan } : {}),
       durationSeconds,
       sessionNotes: s.sessionNote.trim() ? s.sessionNote : undefined,
       exercises,
@@ -712,6 +740,7 @@ export class Lifter {
       sessionNote: s.sessionNote,
       via: s.via,
       savedSeq: this.savedSeq++,
+      ...(s.plan ? { plan: s.plan } : {}),
     };
     this.sessions.push(ledger);
     this.hooks.afterSave?.({ lifter: this, saved: completed, ledger, prior });

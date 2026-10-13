@@ -15,6 +15,9 @@
 // In each, every action a person can take from what's on their screen:
 // accept, remove, archive, restore, delete, send an update, send back, take
 // back, withdraw, and a client deleting / archiving / restoring their own copy.
+// And a phone restored from its backup partway through (Cara's, and in the
+// re-sends Tara's too: scripts/harness/restore.ts, the app's own lib/cloud.ts),
+// which must leave every program the one it was, under its own id.
 // scripts/harness/explore.ts plays each flow out every way it can go:
 //
 //   every sequence of actions up to DEPTH long, checked at its end against a

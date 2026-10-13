@@ -47,3 +47,8 @@ scripts/exercise-source/*
 # generated native folders
 /ios
 /android
+
+# Gradle's caches and build output in a local module's android/ folder (an
+# editor's Java/Gradle tooling makes them on opening one)
+.gradle/
+modules/*/android/build/

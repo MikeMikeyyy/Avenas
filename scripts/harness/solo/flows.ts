@@ -22,7 +22,7 @@ import {
 import { addDaysYMD, formatStoredDate, toYMD } from "../../../utils/dates";
 import { getEffectiveToday, getWorkoutForDate, normalizeDriftDates, resolveWorkoutForDate, type DayOverride } from "../../../utils/workout";
 import { applyRestDay, clearRestDay, type RestDayOutcome } from "../../../utils/restDay";
-import { autoPauseIfIdle, pauseProgram, resumeWithPrompt } from "../../../utils/programPause";
+import { AUTO_PAUSE_AFTER_DAYS, autoPauseIfIdle, idleDays, pauseProgram, resumeWithPrompt } from "../../../utils/programPause";
 import { activateProgram, completeProgram, deactivateProgram, programsAfterPastLog, setWorkoutDay } from "../../../utils/programLifecycle";
 import { archiveProgram, restoreProgram } from "../../../utils/programArchive";
 import { buildWeekSchedule, weekStartFor } from "../../../utils/weekSchedule";
@@ -606,6 +606,13 @@ const programSteps: Step[] = [
       const now = activeOf(after)!;
       const issues: string[] = [];
       if (now.pausedAt) issues.push("still on hold after resuming");
+      // The app opening again straight after must leave it running: a resume
+      // the same day as the week-idle auto-pause left nothing to count from,
+      // and it held itself again every time the app opened (user report,
+      // 2026-10-13).
+      if (idleDays(now, after.history.map(w => w.date)) >= AUTO_PAUSE_AFTER_DAYS) {
+        issues.push(`resumed, it would hold itself again the next time the app opened (${idleDays(now, after.history.map(w => w.date))} idle days)`);
+      }
       // The weeks didn't count during the hold, so it picks up in the week the
       // hold began in, on the program's timeline as it is now (a session logged
       // from the Journal meanwhile can have moved its start back).

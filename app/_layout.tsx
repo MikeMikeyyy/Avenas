@@ -28,6 +28,7 @@ import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
 import { runDayIdMigrationIfNeeded } from "../utils/dayIdMigration";
 import { runHoldMigrationIfNeeded } from "../utils/holdMigration";
 import { runExerciseRenames } from "../utils/exerciseRenameMigration";
+import { linkAcceptedCopies } from "../utils/trainerStore";
 import { autoPauseIfIdle } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 
@@ -197,13 +198,16 @@ export default function RootLayout() {
   // pre-migration data through the new kg-canonical display lens, read a
   // program day before it has a stable id, or count a plank's seconds as reps.
   // Then the catalogue's exercise renames, on every launch (programs and
-  // favourites only; utils/exerciseRenameMigration.ts).
+  // favourites only; utils/exerciseRenameMigration.ts), and each accepted copy's
+  // origin learnt from this phone's share links while they're here, so the
+  // next backup carries it (utils/trainerStore.ts linkAcceptedCopies).
   const [migrated, setMigrated] = useState(false);
   useEffect(() => {
     runWeightUnitMigrationIfNeeded()
       .then(runDayIdMigrationIfNeeded)
       .then(runHoldMigrationIfNeeded)
       .then(runExerciseRenames)
+      .then(linkAcceptedCopies)
       .finally(() => setMigrated(true));
   }, []);
 

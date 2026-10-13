@@ -104,7 +104,22 @@ export type CompletedWorkout = {
    *                   (see workoutMatchesDay in utils/progressStats.ts).
    */
   dayId?: string;
+  /**
+   * What the program planned for that day when the session was saved: its
+   * exercises, in order, each by its `id` in the day's WorkoutMap (the place a
+   * CompletedExercise's `programExerciseId` points at) and its name. A snapshot
+   * like `exercises`: editing the program later never changes it, and neither
+   * does editing the session in the Journal (it's what was PLANNED). It's what
+   * a session's "Planned 2nd" and "Skipped" are read against, and what tells
+   * the Workout tab whether the day has changed in the builder since
+   * (utils/exerciseChanges.ts). Absent on a free workout, a custom one and every
+   * session saved before it existed. Synced as `workouts.plan` (migration 0046).
+   */
+  plan?: PlannedExercise[];
 };
+
+/** One exercise of a session's plan (CompletedWorkout.plan). */
+export type PlannedExercise = { id: string; name: string };
 
 export type ProgramSet = {
   type: "warmup" | "working";
@@ -279,6 +294,23 @@ export type SavedProgram = {
    * is never archived (utils/programArchive.ts). Synced (migration 0037).
    */
   archivedAt?: string;
+  /**
+   * On a copy accepted from someone's send: whose program it is, as
+   * "<sender uid>|<sender's program id>" (the share row's sender and
+   * sender_program_id). An update or a re-send of that program lands on this
+   * copy by it (utils/trainerStore.ts copyToUpdate), restored from a backup or
+   * not: the phone's own record of which send made which copy is cleared by a
+   * restore, and without this the next accept added a second copy (user
+   * report, 2026-10-13). Each load of the shares also links the accepted sends
+   * back to it from this (relinkAcceptedShares). On a copy a trainer's review
+   * made because the original was gone, it's the review's: the user's own uid
+   * and the original's id, so the next accept of that review lands here too.
+   * Absent on the user's own programs, on a duplicate, and on copies accepted
+   * before it that the launch backfill couldn't link (linkAcceptedCopies).
+   * Never sent on: a snapshot leaving the phone drops it. Synced (migration
+   * 0044).
+   */
+  shareOrigin?: string;
   trainingDays: number;
   cycleDays: number;
   cyclePattern: string[];

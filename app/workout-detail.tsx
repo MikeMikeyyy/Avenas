@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   Modal,
   Easing,
   Keyboard,
+  KeyboardAvoidingView,
   Platform,
 } from "react-native";
 import Reanimated, {
@@ -39,6 +40,10 @@ import WorkoutAchievements from "../components/WorkoutAchievements";
 import { stampSession } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT } from "../constants/theme";
 import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import { SessionCueLine, SkippedRow } from "../components/ChangeCue";
+import { sessionChanges } from "../utils/exerciseChanges";
+import { useFieldAboveKeyboard } from "../hooks/useFieldAboveKeyboard";
 import {
   WORKOUT_HISTORY_KEY,
   WORKOUT_DATES_KEY,
@@ -505,12 +510,20 @@ export default function WorkoutDetailScreen() {
   const prevFnRef = useRef<(() => void) | null>(null);
   const inputRefs = useRef<Record<string, TextInput | null>>({});
 
+  // Every field on this page is in the list (session notes, names, sets,
+  // exercise notes), so each one that focuses is scrolled clear of the keyboard
+  // and its tools (hooks/useFieldAboveKeyboard.ts), as on the Workout tab.
+  // Editing notes low on the page left them behind the keyboard (user report,
+  // 2026-10-13).
+  const scrollRef = useRef<ScrollView>(null);
+  const fieldFocused = useFieldAboveKeyboard(scrollRef, kbHeight, ABOVE_KEYBOARD_TOOLS);
   const handleInputFocus = useCallback((nextFn: (() => void) | null, prevFn: (() => void) | null = null) => {
     setHasNext(nextFn !== null);
     setHasPrev(prevFn !== null);
     nextFnRef.current = nextFn;
     prevFnRef.current = prevFn;
-  }, []);
+    fieldFocused();
+  }, [fieldFocused]);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
@@ -778,6 +791,14 @@ export default function WorkoutDetailScreen() {
   }, []);
 
   const exercises = workout ? (isEditing ? editedExercises : exToDisplay(workout.exercises)) : [];
+  // What the session did with its program day, read against the plan it saved
+  // (utils/exerciseChanges.ts): a line under each exercise it moved, swapped or
+  // added, and a dashed row where it left one out. Off the list as shown, so an
+  // edit reads straight away; the skipped rows wait until the edit is done,
+  // since the list itself is what's being changed then.
+  const changes = workout ? sessionChanges({ dayId: workout.dayId, plan: workout.plan, exercises }) : null;
+  const skippedBefore = (i: number) =>
+    !isEditing && changes ? changes.skipped.filter(s => s.before === i) : [];
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -833,7 +854,12 @@ export default function WorkoutDetailScreen() {
         )}
       </View>
 
+      {/* The list shrinks above the keyboard (so a field low on the page has
+          room to scroll up to), and the field itself is scrolled clear by
+          handleInputFocus, as on the Workout tab and the Journal's log. */}
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + (isEditing ? 100 : 40), paddingHorizontal: 20 }}
@@ -938,9 +964,11 @@ export default function WorkoutDetailScreen() {
             {exercises.map((ex, ei) => {
               let workingCounter = 0;
               const isIsometric = editedIsIsometric[ei] ?? false;
+              const cue = changes?.cues[ei] ?? null;
               return (
+                <Fragment key={editedKeys[ei] ?? ei}>
+                {skippedBefore(ei).map(s => <SkippedRow key={s.id} name={s.name} isDark={isDark} style={styles.skippedGap} />)}
                 <CollapsibleCard
-                  key={editedKeys[ei] ?? ei}
                   isCollapsing={collapsingIndices.has(ei)}
                   onCollapsed={() => {
                     removeExercise(ei);
@@ -966,6 +994,7 @@ export default function WorkoutDetailScreen() {
                         scrollEnabled={false}
                       />
                     </View>
+                    {cue ? <SessionCueLine cue={cue} isDark={isDark} style={styles.changeCue} /> : null}
 
                     {/* Column headers */}
                     <View style={[styles.colHeaderRow, { borderBottomColor: divider }]}>
@@ -1185,12 +1214,15 @@ export default function WorkoutDetailScreen() {
                   </View>
                 </NeuCard>
                 </CollapsibleCard>
+                </Fragment>
               );
             })}
+            {skippedBefore(exercises.length).map(s => <SkippedRow key={s.id} name={s.name} isDark={isDark} style={styles.skippedGap} />)}
 
           </>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Add an exercise to this logged workout — the same floating round green
           + used by the workout / log-workout screens, pinned bottom-left while
@@ -1214,6 +1246,7 @@ export default function WorkoutDetailScreen() {
       <ExercisePicker
         visible={changingExIdx !== null || addingExercise}
         subtitle={addingExercise ? "ADD EXERCISES" : "CHANGE EXERCISE"}
+        changing={addingExercise ? undefined : (changingExIdx !== null ? editedExercises[changingExIdx]?.name : undefined) ?? ""}
         customExercises={customExercises}
         onSelectMultiple={names => {
           if (addingExercise) {
@@ -1303,6 +1336,11 @@ const styles = StyleSheet.create({
   exNumInner:  { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
   exNumText:   { fontFamily: FontFamily.bold, fontSize: 13 },
   exName: { fontFamily: FontFamily.bold, fontSize: 22 },
+  // Under the name, past the number badge (32 + the header's gap of 10), 4
+  // below it: the header's margin is 12.
+  changeCue:   { marginTop: -8, marginBottom: 12, paddingLeft: 42 },
+  // A Skipped row keeps the gap the exercise cards keep.
+  skippedGap:  { marginBottom: 20 },
 
   colHeaderRow: { flexDirection: "row", alignItems: "center", paddingBottom: 6, paddingHorizontal: 4, borderBottomWidth: 1 },
   colText:      { fontFamily: FontFamily.semibold, fontSize: 11, textAlign: "center", letterSpacing: 0.4 },

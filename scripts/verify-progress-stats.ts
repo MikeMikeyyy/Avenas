@@ -42,8 +42,11 @@ import {
 } from "../utils/progressStats";
 import { historicalDays, markDayRefLabels, programDays, programDaysWithExtras } from "../utils/programDays";
 import {
-  CHART_HEIGHT, GIFTED_TOP_PAD, changeFromPrevious, chartChange, dotY, exerciseChartAxis, exerciseChartLabels, fmtChange,
-  percentChange, plottedPoints,
+  BAR_WIDTH, BLOCK_GAP, CHART_HEIGHT, LABEL_H, LABEL_INK_DOWN, LABEL_INK_UP, LINE_STROKE, PLOT_TOP, SESSION_SPACING,
+  axisLoadStep, barAxis, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, chartChange, dotY, drawsOn,
+  exerciseChartAxis, exerciseChartGeometry, fmtChange, isExerciseMetric, linePathD, loadStep, percentChange, setStacks,
+  setsTotal, slotX, sparkleD, strengthDots, strengthLabel, strengthLabelInkWidth, visibleSlots, volumeBars, windowAxis,
+  type StrengthDot,
 } from "../utils/exerciseChartLayout";
 import type { ExerciseDataPoint } from "../constants/progress";
 import type { CompletedWorkout, CompletedSet, ProgramDayRef, SavedProgram } from "../constants/programs";
@@ -388,6 +391,18 @@ if (observesDST) {
   approx(p2.e1rm, 100 * (1 + 5 / 30), "exHistory: e1rm = the session's best Epley estimate");
   eq([p2.e1rmWeight, p2.e1rmReps], [100, 5], "exHistory: e1rm remembers the set it came from");
   eq(pts[0].e1rm, 80 * (1 + 5 / 30), "exHistory: one set, its own estimate");
+  // The Sets tab's blocks: every working set in the order done.
+  eq(p2.sets, [{ weight: 100, reps: 3 }, { weight: 90, reps: 8 }, { weight: 100, reps: 5 }], "exHistory: a session's sets, in order");
+  eq(setsTotal(p2), p2.totalReps, "exHistory: the sets add up to the session's reps");
+}
+{
+  // Warm-ups and sets not done stay out of the blocks; a bodyweight set is in,
+  // with no weight; the same exercise twice in a day is one session's sets.
+  const pts = collectExerciseHistory([workout({ id: "x", exercises: [
+    ex("Dips", [set("20", "5", { type: "warmup" }), set("", "12"), set("10", "8", { done: false })]),
+    ex("Dips", [set("10", "9")]),
+  ] })], "Dips");
+  eq(pts[0].sets, [{ weight: 0, reps: 12 }, { weight: 10, reps: 9 }], "exHistory: sets skip warm-ups and unticked, keep bodyweight, join both entries");
 }
 {
   // Est. 1RM and Heaviest part ways when the reps change: the same 100 kg for
@@ -408,6 +423,8 @@ if (observesDST) {
   eq(pts.map(p => [p.workoutId, p.totalReps, p.topWeight, p.sessionVolume]), [["bw", 18, 0, 0]], "exHistory: a bodyweight session is a point with its reps and no weight");
   const prs = computePRs(pts, hist, "Pullups");
   eq([prs.heaviest, prs.bestSetVolume, prs.bestSessionVolume, prs.oneRepMax], [null, null, null, null], "PR: a bodyweight session holds no weight record");
+  // ...but its reps are a record: a pull-up's is the most done in a set.
+  eq([prs.mostReps?.value, prs.mostReps?.weight, prs.mostReps?.setIndex], [10, 0, 0], "PR most reps: a bodyweight set counts");
   // A timed hold: its "reps" are seconds, so they're not reps or volume, and
   // its chart point says it's a hold (found by verify-training-months).
   const plank = workout({ id: "pl", exercises: [
@@ -419,6 +436,10 @@ if (observesDST) {
   const plankPts = collectExerciseHistory([plank], "Plank");
   eq(plankPts.map(p => [p.isHold, p.totalReps, p.topWeight, p.sessionVolume, p.e1rm]), [[true, 105, 10, 0, 0]], "holds: the chart's point is seconds held, its load, and no volume or 1RM");
   eq(computePRs(plankPts, [plank], "Plank").oneRepMax, null, "holds: no rep max from seconds");
+  {
+    const longest = computePRs(plankPts, [plank], "Plank").mostReps;
+    eq([longest?.value, longest?.hold, longest?.setIndex], [60, true, 0], "holds: the reps record is the longest hold, in seconds");
+  }
   // Mixed: a weighted session and a bodyweight one. Heaviest is the weighted.
   const mixed = [...hist, workout({ id: "w10", date: "2026-05-08", completedAt: "2026-05-08T10:00:00.000Z", exercises: [ex("Pullups", [set("10", "6")])] })];
   eq(computePRs(collectExerciseHistory(mixed, "Pullups"), mixed, "Pullups").heaviest?.workoutId, "w10", "PR: heaviest skips the bodyweight session");
@@ -454,6 +475,19 @@ if (observesDST) {
   approx(prs.oneRepMax!.value, 100 * (1 + 5 / 30), "PR 1RM: Epley picks the best single set across sessions");
   eq(prs.oneRepMax?.weight, 100, "PR 1RM: source set weight");
   eq(prs.oneRepMax?.reps, 5, "PR 1RM: source set reps");
+  // Most reps: 90×8 in p1, the set itself (its index for the gold block).
+  eq([prs.mostReps?.value, prs.mostReps?.weight, prs.mostReps?.workoutId, prs.mostReps?.setIndex], [8, 90, "p1", 1], "PR most reps: the set with the most reps");
+}
+{
+  // Most reps on a tie: the heaviest set that did them, never the first light
+  // one; then the earliest.
+  const hist = [
+    workout({ id: "a", date: "2026-05-01", completedAt: "2026-05-01T10:00:00.000Z", exercises: [ex("Ext", [set("50", "12"), set("50", "12")])] }),
+    workout({ id: "b", date: "2026-05-08", completedAt: "2026-05-08T10:00:00.000Z", exercises: [ex("Ext", [set("77", "10"), set("77", "12")])] }),
+    workout({ id: "c", date: "2026-05-15", completedAt: "2026-05-15T10:00:00.000Z", exercises: [ex("Ext", [set("77", "12")])] }),
+  ];
+  const prs = computePRs(collectExerciseHistory(hist, "Ext"), hist, "Ext");
+  eq([prs.mostReps?.workoutId, prs.mostReps?.weight, prs.mostReps?.setIndex], ["b", 77, 1], "PR most reps: a tie goes to the heaviest, then the earliest");
 }
 {
   // Lighter-but-higher-rep set can take the 1RM crown.
@@ -761,14 +795,38 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   eq(groupDaysByProgram([], [running]), [], "groups: no days, no groups");
 }
 
-// ── the exercise chart's dates ────────────────────────────────────────────────
-// Day first, the month by name: "10/5" read as the 10th of May to anyone who
-// writes the day first, as the app does everywhere else.
+// ── the exercise chart ────────────────────────────────────────────────────────
+// One kind of chart per tab (user decision, 2026-10-12): Strength, Sets,
+// Volume. Sessions as the chart gets them, from logged workouts.
+const sessionsOf = (rows: [string, [number, number][]][]) =>
+  collectExerciseHistory(
+    rows.map(([date, sets], i) => workout({
+      id: `s${i}`, date, completedAt: `${date}T10:00:00.000Z`,
+      exercises: [ex("Row", sets.map(([w, r]) => set(w > 0 ? String(w) : "", String(r))))],
+    })),
+    "Row",
+  );
+const dayOf = (i: number) => `2026-07-${String(i + 1).padStart(2, "0")}`;
+eq([isExerciseMetric("strength"), isExerciseMetric("topWeight")], [true, false], "tabs: Strength, Sets and Volume only");
+
+// ── its slots ────────────────────────────────────────────────────────────────
+// Every session a numbered slot of the same width. What fits sits in the
+// middle, as option A showed five sessions; past that the row scrolls and
+// opens on the newest (user decision, 2026-10-12).
 {
-  eq(exerciseChartLabels(["2026-10-05", "2026-10-07", "2026-10-12"]), ["5 Oct", "7 Oct", "12 Oct"],
-    "chart dates: day first, the month by name");
-  eq(exerciseChartLabels(["2026-06-02", "2026-07-02", "2026-09-30", "2026-10-01"]), ["Jun", "Jul", "Sep", "Oct"],
-    "chart dates: past three months, each month's name once");
+  const few = exerciseChartGeometry(5, 390);
+  eq([few.viewportWidth, few.contentWidth, few.maxScrollX], [286, 286, 0], "slots: five sessions fit a 390pt phone without scrolling");
+  approx(slotX(few, 1) - slotX(few, 0), SESSION_SPACING, "slots: the same width each");
+  approx((slotX(few, 0) + slotX(few, 4)) / 2, few.viewportWidth / 2, "slots: a short row sits in the middle");
+  eq(visibleSlots(few, 5, 0), { first: 0, last: 4 }, "slots: all five on screen");
+  const many = exerciseChartGeometry(23, 390);
+  eq(many.contentWidth, 23 * SESSION_SPACING, "slots: a long row keeps its slots' width and scrolls");
+  approx(slotX(many, 22) - many.maxScrollX, many.viewportWidth - SESSION_SPACING / 2, "slots: opened at the end, the newest is half a slot in from the right");
+  const end = visibleSlots(many, 23, many.maxScrollX);
+  eq(end.last, 22, "slots: the newest on screen when it opens");
+  check(end.last - end.first + 1 >= 6, "slots: about six sessions on screen at once");
+  eq(visibleSlots(many, 23, 0).first, 0, "slots: scrolled back, the first session");
+  check(slotX(many, 0) >= SESSION_SPACING / 2 - 1e-9, "slots: the first session clear of the axis");
 }
 
 // ── the exercise chart's y-axis ───────────────────────────────────────────────
@@ -780,7 +838,7 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   // Where a value sits, as a share of the plot's height from the bottom.
   const at = (v: number, values: number[]) => {
     const a = exerciseChartAxis(values);
-    return (CHART_HEIGHT + GIFTED_TOP_PAD - dotY(v, a)) / CHART_HEIGHT;
+    return (CHART_HEIGHT + PLOT_TOP - dotY(v, a)) / CHART_HEIGHT;
   };
   const climb = [60, 62.5, 65, 66];
   check(at(66, climb) - at(60, climb) >= 0.25, "axis: 60 → 66 kg climbs a quarter of the plot or more");
@@ -794,6 +852,140 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   check(exerciseChartAxis([24, 30]).labels.every(l => !l.includes(".")), "axis: reps step in whole numbers");
   eq(exerciseChartAxis([2000, 2300, 2600]).labels, ["1.75k", "2k", "2.25k", "2.5k", "2.75k"], "axis: thousands read as k");
   eq(exerciseChartAxis([]).min, 0, "axis: nothing to plot, a clean grid from zero");
+
+  // Heaviest reads in the jumps the weights were loaded in: loaded 5 kg at a
+  // time, a T-bar row read against 44, 48, 52, 56 (user report, 2026-10-12).
+  eq(loadStep([30, 40, 55, 55]), 5, "load: weights in 5 kg jumps");
+  eq(loadStep([57.5, 60, 62.5, 65]), 2.5, "load: in 2.5 kg jumps");
+  eq(loadStep([40, 45, 50, 52.5]), 5, "load: mainly 5 kg jumps, one odd weight aside");
+  eq(loadStep([135.0006, 145.0003, 155.0009]), 5, "load: lbs read back from kg still find their 5 lb jumps");
+  eq(loadStep([50.3, 63.7, 77.1]), null, "load: weights too uneven for any jump");
+  eq(exerciseChartAxis([30, 40, 55, 55], true).labels, ["20", "30", "40", "50", "60"], "axis: 5 kg jumps read in tens, never 44, 48, 52");
+  check(exerciseChartAxis([135.0006, 145.0003, 155.0009], true).labels.every(l => Number(l) % 5 === 0), "axis: 5 lb jumps read in fives");
+  check(exerciseChartAxis([57.5, 60, 62.5, 65], true).labels.every(l => Number(l) % 2.5 === 0), "axis: 2.5 kg jumps read in 2.5s or more");
+  eq(exerciseChartAxis([50, 63, 77, 84], true).labels, ["40", "50", "60", "70", "80", "90"], "axis: a machine's uneven pins take round steps (five of them fit closer than four)");
+  check(!exerciseChartAxis([48, 55, 55], true).labels.includes("44"), "axis: steps are 1, 2, 2.5 or 5 times ten, never 4");
+  eq(axisLoadStep([10, 10, 10, 8]), null, "load: weights all within one jump don't step by it");
+  {
+    // Light dumbbells mostly on 5s, all within a jump: round steps that show
+    // the change rather than 0, 5, 10, 15 with the line at the foot.
+    const a = exerciseChartAxis([10, 10, 10, 8], true);
+    check((dotY(8, a) - dotY(10, a)) / CHART_HEIGHT >= 0.3, "axis: a change within one jump still fills the plot");
+  }
+  check(exerciseChartAxis([14, 16, 18, 20, 22], true).labels.every(l => Number(l) % 2 === 0), "axis: 2 kg dumbbell jumps read in even steps");
+  {
+    const a = exerciseChartAxis([50, 63, 77, 84], true);
+    eq([a.labels.length, a.max], [a.sections + 1, a.min + a.sections * a.stepValue], "axis: one label per line, the top at its last step");
+  }
+  {
+    // Bars stand on zero, with room over the tallest for its label.
+    const a = barAxis([30, 28, 22]);
+    eq(a.min, 0, "bar axis: from zero");
+    check(a.max >= 33 && a.labels.every(l => !l.includes(".")), "bar axis: a tenth over the tallest, whole steps for reps");
+  }
+  {
+    // The axis fits the sessions on screen: scrolled to the newest of ten
+    // weeks climbing 40 → 85 kg, it fits the newest few, not the light first
+    // weeks too.
+    const pts = sessionsOf([40, 45, 50, 55, 60, 65, 70, 75, 80, 85].map((w, i): [string, [number, number][]] => [dayOf(i), [[w, 8]]]));
+    const g = exerciseChartGeometry(pts.length, 390);
+    const { first, last } = visibleSlots(g, pts.length, g.maxScrollX);
+    const a = windowAxis(pts, "strength", first, last)!;
+    check(a.min > 40 && a.max >= 85, "window axis: fits the sessions on screen, not the first light weeks");
+    check(pts.slice(first, last + 1).every(p => dotY(p.topWeight, a) >= PLOT_TOP && dotY(p.topWeight, a) <= PLOT_TOP + CHART_HEIGHT),
+      "window axis: every dot on screen inside the plot");
+    check(a.labels.every(l => Number(l) % 5 === 0), "window axis: Strength still steps by the load jump");
+  }
+  {
+    // A screen of bodyweight sessions has nothing for Strength: no axis, and
+    // the plot keeps the whole row's.
+    const pts = sessionsOf([["2026-07-01", [[0, 10]]], ["2026-07-08", [[0, 12]]]]);
+    eq(windowAxis(pts, "strength", 0, 1), null, "window axis: nothing drawn, no axis");
+    eq(drawsOn(pts[0], "sets"), true, "draws: Sets draws a bodyweight session");
+    eq(drawsOn(pts[0], "strength") || drawsOn(pts[0], "volume"), false, "draws: Strength and Volume leave its slot empty");
+  }
+}
+
+// ── the Sets tab's stacks ─────────────────────────────────────────────────────
+// A block per set, set 1 on the baseline, as tall as its reps, a lighter
+// back-off set marked (drawn paler, so the weight over the stack can't pass
+// for it).
+{
+  const pts = sessionsOf([["2026-10-12", [[60, 8], [60, 8], [55, 9]]]]);
+  const g = exerciseChartGeometry(1, 390);
+  const a = windowAxis(pts, "sets", 0, 0)!;
+  const [st] = setStacks(pts, g, a);
+  approx(st.blocks[0].y + st.blocks[0].h, PLOT_TOP + CHART_HEIGHT, "stack: set 1 stands on the baseline", 1e-6);
+  approx(st.top, dotY(25, a), "stack: as tall as the session's 25 reps", 1e-6);
+  approx(st.blocks[2].h + BLOCK_GAP, dotY(16, a) - dotY(25, a), "stack: a block as tall as its 9 reps, less the gap over it", 1e-6);
+  eq(st.blocks.map(b => b.lighter), [false, false, true], "stack: the lighter back-off set is marked");
+  eq(st.heaviest, 60, "stack: the weight over it is the heaviest set");
+  check(st.blocks.every((b, i) => i === 0 || b.y + b.h <= st.blocks[i - 1].y + 1e-6), "stack: each block above the one before");
+  check(st.labelY - 7 >= 0, "stack: its weight inside the chart");
+}
+
+// ── the paths ─────────────────────────────────────────────────────────────────
+// What's drawn, on whatever axis the plot is easing through.
+{
+  eq(linePathD([10, 54], [60, 80], 50, 100), `M10,${PLOT_TOP + CHART_HEIGHT * 0.8}L54,${PLOT_TOP + CHART_HEIGHT * 0.4}`, "path: the line straight through each session");
+  check(blocksPathD([22, 0, 10], 0, 40).startsWith("M"), "path: a block");
+  eq(blocksPathD([], 0, 40), "", "path: no blocks, nothing drawn");
+  check(barsPathD([22], [100], 0, 200).includes(`V${PLOT_TOP + CHART_HEIGHT}`), "path: a bar stands on the baseline");
+}
+
+// ── the record's shine ────────────────────────────────────────────────────────
+// Every few seconds a glint of light runs up the gold bar or block, and a
+// sparkle twinkles on the gold dot (user request, 2026-10-13): on its shape and
+// only on it, rising, and nothing at either end of its run.
+{
+  const pointsOf = (d: string) => [...d.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map(m => [Number(m[1]), Number(m[2])]);
+  const meanY = (d: string) => { const p = pointsOf(d); return p.reduce((s, [, y]) => s + y, 0) / p.length; };
+  const base = PLOT_TOP + CHART_HEIGHT;
+  const axis = { min: 0, max: 1000 };
+  const top = dotY(800, axis);
+  const L = 100 - BAR_WIDTH / 2;
+  const R = 100 + BAR_WIDTH / 2;
+  const k = 5; // the bar's rounded top corners (barsPathD)
+  const onBar = (d: string) => pointsOf(d).every(([x, y]) => {
+    if (x < L - 0.05 || x > R + 0.05 || y < top - 0.05 || y > base + 0.05) return false;
+    // In a top corner, inside its curve (a quadratic bulges ~7% past the circle).
+    const cx = x < L + k ? L + k : x > R - k ? R - k : null;
+    return cx === null || y >= top + k || Math.hypot(x - cx, y - (top + k)) <= k * 1.07 + 0.1;
+  });
+  eq(barGlintD(100, 800, 0, 1000, 0, 14), "", "shine: nothing on the bar before the glint starts");
+  eq(barGlintD(100, 800, 0, 1000, 1, 14), "", "shine: nothing once it's run past the top");
+  const along = [0.05, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95].map(p => barGlintD(100, 800, 0, 1000, p, 14));
+  check(along.every(d => d.startsWith("M") && onBar(d)), "shine: the glint is on the bar all the way up, and only on it");
+  check(along.every((d, i) => i === 0 || meanY(d) < meanY(along[i - 1])), "shine: it runs up the bar");
+  // The bands share one centre, so the narrow bright one sits inside the wide one.
+  const wide = pointsOf(barGlintD(100, 800, 0, 1000, 0.5, 14));
+  const narrow = pointsOf(barGlintD(100, 800, 0, 1000, 0.5, 4));
+  check(Math.abs(meanY(barGlintD(100, 800, 0, 1000, 0.5, 14)) - meanY(barGlintD(100, 800, 0, 1000, 0.5, 4))) < 3
+    && Math.min(...narrow.map(([, y]) => y)) >= Math.min(...wide.map(([, y]) => y)) - 0.05
+    && Math.max(...narrow.map(([, y]) => y)) <= Math.max(...wide.map(([, y]) => y)) + 0.05,
+  "shine: the glint's bands are one glint, the narrow inside the wide");
+  // The thin streak trails the glint up the bar, on it, and off it at both ends.
+  const trail = [0.2, 0.5, 0.8].map(p => barGlintD(100, 800, 0, 1000, p, 3, -12));
+  check(trail.every((d, i) => d.startsWith("M") && onBar(d) && meanY(d) > meanY(barGlintD(100, 800, 0, 1000, [0.2, 0.5, 0.8][i], 5))),
+    "shine: the trailing streak is on the bar, behind the glint");
+  eq(barGlintD(100, 800, 0, 1000, 0.999, 3, -12), "", "shine: the trailing streak is past the top by the end");
+  // A short bar takes the glint as well as a tall one.
+  check(barGlintD(100, 30, 0, 1000, 0.5, 14).startsWith("M"), "shine: a short bar glints too");
+
+  eq(blockGlintD([], 0, 40, 0.5, 9), "", "shine: no record block, no glint");
+  const bAxis = { min: 0, max: 40 };
+  const bTop = dotY(20, bAxis) + BLOCK_GAP;
+  const bBottom = dotY(10, bAxis);
+  const block = [0.2, 0.5, 0.8].map(p => blockGlintD([100, 10, 20], 0, 40, p, 14));
+  check(block.every(d => d.startsWith("M") && pointsOf(d).every(([x, y]) =>
+    x >= L - 0.05 && x <= R + 0.05 && y >= bTop - 0.05 && y <= bBottom + 0.05)), "shine: on a Sets block, the glint stays on the block");
+  check(meanY(block[0]) > meanY(block[2]), "shine: and runs up it");
+
+  eq(sparkleD(50, 50, 0, 0), "", "shine: a sparkle of no size draws nothing");
+  const star = pointsOf(sparkleD(50, 50, 7, 0));
+  check(star.length === 9 && star.every(([x, y]) => Math.hypot(x - 50, y - 50) <= 7.1)
+    && star.filter(([x, y]) => Math.hypot(x - 50, y - 50) > 6.9).length === 5,
+  "shine: a four-pointed sparkle, its points 7 out, drawn in to its middle between them");
 }
 
 // ── the exercise chart's % change ─────────────────────────────────────────────
@@ -812,16 +1004,134 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
     workoutId: id, date, completedAt: `${date}T10:00:00.000Z`, topWeight: top, topReps: reps,
     bestSetVolume: top * reps, bestSetWeight: top, bestSetReps: reps, e1rm: top * (1 + reps / 30), e1rmWeight: top, e1rmReps: reps,
     sessionVolume: top * reps, weightedSets: top > 0 ? 1 : 0, weightedReps: top > 0 ? reps : 0, totalReps: reps,
+    sets: [{ weight: top, reps }],
   });
   const pts = [pt("a", "2026-09-12", 60, 8), pt("bw", "2026-09-15", 0, 10), pt("b", "2026-09-19", 62.5, 8), pt("c", "2026-09-26", 66, 8)];
-  const change = chartChange(pts, "topWeight");
+  const change = chartChange(pts, "strength");
   approx(change?.pct ?? NaN, 10, "change: the last dot against the first (60 → 66 kg)");
   eq(change?.sinceYMD, "2026-09-12", "change: since the first dot's date");
-  approx(chartChange(pts, "totalReps")?.pct ?? NaN, 0, "change: per metric (Reps plots the bodyweight session too)");
-  eq(chartChange([pts[0]], "topWeight"), null, "change: one dot, nothing to compare");
-  const plotted = plottedPoints(pts, "topWeight");
-  eq(changeFromPrevious(plotted, 0, "topWeight"), null, "change: the first dot has none before it");
-  approx(changeFromPrevious(plotted, 1, "topWeight") ?? NaN, (62.5 - 60) / 60 * 100, "change: a dot against the one before it, skipping the bodyweight session");
+  approx(chartChange(pts, "volume")?.pct ?? NaN, 10, "change: Volume, its last bar against its first");
+  eq(chartChange(pts, "sets"), null, "change: Sets is how the sets went, no trend to put a number on");
+  eq(chartChange([pts[0]], "strength"), null, "change: one dot, nothing to compare");
+  eq(changeFromPrevious(pts, 0, "strength"), null, "change: the first session has none before it");
+  eq(changeFromPrevious(pts, 1, "strength"), null, "change: a bodyweight session has nothing on Strength");
+  approx(changeFromPrevious(pts, 2, "strength") ?? NaN, (62.5 - 60) / 60 * 100, "change: a session against the one before it, skipping the bodyweight one");
+
+  // Each in its own slot: the bodyweight session keeps its number, empty.
+  const g = exerciseChartGeometry(pts.length, 390);
+  eq(strengthDots(pts, g, windowAxis(pts, "strength", 0, 3)!).map(d => d.slot), [0, 2, 3], "dots: one per session with weight, in its own slot");
+  eq(volumeBars(pts, g, windowAxis(pts, "volume", 0, 3)!).map(b => b.slot), [0, 2, 3], "bars: likewise");
+  eq(setStacks(pts, g, windowAxis(pts, "sets", 0, 3)!).map(s => s.slot), [0, 1, 2, 3], "stacks: every session, bodyweight included");
+}
+
+// ── the reps by each Strength dot ─────────────────────────────────────────────
+// Over the dot as ever, but never on the line: a steep climb or drop ran the
+// line through them (user report, 2026-10-13).
+{
+  type Ink = { l: number; t: number; r: number; b: number };
+  const inkOf = (d: StrengthDot, p: ExerciseDataPoint): Ink => {
+    const half = strengthLabelInkWidth(strengthLabel(p)) / 2;
+    return { l: d.labelX - half, r: d.labelX + half, t: d.labelY - LABEL_INK_UP, b: d.labelY + LABEL_INK_DOWN };
+  };
+  // How near the line, edge to edge, comes to dot i's reps: walked along the
+  // segments either side a quarter of a point at a time.
+  const lineGap = (dots: StrengthDot[], i: number, ink: Ink): number => {
+    let gap = Infinity;
+    for (const n of [dots[i - 1], dots[i + 1]]) {
+      if (!n) continue;
+      const d = dots[i];
+      const steps = Math.ceil(Math.hypot(n.x - d.x, n.y - d.y) * 4);
+      for (let s = 0; s <= steps; s++) {
+        const x = d.x + ((n.x - d.x) * s) / steps;
+        const y = d.y + ((n.y - d.y) * s) / steps;
+        gap = Math.min(gap, Math.hypot(Math.max(ink.l - x, 0, x - ink.r), Math.max(ink.t - y, 0, y - ink.b)) - LINE_STROKE / 2);
+      }
+    }
+    return gap;
+  };
+  const chart = (weights: number[], reps: number[] = [], width = 390) => {
+    const pts = sessionsOf(weights.map((w, i): [string, [number, number][]] => [dayOf(i), [[w, reps[i] ?? 8]]]));
+    const g = exerciseChartGeometry(pts.length, width);
+    const { first, last } = visibleSlots(g, pts.length, g.maxScrollX);
+    return { pts, g, first, last, dots: strengthDots(pts, g, windowAxis(pts, "strength", first, last)!) };
+  };
+  const base = PLOT_TOP + CHART_HEIGHT;
+
+  {
+    const { dots } = chart([60, 60, 60, 60]);
+    check(dots.every(d => d.labelX === d.x && d.labelY === d.y - 13), "reps: a flat run keeps every label right over its dot");
+  }
+  {
+    const { pts, dots } = chart([60, 62.5, 65, 67.5, 70]);
+    check(dots.every(d => d.labelX === d.x && d.labelY < d.y), "reps: a gentle climb keeps them over their dots");
+    check(dots.every((d, i) => lineGap(dots, i, inkOf(d, pts[d.slot])) >= 1), "reps: and off the line");
+  }
+  {
+    // A jump of 40 kg in a week: the line runs up steeply out of the third dot.
+    const { pts, dots } = chart([60, 60, 60, 100, 100]);
+    check(dots.every((d, i) => lineGap(dots, i, inkOf(d, pts[d.slot])) >= 1), "reps: a steep climb runs past every label, never through one");
+    check(dots[2].labelY < dots[2].y, "reps: the one at the foot of the climb still sits over its dot's level");
+    check(Math.abs(dots[2].labelX - dots[2].x) < 14 && Math.abs(dots[2].labelY - dots[2].y) < 18, "reps: and close by it");
+  }
+  {
+    const { pts, dots } = chart([100, 100, 60, 60, 60]);
+    check(dots.every((d, i) => lineGap(dots, i, inkOf(d, pts[d.slot])) >= 1), "reps: so does a steep drop");
+  }
+  {
+    // A deload: down and straight back up. Over the low dot, both sides of
+    // the V cross where its reps were; under it, nothing does.
+    const { pts, dots } = chart([80, 80, 60, 80, 80]);
+    check(dots[2].labelY > dots[2].y && dots[2].labelX === dots[2].x, "reps: in a dip, under the dot");
+    check(lineGap(dots, 2, inkOf(dots[2], pts[2])) >= 1, "reps: clear of both sides of the dip");
+  }
+  {
+    const { dots } = chart([60, 60, 80, 60, 60]);
+    check(dots[2].labelX === dots[2].x && dots[2].labelY === dots[2].y - 13, "reps: a peak keeps its reps right over it");
+  }
+  {
+    // A wider number needs more room: three figures on a steady climb.
+    const { pts, dots } = chart([60, 65, 70, 75, 80], [12, 12, 12, 12, 12]);
+    check(dots.every((d, i) => lineGap(dots, i, inkOf(d, pts[d.slot])) >= 1), "reps: ×12 on a climb, off the line too");
+  }
+
+  // Thousands of runs of sessions, every shape a lifter could log: every label
+  // on screen clear of the line, of its dot and of the next label, inside the
+  // chart, and beside its own dot.
+  let seed = 7;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  const problems: string[] = [];
+  for (let run = 0; run < 4000 && problems.length < 5; run++) {
+    const n = 2 + Math.floor(rand() * 14);
+    let w = 40 + Math.round(rand() * 40) * 2.5;
+    const weights: number[] = [];
+    const reps: number[] = [];
+    for (let i = 0; i < n; i++) {
+      // Mostly small steps, now and then a jump or a deload.
+      const r = rand();
+      const step = r < 0.15 ? -Math.round(rand() * 12) * 2.5 : r < 0.3 ? Math.round(rand() * 12) * 2.5 : Math.round(rand() * 4 - 1.5) * 2.5;
+      w = Math.max(5, w + (i === 0 ? 0 : step));
+      weights.push(w);
+      reps.push(1 + Math.floor(rand() * (rand() < 0.2 ? 30 : 12)));
+    }
+    const width = [320, 360, 375, 390, 414, 430][Math.floor(rand() * 6)];
+    const { pts, g, first, last, dots } = chart(weights, reps, width);
+    dots.forEach((d, i) => {
+      if (d.slot < first || d.slot > last) return;
+      const ink = inkOf(d, pts[d.slot]);
+      const at = `${weights.join(",")} ×${reps.join(",")} on ${width}pt, session ${d.slot + 1}`;
+      const gap = lineGap(dots, i, ink);
+      const next = dots[i + 1] ? inkOf(dots[i + 1], pts[dots[i + 1].slot]) : null;
+      if (gap < 1) problems.push(`${at}: its reps ${gap.toFixed(2)}pt from the line`);
+      else if (Math.hypot(Math.max(ink.l - d.x, 0, d.x - ink.r), Math.max(ink.t - d.y, 0, d.y - ink.b)) < 4.5) problems.push(`${at}: its reps on its dot`);
+      else if (next && ink.l < next.r && next.l < ink.r && ink.t < next.b && next.t < ink.b) problems.push(`${at}: its reps on the next session's`);
+      else if (d.labelY - LABEL_H / 2 < 0 || d.labelY + LABEL_H / 2 > base || ink.l < 0 || ink.r > g.contentWidth) problems.push(`${at}: its reps outside the chart`);
+      else if (Math.hypot(d.labelX - d.x, d.labelY - d.y) > 36) problems.push(`${at}: its reps ${Math.round(Math.hypot(d.labelX - d.x, d.labelY - d.y))}pt from its dot`);
+    });
+  }
+  check(problems.length === 0, `reps: every shape of run keeps its labels clear\n      ${problems.join("\n      ")}`);
 }
 
 // ── report ────────────────────────────────────────────────────────────────────

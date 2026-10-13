@@ -21,7 +21,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../components/FadeScreen";
@@ -37,6 +36,7 @@ import { PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { createGroup, fetchGroup, fetchGroupMembers, isGroupFullError, isGroupLimitError, renameGroup, setGroupAvatar, setGroupMembers, uploadGroupAvatar } from "../../lib/groups";
 import { getMyUid, isCloudContactId } from "../../lib/chat";
+import { pickFromLibrary, SQUARE_PHOTO } from "../../lib/photoPicker";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { loadBlockedIds, reportPerson } from "../../utils/moderation";
 import type { Client } from "../../utils/trainerStore";
@@ -177,30 +177,24 @@ export default function GroupEditScreen() {
   // Pick from the library and STAGE it. The upload happens in onSave, which on a
   // NEW group is the only time it can: there's no group id to file the photo
   // under until create_group has returned one.
-  const pickPhoto = useCallback(async () => {
+  const pickPhoto = useCallback(async (afterAlert = false) => {
     if (busy) return;
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Photo access needed", "Allow photo library access in Settings to choose a group photo.");
-      return;
+    try {
+      const asset = await pickFromLibrary(SQUARE_PHOTO, { afterAlert });
+      if (!asset) return;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setPhotoChange({ type: "set", uri: asset.uri, mimeType: asset.mimeType });
+    } catch (e) {
+      Alert.alert("Couldn't open your photos", alertMessage(e, "Please try again."));
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.6,
-    });
-    if (result.canceled) return;
-    const asset = result.assets[0];
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setPhotoChange({ type: "set", uri: asset.uri, mimeType: asset.mimeType });
   }, [busy]);
 
   const onPhotoPress = useCallback(() => {
     if (busy) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (shownPhoto) {
       Alert.alert("Group photo", undefined, [
-        { text: "Change Photo", onPress: () => void pickPhoto() },
+        { text: "Change Photo", onPress: () => void pickPhoto(true) },
         {
           text: "Remove Photo",
           style: "destructive",
@@ -286,7 +280,14 @@ export default function GroupEditScreen() {
       }
       await renameGroup(groupId, trimmed);
       await setGroupMembers(groupId, Array.from(selected));
-      await commitPhoto(groupId);
+      // The name and members are saved by now, so a photo that fails is said
+      // on its own, not as "couldn't save group".
+      try {
+        await commitPhoto(groupId);
+      } catch (e) {
+        Alert.alert("Photo didn't upload", `Your other changes are saved. ${alertMessage(e, "Try adding the photo again.")}`);
+        return;
+      }
       router.back();
     } catch (e) {
       // The hub checks the creating limit before opening this screen, and the
@@ -325,14 +326,17 @@ export default function GroupEditScreen() {
               {/* The photo sits above the name for the same reason it does on
                   the profile screen: it's the thing you recognise the group by
                   in a list, so it's the first thing you set. */}
-              <View style={styles.photoBlock}>
-                <TouchableOpacity
-                  onPress={onPhotoPress}
-                  activeOpacity={0.85}
-                  disabled={busy}
-                  accessibilityRole="button"
-                  accessibilityLabel={shownPhoto ? "Change group photo" : "Add group photo"}
-                >
+              {/* The circle and the line under it are one button: the line
+                  says "Tap to add", so it has to be something you can tap. */}
+              <TouchableOpacity
+                style={styles.photoBlock}
+                onPress={onPhotoPress}
+                activeOpacity={0.85}
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={shownPhoto ? "Change group photo" : "Add group photo"}
+              >
+                <View>
                   <NeuCard dark={isDark} radius={48} style={styles.photo}>
                     <View style={styles.photoInner}>
                       {shownPhoto
@@ -343,13 +347,13 @@ export default function GroupEditScreen() {
                   <View style={[styles.cameraBadge, { backgroundColor: ACCT, borderColor: t.bg }]}>
                     <Ionicons name="camera" size={16} color="#fff" />
                   </View>
-                </TouchableOpacity>
+                </View>
                 <Text style={[styles.photoNote, { color: t.ts }]}>
                   {photoChange
                     ? `Tap ${isNew ? "Create" : "Save changes"} to apply the photo`
                     : shownPhoto ? "Tap to change the group photo" : "Tap to add a group photo"}
                 </Text>
-              </View>
+              </TouchableOpacity>
 
               <Text style={[styles.label, { color: t.ts }]}>GROUP NAME</Text>
               <NeuCard dark={isDark} radius={14}>
@@ -357,7 +361,7 @@ export default function GroupEditScreen() {
                   style={[styles.input, { color: t.tp }]}
                   value={name}
                   onChangeText={setName}
-                  placeholder="e.g. Monday Strength"
+                  placeholder="Enter a group name"
                   placeholderTextColor={t.ts}
                   maxLength={60}
                   returnKeyType="done"
@@ -498,7 +502,8 @@ const styles = StyleSheet.create({
 
   // Same geometry as the profile screen's photo picker, so setting a group's
   // photo and setting your own look and behave identically.
-  photoBlock:   { alignItems: "center", gap: 10, marginBottom: 24 },
+  // The tap target: centred, as wide as its caption, padded a little past it.
+  photoBlock:   { alignSelf: "center", alignItems: "center", gap: 10, marginTop: -4, marginBottom: 20, paddingHorizontal: 16, paddingVertical: 4 },
   photo:        { width: 96, height: 96, borderRadius: 48 },
   photoInner:   { width: 96, height: 96, alignItems: "center", justifyContent: "center", borderRadius: 48, overflow: "hidden" },
   photoImage:   { width: 96, height: 96, borderRadius: 48 },

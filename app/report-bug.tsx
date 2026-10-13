@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Keyboard, TouchableWithoutFeedback } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Keyboard, TouchableWithoutFeedback } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -13,6 +14,7 @@ import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const TP = APP_LIGHT.tp;
@@ -52,93 +54,92 @@ export default function ReportBugScreen() {
         </MaskedView>
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1 }}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
-          >
-            <View style={styles.header}>
-              <View style={{ width: 40 }} />
-              <Text style={[styles.title, { color: t.tp }]}>Report a Bug</Text>
-              <View style={{ width: 40 }} />
+      {/* The keyboard library's scroll view, as on Profile: the box being typed
+          in is scrolled clear of the keyboard and the down key. Inside a
+          KeyboardAvoidingView, the second box stayed behind the keyboard. */}
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAwareScrollView
+          bottomOffset={ABOVE_KEYBOARD_TOOLS}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
+        >
+          <View style={styles.header}>
+            <View style={{ width: 40 }} />
+            <Text style={[styles.title, { color: t.tp }]}>Report a Bug</Text>
+            <View style={{ width: 40 }} />
+          </View>
+
+          {sent ? (
+            <View style={styles.successWrap}>
+              <NeuCard dark={isDark} radius={40} style={styles.successIconCard}>
+                <View style={styles.successIconInner}>
+                  <Ionicons name="checkmark" size={40} color={ACCT} />
+                </View>
+              </NeuCard>
+              <Text style={[styles.successTitle, { color: t.tp }]}>Thanks!</Text>
+              <Text style={[styles.successBody, { color: t.ts }]}>
+                We've got your report. We'll take a look and follow up if we need more info.
+              </Text>
+              <BounceButton
+                onPress={() => router.back()}
+                style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}
+                accessibilityLabel="Back to settings"
+                accessibilityRole="button"
+              >
+                <Text style={styles.primaryBtnText}>Back to Settings</Text>
+              </BounceButton>
             </View>
+          ) : (
+            <>
+              <Text style={[styles.intro, { color: t.ts }]}>
+                Tell us what went wrong and we'll look into it.
+              </Text>
 
-            {sent ? (
-              <View style={styles.successWrap}>
-                <NeuCard dark={isDark} radius={40} style={styles.successIconCard}>
-                  <View style={styles.successIconInner}>
-                    <Ionicons name="checkmark" size={40} color={ACCT} />
-                  </View>
-                </NeuCard>
-                <Text style={[styles.successTitle, { color: t.tp }]}>Thanks!</Text>
-                <Text style={[styles.successBody, { color: t.ts }]}>
-                  We've got your report. We'll take a look and follow up if we need more info.
-                </Text>
-                <BounceButton
-                  onPress={() => router.back()}
-                  style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}
-                  accessibilityLabel="Back to settings"
-                  accessibilityRole="button"
-                >
-                  <Text style={styles.primaryBtnText}>Back to Settings</Text>
-                </BounceButton>
-              </View>
-            ) : (
-              <>
-                <Text style={[styles.intro, { color: t.ts }]}>
-                  Tell us what went wrong and we'll look into it.
-                </Text>
+              <Text style={[styles.fieldLabel, { color: t.ts }]}>WHAT HAPPENED</Text>
+              <NeuCard dark={isDark} style={styles.fieldCard}>
+                <TextInput
+                  value={description}
+                  onChangeText={setDescription}
+                  placeholder="Describe the bug…"
+                  placeholderTextColor={t.ts}
+                  multiline
+                  style={[styles.multilineInput, { color: t.tp }]}
+                  textAlignVertical="top"
+                />
+              </NeuCard>
 
-                <Text style={[styles.fieldLabel, { color: t.ts }]}>WHAT HAPPENED</Text>
-                <NeuCard dark={isDark} style={styles.fieldCard}>
-                  <TextInput
-                    value={description}
-                    onChangeText={setDescription}
-                    placeholder="Describe the bug…"
-                    placeholderTextColor={t.ts}
-                    multiline
-                    style={[styles.multilineInput, { color: t.tp }]}
-                    textAlignVertical="top"
-                  />
-                </NeuCard>
+              <Text style={[styles.fieldLabel, { color: t.ts }]}>STEPS TO REPRODUCE (OPTIONAL)</Text>
+              <NeuCard dark={isDark} style={styles.fieldCard}>
+                <TextInput
+                  value={steps}
+                  onChangeText={setSteps}
+                  placeholder="e.g. Go to Programs, tap New Program…"
+                  placeholderTextColor={t.ts}
+                  multiline
+                  style={[styles.multilineInputShort, { color: t.tp }]}
+                  textAlignVertical="top"
+                />
+              </NeuCard>
 
-                <Text style={[styles.fieldLabel, { color: t.ts }]}>STEPS TO REPRODUCE (OPTIONAL)</Text>
-                <NeuCard dark={isDark} style={styles.fieldCard}>
-                  <TextInput
-                    value={steps}
-                    onChangeText={setSteps}
-                    placeholder="e.g. Go to Programs, tap New Program…"
-                    placeholderTextColor={t.ts}
-                    multiline
-                    style={[styles.multilineInputShort, { color: t.tp }]}
-                    textAlignVertical="top"
-                  />
-                </NeuCard>
-
-                <BounceButton
-                  onPress={onSend}
-                  style={[
-                    styles.primaryBtn,
-                    {
-                      backgroundColor: canSend ? ACCT : (isDark ? t.div : "#cfd4dc"),
-                      shadowColor: canSend ? ACCT : "transparent",
-                    },
-                  ]}
-                  accessibilityLabel="Send report"
-                  accessibilityRole="button"
-                >
-                  <Text style={[styles.primaryBtnText, !canSend && { color: t.ts }]}>Send Report</Text>
-                </BounceButton>
-              </>
-            )}
-          </ScrollView>
-        </TouchableWithoutFeedback>
-      </KeyboardAvoidingView>
+              <BounceButton
+                onPress={onSend}
+                style={[
+                  styles.primaryBtn,
+                  {
+                    backgroundColor: canSend ? ACCT : (isDark ? t.div : "#cfd4dc"),
+                    shadowColor: canSend ? ACCT : "transparent",
+                  },
+                ]}
+                accessibilityLabel="Send report"
+                accessibilityRole="button"
+              >
+                <Text style={[styles.primaryBtnText, !canSend && { color: t.ts }]}>Send Report</Text>
+              </BounceButton>
+            </>
+          )}
+        </KeyboardAwareScrollView>
+      </TouchableWithoutFeedback>
 
       {/* Both fields are multiline, so Return adds a line instead of closing the
           keyboard. This is the same floating down-button the other text-entry

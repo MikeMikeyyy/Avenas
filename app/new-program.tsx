@@ -27,7 +27,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
-import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, normaliseSets } from "../constants/programs";
+import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
 import { activateProgram, type FinishedProgram } from "../utils/programLifecycle";
 import { marksAfterEdit } from "../utils/skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -35,6 +35,7 @@ import { awardProgramAchievement } from "../utils/achievementStore";
 import { batchKeyOf, loadGroupReviewPrograms, loadSentPrograms, loadSharedPrograms, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
+import DeleteCircleButton, { DELETE_CIRCLE_SIZE } from "../components/DeleteCircleButton";
 import BounceButton from "../components/BounceButton";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
@@ -53,6 +54,7 @@ import { carriedIn, exerciseSummaryParams, knownCustomExercises, stampCustomDeta
 import { loadCarriedExercises } from "../lib/exerciseMedia";
 import { canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, reorderCycleSlots, trainingDayKeys } from "../utils/programDays";
 import { alertMessage } from "../utils/errors";
+import { normalizeExerciseName } from "../utils/workout";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -467,6 +469,8 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
         >
           <DragHandleIcon color={t.ts} />
         </TouchableOpacity>
+        {/* A plain red bin on the card itself (user decision, 2026-10-13); the
+            reorder sheet's rows carry the red circle. */}
         <TouchableOpacity
           onPress={() =>
             Alert.alert("Remove Exercise", `Remove "${exercise.name}"?`, [
@@ -475,6 +479,8 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
             ])
           }
           activeOpacity={0.7}
+          accessibilityLabel={`Remove ${exercise.name}`}
+          accessibilityRole="button"
         >
           <TrashIcon size={16} color={DANGER_BRIGHT} />
         </TouchableOpacity>
@@ -1261,18 +1267,29 @@ function DraggableExerciseList({
             >
               <Text style={[styles.daySummaryName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
             </TouchableOpacity>
+            {/* The swap in plain sight (the name tap does the same, but nothing
+                said so): another exercise in this one's place, keeping its
+                sets, targets and rest. */}
             <TouchableOpacity
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(day, ex.id); }}
+              activeOpacity={0.7}
+              hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+              style={[styles.daySummaryChangeBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}
+              accessibilityRole="button"
+              accessibilityLabel={`Change ${ex.name}`}
+            >
+              <Ionicons name="swap-horizontal" size={14} color={t.tp} />
+              <Text style={[styles.daySummaryChangeText, { color: t.tp }]}>Change</Text>
+            </TouchableOpacity>
+            <DeleteCircleButton
+              onPress={() =>
                 Alert.alert("Remove Exercise", `Remove "${ex.name}"?`, [
                   { text: "Cancel", style: "cancel" },
                   { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(day, ex.id) },
-                ]);
-              }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <TrashIcon size={18} color={DANGER_BRIGHT} />
-            </TouchableOpacity>
+                ])
+              }
+              accessibilityLabel={`Remove ${ex.name}`}
+            />
           </Animated.View>
         );
       })}
@@ -2145,8 +2162,10 @@ export default function NewProgramScreen() {
   // are internal, and a program whose ids were just filled in by the one-shot
   // backfill must not read as edited.
   const originalEdit = useRef<{ name: string; totalWeeks: number; cycleDays: number; isTrainingDay: boolean[]; cyclePattern: string[]; dayIds: string[]; workouts: WorkoutMap } | null>(null);
-  // Remembers which day's picker was open before navigating to create-custom-exercise
-  const pendingPickerDay = useRef<string | null>(null);
+  // Remembers the picker that was open before navigating to create-custom-exercise:
+  // its day, and for a change the exercise being changed, so coming back from
+  // making a new exercise mid-swap reopens the swap rather than an Add.
+  const pendingPicker = useRef<{ day: string; replaceId?: string } | null>(null);
 
   const hasChanges = useMemo(() => {
     if (!isEditMode && !isReviewMode && !isSharedEditMode) return false;
@@ -2200,9 +2219,9 @@ export default function NewProgramScreen() {
       .then(r => setProgramCarried(r.carried))
       .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e));
 
-    if (pendingPickerDay.current) {
-      setPickerState({ day: pendingPickerDay.current });
-      pendingPickerDay.current = null;
+    if (pendingPicker.current) {
+      setPickerState(pendingPicker.current);
+      pendingPicker.current = null;
     }
   }, []));
 
@@ -2591,6 +2610,41 @@ export default function NewProgramScreen() {
     });
   }, []);
 
+  // Change an exercise for another IN ITS PLACE (the reorder sheet's Change, or
+  // a tap on its name): only the exercise changes. Its sets stay as they are,
+  // warm-ups, target weights, reps and ranges included, with its rest, Hold
+  // setting and notes, and so does its id, its place in the day, so it never
+  // needs deleting, re-adding at the bottom and dragging back up. Another
+  // custom exercise's carried details belong to the old name and go with it
+  // (the save's stamp would drop them too; this keeps the card right until then).
+  // Like removeExercise, a stale day key falls back to the day holding the id.
+  const swapExercise = useCallback((day: string, id: string, name: string) => {
+    setWorkouts(prev => {
+      const owner = prev[day]?.some(e => e.id === id)
+        ? day
+        : Object.keys(prev).find(k => prev[k]?.some(e => e.id === id));
+      if (!owner) return prev;
+      return {
+        ...prev,
+        [owner]: prev[owner].map(e => {
+          if (e.id !== id || e.name === name) return e;
+          const { customDetails, ...rest } = e;
+          const keepsDetails = customDetails && normalizeExerciseName(customDetails.name) === normalizeExerciseName(name);
+          return { ...rest, name, ...(keepsDetails ? { customDetails } : {}) };
+        }),
+      };
+    });
+  }, []);
+
+  /** The exercise a swap is replacing, for the picker's "Replacing …" line. */
+  const exerciseNameById = (id: string) => {
+    for (const list of Object.values(workouts)) {
+      const ex = list.find(e => e.id === id);
+      if (ex) return ex.name;
+    }
+    return "";
+  };
+
   const updateExerciseSets = useCallback((day: string, id: string, sets: ProgramSet[]) => {
     setWorkouts(prev => {
       const list = prev[day];
@@ -2904,11 +2958,43 @@ export default function NewProgramScreen() {
       router.back();
     };
 
+    // Making it active ends the current program's run: it's shelved where it
+    // stands, and making it active again later starts it over from week 1. Set
+    // as Active is the first prompt's first button, so with another program
+    // active it asks again, rather than let a stray tap cost someone their place
+    // in a program (user request, 2026-10-13). Keep Current Program saves this
+    // one inactive, which is what the first prompt's "has been saved" promised.
+    const confirmMakeActive = async () => {
+      let current: SavedProgram | undefined;
+      try {
+        const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
+        current = (raw ? (JSON.parse(raw) as SavedProgram[]) : []).find(p => p.status === "active");
+      } catch (e) {
+        warnStorage("getItem", PROGRAMS_KEY, e);
+      }
+      if (!current) {
+        void save(true);
+        return;
+      }
+      const week = getCurrentWeek(current);
+      Alert.alert(
+        "Replace your active program?",
+        week >= current.totalWeeks
+          ? `"${current.name}" has reached its last week, so it will be marked complete and "${programName}" will start today.`
+          : `"${current.name}" is your active program, in week ${week} of ${current.totalWeeks}. "${programName}" will start today in its place, and making "${current.name}" active again later starts it over from week 1. Your logged workouts stay in your Journal.`,
+        [
+          { text: "Replace", style: "destructive", onPress: () => save(true) },
+          { text: "Keep Current Program", onPress: () => save(false) },
+          { text: "Cancel", style: "cancel" },
+        ],
+      );
+    };
+
     Alert.alert(
       "Program Created!",
       `"${programName}" has been saved. Would you like to set it as your active program?`,
       [
-        { text: "Set as Active", onPress: () => save(true) },
+        { text: "Set as Active", onPress: () => void confirmMakeActive() },
         { text: "Not Now", onPress: () => save(false) },
         { text: "Cancel", style: "cancel" },
       ]
@@ -3304,21 +3390,22 @@ export default function NewProgramScreen() {
           subtitle={dayLabel(pickerState.day).toUpperCase()}
           customExercises={customExercises}
           withSetCount={!pickerState.replaceId}
+          changing={pickerState.replaceId ? exerciseNameById(pickerState.replaceId) : undefined}
           onSelectMultiple={(exNames, setCount) => {
             if (pickerState.replaceId) {
-              updateExercise(pickerState.day, pickerState.replaceId, "name", exNames[0]);
+              swapExercise(pickerState.day, pickerState.replaceId, exNames[0]);
             } else {
               exNames.forEach((name) => addExercise(pickerState.day, name, setCount));
             }
             setPickerState(null);
           }}
           onCreateCustom={query => {
-            pendingPickerDay.current = pickerState?.day ?? null;
+            pendingPicker.current = pickerState;
             setPickerState(null);
             router.navigate({ pathname: "/create-custom-exercise", params: { name: query } });
           }}
           onEditCustom={name => {
-            pendingPickerDay.current = pickerState?.day ?? null;
+            pendingPicker.current = pickerState;
             setPickerState(null);
             router.navigate({ pathname: "/create-custom-exercise", params: { edit: name } });
           }}
@@ -3534,6 +3621,9 @@ const styles = StyleSheet.create({
   daySummaryNum:        { fontFamily: FontFamily.bold, fontSize: 13 },
   daySummaryNameBtn:    { flex: 1, flexDirection: "row", alignItems: "center" },
   daySummaryName:       { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
+  // As tall as the red delete beside it, so the pair lines up.
+  daySummaryChangeBtn:  { flexDirection: "row", alignItems: "center", gap: 4, height: DELETE_CIRCLE_SIZE, paddingHorizontal: 12, borderRadius: PILL_RADIUS },
+  daySummaryChangeText: { fontFamily: FontFamily.semibold, fontSize: 13 },
   workoutDayCard:   { borderRadius: 16 },
   exerciseCard:     { borderRadius: 16, marginBottom: 14 },
   emptyCard:        { borderRadius: 16, marginBottom: 14 },

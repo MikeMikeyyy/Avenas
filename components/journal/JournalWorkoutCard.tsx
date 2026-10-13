@@ -12,7 +12,9 @@ import { Ionicons } from "@expo/vector-icons";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import SessionTrack from "../SessionTrack";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily, REPLACED_ORANGE } from "../../constants/theme";
+import { ChangesSummaryLine } from "../ChangeCue";
+import { changesSummary, sessionChanges } from "../../utils/exerciseChanges";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, replacedTextColor } from "../../constants/theme";
 import type { CompletedWorkout, SavedProgram } from "../../constants/programs";
 import { fmtDuration, fromYMD } from "../../utils/dates";
 import { indexOfDayId } from "../../utils/programDays";
@@ -48,6 +50,10 @@ export type JournalWorkoutInfo = {
    *  the other end of the orange dot on that day's track. Null when it
    *  replaced nothing, which is every ordinary session. */
   insteadOf: string | null;
+  /** What the session changed about its program day, in a few words ("Order
+   *  changed · 1 swap"), or null when it was done as planned
+   *  (utils/exerciseChanges.ts). */
+  changes: string | null;
 };
 
 /** The program row under a workout. */
@@ -111,8 +117,9 @@ export function useJournalWorkoutInfo(
 
   return useCallback((w: CompletedWorkout): JournalWorkoutInfo => {
     const insteadOf = sessionTracks.insteadOfById[w.id] ?? null;
+    const changes = changesSummary(sessionChanges(w));
     const prog = owningProgramByWorkoutId[w.id];
-    if (!prog) return { program: null, insteadOf };
+    if (!prog) return { program: null, insteadOf, changes };
     // A dayId names ONE slot, so the program schedules it once per cycle. The
     // name count is the fallback for sessions with no dayId, and it reads 0
     // once the day has been renamed, which is why the id is preferred.
@@ -134,6 +141,7 @@ export function useJournalWorkoutInfo(
         replaced: sessionTracks.replacedById[w.id],
       },
       insteadOf,
+      changes,
     };
   }, [owningProgramByWorkoutId, sessionTracks]);
 }
@@ -159,12 +167,18 @@ function JournalWorkoutCard({ workout, info, isDark, onPress }: {
             <View style={{ flex: 1 }}>
               <Text style={[styles.name, { color: t.tp }]}>{workout.workoutName}</Text>
               <Text style={[styles.date, { color: t.ts }]}>{formatWorkoutDate(workout.date, workout.completedAt, workout.durationSeconds)}</Text>
-              {/* In the orange of the dot it explains: that day's track shows
-                  this date orange, and this is what stood in for it. */}
+              {/* In the orange of the dot it explains (its text shade, deeper
+                  on a light card): that day's track shows this date orange,
+                  and this is what stood in for it. */}
               {info.insteadOf ? (
-                <Text style={[styles.insteadOf, { color: REPLACED_ORANGE }]} numberOfLines={1}>
+                <Text style={[styles.insteadOf, { color: replacedTextColor(isDark) }]} numberOfLines={1}>
                   Instead of {info.insteadOf}
                 </Text>
+              ) : null}
+              {/* What it changed about its day, in grey: the workout's own
+                  page says which exercises. */}
+              {info.changes ? (
+                <ChangesSummaryLine summary={info.changes} isDark={isDark} style={styles.changes} />
               ) : null}
             </View>
             <Ionicons name="chevron-forward" size={16} color={t.ts} />
@@ -205,6 +219,7 @@ const styles = StyleSheet.create({
   name:        { fontFamily: FontFamily.bold, fontSize: 16 },
   date:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
   insteadOf:   { fontFamily: FontFamily.semibold, fontSize: 12, marginTop: 4 },
+  changes:     { marginTop: 4 },
   progRow:     { paddingTop: 10 },
   progHead:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7 },
   progName:    { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.9 },

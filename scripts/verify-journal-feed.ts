@@ -4,7 +4,7 @@
 //
 // Run: npx tsx scripts/verify-journal-feed.ts
 
-import { buildJournalFeed } from "../utils/journalFeed";
+import { buildJournalFeed, sessionFeed, sessionNumbers } from "../utils/journalFeed";
 import type { CompletedWorkout } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 
@@ -99,6 +99,26 @@ eq(
   ["good"],
   "an unparseable timestamp is dropped rather than sorted somewhere arbitrary",
 );
+
+// ─── the session filter ──────────────────────────────────────────────────────
+// Session numbers as the cards would read them; "free" belongs to no program.
+const SESSION: Record<string, number | null> = { a1: 1, b1: 1, a2: 2, a3: 3, old1: 1, free: null, bad: 2 };
+const sessionOf = (w: CompletedWorkout) => SESSION[w.id] ?? null;
+const history = [
+  workout("a1", daysAgo(15)), workout("b1", daysAgo(3)), workout("a2", daysAgo(8)),
+  workout("a3", daysAgo(1)), workout("old1", daysAgo(90)), workout("free", daysAgo(2)),
+  workout("bad", "not a date"),
+];
+const groups = (selected: number[]) =>
+  sessionFeed({ workouts: history, sessionOf, selected: new Set(selected) })
+    .map(g => [g.session, ids(g.items)]);
+
+eq(sessionNumbers(history, sessionOf), [1, 2, 3], "the chips are every number the history holds, ascending, once each");
+eq(sessionNumbers([workout("free", daysAgo(1))], sessionOf), [], "no program sessions, no chips");
+eq(groups([1]), [[1, ["b1", "a1", "old1"]]], "one number: all of its sessions, newest first, from the whole history, not the window");
+eq(groups([3, 1]), [[1, ["b1", "a1", "old1"]], [3, ["a3"]]], "several at once, grouped by number ascending whatever order they were picked in");
+eq(groups([2]), [[2, ["a2"]]], "an unparseable completedAt is dropped here too");
+eq(groups([4]), [], "a number nothing was finds nothing");
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

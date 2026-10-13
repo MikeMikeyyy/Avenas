@@ -17,8 +17,7 @@ import { CUSTOM_KEY, EXERCISE_MEDIA_UPLOADS_KEY, type CustomExercise } from "../
 import {
   customFromRow,
   journalFromRow,
-  programFromRow,
-  workoutFromRow,
+  snapshotFromRows,
   toReplaceUserDataPayload,
 } from "./mappers";
 import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./database.types";
@@ -26,7 +25,7 @@ import { ACCOUNT_TYPE_KEY, type AccountType } from "../contexts/AccountTypeConte
 import { UNIT_KEY } from "../utils/units";
 import {
   CLIENTS_KEY, CLIENT_DATA_PREFIX, CONNECTION_ROLES_KEY, PT_SEEDED_KEY, SHARED_PROGRAMS_KEY, TRAINER_CLIENTS_KEY,
-  clearTrainerData,
+  clearTrainerData, relinkSharesAfterRestore,
 } from "../utils/trainerStore";
 import { clearChatData } from "../utils/chatStore";
 import { clearModerationData } from "../utils/moderation";
@@ -122,12 +121,10 @@ type CloudSnapshot = {
 async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
   const { data: progRows, error: pe } = await supabase
     .from("programs").select("*").eq("user_id", userId)
-    // Oldest-first, matching how local writes append to @avenas/programs. The
-    // array's order is the only record of when a program was created — ids come
-    // back as Supabase uuids (see mappers.programFromRow), losing the
-    // `program_<timestamp>` form local creation uses. Without this the pull
-    // returned rows in whatever order Postgres chose, so "newest first" in the
-    // programs list was arbitrary after any sync.
+    // Oldest-first, matching how local writes append to @avenas/programs (a
+    // backup inserts them in that order). Without this the pull returned rows
+    // in whatever order Postgres chose, so "newest first" in the programs list
+    // was arbitrary after any sync.
     .order("created_at", { ascending: true });
   if (pe) throw new Error(`pull programs: ${pe.message}`);
 
@@ -144,22 +141,29 @@ async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
   const { data: cRows, error: ce } = await supabase.from("custom_exercises").select("*").eq("user_id", userId);
   if (ce) throw new Error(`pull custom exercises: ${ce.message}`);
 
+  // Each program under its own id, and each workout pointing at it by that id:
+  // the row ids are minted afresh by every backup, and taken as the ids, a
+  // restore renamed every program (mappers.snapshotFromRows, migration 0044).
+  const { programs, workouts } = snapshotFromRows((progRows ?? []) as ProgramRow[], (woRows ?? []) as WorkoutRow[]);
   return {
-    programs: ((progRows ?? []) as ProgramRow[]).map(programFromRow),
-    workouts: ((woRows ?? []) as WorkoutRow[]).map(workoutFromRow),
+    programs,
+    workouts,
     journal: ((jRows ?? []) as JournalRow[]).map(journalFromRow),
     custom: ((cRows ?? []) as CustomExerciseRow[]).map(customFromRow),
   };
 }
 
 /** Overwrite the local cache with a fetched snapshot (cloud is the source of
- *  truth). workout_dates is rebuilt from the snapshot's workouts. */
+ *  truth). workout_dates is rebuilt from the snapshot's workouts. Then which
+ *  sends made which of the restored copies, which only the phone kept and a
+ *  restore clears (relinkSharesAfterRestore). */
 async function writeSnapshotToLocal(snap: CloudSnapshot): Promise<void> {
   await setJSON(PROGRAMS_KEY, snap.programs);
   await setJSON(WORKOUT_HISTORY_KEY, snap.workouts);
   await setJSON(WORKOUT_DATES_KEY, Array.from(new Set(snap.workouts.map((w) => w.date))));
   await setJSON(JOURNAL_KEY, snap.journal);
   await setJSON(CUSTOM_KEY, snap.custom);
+  await relinkSharesAfterRestore();
 }
 
 const snapshotCounts = (s: CloudSnapshot): SyncCounts => ({

@@ -10,11 +10,14 @@
 // Each accept updates it, as a Send Update would, so it holds the version they
 // accepted last (user decision, 2026-10-01; copyToUpdate in
 // utils/trainerStore.ts). And Tara can only send what her picker lists: not
-// while the program is archived, and again once it's restored.
+// while the program is archived, and again once it's restored. Either of
+// them can restore onto a new phone along the way, which mustn't change any
+// of that (user report, 2026-10-13).
 
 import { on } from "../app";
 import { OK, pressed, type Action, type Flow, type Outcome, type Press, type View } from "../explore";
-import { CARA, CODY, COLE, db, GROUP, resetWorld, TARA, type Person } from "../world";
+import { restoreOntoNewPhone } from "../restore";
+import { CARA, CARA_OWN, CODY, COLE, db, GROUP, resetWorld, TARA, type Person } from "../world";
 import { BLOCK } from "./sends";
 import type { SharedProgram } from "../../../utils/trainerStore";
 import { groupAlertCounts } from "../../../utils/groupAlerts";
@@ -478,6 +481,39 @@ function copyActions(c: Person): Action<Model>[] {
   ];
 }
 
+/** A new phone, or the app deleted and installed again (scripts/harness/restore.ts). */
+const restoreActions: Action<Model>[] = [
+  {
+    label: "Cara restores onto a new phone",
+    kinds: ["direct", "group"],
+    enabled: () => true,
+    alone: true,
+    draw: async () => async () => { await restoreOntoNewPhone(CARA); return OK; },
+    apply: m => {
+      // Her copy comes back as it was, under its own id. The cards she removed
+      // were this phone's alone; and the restore links her copy back to each
+      // send whose accept of it still stands.
+      for (const x of m.sends) {
+        const r = x.r[CARA.name];
+        if (!r) continue;
+        r.removedAt = null;
+        r.linked = r.row && r.accepted;
+      }
+      return OK;
+    },
+  },
+  {
+    // Block comes back under its own id, so what she sends next is the same
+    // program to Cara's and Cody's phones, not a new one.
+    label: "Tara restores onto a new phone",
+    kinds: ["direct", "group"],
+    enabled: () => true,
+    alone: true,
+    draw: async () => async () => { await restoreOntoNewPhone(TARA); return OK; },
+    apply: () => OK,
+  },
+];
+
 export function resendFlow(kind: Kind): Flow<Model> {
   const sendBoth = kind === "group" ? "Tara sends it to the group" : "Tara sends it to Cara and Cody (Trainer tab)";
   const sendCara = kind === "group" ? "Tara sends it to the group" : "Tara sends it to Cara (her client page)";
@@ -486,7 +522,7 @@ export function resendFlow(kind: Kind): Flow<Model> {
     kind,
     start: async () => {
       TARA.programs = [BLOCK];
-      CARA.programs = [];
+      CARA.programs = [CARA_OWN];
       CODY.programs = [];
       await resetWorld();
       sendsMade = 0;
@@ -506,6 +542,7 @@ export function resendFlow(kind: Kind): Flow<Model> {
       ...sendActions(kind),
       ...Array.from({ length: MAX_SENDS }, (_, n) => perSendActions(n)).flat(),
       ...CLIENTS.flatMap(copyActions),
+      ...restoreActions,
     ],
     stories: [
       // Archived in My Programs, restored, sent again, and both accepted onto
@@ -528,6 +565,13 @@ export function resendFlow(kind: Kind): Flow<Model> {
         "Tara sends an update to send 1", "Cara accepts send 1"],
       // A removed card doesn't hide the next send.
       ["Cara removes send 1's card", sendCara, "Cara accepts send 2"],
+      // The reported cases (2026-10-13), each of which made a second copy:
+      // Cara restores, then takes an update; Tara restores, then sends again.
+      ["Cara accepts send 1", "Cara restores onto a new phone", "Tara sends an update to send 1", "Cara accepts send 1"],
+      ["Cara accepts send 1", "Tara restores onto a new phone", "Tara edits Block (builder)", sendCara, "Cara accepts send 2"],
+      // Both sends' accepts on her one copy, restored: deleting it tells Tara
+      // about both.
+      ["Cara accepts send 1", sendCara, "Cara accepts send 2", "Cara restores onto a new phone", "Cara deletes their copy"],
       ...(kind === "direct" ? [
         // Taken back from her, then sent to her alone.
         ["Cara accepts send 1", "Tara takes send 1 back from Cara (client page)", sendCara, "Cara accepts send 2", "Cara deletes their copy"],

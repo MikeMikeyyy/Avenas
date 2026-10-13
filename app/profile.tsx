@@ -10,7 +10,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import * as ImagePicker from "expo-image-picker";
 
 import { useTheme } from "../contexts/ThemeContext";
 import { useUserProfile, initialsFromName } from "../contexts/UserProfileContext";
@@ -20,10 +19,13 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import SegmentedControl from "../components/SegmentedControl";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
 import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, DANGER, FontFamily } from "../constants/theme";
 import { clearCoachingData, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
 import { changeAccountType } from "../lib/connectionRoles";
 import { isApplePrivateEmail } from "../lib/auth";
+import { pickFromLibrary, SQUARE_PHOTO } from "../lib/photoPicker";
+import { alertMessage } from "../utils/errors";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -185,23 +187,17 @@ export default function ProfileScreen() {
 
   // Pick from the library and STAGE it as a preview. The upload + persist happen
   // in onSave, so the photo only sticks once the user taps Save changes.
-  const pickPhoto = async () => {
+  // Through lib/photoPicker, which every photo pick in the app shares.
+  const pickPhoto = async (afterAlert = false) => {
     if (busy) return;
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Photo access needed", "Allow photo library access in Settings to choose a profile photo.");
-      return;
+    try {
+      const asset = await pickFromLibrary(SQUARE_PHOTO, { afterAlert });
+      if (!asset) return;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setPhotoChange({ type: "set", uri: asset.uri, mimeType: asset.mimeType });
+    } catch (e) {
+      Alert.alert("Couldn't open your photos", alertMessage(e, "Please try again."));
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.6,
-    });
-    if (result.canceled) return;
-    const asset = result.assets[0];
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setPhotoChange({ type: "set", uri: asset.uri, mimeType: asset.mimeType });
   };
 
   const stageRemovePhoto = () => {
@@ -211,9 +207,10 @@ export default function ProfileScreen() {
 
   const onPhotoPress = () => {
     if (busy) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (shownPhoto) {
       Alert.alert("Profile photo", undefined, [
-        { text: "Change Photo", onPress: () => void pickPhoto() },
+        { text: "Change Photo", onPress: () => void pickPhoto(true) },
         { text: "Remove Photo", style: "destructive", onPress: stageRemovePhoto },
         { text: "Cancel", style: "cancel" },
       ]);
@@ -229,21 +226,23 @@ export default function ProfileScreen() {
       <BackButton />
 
       <KeyboardAwareScrollView
-        bottomOffset={24}
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: insets.bottom + 32 }]}
       >
         <Text style={[styles.title, { color: t.tp }]}>Profile</Text>
 
-        <View style={styles.avatarSection}>
-          <TouchableOpacity
-            onPress={onPhotoPress}
-            activeOpacity={0.85}
-            disabled={busy}
-            accessibilityRole="button"
-            accessibilityLabel={shownPhoto ? "Change profile photo" : "Add profile photo"}
-          >
+        {/* The circle and the line under it are one button, as on a group's. */}
+        <TouchableOpacity
+          style={styles.avatarSection}
+          onPress={onPhotoPress}
+          activeOpacity={0.85}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={shownPhoto ? "Change profile photo" : "Add profile photo"}
+        >
+          <View>
             <NeuCard dark={isDark} radius={48} style={styles.avatar}>
               <View style={styles.avatarInner}>
                 {shownPhoto
@@ -256,11 +255,11 @@ export default function ProfileScreen() {
             <View style={[styles.cameraBadge, { backgroundColor: ACCT, borderColor: t.bg }]}>
               <Ionicons name="camera" size={16} color="#fff" />
             </View>
-          </TouchableOpacity>
+          </View>
           <Text style={[styles.photoNote, { color: t.ts }]}>
             {photoChanged ? "Tap Save changes to apply your photo" : shownPhoto ? "Tap to change your photo" : "Tap to add a profile photo"}
           </Text>
-        </View>
+        </TouchableOpacity>
 
         <Text style={[styles.label, { color: t.ts }]}>NAME</Text>
         <NeuCard dark={isDark} radius={16} style={styles.field}>
@@ -376,7 +375,8 @@ const styles = StyleSheet.create({
   root:          { flex: 1 },
   scroll:        { paddingHorizontal: 28 },
   title:         { fontFamily: FontFamily.bold, fontSize: 26, textAlign: "center" },
-  avatarSection: { alignItems: "center", marginTop: 18, marginBottom: 8, gap: 8 },
+  // The tap target: centred, as wide as its caption, padded a little past it.
+  avatarSection: { alignSelf: "center", alignItems: "center", marginTop: 14, marginBottom: 4, gap: 8, paddingHorizontal: 16, paddingVertical: 4 },
   avatar:        { width: 96, height: 96, borderRadius: 48 },
   avatarInner:   { width: 96, height: 96, alignItems: "center", justifyContent: "center", borderRadius: 48, overflow: "hidden" },
   avatarImage:   { width: 96, height: 96, borderRadius: 48 },

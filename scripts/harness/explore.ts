@@ -58,6 +58,10 @@ export type Action<M> = {
    *  in the same instant. Left out of at-once pairs with each other; they're
    *  still played one after the other on out-of-date screens. */
   screen?: string;
+  /** Takes a whole phone (restoring onto a new one): nothing else is pressed in
+   *  the same instant, as nothing runs on a phone while it's being set up.
+   *  Still played one after the other on out-of-date screens, both ways. */
+  alone?: boolean;
 };
 
 export type View = Record<string, unknown>;
@@ -168,7 +172,7 @@ export async function explore<M>(flow: Flow<M>, budget: Budget, seedBase = 0): P
       for (let j = i; j < available.length; j++) {
         const [a, b] = [available[i], available[j]];
         if (a === b && a.notTwiceAtOnce) continue;
-        const sameScreen = !!a.screen && a.screen === b.screen;
+        const sameScreen = (!!a.screen && a.screen === b.screen) || !!a.alone || !!b.alone;
         if (sameScreen) {
           for (const [first, second] of a === b ? [[a, b]] : [[a, b], [b, a]]) await stale(steps, model, first, second);
           continue;

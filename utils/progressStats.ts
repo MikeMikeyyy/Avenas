@@ -22,6 +22,7 @@ import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
 import { currentExerciseName, exerciseKey } from "./exerciseNames";
 import type {
   ExerciseDataPoint,
+  ExerciseSetPoint,
   LoggedExerciseRow,
   MuscleGroupStat,
   PRs,
@@ -539,12 +540,12 @@ export function bucketVolumeByMonth(
 /**
  * One ExerciseDataPoint per workout that did `exerciseName` (case-insensitive
  * trim): a working set ticked with its reps in. Sorted ascending by
- * completedAt so it can feed a left-to-right line chart.
+ * completedAt, the exercise chart's slots left to right.
  *
- * A set at bodyweight counts: its reps go into `totalReps` and it adds nothing
- * to the weight figures, so a session done only at bodyweight has a point with
- * no weight (topWeight 0), which the chart plots on Reps alone
- * (utils/exerciseChartLayout.ts plottedPoints). It used to need a weight to
+ * A set at bodyweight counts: its reps go into `totalReps` and `sets` and it
+ * adds nothing to the weight figures, so a session done only at bodyweight has
+ * a point with no weight (topWeight 0), which the chart draws on its Sets tab
+ * alone (utils/exerciseChartLayout.ts drawsOn). It used to need a weight to
  * count at all, so pull-ups, dips and leg raises done at bodyweight said "No
  * sessions yet" however often they were done.
  *
@@ -576,6 +577,7 @@ export function collectExerciseHistory(
     let weightedSets = 0;
     let weightedReps = 0;
     let totalReps = 0;
+    const sets: ExerciseSetPoint[] = [];
     let did = false;
     let isHold = false;
     for (const ex of w.exercises) {
@@ -588,6 +590,8 @@ export function collectExerciseHistory(
         did = true;
         totalReps += r;
         const wt = parsePositive(s.weight);
+        // Every set, in the order done, for the Sets tab's blocks.
+        sets.push({ weight: wt, reps: r });
         if (wt === 0) continue; // bodyweight: reps, and nothing to weigh
         if (ex.isIsometric) {
           // A hold's load is its weight, and its "reps" are seconds: a
@@ -638,6 +642,7 @@ export function collectExerciseHistory(
       weightedSets,
       weightedReps,
       totalReps,
+      sets,
       ...(isHold ? { isHold: true as const } : {}),
     });
   }
@@ -665,9 +670,12 @@ function epley(weight: number, reps: number): number {
  * 1RM PR walks the entire set list (not just the session's top set) so that a
  * lighter-but-higher-rep set can take the 1RM crown.
  *
- * Every record is of a weight, so a session done at bodyweight (a point with
- * topWeight 0) never holds one: a pull-up's 0 isn't a "Heaviest", and the
- * post-workout summary (computeSessionRecords) mustn't call it a first record.
+ * Every record but Most reps is of a weight, so a session done at bodyweight
+ * (a point with topWeight 0) never holds one: a pull-up's 0 isn't a
+ * "Heaviest", and the post-workout summary (computeSessionRecords) mustn't
+ * call it a first record. Most reps counts bodyweight sets (a pull-up's record
+ * is its reps), and it's the session's set itself (`setIndex`), the block the
+ * chart's Sets tab draws gold.
  */
 export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exerciseName: string, day?: ProgramDayRef): PRs {
   const heaviest = history.reduce<{ p: ExerciseDataPoint; reps: number } | null>((acc, p) => {
@@ -685,6 +693,17 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
     if (!acc || p.sessionVolume > acc.sessionVolume) return p;
     return acc;
   }, null);
+  // The most reps in one set; of those, the heaviest (the most done at the
+  // biggest weight, never the first light set that reached the count); then
+  // the earliest. A hold's "reps" are seconds: its longest hold.
+  let most: { p: ExerciseDataPoint; i: number } | null = null;
+  for (const p of history) {
+    for (let i = 0; i < p.sets.length; i++) {
+      const s = p.sets[i];
+      const best = most ? most.p.sets[most.i] : null;
+      if (!best || s.reps > best.reps || (s.reps === best.reps && s.weight > best.weight)) most = { p, i };
+    }
+  }
 
   // 1RM walks raw sets. Same optional day scoping as collectExerciseHistory —
   // `history` arrives already day-filtered, so the raw walk must match or a
@@ -724,6 +743,13 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
       : null,
     oneRepMax: oneRm
       ? { value: oneRm.value, workoutId: oneRm.workoutId, date: oneRm.date, weight: oneRm.weight, reps: oneRm.reps }
+      : null,
+    mostReps: most
+      ? {
+          value: most.p.sets[most.i].reps, workoutId: most.p.workoutId, date: most.p.date,
+          weight: most.p.sets[most.i].weight, reps: most.p.sets[most.i].reps, setIndex: most.i,
+          ...(most.p.isHold ? { hold: true as const } : {}),
+        }
       : null,
   };
 }

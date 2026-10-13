@@ -18,6 +18,7 @@ import { useAuth } from "../contexts/AuthContext";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { pill, PILL_H } from "../constants/buttons";
 import { pullProfile, pushProfile } from "../lib/cloud";
@@ -143,7 +144,7 @@ export default function CompleteProfileScreen() {
       <BackButton onPress={onBack} />
 
       <KeyboardAwareScrollView
-        bottomOffset={24}
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 4, paddingBottom: insets.bottom + 32 }]}

@@ -55,9 +55,8 @@ import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "../l
 import {
   customFromRow,
   journalFromRow,
-  programFromRow,
+  snapshotFromRows,
   toReplaceUserDataPayload,
-  workoutFromRow,
 } from "../lib/mappers";
 import { migrationFiles, readMigration, SUPABASE_STANDINS } from "./harness/db";
 
@@ -106,6 +105,9 @@ const fullProgram: Required<SavedProgram> = {
   // session before the hold once a backup is restored.
   holds: [{ from: "2026-09-05", to: "2026-09-09", shift: 4, offsetShift: 4 }],
   archivedAt: "2026-09-20",
+  // A copy accepted from a trainer's send (0044): which of whose programs it
+  // is, so an update or re-send still finds it after a restore.
+  shareOrigin: `${TRAINER}|program_9`,
   trainingDays: 3,
   cycleDays: 4,
   cyclePattern: ["Push", "Pull", "Legs", "Rest"],
@@ -186,6 +188,14 @@ const fullWorkout: Required<CompletedWorkout> = {
   sessionNotes: "Good session",
   programId: "program_1",
   dayId: "d0",
+  // What the day planned (0046): what the Journal's "Planned 2nd" and
+  // "Skipped" read against, so a restore or a trainer's read must keep it.
+  plan: [
+    { id: "e1", name: "Bench Press" },
+    { id: "e2", name: "Incline Bench Press" },
+    { id: "e3", name: "Cable Fly" },
+    { id: "e4", name: "Plank" },
+  ],
 };
 const oldBlockWorkout: CompletedWorkout = {
   id: "workout_2", date: "2026-08-01", completedAt: "2026-08-01T09:00:00.000Z", workoutName: "Upper",
@@ -288,8 +298,10 @@ async function main() {
     )).rows[0].rows;
   /** The owner's own read, as lib/cloud.ts pulls it. */
   const pull = async (uid: string) => ({
-    programs: (await rowsOf<ProgramRow>("programs", uid, "t.created_at")).map(programFromRow),
-    workouts: (await rowsOf<WorkoutRow>("workouts", uid, "t.completed_at desc")).map(workoutFromRow),
+    ...snapshotFromRows(
+      await rowsOf<ProgramRow>("programs", uid, "t.created_at"),
+      await rowsOf<WorkoutRow>("workouts", uid, "t.completed_at desc"),
+    ),
     journal: (await rowsOf<JournalRow>("journal_entries", uid, "t.created_at desc")).map(journalFromRow),
     custom: (await rowsOf<CustomExerciseRow>("custom_exercises", uid, "t.name")).map(customFromRow),
   });
@@ -322,9 +334,12 @@ async function main() {
   if (!full || !bare) {
     failures.push("✗ backup: a program didn't come back at all");
   } else {
-    // Program ids are re-minted by every backup; everything else must survive.
-    sameFields("program with every field", full, fullProgram, ["id"]);
-    sameFields("program with no optional fields", bare, bareProgram, ["id"]);
+    // Everything survives, the program's own id included (0044): the rows'
+    // ids are minted afresh by every backup, and read back as the ids, a
+    // restore renamed every program, so the trainer's next send of it, or the
+    // client's next accept, made a second copy (user report, 2026-10-13).
+    sameFields("program with every field", full, fullProgram);
+    sameFields("program with no optional fields", bare, bareProgram);
 
     const back = new Map(cloud.workouts.map(w => [Date.parse(w.completedAt), w]));
     const w1 = back.get(Date.parse(fullWorkout.completedAt));
@@ -334,8 +349,8 @@ async function main() {
     if (!w1 || !w2 || !w3 || !w4) {
       failures.push("✗ backup: a workout didn't come back at all");
     } else {
-      sameFields("workout with every field", w1, fullWorkout, ["id", "programId"]);
-      eq(w1.programId, full.id, "workout: still points at its program after the ids are re-minted");
+      sameFields("workout with every field", w1, fullWorkout, ["id"]);
+      eq(w1.programId, full.id, "workout: still points at its program, by the program's own id");
       eq(w2.programId, bare.id, "workout: a second program's session points at the second program");
       eq(w3.programId, "", "workout: a free workout stays free");
       eq(w4.programId, undefined, "workout: a legacy record stays legacy (still counted by name), not free");
@@ -351,6 +366,21 @@ async function main() {
   await backup(STRANGER, [], [freeWorkout], [], []);
   eq((await pull(CLIENT)).workouts.length, cloud.workouts.length, "backup: one account's backup leaves another's rows alone");
 
+  // A backup from an app before 0044 carries no local_id: its programs read
+  // back under their row ids, as they always did, with their sessions on them.
+  {
+    await as(GYM_USER);
+    const old = toReplaceUserDataPayload([fullProgram], [fullWorkout], [], [], GYM_USER);
+    const without = old.p_programs.map(({ local_id: _id, share_origin: _origin, ...rest }) => rest);
+    await db.query(`select public.replace_user_data($1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb)`,
+      [JSON.stringify(without), JSON.stringify(old.p_workouts), "[]", "[]"]);
+    const legacy = await pull(GYM_USER);
+    eq(legacy.programs.length === 1 && legacy.programs[0].id !== fullProgram.id && legacy.programs[0].shareOrigin === undefined, true,
+      "backup from an older app: the program reads back under its row id, with no origin");
+    eq(legacy.workouts[0]?.programId, legacy.programs[0]?.id, "backup from an older app: its session still points at it");
+    await backup(GYM_USER, [], [], [], []);
+  }
+
   // ─── 3. Who reads whose training ──────────────────────────────────────────
   const training = async (of: string) =>
     (await db.query<{ j: Record<string, unknown[]> & { backed_up_at: string | null } | null }>(
@@ -360,12 +390,13 @@ async function main() {
   const read = await training(CLIENT);
   eq(read !== null, true, "access: a connected trainer reads a client's training");
   if (read) {
-    const programs = (read.programs as ProgramRow[]).map(programFromRow);
-    const workouts = (read.workouts as WorkoutRow[]).map(workoutFromRow);
+    const { programs, workouts } = snapshotFromRows(read.programs as ProgramRow[], read.workouts as WorkoutRow[]);
     eq([programs.length, workouts.length, read.journal.length, read.custom.length], [2, 4, 1, 2],
       "access: all four lists come through");
     eq(workouts.filter(w => w.programId).every(w => programs.some(p => p.id === w.programId)), true,
       "access: every program session points at a program in the same read");
+    eq(programs.map(p => p.id).sort(), [fullProgram.id, bareProgram.id].sort(),
+      "access: the trainer reads the client's programs under the client's own ids, the same from one backup to the next");
     eq(workouts.map(w => w.workoutName), ["Run", "Push", "Upper", "Push"], "access: workouts newest first");
     eq(workouts.map(w => w.programId === undefined), [false, false, false, true],
       "access: the trainer sees the legacy session as legacy too, so it counts towards its program");
@@ -685,6 +716,36 @@ async function main() {
   await asApi(CLIENT, `delete from storage.objects where bucket_id = 'exercise-media' and name = $1`, [`${TRAINER}/exercise_icon_1.jpg`]);
   eq((await db.query(`select 1 from storage.objects where name = $1`, [`${TRAINER}/exercise_icon_1.jpg`])).rows.length, 1,
     "exercise media: only its author can delete it");
+
+  // ─── 8b. Group photos (0030, fixed by 0045) ───────────────────────────────
+  // Only a group's owner may write inside "<groupId>/". 0030's check looked the
+  // group up with an unqualified `name`, which inside `from public.groups`
+  // is the GROUP's name, not the object's path, so nobody could ever upload
+  // one and every Save with a photo failed. The owner here is STRANGER, of
+  // "Gym" above; GYM_USER is a member of it and COACHED_PT one of its trainers.
+  const groupPhoto = `${gid}/avatar`;
+  const putGroupPhoto = (uid: string, path = groupPhoto) =>
+    asApi(uid, `insert into storage.objects (bucket_id, name, owner) values ('group-avatars', $1, $2)`, [path, uid]);
+  eq(await putGroupPhoto(STRANGER), null, "group photo: its owner can upload it");
+  // A refused update changes nothing without an error, so each writes a
+  // different value and the row says whose landed.
+  const photoOwner = async () => (await db.query<{ owner: string }>(
+    `select owner from storage.objects where bucket_id = 'group-avatars' and name = $1`, [groupPhoto])).rows[0]?.owner;
+  const touchPhoto = (uid: string, mark: string) =>
+    asApi(uid, `update storage.objects set owner = $2 where bucket_id = 'group-avatars' and name = $1`, [groupPhoto, mark]);
+  await touchPhoto(STRANGER, COACHED_PT);
+  eq(await photoOwner(), COACHED_PT, "group photo: its owner can replace it (an upsert is an update)");
+  await touchPhoto(GYM_USER, GYM_USER);
+  eq(await photoOwner(), COACHED_PT, "group photo: ...and a member can't");
+  eq(/row-level security/.test((await putGroupPhoto(COACHED_PT, `${gid}/other`)) ?? ""), true,
+    "group photo: a trainer of the group can't, only its owner");
+  eq(/row-level security/.test((await putGroupPhoto(GYM_USER, `${gid}/other`)) ?? ""), true,
+    "group photo: nor a member");
+  eq(/row-level security/.test((await putGroupPhoto(TRAINER, `${gid}/other`)) ?? ""), true,
+    "group photo: nor someone outside it");
+  await asApi(GYM_USER, `delete from storage.objects where bucket_id = 'group-avatars' and name = $1`, [groupPhoto]);
+  eq((await db.query(`select 1 from storage.objects where bucket_id = 'group-avatars' and name = $1`, [groupPhoto])).rows.length, 1,
+    "group photo: only its owner can delete it");
 
   // ─── 9. Who may change which columns of a shared program (0039) ──────────
   // Through the API, with their own login, a party to a row could change any

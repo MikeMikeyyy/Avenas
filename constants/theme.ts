@@ -100,6 +100,10 @@ export const DANGER_BRIGHT = "#FF4D4F";
 // stronger than the same values do on light.
 export const GOLD      = "#FFC61F";
 export const GOLD_DARK = "#FFD35C";
+// The light that passes over a gold record on the exercise chart every few
+// seconds (a glint up the bar or block, a sparkle on the dot): white, in both
+// themes, at the strengths the chart gives it.
+export const GOLD_SHINE = "#FFFFFF";
 
 // ─── Group roles ──────────────────────────────────────────────────────────────
 // Badges beside a member's name on a group page. The OWNER keeps the brand
@@ -131,6 +135,25 @@ export const AWAITING_ORANGE = PAUSED_ORANGE;
 // logged at all. Orange because it's the app's "not quite done" colour: the
 // user trained, just not this workout.
 export const REPLACED_ORANGE = PAUSED_ORANGE;
+
+// ─── Change cues ──────────────────────────────────────────────────────────────
+// The quiet line under an exercise that was moved, swapped, added or skipped
+// (components/ChangeCue.tsx, utils/exerciseChanges.ts). A grey a shade darker
+// than the text-secondary greys, which read at about 3:1 on a card: this line
+// is information, so it's held to 4.5:1 (4.7 on the light card, 5 on the dark).
+export const CUE_INK      = "#5F6E83";
+export const CUE_INK_DARK = "#8E97B8";
+// The replaced orange's WORDS ("Instead of Push", "Instead of Cable Fly",
+// "Last week: Pec Deck instead"), deepened for a light card, where
+// REPLACED_ORANGE as text reads at 2:1 (this, 4.7:1). Dark mode keeps
+// REPLACED_ORANGE itself. Dots and glows stay REPLACED_ORANGE in both themes:
+// they're marks, not text (user decision, 2026-10-14).
+export const REPLACED_ORANGE_INK = "#A65800";
+
+/** The replaced orange for text: REPLACED_ORANGE_INK on a light card. */
+export function replacedTextColor(isDark: boolean): string {
+  return isDark ? REPLACED_ORANGE : REPLACED_ORANGE_INK;
+}
 
 // ─── Aurora (soft pastel gradient system) ─────────────────────────────────────
 // Bubbly pastel accents built around the brand green, with an aqua and a blush

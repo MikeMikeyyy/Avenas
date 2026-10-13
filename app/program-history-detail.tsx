@@ -46,6 +46,7 @@ import {
   GOLD_DARK,
   PAUSED_ORANGE,
   REPLACED_ORANGE,
+  replacedTextColor,
 } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
 import { TROPHY_ICON } from "../constants/icons";
@@ -361,9 +362,10 @@ function SessionRow({ workout, info, earned, isDark, isKg, onPress }: {
         </View>
         <Text style={[styles.sessionMeta, { color: t.ts }]} numberOfLines={1}>{timeLine(workout)}</Text>
         <Text style={[styles.sessionMeta, { color: t.ts }]} numberOfLines={1}>{statsLine}</Text>
-        {/* In the orange of the dot it explains, as on the Journal. */}
+        {/* In the orange of the dot it explains (its text shade), as on the
+            Journal. */}
         {info.insteadOf ? (
-          <Text style={[styles.insteadOf, { color: REPLACED_ORANGE }]} numberOfLines={1}>
+          <Text style={[styles.insteadOf, { color: replacedTextColor(isDark) }]} numberOfLines={1}>
             Instead of {info.insteadOf}
           </Text>
         ) : null}

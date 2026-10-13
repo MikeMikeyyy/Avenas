@@ -107,10 +107,13 @@ export function resumeProgram(
 
     // The hold itself, kept: the shift above re-dates every day before it, and
     // this is what lets a past date be read as it was and the run's first day
-    // be found again (utils/programHolds.ts).
-    const holds = held > 0
-      ? [...(p.holds ?? []), { from: p.pausedAt, to: onYMD, shift: held, offsetShift: mode === "today" ? held : 0 }]
-      : p.holds;
+    // be found again (utils/programHolds.ts). Kept for a same-day resume too, a
+    // hold of no days, which moves nothing: it's still the last time the
+    // program came back, and the week-idle auto-pause counts from that
+    // (idleDays). Left out, a program the auto-pause held after a week off and
+    // resumed the same day held itself again the next time the app opened, and
+    // after every resume until a workout was logged (user report, 2026-10-13).
+    const holds = [...(p.holds ?? []), { from: p.pausedAt, to: onYMD, shift: held, offsetShift: mode === "today" ? held : 0 }];
 
     // The rest days and moves around the hold, settled for the shifted
     // timeline (marksAfterHold): what the hold swallowed goes, and each move

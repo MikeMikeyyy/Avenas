@@ -544,7 +544,30 @@ export default function ProgramsScreen() {
 
   const todayFormatted = () => formatStoredDate(new Date());
 
-  const handleMakeActive = async (program: SavedProgram) => {
+  // Making a program active ends the current one's run: it's shelved where it
+  // stands, and making it active again later starts it over from week 1. So
+  // with another program active this asks first, in the builder's words for
+  // its own Set as Active (user request, 2026-10-14).
+  const handleMakeActive = (program: SavedProgram) => {
+    const current = programs.find(p => p.status === "active" && p.id !== program.id);
+    if (!current) {
+      void makeActive(program);
+      return;
+    }
+    const week = getCurrentWeek(current);
+    Alert.alert(
+      "Replace your active program?",
+      week >= current.totalWeeks
+        ? `"${current.name}" has reached its last week, so it will be marked complete and "${program.name}" will start today.`
+        : `"${current.name}" is your active program, in week ${week} of ${current.totalWeeks}. "${program.name}" will start today in its place, and making "${current.name}" active again later starts it over from week 1. Your logged workouts stay in your Journal.`,
+      [
+        { text: "Replace", style: "destructive", onPress: () => void makeActive(program) },
+        { text: "Cancel", style: "cancel" },
+      ],
+    );
+  };
+
+  const makeActive = async (program: SavedProgram) => {
     // A fresh run from today, the outgoing program demoted by the week it
     // reached (utils/programLifecycle.ts, shared with the builder's "set it as
     // your active program").
@@ -651,6 +674,9 @@ export default function ProgramsScreen() {
       skippedDates: undefined,
       pushedDates: undefined,
       pulledDates: undefined,
+      // Your own copy to change: a trainer's update of the original must not
+      // land on it (copyToUpdate matches copies by their origin).
+      shareOrigin: undefined,
     };
     const updated = [...programs, copy];
     setPrograms(updated);

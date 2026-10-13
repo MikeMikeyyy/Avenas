@@ -307,8 +307,82 @@ type CloudShareMeta = Record<string, {
 async function loadShareMeta(): Promise<CloudShareMeta> {
   return getJSON<CloudShareMeta>(CLOUD_SHARE_META_KEY, {});
 }
+
+/**
+ * Every launch (app/_layout.tsx, after the migrations): a copy accepted before
+ * copies kept their origin learns it from this phone's share meta, while the
+ * meta is still here. A restore clears the meta, and the origin, which rides
+ * the backup (programs.share_origin, migration 0044), is then what lets the
+ * next update or re-send find the copy instead of adding a second (user
+ * report, 2026-10-13). Writes only when it links one; never throws.
+ */
+export function linkAcceptedCopies(): Promise<void> {
+  return exclusive(async () => {
+    try {
+      const origins = new Map<string, string>();
+      for (const m of Object.values(await loadShareMeta())) {
+        if (m.from && m.acceptedProgramId) origins.set(m.acceptedProgramId, m.from);
+      }
+      if (origins.size === 0) return;
+      const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+      let linked = false;
+      const next = programs.map(p => {
+        const from = origins.get(p.id);
+        if (!from || p.shareOrigin) return p;
+        linked = true;
+        return { ...p, shareOrigin: from };
+      });
+      if (linked) await setJSON(PROGRAMS_KEY, next);
+    } catch (e) {
+      if (__DEV__) console.warn("[avenas] linkAcceptedCopies", e);
+    }
+  });
+}
 async function saveShareMeta(meta: CloudShareMeta): Promise<void> {
   await setJSON(CLOUD_SHARE_META_KEY, meta);
+}
+
+/**
+ * The other way round, on every load of my shares: an accepted send this phone
+ * has no link for (a restore cleared the meta, or it was accepted on another
+ * phone) is linked to the copy of its program here, when there's exactly one.
+ * Without it, after a restore the card's View couldn't open the copy, Pass Down
+ * found nothing, and deleting the copy never told the trainer. A send accepted
+ * and since updated reads like one never accepted, so it stays unlinked until
+ * it's accepted again. Returns the meta to read the rows with.
+ */
+function relinkAcceptedShares(rows: SharedProgramRow[], uid: string): Promise<CloudShareMeta> {
+  return exclusive(async () => {
+    const meta = await loadShareMeta();
+    const unlinked = rows.filter(r =>
+      r.kind === "share" && r.recipient_id === uid && r.accepted_at && !meta[r.id]?.acceptedProgramId);
+    if (unlinked.length === 0) return meta;
+    const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
+    let linked = false;
+    for (const r of unlinked) {
+      const copies = programs.filter(p => p.shareOrigin === shareOrigin(r));
+      if (copies.length !== 1) continue;
+      meta[r.id] = { ...meta[r.id], acceptedProgramId: copies[0].id, from: shareOrigin(r) };
+      linked = true;
+    }
+    if (linked) await saveShareMeta(meta);
+    return meta;
+  });
+}
+
+/**
+ * The same, straight after a restore writes the backup to the phone
+ * (lib/cloud.ts), so deleting a copy before the trainer page has loaded still
+ * tells the trainer. Never fails the restore: the next load of the shares
+ * tries again.
+ */
+export async function relinkSharesAfterRestore(): Promise<void> {
+  try {
+    const cloud = await fetchCloudRowsSafe();
+    if (cloud) await relinkAcceptedShares(cloud.rows, cloud.uid);
+  } catch (e) {
+    if (__DEV__) console.warn("[avenas] relinkSharesAfterRestore", e);
+  }
 }
 
 async function viewerIsPT(): Promise<boolean> {
@@ -419,7 +493,13 @@ function mergedDayIds(local: SavedProgram, snap: SavedProgram): string[] {
   );
 }
 
-async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promise<string> {
+/**
+ * Write a sent program into My Programs: over the copy `priorId` (an update, or
+ * a re-send of the same program), or as a new copy. `origin` is whose program it
+ * is (shareOrigin of the row; none for a mock-roster share), recorded on the
+ * copy so the next update or re-send finds it even after a restore.
+ */
+async function materialiseSnapshot(snap: SavedProgram, priorId?: string, origin?: string): Promise<string> {
   const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
   const existing = priorId ? programs.find(p => p.id === priorId) : undefined;
   if (existing) {
@@ -427,6 +507,8 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
     // cycle as sent (marksAfterEdit), as the builder's own edit is.
     const updated = programs.map(p => p.id === existing.id ? marksAfterEdit(p, {
       ...p,
+      // A copy from before origins were kept learns its own here.
+      shareOrigin: p.shareOrigin ?? origin,
       name: snap.name,
       totalWeeks: snap.totalWeeks,
       trainingDays: snap.trainingDays,
@@ -467,6 +549,9 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string): Promis
     pushedDates: undefined,
     pulledDates: undefined,
     archivedAt: undefined,
+    // Whose program this copy is, so an update or re-send of it lands here
+    // (copyToUpdate), restored from a backup or not.
+    shareOrigin: origin,
   };
   await setJSON(PROGRAMS_KEY, [...programs, imported]);
   return importedId;
@@ -483,6 +568,11 @@ const shareOrigin = (r: SharedProgramRow) => `${r.sender_id}|${r.sender_program_
  * logged sessions stay on it (user decision, 2026-10-01). It used to add a
  * second copy of the same name beside the first. Undefined makes a new copy.
  *
+ * The copy knows its own origin (SavedProgram.shareOrigin), which a restore
+ * keeps; the share meta, a restore clears. Found by the meta alone, every
+ * update and re-send after a restore on either phone added a second copy (user
+ * report, 2026-10-13).
+ *
  * `peers` are the local (mock-roster) entries of the same program.
  */
 async function copyToUpdate(
@@ -496,6 +586,7 @@ async function copyToUpdate(
   if (own && programs.some(p => p.id === own)) return own;
   const linked = new Set<string>();
   if (origin) {
+    for (const p of programs) if (p.shareOrigin === origin) linked.add(p.id);
     for (const m of Object.values(meta)) if (m.from === origin && m.acceptedProgramId) linked.add(m.acceptedProgramId);
     // Accepts made before `from` was recorded: read the origin off the row,
     // while the row is still there.
@@ -601,7 +692,7 @@ export async function loadSharedPrograms(): Promise<SharedProgram[]> {
   const local = (await loadLocalSharedPrograms()).filter(s => !s.archivedAtISO);
   const cloud = await fetchCloudRowsSafe();
   if (!cloud) return withoutDismissed(local, null);
-  const [isPT, meta] = await Promise.all([viewerIsPT(), loadShareMeta()]);
+  const [isPT, meta] = await Promise.all([viewerIsPT(), relinkAcceptedShares(cloud.rows, cloud.uid)]);
   const mapped = cloud.rows
     .filter(r => r.kind === "share" && !r.archived_at)
     .map(r => rowToShared(r, cloud.uid, isPT, meta));
@@ -733,7 +824,16 @@ function withSenderUnits(snapshot: SavedProgram, unit: WeightUnit): SavedProgram
  * write of a snapshot to another person goes through here.
  */
 async function prepareSnapshot(snapshot: SavedProgram, unit: WeightUnit): Promise<SavedProgram> {
-  return detailsForSend(withSenderUnits(snapshot, unit));
+  return detailsForSend(withSenderUnits(outgoing(snapshot), unit));
+}
+
+/** A program as it leaves this phone: its programming, without this phone's
+ *  record of whose program it was (shareOrigin), which would hand another
+ *  person's account id to the recipient and is set afresh by their accept. */
+function outgoing(snapshot: SavedProgram): SavedProgram {
+  if (snapshot.shareOrigin === undefined) return snapshot;
+  const { shareOrigin: _origin, ...rest } = snapshot;
+  return rest;
 }
 
 /** Send program shares. Entries addressed to REAL accounts (uuid clientId) go
@@ -745,7 +845,7 @@ export async function appendSharedPrograms(entries: SharedProgram[]): Promise<vo
   const cloudEntries = entries.filter(e => e.clientId !== "all" && isCloudContactId(e.clientId));
   const localEntries = entries
     .filter(e => !cloudEntries.includes(e))
-    .map(e => (e.programSnapshot ? { ...e, programSnapshot: withSenderUnits(e.programSnapshot, unit) } : e));
+    .map(e => (e.programSnapshot ? { ...e, programSnapshot: withSenderUnits(outgoing(e.programSnapshot), unit) } : e));
   if (cloudEntries.length > 0) {
     const uid = await getMyUid();
     if (!uid) throw new Error("Sign in to send programs to connected accounts.");
@@ -862,7 +962,7 @@ export function acceptSharedProgramBatch(batchKey: string): Promise<string | nul
       cloud?.rows ?? [],
       localTargets[0] ? list.filter(s => s.programId === localTargets[0].programId) : [],
     );
-    let importedId = await materialiseSnapshot(snap, priorId);
+    let importedId = await materialiseSnapshot(snap, priorId, cloudTargets[0] ? shareOrigin(cloudTargets[0]) : undefined);
 
     if (localTargets.length > 0) {
       const next = list.map(s => batchKeyOf(s) === batchKey
@@ -905,7 +1005,7 @@ async function stampAcceptedRow(row: SharedProgramRow, localId: string, accepted
     if (await stampShareAccepted(current.id, current.last_edited_at ?? null, acceptedAt)) return localId;
     const fresh = await fetchShareRow(current.id);
     if (!fresh) return localId;
-    localId = await materialiseSnapshot(fresh.snapshot as unknown as SavedProgram, localId);
+    localId = await materialiseSnapshot(fresh.snapshot as unknown as SavedProgram, localId, shareOrigin(fresh));
     current = fresh;
   }
   throw new Error("The program kept changing while it was being added. Try again.");
@@ -1009,7 +1109,7 @@ async function batchStillThere(groupId: string | undefined, batchKey: string): P
 export async function updateSharedProgramBatch(batchKey: string, patch: Partial<SharedProgram>): Promise<void> {
   // Units are already stamped by the builder, which is the only caller with a
   // snapshot; the custom exercises it uses still have to travel with it.
-  if (patch.programSnapshot) patch = { ...patch, programSnapshot: await detailsForSend(patch.programSnapshot) };
+  if (patch.programSnapshot) patch = { ...patch, programSnapshot: await detailsForSend(outgoing(patch.programSnapshot)) };
   const existing = await loadLocalSharedPrograms();
   const localHit = existing.some(s => batchKeyOf(s) === batchKey);
   if (localHit) await setJSON(SHARED_PROGRAMS_KEY, existing.map(s => batchKeyOf(s) === batchKey ? { ...s, ...patch } : s));
@@ -1060,6 +1160,7 @@ export function acceptSharedProgram(shareId: string): Promise<string | null> {
       let importedId = await materialiseSnapshot(
         row.snapshot as unknown as SavedProgram,
         await copyToUpdate(meta[row.id]?.acceptedProgramId, shareOrigin(row), meta, rows, []),
+        shareOrigin(row),
       );
       meta[row.id] = { acceptedProgramId: importedId, from: shareOrigin(row) };
       await saveShareMeta(meta);
@@ -1572,7 +1673,7 @@ export async function updateSentProgram(
     // builder stamps them with the client's unit. Only the custom exercises the
     // trainer added still need to travel with it.
     if (patch.programSnapshot) {
-      rowPatch.draft_snapshot = await detailsForSend(patch.programSnapshot) as unknown as Record<string, unknown>;
+      rowPatch.draft_snapshot = await detailsForSend(outgoing(patch.programSnapshot)) as unknown as Record<string, unknown>;
     }
     if (patch.programName) rowPatch.program_name = patch.programName;
     if (patch.lastEditedAtISO) rowPatch.last_edited_at = patch.lastEditedAtISO;
@@ -1657,6 +1758,7 @@ export function applyReturnedProgram(id: string): Promise<void> {
         const written = await materialiseSnapshotOverExisting(
           (row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram,
           target,
+          shareOrigin(row),
         );
         if (written !== row.sender_program_id && meta[row.id]?.appliedProgramId !== written) {
           meta[row.id] = { ...meta[row.id], appliedProgramId: written };
@@ -1685,11 +1787,15 @@ export function applyReturnedProgram(id: string): Promise<void> {
 }
 
 /** Overwrite the first of `candidates` still in @avenas/programs with `snap`
- *  (preserving id, status, currentWeek, startDate), or import fresh when none
- *  is. Returns the id written to. */
-async function materialiseSnapshotOverExisting(snap: SavedProgram, candidates: string[]): Promise<string> {
+ *  (preserving id, status, currentWeek, startDate), else the copy made in the
+ *  original's place, found by `origin` (the review's: my uid and my original's
+ *  id), or import fresh when there's neither. Returns the id written to. */
+async function materialiseSnapshotOverExisting(snap: SavedProgram, candidates: string[], origin?: string): Promise<string> {
   const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-  const original = candidates.map(id => programs.find(p => p.id === id)).find(Boolean);
+  const original = candidates.map(id => programs.find(p => p.id === id)).find(Boolean)
+    // A restore clears the meta naming that copy (appliedProgramId); the copy
+    // itself still knows which program it stands in for.
+    ?? (origin ? programs.find(p => p.shareOrigin === origin) : undefined);
   const programId = original?.id ?? "";
   let nextPrograms: SavedProgram[];
   let writtenId = programId;
@@ -1723,6 +1829,10 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, candidates: s
       cycleOffset: undefined,
       completedDate: undefined,
       archivedAt: undefined,
+      // Your own program, reviewed and made again because the original is
+      // gone: which program it stands in for, so the next accept of this
+      // review lands here, restored from a backup or not.
+      shareOrigin: origin,
     };
     writtenId = imported.id;
     nextPrograms = [...programs, imported];

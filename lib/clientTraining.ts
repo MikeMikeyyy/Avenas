@@ -9,7 +9,7 @@
 // app can never show more than the database agreed to hand over.
 
 import { supabase } from "./supabase";
-import { customFromRow, journalFromRow, programFromRow, workoutFromRow } from "./mappers";
+import { customFromRow, journalFromRow, snapshotFromRows } from "./mappers";
 import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./database.types";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
@@ -52,9 +52,13 @@ export async function fetchClientTraining(clientId: string): Promise<ClientTrain
   if (error) throw new Error(`load client training: ${error.message}`);
   const payload = data as ClientTrainingPayload | null;
   if (!payload) return null;
+  // Their programs under the ids their own phone uses, each workout pointing at
+  // its program by them (mappers.snapshotFromRows), so a client's program reads
+  // as the same one from one of their backups to the next.
+  const { programs, workouts } = snapshotFromRows(payload.programs ?? [], payload.workouts ?? []);
   return {
-    programs: (payload.programs ?? []).map(programFromRow),
-    workoutHistory: (payload.workouts ?? []).map(workoutFromRow),
+    programs,
+    workoutHistory: workouts,
     journal: (payload.journal ?? []).map(journalFromRow),
     customExercises: (payload.custom ?? []).map(customFromRow),
     backedUpAt: payload.backed_up_at ?? undefined,

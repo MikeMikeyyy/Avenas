@@ -11,6 +11,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GoogleIcon from "../components/icons/GoogleIcon";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
 import { pill, PILL_H, PILL_SHADOW } from "../constants/buttons";
 import { AppleSignInCancelled, isAppleSignInAvailable, oauthOnlyProvidersForEmail, signInWithApple, signInWithEmail, signInWithProvider, signUpWithEmail } from "../lib/auth";
@@ -152,7 +153,7 @@ export default function SignupScreen() {
       <BackButton />
 
       <KeyboardAwareScrollView
-        bottomOffset={24}
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 38, paddingBottom: insets.bottom + 32 }]}

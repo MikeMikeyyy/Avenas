@@ -130,6 +130,7 @@ async function main() {
       ...(e.hidden ? { hidden: true } : {}),
       ...(e.formerNames?.length ? { formerNames: e.formerNames } : {}),
       ...(e.searchTerms?.length ? { searchTerms: e.searchTerms } : {}),
+      ...(e.common ? { common: true } : {}),
       secondaryMuscles: e.secondaryMuscles || [],
       instructions: e.instructions || [],
     });

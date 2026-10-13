@@ -96,8 +96,13 @@ export type VolumeBucket = {
   workoutIds: string[]; // ids of workouts that contributed
 };
 
-// One point on the per-exercise line chart. Carries every metric the chart
-// can plot (the active metric is chosen at render time via ExerciseMetricKey).
+/** One working set of a session, in the order it was done: a block on the
+ *  exercise chart's Sets tab. `weight` is 0 at bodyweight; a timed hold's
+ *  `reps` are seconds. */
+export type ExerciseSetPoint = { weight: number; reps: number };
+
+// One session on the per-exercise chart. Carries what every tab draws (the
+// tab is chosen at render time via ExerciseMetricKey).
 export type ExerciseDataPoint = {
   workoutId: string;
   date: string;          // YYYY-MM-DD
@@ -121,32 +126,31 @@ export type ExerciseDataPoint = {
   weightedSets: number;
   weightedReps: number;
   totalReps: number;     // Σ reps across working+done sets in the session
+  /** The working sets totalReps adds up, in the order they were done: the
+   *  Sets tab's blocks. */
+  sets: ExerciseSetPoint[];
   /** A timed hold (CompletedExercise.isIsometric): `totalReps` and `topReps`
    *  are seconds held, and it moves no volume. */
   isHold?: true;
 };
 
-// Which metric the per-exercise line chart is currently plotting.
-export type ExerciseMetricKey =
-  | "topWeight"
-  | "e1rm"
-  | "sessionVolume"
-  | "totalReps";
+// Which tab the per-exercise chart is showing.
+export type ExerciseMetricKey = "strength" | "sets" | "volume";
 
 export type ExerciseMetricOption = { key: ExerciseMetricKey; label: string };
 
-// Est. 1RM took Best Set's place (user decision, 2026-10-08). Best Set, the
-// best set's weight × reps, is Heaviest times the reps for anyone who does the
-// same reps every week, so the two lines drew the same dots; and it rewarded
-// light sets of many reps (60 × 20 beat 100 × 8). An estimated one-rep max
-// counts reps as well as weight on one strength scale, so more reps at the same
-// weight reads as progress where Heaviest stays flat. Best Set is still a
-// record tile under the chart.
+// One kind of chart per tab, each telling its own story (user decision,
+// 2026-10-12). They were four lines, Heaviest, Est. 1RM, Volume and Reps, and
+// for anyone doing about the same sets and reps every week the first three are
+// the weight times a near-fixed number: one shape on three scales. Strength is
+// a line of each session's top set with its reps on the dot (more reps at a
+// weight shows there; the Est. 1RM is in its pop-up and the records); Sets
+// stacks each session's working sets by their reps, so a set that fell short
+// or a lighter back-off set shows; Volume is a bar per session.
 export const EXERCISE_METRIC_OPTIONS: ExerciseMetricOption[] = [
-  { key: "topWeight",     label: "Heaviest" },
-  { key: "e1rm",          label: "Est. 1RM" },
-  { key: "sessionVolume", label: "Volume"   },
-  { key: "totalReps",     label: "Reps"     },
+  { key: "strength", label: "Strength" },
+  { key: "sets",     label: "Sets"     },
+  { key: "volume",   label: "Volume"   },
 ];
 
 // Sliding-window time range shared between the per-exercise progression chart
@@ -178,13 +182,19 @@ export type PRSet = {
   /** Most Volume only: the session's working sets with weight on the bar,
    *  which together lifted `value` ("4 sets · 38 reps"). */
   sets?: number;
+  /** Most Reps only: which of its session's sets it was
+   *  (ExerciseDataPoint.sets), the block drawn gold on the Sets tab. */
+  setIndex?: number;
+  /** Most Reps only: a timed hold's record, in seconds ("Longest hold"). */
+  hold?: true;
 };
 
 export type PRs = {
   heaviest: PRSet | null;          // max weight in a single working set
-  bestSetVolume: PRSet | null;     // max(weight × reps) in a single working set ("Best Set")
-  bestSessionVolume: PRSet | null; // max total exercise tonnage across all sessions ("Most Volume")
+  bestSetVolume: PRSet | null;     // max(weight × reps) in a single working set (the post-workout summary's "Best Set")
+  bestSessionVolume: PRSet | null; // max total exercise tonnage across all sessions ("Most volume")
   oneRepMax: PRSet | null;         // Epley: weight × (1 + reps/30), reps >= 1 ("Estimated 1RM")
+  mostReps: PRSet | null;          // most reps in one working set, bodyweight included; a hold's longest ("Most reps")
 };
 
 // Synthetic sentinel — never used as a real program id, currently reserved for

@@ -3,14 +3,17 @@
 // live here so they can be unit-tested (see scripts/verify-data-layer.ts) and so
 // the network layer stays mechanical.
 //
-// Note on ids: `*ToRow` omits id — the database generates uuids and we read them
-// back on insert. `*FromRow` uses the row's uuid as the app object's id, so once
-// data lives in Supabase the uuid is the single id everywhere.
+// Note on ids: `*ToRow` omits id — the database generates uuids, and every
+// backup mints them afresh. A program's own id travels as `local_id` (migration
+// 0044) and comes back as its id, so a program keeps one id for life; read a
+// backup through snapshotFromRows, which also points each workout at its program
+// by that id. Workouts, journal entries and custom exercises take the row's uuid.
 
 import { parseStoredDate, formatStoredDate, toYMD } from "../utils/dates";
 import type {
   CompletedExercise,
   CompletedWorkout,
+  PlannedExercise,
   SavedProgram,
   WorkoutMap,
 } from "../constants/programs";
@@ -45,6 +48,9 @@ function ymdToStored(ymd: string | null): string {
 export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
   return {
     user_id: userId,
+    // The program's own id, given back on a restore (snapshotFromRows).
+    local_id: p.id,
+    share_origin: p.shareOrigin ?? null,
     name: p.name,
     total_weeks: p.totalWeeks,
     current_week: p.currentWeek,
@@ -69,9 +75,13 @@ export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
   };
 }
 
+/** One program row as the app holds it. Its id is the program's own
+ *  (local_id), or the row's on a row from before 0044. Read a whole backup
+ *  through snapshotFromRows, which points the workouts at these ids. */
 export function programFromRow(r: ProgramRow): SavedProgram {
   return {
-    id: r.id,
+    id: r.local_id || r.id,
+    ...(r.share_origin ? { shareOrigin: r.share_origin } : {}),
     name: r.name,
     totalWeeks: r.total_weeks,
     currentWeek: r.current_week,
@@ -119,6 +129,7 @@ export function workoutToRow(w: CompletedWorkout, userId: string, programUuid: s
     duration_seconds: w.durationSeconds,
     exercises: w.exercises as unknown[],
     session_notes: w.sessionNotes ?? null,
+    plan: w.plan ?? null,
   };
 }
 
@@ -137,6 +148,45 @@ export function workoutFromRow(r: WorkoutRow): CompletedWorkout {
     // did.
     programId: r.program_id ?? (r.program_unknown ? undefined : ""),
     dayId: r.day_id ?? undefined,
+    // Absent on a row from before 0046 (and from a server without it).
+    ...(Array.isArray(r.plan) ? { plan: r.plan as PlannedExercise[] } : {}),
+  };
+}
+
+/**
+ * A backup read back as the app holds it: each program under its own id and
+ * each workout pointing at its program by that id (a workout row points at the
+ * program ROW, whose uuid every backup mints afresh). Used by everything that
+ * reads one: the owner's restore (lib/cloud.ts) and a trainer's read of a client
+ * (lib/clientTraining.ts).
+ *
+ * Before 0044 the row uuids were the ids, so a restore renamed every program:
+ * its next send went out under a new id, the client's phone took it for another
+ * program, and the client ended up with two copies and their sessions on the
+ * first (user report, 2026-10-13).
+ */
+export function snapshotFromRows(
+  programRows: ProgramRow[],
+  workoutRows: WorkoutRow[],
+): { programs: SavedProgram[]; workouts: CompletedWorkout[] } {
+  const idOfRow = new Map<string, string>();
+  const taken = new Set<string>();
+  const programs = programRows.map(r => {
+    const p = programFromRow(r);
+    // Two rows with one id isn't something the app writes; the second keeps
+    // its row's id rather than be mistaken for the first.
+    const id = taken.has(p.id) ? r.id : p.id;
+    taken.add(id);
+    idOfRow.set(r.id, id);
+    return id === p.id ? p : { ...p, id };
+  });
+  return {
+    programs,
+    workouts: workoutRows.map(r => {
+      const w = workoutFromRow(r);
+      const programId = r.program_id ? idOfRow.get(r.program_id) : undefined;
+      return programId ? { ...w, programId } : w;
+    }),
   };
 }
 

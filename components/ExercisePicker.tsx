@@ -17,7 +17,7 @@ import {
 } from "../constants/exercises";
 import { EXERCISES } from "../constants/exerciseData";
 import { isFavourite as isFav, sortByMuscleThenName, toggleFavourite } from "../utils/exerciseFavourites";
-import { exerciseSearchDoc, matchScore, queryWords, searchDoc } from "../utils/exerciseSearch";
+import { exerciseSearchDoc, parseQuery, rankMatch, searchDoc } from "../utils/exerciseSearch";
 import { sharedExercises } from "../utils/customExerciseDetails";
 import { loadCarriedExercises } from "../lib/exerciseMedia";
 import ExerciseImage from "./ExerciseImage";
@@ -53,6 +53,14 @@ export interface ExercisePickerProps {
    * keep their current behavior.
    */
   withSetCount?: boolean;
+  /**
+   * The name of the exercise being CHANGED, for a swap: the sheet is titled
+   * "Change Exercise", says what it replaces, picks exactly one (a second tap
+   * moves the tick) and confirms with "Swap Exercise". Without it, every change
+   * flow showed "Add Exercise" with numbered multi-picks and quietly kept only
+   * the first.
+   */
+  changing?: string;
   onDeleteCustom: (name: string) => void;
   onEditCustom: (name: string) => void;
   /** `query` is what's in the search box (trimmed, possibly empty): the name
@@ -95,8 +103,9 @@ const MAX_SET_COUNT = 10;
 const FALLBACK_SET_COUNT = 3;
 
 export default function ExercisePicker({
-  visible, subtitle, customExercises, onSelectMultiple, withSetCount, onDeleteCustom, onEditCustom, onCreateCustom, onClose, isDark,
+  visible, subtitle, customExercises, onSelectMultiple, withSetCount, changing, onDeleteCustom, onEditCustom, onCreateCustom, onClose, isDark,
 }: ExercisePickerProps) {
+  const isChange = changing !== undefined;
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
   const [search, setSearch] = useState("");
@@ -219,8 +228,9 @@ export default function ExercisePicker({
   // Returns both the rows and a precomputed layout (length + offset per row) so
   // FlatList's getItemLayout is O(1) and the scrollbar is accurate immediately.
   //
-  // Starred exercises are HOISTED to a FAVOURITES block at the top, ordered by
-  // muscle group then name. A starred CATALOGUE exercise leaves EXERCISES, but a
+  // With nothing typed, starred exercises are HOISTED to a FAVOURITES block at
+  // the top, ordered by muscle group then name (a search is one ranked list
+  // instead, below). A starred CATALOGUE exercise leaves EXERCISES, but a
   // starred custom one stays under CUSTOM as well: that section is the user's
   // own inventory (its slots, edit and delete), and a starred exercise vanishing
   // from it read as lost. The same goes for FROM YOUR TRAINER, which is the
@@ -237,24 +247,42 @@ export default function ExercisePicker({
     [customExercises, carried],
   );
   const { listData, layout } = useMemo(() => {
-    const q = queryWords(search);
+    const query = parseQuery(search);
     const muscleOk = (m: SelectableMuscle) => selectedMuscles.size === 0 || selectedMuscles.has(m);
+    const customMuscleOk = (e: CustomExercise) => selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m));
 
-    const customMatch = (e: CustomExercise) =>
-      (q === null || matchScore(search, q, searchDoc(e.name, e.muscles)) !== null) &&
-      (selectedMuscles.size === 0 || e.muscles.some(m => selectedMuscles.has(m)));
-    const customs = customExercises.filter(customMatch);
-    const shareds = shared.filter(customMatch);
-    // The catalogue is already alphabetical. A search ranks it by how well the
-    // name matches (the name starting with what was typed first), then A to Z.
-    const scored: { e: Exercise; score: number }[] = [];
-    for (const e of CATALOGUE) {
-      if (!muscleOk(e.primaryMuscle)) continue;
-      const score = q === null ? 0 : matchScore(search, q, CATALOGUE_DOCS.get(e.id)!);
-      if (score !== null) scored.push({ e, score });
+    // A search is ONE list, closest first (utils/exerciseSearch.ts), whatever
+    // kind each exercise is: in sections, a favourite or custom exercise that
+    // only half matched sat above the exercise that was exactly what was typed.
+    // A tie goes to your favourites, then your own exercises, then A to Z. The
+    // chips narrow it as they do the sections.
+    if (query !== null) {
+      const ranked: { row: Row; score: number; mine: number; name: string }[] = [];
+      const add = (row: Exclude<Row, { type: "header" }>, score: number | null) => {
+        if (score === null) return;
+        const name = row.exercise.name;
+        const fav = isFav(favourites, name);
+        if (favouritesOnly && !fav) return;
+        ranked.push({ row, score, mine: (fav ? 2 : 0) + (row.type === "exercise" ? 0 : 1), name });
+      };
+      for (const e of customExercises) {
+        if (customMuscleOk(e)) add({ type: "custom", key: `custom:${e.name}`, exercise: e }, rankMatch(query, searchDoc(e.name, [], e.muscles)));
+      }
+      for (const e of shared) {
+        if (customMuscleOk(e)) add({ type: "shared", key: `shared:${e.name}`, exercise: e }, rankMatch(query, searchDoc(e.name, [], e.muscles)));
+      }
+      for (const e of CATALOGUE) {
+        if (muscleOk(e.primaryMuscle)) add({ type: "exercise", key: `ex:${e.id}`, exercise: e }, rankMatch(query, CATALOGUE_DOCS.get(e.id)!));
+      }
+      ranked.sort((a, b) => b.score - a.score || b.mine - a.mine || a.name.localeCompare(b.name));
+      const rows = ranked.map(r => r.row);
+      return { listData: rows, layout: rows.map((_, i) => ({ length: ROW_H, offset: i * ROW_H })) };
     }
-    if (q !== null) scored.sort((a, b) => a.score - b.score || a.e.name.localeCompare(b.e.name));
-    const matched = scored.map(x => x.e);
+
+    const customs = customExercises.filter(customMuscleOk);
+    const shareds = shared.filter(customMuscleOk);
+    // The catalogue is already alphabetical.
+    const matched = CATALOGUE.filter(e => muscleOk(e.primaryMuscle));
 
     const favCustoms = customs.filter(e => isFav(favourites, e.name));
     const favShared = shareds.filter(e => isFav(favourites, e.name));
@@ -312,7 +340,10 @@ export default function ExercisePicker({
 
   const togglePick = (name: string) => {
     setPickedOrder(prev =>
-      prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+      prev.includes(name) ? prev.filter(n => n !== name)
+      // A change takes one exercise: picking another moves the tick to it.
+      : isChange ? [name]
+      : [...prev, name]
     );
   };
 
@@ -333,8 +364,10 @@ export default function ExercisePicker({
         : { backgroundColor: ACCT + "22", borderColor: ACCT }
       ]}>
         {isPicked
-          ? <Text style={styles.pickerAddNum}>{pickIndex + 1}</Text>
-          : <Ionicons name="add" size={18} color={ACCT} />}
+          ? isChange
+            ? <Ionicons name="checkmark" size={18} color="#fff" />
+            : <Text style={styles.pickerAddNum}>{pickIndex + 1}</Text>
+          : <Ionicons name={isChange ? "swap-horizontal" : "add"} size={18} color={ACCT} />}
       </View>
     );
   };
@@ -512,8 +545,10 @@ export default function ExercisePicker({
               divider separates it from the list. */}
           <View style={styles.pickerHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.pickerTitle, { color: t.tp }]}>Add Exercise</Text>
-              <Text style={[styles.pickerSubtitle, { color: t.ts }]}>{subtitle}</Text>
+              <Text style={[styles.pickerTitle, { color: t.tp }]}>{isChange ? "Change Exercise" : "Add Exercise"}</Text>
+              <Text style={[styles.pickerSubtitle, { color: t.ts }]} numberOfLines={1}>
+                {isChange && changing ? `REPLACING ${changing.toUpperCase()}` : subtitle}
+              </Text>
             </View>
             <TouchableOpacity onPress={dismiss} activeOpacity={0.7} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
               <Ionicons name="close" size={22} color={t.tp} />
@@ -689,12 +724,21 @@ export default function ExercisePicker({
                     </TouchableOpacity>
                   </View>
                 )}
-                <BounceButton style={{ flex: 1 }} onPress={confirmPicks} accessibilityLabel={`Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`} accessibilityRole="button">
+                <BounceButton
+                  style={{ flex: 1 }}
+                  onPress={confirmPicks}
+                  accessibilityLabel={isChange
+                    ? `Swap for ${pickedOrder[0]}`
+                    : `Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`}
+                  accessibilityRole="button"
+                >
                   <View style={styles.createCustomBtnWrap}>
                     <View style={styles.createCustomBtn}>
-                      <Ionicons name="checkmark" size={18} color="#fff" />
+                      <Ionicons name={isChange ? "swap-horizontal" : "checkmark"} size={18} color="#fff" />
                       <Text style={styles.createCustomBtnText}>
-                        Add {pickedOrder.length} Exercise{pickedOrder.length > 1 ? "s" : ""}
+                        {isChange
+                          ? "Swap Exercise"
+                          : `Add ${pickedOrder.length} Exercise${pickedOrder.length > 1 ? "s" : ""}`}
                       </Text>
                     </View>
                   </View>

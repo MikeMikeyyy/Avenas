@@ -2,12 +2,14 @@
 // owner, and Cole, its other trainer, can both act on it). From then on: a
 // trainer edits it in the builder (a draft only they see), sends it back (and
 // sends updates), archives, restores or deletes it; Cara withdraws it while
-// it waits, accepts what came back, removes that card, and deletes / archives
-// / restores her own program, which accepting writes over.
+// it waits, accepts what came back, removes that card, deletes / archives /
+// restores her own program, which accepting writes over, and restores her
+// backup onto a new phone.
 
 import { on } from "../app";
 import { OK, pressed, REFUSED, type Action, type Flow, type View } from "../explore";
-import { CARA, CODY, COLE, GROUP, resetWorld, TARA, type Person } from "../world";
+import { restoreOntoNewPhone } from "../restore";
+import { CARA, CARA_OWN, CODY, COLE, GROUP, resetWorld, TARA, type Person } from "../world";
 import type { SentProgram } from "../../../utils/trainerStore";
 import { groupAlertCounts } from "../../../utils/groupAlerts";
 import { archiveProgram, restoreProgram } from "../../../utils/programArchive";
@@ -318,6 +320,19 @@ function caraActions(kind: Kind): Action<Model>[] {
       }),
       apply: m => { if (m.program === "archived") m.program = "present"; return OK; },
     },
+    {
+      // A new phone, or the app deleted and installed again
+      // (scripts/harness/restore.ts). Her program comes back under its own id,
+      // and so does a copy accepting the changes made in its place, so the
+      // next accept still lands on the one program. The card she removed was
+      // this phone's alone.
+      label: "Cara restores onto a new phone",
+      kinds: [kind],
+      enabled: () => true,
+      alone: true,
+      draw: async () => async () => { await restoreOntoNewPhone(CARA); return OK; },
+      apply: m => { m.removedAt = null; return OK; },
+    },
   ];
 }
 
@@ -328,7 +343,7 @@ export function reviewFlow(kind: Kind): Flow<Model> {
     kind,
     start: async () => {
       // Cara's program is "active", which archiving refuses; a shelved one can be.
-      CARA.programs = [{ ...CARA_PLAN, status: "paused" }];
+      CARA.programs = [{ ...CARA_PLAN, status: "paused" }, CARA_OWN];
       TARA.programs = [];
       CODY.programs = [];
       await resetWorld();
@@ -361,6 +376,15 @@ export function reviewFlow(kind: Kind): Flow<Model> {
         [t("Tara edits it in the builder"), t("Tara archives it"), t("Tara restores it"), t("Tara sends it back"),
           "Cara removes the card", t("Tara edits it in the builder"), t("Tara sends it back"), "Cara archives her program",
           "Cara accepts the changes", t("Tara deletes it")],
+        // Restored onto a new phone before the changes come back: they land on
+        // her program, not a second one beside it.
+        ["Cara restores onto a new phone", t("Tara sends it back"), "Cara accepts the changes"],
+        // The original deleted, the changes accepted onto a copy in its place,
+        // then restored: the next accept still lands on that copy.
+        ["Cara deletes her program", t("Tara sends it back"), "Cara accepts the changes", "Cara restores onto a new phone",
+          t("Tara edits it in the builder"), t("Tara sends it back"), "Cara accepts the changes"],
+        // A card removed on the old phone is back on the new one.
+        [t("Tara sends it back"), "Cara removes the card", "Cara restores onto a new phone", "Cara accepts the changes"],
         ...(kind === "group" ? [
           [t("Cole edits it in the builder", "Cole"), t("Tara sends it back"), t("Cole archives it", "Cole"),
             "Cara accepts the changes", t("Tara restores it"), t("Cole deletes it", "Cole")],

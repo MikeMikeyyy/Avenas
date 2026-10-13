@@ -25,8 +25,11 @@
       "library": "ab-wheel-rollout"
     },
     "searchTerms": [
-      "core"
+      "core",
+      "ab roller",
+      "ab rollout"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -45,7 +48,9 @@
       "library": "adductor-rock-backs"
     },
     "searchTerms": [
-      "glutes"
+      "glutes",
+      "inner thigh",
+      "adductors"
     ],
     "secondaryMuscles": [
       "hamstrings",
@@ -67,7 +72,10 @@
     },
     "searchTerms": [
       "fan bike",
-      "quads"
+      "quads",
+      "assault bike",
+      "echo bike",
+      "cardio"
     ],
     "secondaryMuscles": [
       "glutes",
@@ -210,6 +218,7 @@
       "shoulders",
       "triceps"
     ],
+    "common": true,
     "secondaryMuscles": [
       "core",
       "chest"
@@ -252,8 +261,12 @@
     },
     "searchTerms": [
       "lats",
-      "back"
+      "back",
+      "assisted pull up machine",
+      "gravitron",
+      "assisted chin up"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "core"
@@ -275,8 +288,13 @@
     "searchTerms": [
       "hyperextension",
       "lower back",
-      "glutes"
+      "glutes",
+      "hyper",
+      "45 degree back extension",
+      "roman chair back extension",
+      "weighted back extension"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -751,8 +769,11 @@
       "back squat",
       "barbell squat",
       "quads",
-      "glutes"
+      "glutes",
+      "low bar squat",
+      "safety bar squat"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -776,8 +797,10 @@
     "searchTerms": [
       "flat bench press",
       "chest",
-      "triceps"
+      "triceps",
+      "bench press"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -799,8 +822,11 @@
     "searchTerms": [
       "bb curl",
       "standing barbell curl",
-      "biceps"
+      "biceps",
+      "close grip curl",
+      "wide grip curl"
     ],
+    "common": true,
     "secondaryMuscles": [
       "forearms"
     ],
@@ -1040,6 +1066,11 @@
     "picture": {
       "photo": "bayesian-cable-curl.jpg"
     },
+    "searchTerms": [
+      "bayesian curl",
+      "behind the body cable curl",
+      "biceps"
+    ],
     "secondaryMuscles": [],
     "instructions": [
       "Stand up with your torso upright while holding a cable curl bar that is attached to a low pulley. Grab the cable bar at shoulder width and keep the elbows close to the torso. The palm of your hands should be facing up (supinated grip). This will be your starting position.",
@@ -1199,6 +1230,7 @@
       "back",
       "lats"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "traps"
@@ -1225,6 +1257,7 @@
       "dumbbell bicep curl",
       "biceps"
     ],
+    "common": true,
     "secondaryMuscles": [
       "forearms"
     ],
@@ -1355,7 +1388,9 @@
     },
     "searchTerms": [
       "quads",
-      "glutes"
+      "glutes",
+      "plyo",
+      "plyometric"
     ],
     "secondaryMuscles": [
       "calves"
@@ -1401,7 +1436,9 @@
     "searchTerms": [
       "standing long jump",
       "quads",
-      "glutes"
+      "glutes",
+      "plyo",
+      "plyometric"
     ],
     "secondaryMuscles": [
       "calves"
@@ -1423,8 +1460,13 @@
     "searchTerms": [
       "rear-foot-elevated split squat",
       "quads",
-      "glutes"
+      "glutes",
+      "bss",
+      "rfess",
+      "rear foot elevated split squat",
+      "split squat"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -1486,7 +1528,9 @@
       "library": "butterfly-stretch"
     },
     "searchTerms": [
-      "glutes"
+      "glutes",
+      "groin stretch",
+      "inner thigh stretch"
     ],
     "secondaryMuscles": [
       "adductors"
@@ -1507,8 +1551,10 @@
     },
     "searchTerms": [
       "cable fly",
-      "chest"
+      "chest",
+      "cable cross over"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -1528,8 +1574,11 @@
       "library": "cable-crunch"
     },
     "searchTerms": [
-      "core"
+      "core",
+      "kneeling cable crunch",
+      "rope crunch"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -1550,7 +1599,8 @@
       "library": "cable-curl"
     },
     "searchTerms": [
-      "biceps"
+      "biceps",
+      "high cable curl"
     ],
     "secondaryMuscles": [
       "forearms"
@@ -1591,6 +1641,13 @@
     "picture": {
       "photo": "cable-fly.jpg"
     },
+    "searchTerms": [
+      "cable flye",
+      "chest fly",
+      "standing cable fly",
+      "chest"
+    ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -1720,8 +1777,10 @@
       "library": "cable-lateral-raise"
     },
     "searchTerms": [
-      "shoulders"
+      "shoulders",
+      "leaning lateral raise"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Stand in the middle of two low pulleys that are opposite to each other and place a flat bench right behind you (in perpendicular fashion to you; the narrow edge of the bench should be the one behind you). Select the weight to be used on each pulley.",
@@ -1763,7 +1822,8 @@
     },
     "searchTerms": [
       "glutes",
-      "hamstrings"
+      "hamstrings",
+      "pull through"
     ],
     "secondaryMuscles": [
       "lower back",
@@ -1781,6 +1841,11 @@
     "picture": {
       "photo": "cable-rear-delt-fly.jpg"
     },
+    "searchTerms": [
+      "cable reverse fly",
+      "rear delt",
+      "shoulders"
+    ],
     "secondaryMuscles": [],
     "instructions": [
       "Adjust the pulleys to the appropriate height and adjust the weight. The pulleys should be above your head.",
@@ -1926,6 +1991,7 @@
       "standing calf raise",
       "calves"
     ],
+    "common": true,
     "secondaryMuscles": [
       "tibialis"
     ],
@@ -2035,8 +2101,12 @@
       "lever T-bar row",
       "chest-supported lever row",
       "back",
-      "lats"
+      "lats",
+      "t-bar row",
+      "tbar row",
+      "t-bar row machine"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "shoulders",
@@ -2081,6 +2151,7 @@
       "lats",
       "back"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "core"
@@ -2163,8 +2234,11 @@
     },
     "searchTerms": [
       "chest",
-      "triceps"
+      "triceps",
+      "cgbp",
+      "close grip bench"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -2185,6 +2259,13 @@
     },
     "formerNames": [
       "Neutral-Grip Lat Pulldown"
+    ],
+    "searchTerms": [
+      "v bar pulldown",
+      "neutral grip pulldown",
+      "close grip pulldown",
+      "lats",
+      "back"
     ],
     "secondaryMuscles": [
       "biceps",
@@ -2342,8 +2423,11 @@
       "library": "crunches"
     },
     "searchTerms": [
-      "core"
+      "core",
+      "ab crunch",
+      "weighted crunch"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -2404,6 +2488,7 @@
     "searchTerms": [
       "core"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -2449,8 +2534,10 @@
     "searchTerms": [
       "conventional deadlift",
       "glutes",
-      "hamstrings"
+      "hamstrings",
+      "barbell deadlift"
     ],
+    "common": true,
     "secondaryMuscles": [
       "lower back",
       "core"
@@ -2678,8 +2765,12 @@
     "searchTerms": [
       "triceps dips",
       "chest",
-      "triceps"
+      "triceps",
+      "parallel bar dip",
+      "weighted dip",
+      "ring dip"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -2843,6 +2934,7 @@
       "chest",
       "triceps"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -2933,8 +3025,11 @@
     "searchTerms": [
       "dumbbell chest fly",
       "dumbbell flyes",
-      "chest"
+      "chest",
+      "flat dumbbell fly",
+      "chest flye"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -3006,6 +3101,7 @@
       "quads",
       "glutes"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -3143,8 +3239,12 @@
       "single-arm row",
       "one-arm row",
       "back",
-      "lats"
+      "lats",
+      "db row",
+      "bent over dumbbell row",
+      "kroc row"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "traps"
@@ -3170,8 +3270,12 @@
       "seated dumbbell press",
       "db shoulder press",
       "shoulders",
-      "triceps"
+      "triceps",
+      "seated shoulder press",
+      "dumbbell overhead press",
+      "seated dumbbell shoulder press"
     ],
+    "common": true,
     "secondaryMuscles": [
       "core",
       "chest"
@@ -3392,7 +3496,8 @@
       "cross trainer",
       "elliptical machine",
       "quads",
-      "glutes"
+      "glutes",
+      "cardio"
     ],
     "secondaryMuscles": [
       "hamstrings",
@@ -3415,8 +3520,12 @@
       "library": "ez-bar-curl"
     },
     "searchTerms": [
-      "biceps"
+      "biceps",
+      "easy bar curl",
+      "ez curl",
+      "curl bar curl"
     ],
+    "common": true,
     "secondaryMuscles": [
       "forearms"
     ],
@@ -3437,8 +3546,11 @@
     },
     "searchTerms": [
       "shoulders",
-      "traps"
+      "traps",
+      "rope face pull",
+      "rear delt"
     ],
+    "common": true,
     "secondaryMuscles": [
       "back"
     ],
@@ -3459,7 +3571,10 @@
     "searchTerms": [
       "farmer carry",
       "traps",
-      "core"
+      "core",
+      "farmers carry",
+      "loaded carry",
+      "grip"
     ],
     "secondaryMuscles": [
       "forearms",
@@ -3566,7 +3681,9 @@
       "library": "foam-rolling-quads"
     },
     "searchTerms": [
-      "quads"
+      "quads",
+      "foam roller",
+      "foam roll"
     ],
     "secondaryMuscles": [],
     "instructions": [
@@ -3584,7 +3701,9 @@
       "library": "foam-rolling-upper-back"
     },
     "searchTerms": [
-      "back"
+      "back",
+      "foam roller",
+      "foam roll"
     ],
     "secondaryMuscles": [],
     "instructions": [
@@ -3633,6 +3752,7 @@
     "searchTerms": [
       "shoulders"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Pick a couple of dumbbells and stand with a straight torso and the dumbbells on front of your thighs at arms length with the palms of the hand facing your thighs. This will be your starting position.",
@@ -3652,6 +3772,7 @@
       "quads",
       "glutes"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -3674,8 +3795,11 @@
     },
     "searchTerms": [
       "glute-bridges",
-      "glutes"
+      "glutes",
+      "bridge",
+      "hip bridge"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -3743,8 +3867,10 @@
     },
     "searchTerms": [
       "quads",
-      "glutes"
+      "glutes",
+      "dumbbell goblet squat"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -3764,7 +3890,8 @@
     },
     "searchTerms": [
       "glutes",
-      "hamstrings"
+      "hamstrings",
+      "barbell good morning"
     ],
     "secondaryMuscles": [
       "lower back",
@@ -3785,8 +3912,11 @@
     },
     "searchTerms": [
       "quads",
-      "glutes"
+      "glutes",
+      "hack squat machine",
+      "machine squat"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -3817,8 +3947,11 @@
       "library": "hammer-curls"
     },
     "searchTerms": [
-      "biceps"
+      "biceps",
+      "neutral grip curl",
+      "dumbbell hammer curl"
     ],
+    "common": true,
     "secondaryMuscles": [
       "forearms"
     ],
@@ -3863,7 +3996,8 @@
     "searchTerms": [
       "wall handstand push-up",
       "shoulders",
-      "triceps"
+      "triceps",
+      "hspu"
     ],
     "secondaryMuscles": [
       "core",
@@ -3886,7 +4020,8 @@
     "searchTerms": [
       "glutes",
       "quads",
-      "hamstrings"
+      "hamstrings",
+      "olympic lift"
     ],
     "secondaryMuscles": [
       "traps",
@@ -3908,7 +4043,9 @@
       "library": "hanging-knee-raise"
     },
     "searchTerms": [
-      "core"
+      "core",
+      "knee lift",
+      "hanging knee lift"
     ],
     "secondaryMuscles": [
       "obliques"
@@ -3928,8 +4065,11 @@
       "library": "hanging-leg-raise"
     },
     "searchTerms": [
-      "core"
+      "core",
+      "leg lift",
+      "hanging leg lift"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -4022,6 +4162,12 @@
     "picture": {
       "photo": "high-bar-squat.jpg"
     },
+    "searchTerms": [
+      "back squat",
+      "barbell squat",
+      "quads",
+      "glutes"
+    ],
     "secondaryMuscles": [
       "calves",
       "glutes",
@@ -4096,8 +4242,10 @@
     ],
     "searchTerms": [
       "barbell hip thrust",
-      "glutes"
+      "glutes",
+      "glute thrust"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -4233,6 +4381,7 @@
       "chest",
       "triceps"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -4323,6 +4472,7 @@
       "chest",
       "triceps"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -4343,6 +4493,12 @@
     "picture": {
       "photo": "incline-dumbbell-row.jpg"
     },
+    "searchTerms": [
+      "incline row",
+      "chest supported row",
+      "back",
+      "lats"
+    ],
     "secondaryMuscles": [
       "biceps",
       "forearms",
@@ -4410,8 +4566,15 @@
     ],
     "searchTerms": [
       "adductor machine",
-      "glutes"
+      "glutes",
+      "hip adduction",
+      "adductors",
+      "inner thigh",
+      "inner thigh machine",
+      "thigh squeeze",
+      "groin"
     ],
+    "common": true,
     "secondaryMuscles": [
       "adductors"
     ],
@@ -4469,6 +4632,10 @@
     "picture": {
       "photo": "jm-press.jpg"
     },
+    "searchTerms": [
+      "jm",
+      "triceps"
+    ],
     "secondaryMuscles": [
       "chest",
       "shoulders"
@@ -4491,7 +4658,9 @@
     "searchTerms": [
       "split jump",
       "quads",
-      "glutes"
+      "glutes",
+      "plyo",
+      "plyometric"
     ],
     "secondaryMuscles": [
       "calves"
@@ -4514,7 +4683,8 @@
       "skipping",
       "skipping rope",
       "jump rope basic bounce",
-      "calves"
+      "calves",
+      "cardio"
     ],
     "secondaryMuscles": [
       "quads",
@@ -4537,7 +4707,9 @@
     "searchTerms": [
       "squat jump",
       "quads",
-      "glutes"
+      "glutes",
+      "plyo",
+      "plyometric"
     ],
     "secondaryMuscles": [
       "calves"
@@ -4570,6 +4742,29 @@
       "Jump your feet out wide while raising your arms overhead.",
       "Jump back to the start.",
       "Keep a steady rhythm."
+    ]
+  },
+  {
+    "name": "Kelso Shrug",
+    "primaryMuscle": "Back",
+    "equipment": "Machine",
+    "picture": {
+      "library": "chest-supported-t-bar-row"
+    },
+    "searchTerms": [
+      "chest-supported shrug",
+      "prone shrug",
+      "traps"
+    ],
+    "secondaryMuscles": [
+      "traps"
+    ],
+    "instructions": [
+      "Set the chest pad so your upper chest sits at its top edge, then lie face down on it and take the handles with an overhand grip.",
+      "Lift the weight off the rack and let your arms hang straight down. This will be your starting position.",
+      "Keeping your arms straight, squeeze your shoulder blades together and back. Your elbows stay straight, so the movement comes only from your shoulder blades.",
+      "Hold the squeeze for a second, then slowly let your shoulder blades spread apart again.",
+      "Repeat for the recommended amount of repetitions."
     ]
   },
   {
@@ -4787,7 +4982,8 @@
     "searchTerms": [
       "kb swing",
       "glutes",
-      "hamstrings"
+      "hamstrings",
+      "russian swing"
     ],
     "secondaryMuscles": [
       "lower back",
@@ -5048,7 +5244,9 @@
     },
     "searchTerms": [
       "back",
-      "lats"
+      "lats",
+      "t-bar row",
+      "tbar row"
     ],
     "secondaryMuscles": [
       "biceps",
@@ -5094,8 +5292,13 @@
       "pulldown",
       "wide-grip lat pulldown",
       "lats",
-      "back"
+      "back",
+      "pull down",
+      "lat pull down",
+      "wide grip pulldown",
+      "machine pulldown"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "core"
@@ -5166,6 +5369,7 @@
       "side lateral raise",
       "shoulders"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Pick a couple of dumbbells and stand with a straight torso and the dumbbells by your side at arms length with the palms of the hand facing you. This will be your starting position.",
@@ -5230,8 +5434,12 @@
     "searchTerms": [
       "lying leg curl",
       "hamstring curl",
-      "hamstrings"
+      "hamstrings",
+      "prone leg curl",
+      "ham curl",
+      "hamstring machine"
     ],
+    "common": true,
     "secondaryMuscles": [
       "calves"
     ],
@@ -5250,8 +5458,12 @@
       "library": "leg-extension"
     },
     "searchTerms": [
-      "quads"
+      "quads",
+      "quad extension",
+      "knee extension",
+      "leg extension machine"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "For this exercise you will need to use a leg extension machine. First choose your weight and sit on the machine with your legs under the pad (feet pointed forward) and the hands holding the side bars. This will be your starting position. Tip: You will need to adjust the pad so that it falls on top of your lower leg (just above your feet). Also, make sure that your legs form a 90-degree angle between the lower and upper leg. If the angle is less than 90-degrees then that means the knee is over the toes which in turn creates undue stress at the knee joint. If the machine is designed that way, either look for another machine or just make sure that when you start executing the exercise you stop going down once you hit the 90-degree angle.",
@@ -5269,8 +5481,12 @@
     },
     "searchTerms": [
       "quads",
-      "glutes"
+      "glutes",
+      "leg sled",
+      "sled press",
+      "45 degree leg press"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -5318,6 +5534,7 @@
       "lying leg raise",
       "core"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -5431,6 +5648,14 @@
     "picture": {
       "photo": "machine-chest-press.jpg"
     },
+    "searchTerms": [
+      "chest press machine",
+      "seated chest press",
+      "chest press",
+      "chest",
+      "triceps"
+    ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders",
       "triceps"
@@ -5500,7 +5725,9 @@
       "library": "machine-lateral-raise"
     },
     "searchTerms": [
-      "shoulders"
+      "shoulders",
+      "lateral raise machine",
+      "side raise machine"
     ],
     "secondaryMuscles": [],
     "instructions": [
@@ -5588,7 +5815,8 @@
     "searchTerms": [
       "reverse machine fly",
       "shoulders",
-      "traps"
+      "traps",
+      "rear delt machine"
     ],
     "secondaryMuscles": [
       "back"
@@ -5627,8 +5855,11 @@
     },
     "searchTerms": [
       "shoulders",
-      "triceps"
+      "triceps",
+      "shoulder press machine",
+      "seated shoulder press machine"
     ],
+    "common": true,
     "secondaryMuscles": [
       "core",
       "chest"
@@ -5646,6 +5877,10 @@
     "picture": {
       "photo": "machine-shrug.jpg"
     },
+    "searchTerms": [
+      "shrug machine",
+      "traps"
+    ],
     "secondaryMuscles": [
       "forearms"
     ],
@@ -5921,7 +6156,9 @@
     },
     "searchTerms": [
       "nordic curl",
-      "hamstrings"
+      "hamstrings",
+      "nordics",
+      "nordic"
     ],
     "secondaryMuscles": [
       "calves"
@@ -5970,8 +6207,15 @@
     ],
     "searchTerms": [
       "abductor machine",
-      "glutes"
+      "glutes",
+      "hip abduction",
+      "abductors",
+      "outer thigh",
+      "outer thigh machine",
+      "glute medius",
+      "side glutes"
     ],
+    "common": true,
     "secondaryMuscles": [
       "core"
     ],
@@ -6038,8 +6282,13 @@
       "barbell shoulder press",
       "military press",
       "shoulders",
-      "triceps"
+      "triceps",
+      "standing press",
+      "strict press",
+      "shoulder press",
+      "seated barbell shoulder press"
     ],
+    "common": true,
     "secondaryMuscles": [
       "core",
       "chest"
@@ -6085,8 +6334,12 @@
       "Overhead Dumbbell Extension"
     ],
     "searchTerms": [
-      "triceps"
+      "triceps",
+      "french press",
+      "tricep extension",
+      "dumbbell overhead extension"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Attach dual handles to a sled using a chain or rope. Load the sled to an appropriate load.",
@@ -6122,7 +6375,8 @@
     },
     "searchTerms": [
       "obliques",
-      "core"
+      "core",
+      "anti-rotation press"
     ],
     "secondaryMuscles": [
       "shoulders"
@@ -6143,6 +6397,12 @@
     "picture": {
       "photo": "pause-squat.jpg"
     },
+    "searchTerms": [
+      "paused squat",
+      "barbell squat",
+      "quads",
+      "glutes"
+    ],
     "secondaryMuscles": [
       "calves",
       "glutes",
@@ -6167,8 +6427,13 @@
     },
     "searchTerms": [
       "machine fly",
-      "chest"
+      "chest",
+      "butterfly",
+      "pec fly",
+      "chest fly machine",
+      "butterfly machine"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -6193,7 +6458,9 @@
     "searchTerms": [
       "chest press",
       "chest",
-      "triceps"
+      "triceps",
+      "butterfly",
+      "pec fly"
     ],
     "secondaryMuscles": [
       "shoulders"
@@ -6342,8 +6609,11 @@
     },
     "searchTerms": [
       "forearm plank",
-      "core"
+      "core",
+      "front plank",
+      "elbow plank"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -6469,7 +6739,8 @@
     "searchTerms": [
       "glutes",
       "quads",
-      "hamstrings"
+      "hamstrings",
+      "olympic lift"
     ],
     "secondaryMuscles": [
       "traps",
@@ -6492,8 +6763,10 @@
     },
     "searchTerms": [
       "ez bar preacher curl",
-      "biceps"
+      "biceps",
+      "scott curl"
     ],
+    "common": true,
     "secondaryMuscles": [
       "forearms"
     ],
@@ -6581,8 +6854,10 @@
     "searchTerms": [
       "pullup",
       "lats",
-      "back"
+      "back",
+      "weighted pull up"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "core"
@@ -6652,6 +6927,7 @@
       "chest",
       "triceps"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -6671,7 +6947,8 @@
     },
     "searchTerms": [
       "glutes",
-      "hamstrings"
+      "hamstrings",
+      "block pull"
     ],
     "secondaryMuscles": [
       "lower back",
@@ -6694,8 +6971,13 @@
       "reverse fly",
       "rear delt flies",
       "shoulders",
-      "traps"
+      "traps",
+      "bent over fly",
+      "rear delt raise",
+      "reverse flye",
+      "bent over lateral raise"
     ],
+    "common": true,
     "secondaryMuscles": [
       "back"
     ],
@@ -6779,7 +7061,9 @@
       "library": "reverse-curl"
     },
     "searchTerms": [
-      "biceps"
+      "biceps",
+      "overhand curl",
+      "forearms"
     ],
     "secondaryMuscles": [
       "forearms"
@@ -6852,8 +7136,11 @@
       "lunge",
       "bodyweight lunge",
       "quads",
-      "glutes"
+      "glutes",
+      "step back lunge",
+      "backward lunge"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -6897,7 +7184,9 @@
     "searchTerms": [
       "reverse machine fly",
       "shoulders",
-      "traps"
+      "traps",
+      "rear delt machine",
+      "rear delt fly machine"
     ],
     "secondaryMuscles": [
       "back"
@@ -7009,7 +7298,9 @@
     "searchTerms": [
       "cable pushdown",
       "rope pushdown",
-      "triceps"
+      "triceps",
+      "reverse grip pressdown",
+      "underhand pushdown"
     ],
     "secondaryMuscles": [],
     "instructions": [
@@ -7049,6 +7340,7 @@
       "glutes",
       "hamstrings"
     ],
+    "common": true,
     "secondaryMuscles": [
       "lower back",
       "core"
@@ -7096,8 +7388,11 @@
     "searchTerms": [
       "cable pushdown",
       "rope pushdown",
-      "triceps"
+      "triceps",
+      "rope pressdown",
+      "pressdown"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Attach a rope attachment to a high pulley and grab with a neutral grip (palms facing each other).",
@@ -7120,8 +7415,12 @@
       "erg",
       "ergometer",
       "back",
-      "quads"
+      "quads",
+      "row erg",
+      "concept 2",
+      "cardio"
     ],
+    "common": true,
     "secondaryMuscles": [
       "lats",
       "glutes",
@@ -7145,8 +7444,11 @@
     },
     "searchTerms": [
       "obliques",
-      "core"
+      "core",
+      "seated twist",
+      "oblique twist"
     ],
+    "common": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -7285,8 +7587,11 @@
       "neutral-grip seated row",
       "v-bar row",
       "back",
-      "lats"
+      "lats",
+      "low row",
+      "cable seated row"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "traps"
@@ -7309,6 +7614,7 @@
     "searchTerms": [
       "calves"
     ],
+    "common": true,
     "secondaryMuscles": [
       "tibialis"
     ],
@@ -7390,6 +7696,11 @@
     "picture": {
       "photo": "seated-dumbbell-lateral-raise.jpg"
     },
+    "searchTerms": [
+      "seated lateral raise",
+      "side raise",
+      "shoulders"
+    ],
     "secondaryMuscles": [],
     "instructions": [
       "Pick a couple of dumbbells and sit at the end of a flat bench with your feet firmly on the floor. Hold the dumbbells with your palms facing in and your arms straight down at your sides at arms' length. This will be your starting position.",
@@ -7480,6 +7791,13 @@
     "picture": {
       "photo": "seated-leg-curl.jpg"
     },
+    "searchTerms": [
+      "seated hamstring curl",
+      "hamstring curl",
+      "ham curl",
+      "hamstrings"
+    ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Adjust the machine lever to fit your height and sit on the machine with your back against the back support pad.",
@@ -7550,8 +7868,12 @@
     "searchTerms": [
       "chest-supported row",
       "back",
-      "lats"
+      "lats",
+      "machine row",
+      "seated row machine",
+      "row machine"
     ],
+    "common": true,
     "secondaryMuscles": [
       "biceps",
       "traps"
@@ -7642,6 +7964,7 @@
       "barbell shrug",
       "traps"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Stand up straight with your feet at shoulder width as you hold a barbell with both hands in front of you using a pronated grip (palms facing the thighs). Tip: Your hands should be a little wider than shoulder width apart. You can use wrist wraps for this exercise for a better grip. This will be your starting position.",
@@ -7658,7 +7981,9 @@
       "library": "side-lunge-adductor-stretch"
     },
     "searchTerms": [
-      "glutes"
+      "glutes",
+      "inner thigh stretch",
+      "groin stretch"
     ],
     "secondaryMuscles": [
       "adductors"
@@ -7679,8 +8004,10 @@
     },
     "searchTerms": [
       "obliques",
-      "core"
+      "core",
+      "oblique plank"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Get into pushup position on the toes with your hands just outside of shoulder width.",
@@ -7859,6 +8186,12 @@
     "picture": {
       "photo": "single-arm-lat-pulldown.jpg"
     },
+    "searchTerms": [
+      "one arm pulldown",
+      "single arm pulldown",
+      "lats",
+      "back"
+    ],
     "secondaryMuscles": [
       "biceps",
       "middle back"
@@ -7877,6 +8210,13 @@
     "picture": {
       "photo": "single-arm-tricep-pushdown.jpg"
     },
+    "searchTerms": [
+      "single arm pushdown",
+      "one arm pushdown",
+      "cable pushdown",
+      "pressdown",
+      "triceps"
+    ],
     "secondaryMuscles": [],
     "instructions": [
       "Attach a straight or angled bar to a high pulley and grab with an overhand grip (palms facing down) at shoulder width.",
@@ -8004,6 +8344,7 @@
     "searchTerms": [
       "core"
     ],
+    "common": true,
     "secondaryMuscles": [
       "obliques"
     ],
@@ -8025,7 +8366,9 @@
     "searchTerms": [
       "skaters",
       "quads",
-      "glutes"
+      "glutes",
+      "plyo",
+      "plyometric"
     ],
     "secondaryMuscles": [
       "calves"
@@ -8046,7 +8389,10 @@
     },
     "searchTerms": [
       "ski ergometer",
-      "lats"
+      "lats",
+      "skierg",
+      "ski erg",
+      "cardio"
     ],
     "secondaryMuscles": [
       "core",
@@ -8071,8 +8417,12 @@
     ],
     "searchTerms": [
       "lying triceps extension",
-      "triceps"
+      "triceps",
+      "skullcrusher",
+      "french press",
+      "ez bar skull crusher"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Using a close grip, lift the EZ bar and hold it with your elbows in as you lie on the bench. Your arms should be perpendicular to the floor. This will be your starting position.",
@@ -8179,6 +8529,12 @@
     "picture": {
       "photo": "smith-machine-decline-press.jpg"
     },
+    "searchTerms": [
+      "smith decline press",
+      "decline bench",
+      "chest",
+      "triceps"
+    ],
     "secondaryMuscles": [
       "shoulders",
       "triceps"
@@ -8356,7 +8712,8 @@
       "barbell snatch",
       "glutes",
       "quads",
-      "hamstrings"
+      "hamstrings",
+      "olympic lift"
     ],
     "secondaryMuscles": [
       "traps",
@@ -8640,7 +8997,9 @@
       "stair stepper",
       "stair machine",
       "glutes",
-      "quads"
+      "quads",
+      "stairmaster",
+      "cardio"
     ],
     "secondaryMuscles": [
       "calves",
@@ -8683,6 +9042,10 @@
     "picture": {
       "photo": "standing-cable-crunch.jpg"
     },
+    "searchTerms": [
+      "cable crunch",
+      "core"
+    ],
     "secondaryMuscles": [],
     "instructions": [
       "Attach a rope to a high pulley and select an appropriate weight.",
@@ -8702,7 +9065,10 @@
       "Cable Hip Abduction"
     ],
     "searchTerms": [
-      "glutes"
+      "glutes",
+      "cable abduction",
+      "outer thigh",
+      "glute medius"
     ],
     "secondaryMuscles": [
       "core"
@@ -8802,7 +9168,9 @@
     },
     "searchTerms": [
       "standing side leg raise",
-      "glutes"
+      "glutes",
+      "outer thigh",
+      "glute medius"
     ],
     "secondaryMuscles": [
       "core"
@@ -8919,8 +9287,12 @@
       "upright bike",
       "indoor cycling",
       "exercise cycle",
-      "quads"
+      "quads",
+      "cycling",
+      "spin bike",
+      "cardio"
     ],
+    "common": true,
     "secondaryMuscles": [
       "glutes",
       "hamstrings",
@@ -8990,8 +9362,10 @@
     },
     "searchTerms": [
       "quads",
-      "glutes"
+      "glutes",
+      "box step-up"
     ],
+    "common": true,
     "secondaryMuscles": [
       "hamstrings",
       "core"
@@ -9037,7 +9411,10 @@
     },
     "searchTerms": [
       "lats",
-      "back"
+      "back",
+      "straight arm lat pulldown",
+      "lat prayer",
+      "cable pullover"
     ],
     "secondaryMuscles": [
       "biceps",
@@ -9484,7 +9861,9 @@
       "library": "toes-to-bar"
     },
     "searchTerms": [
-      "core"
+      "core",
+      "t2b",
+      "ttb"
     ],
     "secondaryMuscles": [
       "lats"
@@ -9552,8 +9931,11 @@
     "searchTerms": [
       "glutes",
       "quads",
-      "hamstrings"
+      "hamstrings",
+      "hex bar deadlift",
+      "hex bar"
     ],
+    "common": true,
     "secondaryMuscles": [
       "lower back",
       "traps",
@@ -9578,7 +9960,9 @@
       "treadmill walk",
       "incline treadmill",
       "glutes",
-      "calves"
+      "calves",
+      "walking",
+      "cardio"
     ],
     "secondaryMuscles": [
       "quads",
@@ -9603,8 +9987,12 @@
       "treadmill jog",
       "running on treadmill",
       "quads",
-      "calves"
+      "calves",
+      "running",
+      "jogging",
+      "cardio"
     ],
+    "common": true,
     "secondaryMuscles": [
       "glutes",
       "hamstrings"
@@ -9626,8 +10014,12 @@
     "searchTerms": [
       "cable pushdown",
       "rope pushdown",
-      "triceps"
+      "triceps",
+      "pressdown",
+      "tricep pressdown",
+      "cable tricep extension"
     ],
+    "common": true,
     "secondaryMuscles": [],
     "instructions": [
       "Attach a straight or angled bar to a high pulley and grab with an overhand grip (palms facing down) at shoulder width.",
@@ -9668,7 +10060,9 @@
     },
     "searchTerms": [
       "quads",
-      "glutes"
+      "glutes",
+      "plyo",
+      "plyometric"
     ],
     "secondaryMuscles": [
       "calves"
@@ -9713,7 +10107,9 @@
     "searchTerms": [
       "cable pushdown",
       "rope pushdown",
-      "triceps"
+      "triceps",
+      "v bar pressdown",
+      "pressdown"
     ],
     "secondaryMuscles": [],
     "instructions": [
@@ -9872,7 +10268,9 @@
       "library": "wall-sit"
     },
     "searchTerms": [
-      "quads"
+      "quads",
+      "wall squat",
+      "wall hold"
     ],
     "secondaryMuscles": [
       "glutes",
@@ -9978,6 +10376,10 @@
     "picture": {
       "photo": "weighted-plank.jpg"
     },
+    "searchTerms": [
+      "plank",
+      "core"
+    ],
     "secondaryMuscles": [],
     "instructions": [
       "Get into a prone position on the floor, supporting your weight on your toes and your forearms. Your arms are bent and directly below the shoulder.",
@@ -10086,6 +10488,11 @@
     "picture": {
       "photo": "wide-grip-seated-cable-row.jpg"
     },
+    "searchTerms": [
+      "wide grip cable row",
+      "lats",
+      "back"
+    ],
     "secondaryMuscles": [
       "biceps",
       "lats",

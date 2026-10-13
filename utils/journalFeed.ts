@@ -24,6 +24,9 @@
 // backdated log (journal → log a past workout) is weeks before it was written.
 // Ordering by `date` would file it under a day you never opened the app.
 //
+// Both screens also filter Recent Activity by session number ("3rd session" on
+// a card), several at once: `sessionNumbers` and `sessionFeed` below.
+//
 // Pure: no RN imports, so scripts/verify-journal-feed.ts can run it.
 
 import type { CompletedWorkout } from "../constants/programs";
@@ -63,4 +66,49 @@ export function buildJournalFeed({ entries, workouts, windowDays, now = Date.now
   ].filter(i => Number.isFinite(i.ts) && i.ts >= cutoff);
 
   return items.sort((a, b) => b.ts - a.ts);
+}
+
+/** Which session of its program day a workout was, the number its card reads
+ *  ("3rd session"), or null for one no program owns. Each screen passes its
+ *  `useJournalWorkoutInfo`, so the filter and the card can't disagree. */
+export type SessionOf = (w: CompletedWorkout) => number | null;
+
+/** The session numbers anything in `workouts` was, ascending: the choices the
+ *  Recent Activity filter offers. */
+export function sessionNumbers(workouts: CompletedWorkout[], sessionOf: SessionOf): number[] {
+  const seen = new Set<number>();
+  for (const w of workouts) {
+    const n = sessionOf(w);
+    if (n != null) seen.add(n);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * Recent Activity filtered to the session numbers picked: every workout whose
+ * number is one of `selected`, grouped by number ascending, newest first within
+ * each.
+ *
+ * Over the WHOLE history, not the feed's window: a program day comes round once
+ * a week, so a fortnight holds about two numbers per day and "every 1st
+ * session" would find nothing. Journal entries have no number and never match.
+ * An unparseable completedAt is dropped, as it is from the feed.
+ */
+export function sessionFeed({ workouts, sessionOf, selected }: {
+  workouts: CompletedWorkout[];
+  sessionOf: SessionOf;
+  selected: ReadonlySet<number>;
+}): { session: number; items: JournalFeedItem[] }[] {
+  const groups = new Map<number, JournalFeedItem[]>();
+  for (const data of workouts) {
+    const n = sessionOf(data);
+    const ts = Date.parse(data.completedAt);
+    if (n == null || !selected.has(n) || !Number.isFinite(ts)) continue;
+    const group = groups.get(n) ?? [];
+    group.push({ kind: "workout", data, ts });
+    groups.set(n, group);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([session, items]) => ({ session, items: items.sort((a, b) => b.ts - a.ts) }));
 }

@@ -95,7 +95,7 @@ const asyncStorage = {
 let db: PGlite | null = null;
 export function connectDb(next: PGlite) { db = next; }
 
-type Result = { data: unknown; error: { message: string } | null };
+type Result = { data: unknown; error: { message: string } | null; count?: number };
 
 /** PostgREST hands timestamps back as ISO strings, and so does this. */
 function plain(v: unknown): unknown {
@@ -147,10 +147,14 @@ class Query implements PromiseLike<Result> {
   private limitN: number | null = null;
   private single: "maybe" | "one" | null = null;
   private payload: Record<string, unknown>[] | Record<string, unknown> | null = null;
+  /** `select(cols, { count: "exact", head: true })`: how many rows, not the rows. */
+  private countOnly = false;
 
   constructor(private table: string) {}
 
-  select(cols = "*") {
+  select(cols = "*", opts?: { count?: "exact"; head?: boolean }) {
+    if (opts && !(opts.count === "exact" && opts.head)) throw new Error(`harness: select(${JSON.stringify(opts)}) unsupported`);
+    this.countOnly = !!opts;
     if (this.op === "select") this.cols = cols;
     else { this.returning = true; this.cols = cols; }
     return this;
@@ -196,7 +200,14 @@ class Query implements PromiseLike<Result> {
     const table = `public.${ident(this.table)}`;
     const cols = this.cols === "*" ? "*" : this.cols.split(",").map(c => ident(c.trim())).join(", ");
     let sql: string;
-    if (this.op === "select") {
+    if (this.op === "select" && this.countOnly) {
+      try {
+        const [row] = await request(`select count(*)::int as n from ${table}${where}`, params);
+        return { data: null, count: row.n as number, error: null };
+      } catch (e) {
+        return { data: null, error: { message: (e as Error).message } };
+      }
+    } else if (this.op === "select") {
       sql = `select ${cols} from ${table}${where}${this.orderBy ? ` order by ${this.orderBy}` : ""}${this.limitN ? ` limit ${this.limitN}` : ""}`;
     } else if (this.op === "insert") {
       const rows = this.payload as Record<string, unknown>[];

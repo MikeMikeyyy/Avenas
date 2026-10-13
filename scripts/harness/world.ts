@@ -35,6 +35,14 @@ export const EVERYONE = [TARA, COLE, CARA, CODY];
 export let db: PGlite;
 export let GROUP = "";
 
+/** A program of Cara's own, so her phone is never empty when she backs up: an
+ *  empty phone never overwrites its backup (lib/cloud.ts), so a copy she'd
+ *  deleted would come back with a restore, which is a story of its own. */
+export const CARA_OWN: SavedProgram = {
+  id: "program_cara_own", name: "Cara Own", totalWeeks: 3, currentWeek: 0, status: "created", startDate: "",
+  trainingDays: 1, cycleDays: 2, cyclePattern: ["Full", "Rest"], dayIds: ["d0", "d1"], workouts: {},
+};
+
 /** Accounts, Tara's connections to the other three, and the group, once. */
 export async function setupWorld() {
   db = await createDb({ apiGrants: true });
@@ -59,9 +67,15 @@ export async function setupWorld() {
 }
 
 /** Every phone back to a fresh install of its account holding its own
- *  `programs`, and nothing sent between anyone. */
+ *  `programs`, nothing sent between anyone, and nothing backed up. */
 export async function resetWorld() {
-  await db.exec("delete from public.shared_programs");
+  await db.exec(`
+    delete from public.shared_programs;
+    delete from public.workouts;
+    delete from public.programs;
+    delete from public.journal_entries;
+    delete from public.custom_exercises;
+  `);
   for (const p of EVERYONE) {
     p.store = new Map([
       ["@avenas/account_type", p.accountType === "pt" ? "pt" : "gym_user"],

@@ -27,8 +27,9 @@ import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGE
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
-  normaliseSets, type SavedProgram, type CompletedWorkout, type ProgramSet,
+  normaliseSets, type SavedProgram, type CompletedWorkout, type PlannedExercise, type ProgramSet,
 } from "../constants/programs";
+import { planForDay } from "../utils/exerciseChanges";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { MONTH_FULL } from "../utils/dates";
 import { programsAfterPastLog } from "../utils/programLifecycle";
@@ -40,6 +41,8 @@ import { scheduleCloudPush } from "../lib/syncManager";
 import { awardWorkoutAchievements } from "../utils/achievementStore";
 import { useTheme } from "../contexts/ThemeContext";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import { useFieldAboveKeyboard } from "../hooks/useFieldAboveKeyboard";
 
 const WARMUP_ORANGE = "#ffbf0f";
 
@@ -930,6 +933,16 @@ export default function LogWorkoutScreen() {
     setHasNext(fn !== null);
     setHasPrev(prevFn !== null);
   }, []);
+  // A field in the exercise list ends clear of the keyboard and its tools
+  // (hooks/useFieldAboveKeyboard.ts), as on the Workout tab. The floating
+  // session notes card lifts itself (notesKbShift), so it reports through
+  // handleInputFocus alone.
+  const scrollRef = useRef<ScrollView>(null);
+  const listFieldFocused = useFieldAboveKeyboard(scrollRef, kbHeight, ABOVE_KEYBOARD_TOOLS);
+  const handleListFieldFocus = useCallback((fn: (() => void) | null, prevFn: (() => void) | null) => {
+    handleInputFocus(fn, prevFn);
+    listFieldFocused();
+  }, [handleInputFocus, listFieldFocused]);
 
   // Session notes (floating card, same as the workout screen). The note text always
   // persists in `notes` (saved on Save Workout), so opening/closing never discards.
@@ -1219,6 +1232,21 @@ export default function LogWorkoutScreen() {
       : (addToProgramId && addToProgramId.length > 0) ? addToProgramId
       : "";
 
+    // What the program plans for the day (CompletedWorkout.plan), read as it
+    // saves: a log is filled in and saved in one sitting, from the program as
+    // it is, and a restored draft skips the template load the plan would
+    // otherwise come from. Absent for a free workout.
+    let plan: PlannedExercise[] | undefined;
+    if (programId && dayId) {
+      try {
+        const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
+        const progs: SavedProgram[] = raw ? JSON.parse(raw) : [];
+        plan = planForDay(progs.find(p => p.id === programId), dayId);
+      } catch (e) {
+        if (__DEV__) console.warn("[avenas]", "getItem", PROGRAMS_KEY, e);
+      }
+    }
+
     const completed: CompletedWorkout = {
       id: `workout_${Date.now()}`,
       date: date ?? "",
@@ -1229,6 +1257,7 @@ export default function LogWorkoutScreen() {
       // session logged from a surface that doesn't know the slot — those fall
       // back to name matching on the Progress page.
       dayId: dayId && dayId.length > 0 ? dayId : undefined,
+      ...(plan ? { plan } : {}),
       durationSeconds,
       sessionNotes: notes.trim() || undefined,
       exercises: exercises.map(ex => ({
@@ -1347,6 +1376,7 @@ export default function LogWorkoutScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: t.bg }}>
         <ScrollView
+          ref={scrollRef}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[s.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: safeBottom + 150 }]}
@@ -1390,7 +1420,7 @@ export default function LogWorkoutScreen() {
               onChangeExercise={() => setChangingExId(ex.id)}
               onToggleIsometric={() => toggleIsometric(ex.id)}
               onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
-              onInputFocus={handleInputFocus}
+              onInputFocus={handleListFieldFocus}
               prevSets={(prevSetsOf(ex) ?? []).map(p => formatPrevHint(p, isKg))}
               prevNote={prevNoteOf(ex)}
             />
@@ -1540,6 +1570,7 @@ export default function LogWorkoutScreen() {
       <ExercisePicker
         visible={!!changingExId}
         subtitle="CHANGE EXERCISE"
+        changing={exercises.find(ex => ex.id === changingExId)?.name ?? ""}
         customExercises={customExercises}
         onSelectMultiple={names => {
           if (names.length > 0 && changingExId) changeExercise(changingExId, names[0]);

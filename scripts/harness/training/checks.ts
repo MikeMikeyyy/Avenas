@@ -11,12 +11,17 @@
 //                  program scope and range, the Exercise Progress day list, the
 //                  exercise chart, its records, and the Exercise History page
 //                  the chart opens
-//   chart-layout/  the exercise chart on every phone width: every dot inside
-//                  the plot, the line never cut short, dates that don't collide
+//   chart-layout/  the exercise chart on every phone width: every session in
+//                  reach, the newest on screen when it opens, and on every
+//                  screenful a scroll stops on, an axis that reads cleanly with
+//                  every dot, block and bar inside the plot
 //   program-page/  the program page the Journal opens: weeks and totals
 //   home/          this week's ring and totals, Recent Activity
-//   hints/         the Workout tab's "Previous" sets and notes
+//   hints/         the Workout tab's "Previous" sets and notes, and its "Last
+//                  week:" lines (what the last session moved, swapped, skipped)
 //   save/          a saved session: weights read back as typed, PR cards
+//   journal/       a saved session's "Planned 2nd" / "Instead of" / "Added"
+//                  lines, its Skipped rows and its card's summary
 
 import {
   bucketMetricByDay, bucketMetricByMonth, bucketMetricByRollingWeeks, collectExerciseHistory,
@@ -24,20 +29,22 @@ import {
   computeWorkoutTonnage, filterByProgramScope, getRangeOption, rangeWindow, scopedProgramDays,
   sessionCountForDay, yearBarCount,
 } from "../../../utils/progressStats";
-import { programFinishDate, type CompletedWorkout, type ProgramDayRef, type SavedProgram } from "../../../constants/programs";
-import type { ExerciseDataPoint, MetricKey, ProgramScope, RangeKey } from "../../../constants/progress";
+import { programFinishDate, type CompletedWorkout, type PlannedExercise, type ProgramDayRef, type SavedProgram } from "../../../constants/programs";
+import { lastTimeCues, sessionChanges } from "../../../utils/exerciseChanges";
+import type { ExerciseDataPoint, ExerciseMetricKey, MetricKey, ProgramScope, RangeKey } from "../../../constants/progress";
 import { EXERCISE_METRIC_OPTIONS } from "../../../constants/progress";
 import { EXERCISES } from "../../../constants/exerciseData";
 import { exerciseHistoryRows } from "../../../utils/exerciseHistory";
 import {
-  CHART_HEIGHT, GIFTED_TOP_PAD, Y_AXIS_LABEL_WIDTH,
-  chartChange, dotX, dotY, exerciseChartAxis, exerciseChartKey, exerciseChartLabels, exerciseChartLayout, metricValue, plottedPoints,
+  CHART_HEIGHT, LABEL_H, LABEL_INK_DOWN, LABEL_INK_UP, LINE_STROKE, PLOT_TOP,
+  axisLoadStep, chartChange, chartValue, dotY, drawsOn, exerciseChartGeometry, setStacks, slotX, strengthDots, strengthLabel,
+  strengthLabelInkWidth, visibleSlots, volumeBars, windowAxis, type ExerciseChartGeometry,
 } from "../../../utils/exerciseChartLayout";
 import { buildProgramHistory } from "../../../utils/programHistory";
 import { buildWeekSchedule, weekStartFor, weekTotals } from "../../../utils/weekSchedule";
 import { addDaysYMD, toYMD } from "../../../utils/dates";
 import {
-  buildPrevNoteLookup, buildPrevSetsLookup, getEffectiveToday, prevDayScopeFor, resolveWorkoutForDate, type DayOverride,
+  buildPrevNoteLookup, buildPrevSetsLookup, getEffectiveToday, lastSessionOfDay, prevDayScopeFor, resolveWorkoutForDate, type DayOverride,
 } from "../../../utils/workout";
 import { formatPrevHint, formatWeightForDisplay, trimNumber } from "../../../utils/units";
 import { detectWorkoutAchievements } from "../../../utils/achievements";
@@ -364,15 +371,28 @@ function checkChart(
     }
   }
 
-  // Each metric's dots: Reps every session it was done in, the weight metrics
-  // the sessions with weight on the bar.
+  // Each tab's sessions: Sets every session it was done in, Strength the
+  // sessions with weight on the bar.
   const weighted = did.filter(s => s.exercises.some(e => liftKey(e.name) === liftKey(name)
     && workingDone(s, e).some(x => x.kg && x.kg > 0 && x.reps && x.reps > 0)));
-  for (const metric of ["topWeight", "totalReps"] as const) {
-    const want = (metric === "totalReps" ? did : weighted).map(s => s.id).join(",");
-    const got = plottedPoints(points, metric).map(p => p.workoutId).filter(id => did.some(s => s.id === id)).join(",");
+  for (const metric of ["strength", "sets"] as const) {
+    const want = (metric === "sets" ? did : weighted).map(s => s.id).join(",");
+    const got = points.filter(p => drawsOn(p, metric)).map(p => p.workoutId).filter(id => did.some(s => s.id === id)).join(",");
     if (kind !== "hold" && want !== got) {
-      out.push({ code: "progress/chart-metric", what: `${at}: ${metric === "totalReps" ? "Reps" : "Heaviest"} plots ${got.split(",").filter(Boolean).length} sessions; ${(metric === "totalReps" ? did : weighted).length} should show there` });
+      out.push({ code: "progress/chart-metric", what: `${at}: ${metric === "sets" ? "Sets" : "Strength"} draws ${got.split(",").filter(Boolean).length} sessions; ${(metric === "sets" ? did : weighted).length} should show there` });
+    }
+  }
+
+  // Sets: a block for every working set lifted, in the order lifted, with its
+  // own weight and reps (a hold's seconds).
+  const liftedSets = (s: LedgerSession) => s.exercises.filter(e => liftKey(e.name) === liftKey(name)).flatMap(e => workingDone(s, e))
+    .filter(x => x.reps && x.reps > 0).map(x => ({ kg: x.kg && x.kg > 0 ? x.kg : 0, reps: x.reps! }));
+  for (const p of points) {
+    const s = l.sessions.find(x => x.id === p.workoutId);
+    if (!s) continue;
+    const want = liftedSets(s);
+    if (want.length !== p.sets.length || want.some((w, i) => p.sets[i].reps !== w.reps || !near(p.sets[i].weight, w.kg, 0.002))) {
+      out.push({ code: "progress/chart-sets", what: `${at} ${s.date}: Sets draws ${p.sets.map(x => `${fmt(x.weight)}×${x.reps}`).join(" ")}; lifted ${want.map(x => `${fmt(x.kg)}×${x.reps}`).join(" ")}` });
     }
   }
 
@@ -391,6 +411,32 @@ function checkChart(
     const best = Math.max(...withWeight.map(p => p.sessionVolume));
     if (!prs.bestSessionVolume || !near(prs.bestSessionVolume.value, best, 0.01)) {
       out.push({ code: "progress/pr-tiles", what: `${at}: Most Volume says ${prs.bestSessionVolume ? fmt(prs.bestSessionVolume.value) : "—"}; the chart's best is ${fmt(best)}` });
+    }
+  }
+
+  // Most reps: the most reps done in a set, bodyweight included, at the
+  // heaviest weight that did them; and the set it names is the block Sets
+  // draws gold.
+  const everySet = did.flatMap(s => liftedSets(s));
+  if (everySet.length > 0) {
+    const maxReps = Math.max(...everySet.map(x => x.reps));
+    const heaviestAt = Math.max(...everySet.filter(x => x.reps === maxReps).map(x => x.kg));
+    const m = prs.mostReps;
+    if (!m || m.value !== maxReps || !near(m.weight ?? 0, heaviestAt, 0.002)) {
+      out.push({ code: "progress/pr-most-reps", what: `${at}: Most reps reads ${m ? `${m.value} at ${fmt(m.weight ?? 0)}` : "—"}; the most lifted was ${maxReps} at ${fmt(heaviestAt)}` });
+    } else {
+      const block = points.find(p => p.workoutId === m.workoutId)?.sets[m.setIndex ?? -1];
+      if (!block || block.reps !== m.value || !near(block.weight, m.weight ?? 0, 0.002)) {
+        out.push({ code: "progress/pr-most-reps", what: `${at}: Most reps names set ${(m.setIndex ?? -1) + 1} on ${m.date}, which wasn't ${m.value} reps` });
+      }
+    }
+  }
+  // Estimated 1RM, the record row marked as an estimate: the best set lifted,
+  // as weight × (1 + reps / 30). A timed hold has none.
+  if (kind !== "hold") {
+    const best = Math.max(0, ...everySet.filter(x => x.kg > 0).map(x => x.kg * (1 + x.reps / 30)));
+    if (best > 0 ? !prs.oneRepMax || !near(prs.oneRepMax.value, best, 0.01) : prs.oneRepMax !== null) {
+      out.push({ code: "progress/pr-e1rm", what: `${at}: Estimated 1RM reads ${prs.oneRepMax ? fmt(prs.oneRepMax.value) : "—"}; the best set lifted works out at ${fmt(best)}` });
     }
   }
 
@@ -422,9 +468,8 @@ function checkChart(
         out.push({ code: "progress/pr-most-volume", what: `${at}: Most Volume reads ${most ? `${most.sets} sets · ${most.reps} reps` : "—"}; the session that moved ${fmt(maxVol)} kg had ${sessions.filter(v => near(v.vol, maxVol, 0.5)).map(v => `${v.sets} sets · ${v.reps} reps`).join(" or ")}` });
       }
       for (const [metric, values] of [
-        ["topWeight", rows.map(r => Math.max(...r.sets.map(x => x.kg)))],
-        ["e1rm", rows.map(r => Math.max(...r.sets.map(x => x.kg * (1 + x.reps / 30))))],
-        ["sessionVolume", sessions.map(v => v.vol)],
+        ["strength", rows.map(r => Math.max(...r.sets.map(x => x.kg)))],
+        ["volume", sessions.map(v => v.vol)],
       ] as const) {
         const shown = chartChange(points, metric);
         const want = values.length >= 2 ? ((values[values.length - 1] - values[0]) / values[0]) * 100 : null;
@@ -462,50 +507,83 @@ function programName(snap: Snapshot, id: string): string {
 // ─── The exercise chart's layout ─────────────────────────────────────────────
 
 const WIDTHS = [375, 390, 393, 402, 428, 430, 440];
-const DOT_R = 3;
 
-/** What the chart keeps between draws. The Progress tab stays mounted, and so
- *  does its chart, through every pick and every session logged (gifted-charts'
- *  line width is opened once per mount: exerciseChartKey); and the page
- *  remembers the exercise picked, so a visit opens on the one the last visit
- *  ended on, with whatever's been logged since. */
-export type ChartMemory = { selected: string | null; mounted: Map<number, { key: string; lineWidth: number }> };
-
-export const newChartMemory = (): ChartMemory => ({ selected: null, mounted: new Map() });
-
-export function checkChartLayout(drawn: DrawnChart[], memory: ChartMemory): Problem[] {
+/**
+ * The exercise chart as it's drawn (utils/exerciseChartLayout.ts), on every
+ * phone width: every session in reach of the scroll and the newest on screen
+ * when it opens; then every screenful the row can stop on, a slot at a time:
+ * an axis that steps by the load jump on Strength, never repeats or dips below
+ * zero, shows a real change across the plot without stretching a wobble, and
+ * holds every dot, block and bar on screen (and the numbers over them) inside
+ * the chart.
+ */
+export function checkChartLayout(drawn: DrawnChart[]): Problem[] {
   const out: Problem[] = [];
-  // This visit: the remembered pick first, then every other chart in turn,
-  // and the page left on the last one.
-  const idOf = (c: DrawnChart) => `${c.scopeLabel}|${c.day.key}|${norm(c.name)}`;
-  const charts = [...drawn.filter(c => idOf(c) === memory.selected), ...drawn.filter(c => idOf(c) !== memory.selected)];
-  if (charts.length > 0) memory.selected = idOf(charts[charts.length - 1]);
-  for (const c of charts) for (const metric of EXERCISE_METRIC_OPTIONS.map(o => o.key)) {
-    // The metric's own dots, as the chart plots them (plottedPoints).
-    const points = plottedPoints(c.points, metric);
+  for (const c of drawn) {
+    const points = c.points;
     const n = points.length;
     if (n === 0) continue;
-    const at = `${c.day.programName} ${c.day.label} › ${c.name} (${n} sessions, ${metric})`;
-    const dates = points.map(p => p.date);
-
-    // Every dot inside the plot vertically, and an axis that reads cleanly.
-    const values = points.map(p => metricValue(p, metric));
-    const axis = exerciseChartAxis(values);
-    for (const v of values) {
-      const y = dotY(v, axis);
-      if (y < GIFTED_TOP_PAD - 0.01 || y > GIFTED_TOP_PAD + CHART_HEIGHT + 0.01) {
-        out.push({ code: "chart-layout/dot-outside", what: `${at}: a dot at ${fmt(v)} sits outside the ${fmt(axis.min)}–${fmt(axis.max)} axis` });
-        break;
+    const name = `${c.day.programName} ${c.day.label} › ${c.name} (${n} sessions)`;
+    for (const width of WIDTHS) {
+      const g = exerciseChartGeometry(n, width);
+      if (slotX(g, 0) < g.spacing / 2 - 0.01 || slotX(g, n - 1) > g.contentWidth - g.spacing / 2 + 0.01) {
+        out.push({ code: "chart-layout/slot-outside", what: `${name} on ${width}pt: the row is ${fmt(g.contentWidth)} wide, its slots run ${fmt(slotX(g, 0))}..${fmt(slotX(g, n - 1))}` });
+      }
+      // It opens on the newest, wholly on screen.
+      const newest = slotX(g, n - 1) - g.maxScrollX;
+      const opened = visibleSlots(g, n, g.maxScrollX);
+      if (newest - g.spacing / 2 < -0.01 || newest + g.spacing / 2 > g.viewportWidth + 0.01 || opened.last !== n - 1) {
+        out.push({ code: "chart-layout/newest-hidden", what: `${name} on ${width}pt: it opens on sessions ${opened.first + 1}–${opened.last + 1}, the newest at ${fmt(newest)} of ${fmt(g.viewportWidth)}` });
       }
     }
-    if (new Set(axis.labels).size !== axis.labels.length) {
-      out.push({ code: "chart-layout/axis-repeat", what: `${at}: the y-axis reads ${axis.labels.join(", ")}` });
+    // Every screenful a scroll can stop on, a slot at a time (on a 390pt
+    // phone: the axis depends on which sessions are on screen, not the width).
+    const g = exerciseChartGeometry(n, 390);
+    const seen = new Set<string>();
+    for (let x = g.maxScrollX; ; x = Math.max(0, x - g.spacing)) {
+      const { first, last } = visibleSlots(g, n, x);
+      if (!seen.has(`${first}-${last}`)) {
+        seen.add(`${first}-${last}`);
+        for (const metric of EXERCISE_METRIC_OPTIONS.map(o => o.key)) {
+          out.push(...checkScreenful(points, metric, first, last, g, `${name}, sessions ${first + 1}–${last + 1} on ${metric}`));
+        }
+      }
+      if (x === 0) break;
     }
-    if (axis.min < 0) out.push({ code: "chart-layout/axis-below-zero", what: `${at}: the y-axis starts at ${fmt(axis.min)}` });
+  }
+  return out;
+}
+
+function checkScreenful(
+  points: ExerciseDataPoint[], metric: ExerciseMetricKey, first: number, last: number, g: ExerciseChartGeometry, at: string,
+): Problem[] {
+  const out: Problem[] = [];
+  const on = points.slice(first, last + 1).filter(p => drawsOn(p, metric));
+  if (on.length === 0) return out;
+  const axis = windowAxis(points, metric, first, last)!;
+  const values = on.map(p => chartValue(p, metric));
+  if (new Set(axis.labels).size !== axis.labels.length) {
+    out.push({ code: "chart-layout/axis-repeat", what: `${at}: the y-axis reads ${axis.labels.join(", ")}` });
+  }
+  if (axis.min < 0) out.push({ code: "chart-layout/axis-below-zero", what: `${at}: the y-axis starts at ${fmt(axis.min)}` });
+  // A bar's height is its value: Sets and Volume stand on zero.
+  if (metric !== "strength" && axis.min !== 0) {
+    out.push({ code: "chart-layout/bars-off-zero", what: `${at}: the bars stand on ${fmt(axis.min)}, not zero` });
+  }
+  const inPlot = (y: number) => y >= PLOT_TOP - 0.01 && y <= PLOT_TOP + CHART_HEIGHT + 0.01;
+  const shown = (slot: number) => slot >= first && slot <= last;
+  if (metric === "strength") {
+    // Strength reads in the jumps the weights were loaded in: sessions loaded
+    // mainly 5 kg at a time read "40, 50, 60", never "44, 48, 52" (user
+    // report, 2026-10-12).
+    const jump = axisLoadStep(values);
+    const off = jump === null ? [] : axis.labels.map((_, i) => axis.min + i * axis.stepValue)
+      .filter(v => Math.abs(v - Math.round(v / jump) * jump) > 0.01);
+    if (off.length) {
+      out.push({ code: "chart-layout/axis-off-load", what: `${at}: weights loaded ${jump} at a time read against ${axis.labels.join(", ")}` });
+    }
     // Zoomed to the dots: a change worth seeing fills the plot, and a wobble
-    // stays a wobble. From zero with the first session on the middle line, a
-    // 10% gain moved a dot 5% of the plot, and Heaviest and Best Set drew the
-    // same dots.
+    // stays a wobble.
     const hi = Math.max(...values);
     const lo = Math.min(...values);
     const share = (dotY(lo, axis) - dotY(hi, axis)) / CHART_HEIGHT;
@@ -515,43 +593,59 @@ export function checkChartLayout(drawn: DrawnChart[], memory: ChartMemory): Prob
     if (hi - lo <= 0.05 * hi && share > 0.25) {
       out.push({ code: "chart-layout/axis-stretch", what: `${at}: a ${fmt(hi - lo)} wobble on ${fmt(hi)} spans ${Math.round(share * 100)}% of the plot (axis ${axis.labels.join(" ")})` });
     }
-
-    for (const width of WIDTHS) {
-      const layout = exerciseChartLayout(n, width);
-      const labels = exerciseChartLabels(dates, layout.spacing);
-      // The line's box, as gifted-charts-core sizes it at mount.
-      const lineWidth = layout.initialSpacing + n * layout.spacing + layout.endSpacing;
-      const key = exerciseChartKey(c.name, c.day.dayId, n, layout);
-      const mounted = memory.mounted.get(width);
-      const open = mounted && mounted.key === key ? mounted.lineWidth : lineWidth;
-      memory.mounted.set(width, { key, lineWidth: open });
-      const lastX = layout.initialSpacing + (n - 1) * layout.spacing;
-      if (open < lastX + DOT_R) {
-        out.push({ code: "chart-layout/line-cut", what: `${at} on a ${width}pt phone: the line stops at ${fmt(open)}, the last dot is at ${fmt(lastX)}` });
+    const dots = strengthDots(points, g, axis);
+    for (const [i, d] of dots.entries()) {
+      if (!shown(d.slot)) continue;
+      if (!inPlot(d.y)) {
+        out.push({ code: "chart-layout/dot-outside", what: `${at}: session ${d.slot + 1}'s ${fmt(chartValue(points[d.slot], metric))} dot sits outside the ${axis.labels[0]}–${axis.labels[axis.labels.length - 1]} axis` });
+        break;
       }
-      for (let i = 0; i < n; i++) {
-        const x = dotX(layout, i);
-        if (x < Y_AXIS_LABEL_WIDTH || x > Y_AXIS_LABEL_WIDTH + layout.chartWidth) {
-          out.push({ code: "chart-layout/dot-outside", what: `${at} on ${width}pt: dot ${i + 1} at x ${fmt(x)}, the plot is ${Y_AXIS_LABEL_WIDTH}..${Y_AXIS_LABEL_WIDTH + layout.chartWidth}` });
-          break;
+      if (d.labelY - LABEL_H / 2 < 0 || d.labelY + LABEL_H / 2 > PLOT_TOP + CHART_HEIGHT) {
+        out.push({ code: "chart-layout/label-outside", what: `${at}: session ${d.slot + 1}'s reps don't fit over or under its dot` });
+        break;
+      }
+      // Its reps clear of the line either side, by a point at least, walked a
+      // quarter of a point at a time (user report, 2026-10-13: a steep climb
+      // ran the line through them).
+      const half = strengthLabelInkWidth(strengthLabel(points[d.slot])) / 2;
+      const ink = { l: d.labelX - half, r: d.labelX + half, t: d.labelY - LABEL_INK_UP, b: d.labelY + LABEL_INK_DOWN };
+      let gap = Infinity;
+      for (const n of [dots[i - 1], dots[i + 1]]) {
+        if (!n) continue;
+        const steps = Math.ceil(Math.hypot(n.x - d.x, n.y - d.y) * 4);
+        for (let s = 0; s <= steps; s++) {
+          const x = d.x + ((n.x - d.x) * s) / steps;
+          const y = d.y + ((n.y - d.y) * s) / steps;
+          gap = Math.min(gap, Math.hypot(Math.max(ink.l - x, 0, x - ink.r), Math.max(ink.t - y, 0, y - ink.b)) - LINE_STROKE / 2);
         }
       }
-      // The dates under the dots.
-      let prev: { x: number; w: number; text: string } | null = null;
-      for (let i = 0; i < n; i++) {
-        if (!labels[i]) continue;
-        const x = dotX(layout, i);
-        const w = labelWidth(labels[i]);
-        if (x - w / 2 < 0 || x + w / 2 > layout.wrapperWidth) {
-          out.push({ code: "chart-layout/label-overlap", what: `${at} on ${width}pt: the date "${labels[i]}" runs off the card` });
-        }
-        if (prev && x - prev.x < (w + prev.w) / 2 + 2) {
-          out.push({ code: "chart-layout/label-overlap", what: `${at} on ${width}pt: "${prev.text}" and "${labels[i]}" overlap` });
-        }
-        if (prev && prev.text === labels[i] && width === WIDTHS[0]) {
-          out.push({ code: "chart-layout/label-repeat", what: `${at}: two dates in a row read "${labels[i]}" (labels ${labels.filter(Boolean).join(" ")})` });
-        }
-        prev = { x, w, text: labels[i] };
+      if (gap < 1) {
+        out.push({ code: "chart-layout/label-on-line", what: `${at}: session ${d.slot + 1}'s reps sit ${gap.toFixed(1)}pt from the line` });
+        break;
+      }
+    }
+  } else if (metric === "sets") {
+    for (const st of setStacks(points, g, axis).filter(s => shown(s.slot))) {
+      if (!inPlot(st.top) || st.blocks.some(b => !(b.h > 0) || !inPlot(b.y) || !inPlot(b.y + b.h))) {
+        out.push({ code: "chart-layout/block-outside", what: `${at}: session ${st.slot + 1}'s stack runs outside the ${axis.labels[0]}–${axis.labels[axis.labels.length - 1]} axis` });
+        break;
+      }
+      // Its weight over it, inside the chart (under its top, it would sit on
+      // the blocks).
+      if (st.labelY > st.top || st.labelY - LABEL_H / 2 < 0) {
+        out.push({ code: "chart-layout/label-outside", what: `${at}: the weight over session ${st.slot + 1} has no room over its stack` });
+        break;
+      }
+    }
+  } else {
+    for (const b of volumeBars(points, g, axis).filter(b => shown(b.slot))) {
+      if (!inPlot(b.y)) {
+        out.push({ code: "chart-layout/bar-outside", what: `${at}: session ${b.slot + 1}'s bar runs outside the ${axis.labels[0]}–${axis.labels[axis.labels.length - 1]} axis` });
+        break;
+      }
+      if (b.labelY > b.y || b.labelY - LABEL_H / 2 < 0) {
+        out.push({ code: "chart-layout/label-outside", what: `${at}: the kilos over session ${b.slot + 1} have no room over its bar` });
+        break;
       }
     }
   }
@@ -760,7 +854,64 @@ export function checkHints(b: BeforeLog): Problem[] {
       if (shownNote !== note) out.push({ code: "hints/prev-note", what: `${where}: the note hint reads "${shownNote ?? ""}"; last time's note was "${note ?? ""}"` });
     }
   }
+
+  // "Last week:" lines: what the last session of this day did, against today's
+  // plan; nothing when the day has changed since that session's plan.
+  if (b.plan) {
+    const shown = lastTimeCues(lastSessionOfDay(b.history, undefined, scope), b.plan);
+    const prev = day[0];
+    const same = !!prev?.plan && prev.plan.length === b.plan.length
+      && prev.plan.every((p, i) => p.id === b.plan![i].id && p.name === b.plan![i].name);
+    const where = `${workout.name} (${workout.dayId}), last week's lines`;
+    if (!same) {
+      if (Object.keys(shown).length) out.push({ code: "hints/changes-after-edit", what: `${where}: ${Object.keys(shown).length} shown, but the day isn't planned as it was last time` });
+    } else {
+      const want = ledgerChanges(prev.plan!, prev.exercises);
+      const swaps = want.swapped.map(i => `${prev.exercises[i].place}:${prev.exercises[i].name}`).sort();
+      const shownSwaps = Object.entries(shown).flatMap(([id, c]) => (c.kind === "swapped" ? [`${id}:${c.to}`] : [])).sort();
+      if (swaps.join(",") !== shownSwaps.join(",")) out.push({ code: "hints/changes-swap", what: `${where}: swaps shown ${shownSwaps.join(", ") || "none"}; done ${swaps.join(", ") || "none"}` });
+      const shownSkips = Object.entries(shown).flatMap(([id, c]) => (c.kind === "skipped" ? [id] : [])).sort();
+      if (want.skipped.slice().sort().join(",") !== shownSkips.join(",")) out.push({ code: "hints/changes-skip", what: `${where}: skips shown ${shownSkips.join(", ") || "none"}; left out ${want.skipped.join(", ") || "none"}` });
+      const moved = Object.entries(shown).flatMap(([id, c]) => (c.kind === "moved" ? [{ id, at: c.donePosition }] : []));
+      for (const m of moved) {
+        if (prev.exercises[m.at - 1]?.place !== m.id) out.push({ code: "hints/changes-move", what: `${where}: "done ${m.at}" on ${m.id}, which was done ${prev.exercises.findIndex(e => e.place === m.id) + 1}` });
+      }
+      if (!movesAccountFor(want, prev.exercises, new Set(moved.map(m => m.id)))) {
+        out.push({ code: "hints/changes-move", what: `${where}: ${moved.length} marked moved; ${want.moves} had to move (${prev.exercises.map(e => e.place ?? "+").join(" ")})` });
+      }
+    }
+  }
   return out;
+}
+
+// ─── What a session changed about its plan ───────────────────────────────────
+
+/** Worked out from what the lifter did: the exercises swapped in, added, left
+ *  out, and how many had to move to get the order done (all but the longest
+ *  run kept in plan order). */
+function ledgerChanges(plan: PlannedExercise[], exercises: LedgerExercise[]) {
+  const at = new Map(plan.map((p, i) => [p.id, i]));
+  const placed = exercises.flatMap((e, i) => (e.place && at.has(e.place) ? [{ i, at: at.get(e.place)! }] : []));
+  const run = placed.map(() => 1);
+  for (let x = 0; x < placed.length; x++) {
+    for (let y = 0; y < x; y++) if (placed[y].at < placed[x].at) run[x] = Math.max(run[x], run[y] + 1);
+  }
+  return {
+    placed,
+    moves: placed.length - (placed.length ? Math.max(...run) : 0),
+    swapped: exercises.flatMap((e, i) => (e.place && at.has(e.place) && e.swappedFrom ? [i] : [])),
+    added: exercises.flatMap((e, i) => (!e.place || !at.has(e.place) ? [i] : [])),
+    skipped: plan.filter(p => !exercises.some(e => e.place === p.id)).map(p => p.id),
+  };
+}
+
+/** The exercises left unmarked (`marked` by place, a swap-in counting as
+ *  marked) are in plan order, and no more were marked than had to move. */
+function movesAccountFor(want: ReturnType<typeof ledgerChanges>, exercises: LedgerExercise[], marked: Set<string>): boolean {
+  const left = want.placed.filter(p => !marked.has(exercises[p.i].place!) && !exercises[p.i].swappedFrom);
+  const inOrder = left.every((p, k) => k === 0 || left[k - 1].at < p.at);
+  const markedPlain = want.placed.filter(p => marked.has(exercises[p.i].place!) && !exercises[p.i].swappedFrom).length;
+  return inOrder && markedPlain <= want.moves;
 }
 
 // ─── A save ──────────────────────────────────────────────────────────────────
@@ -807,6 +958,39 @@ export function checkSave(a: AfterSave): Problem[] {
   const got = pr && "prs" in pr ? pr.prs.map(r => liftKey(r.exerciseName)) : [];
   if (got.sort().join(", ") !== want.sort().join(", ")) {
     out.push({ code: "save/pr", what: `${ledger.workoutName} ${ledger.date}: the PR card lists ${got.join(", ") || "nothing"}; beaten were ${want.join(", ") || "none"}` });
+  }
+
+  // The Journal's cues for it (workout-detail's lines and skipped rows, the
+  // card's summary), read from the saved session against what was done.
+  if (ledger.plan) {
+    const where = `${ledger.workoutName} ${ledger.date}, the Journal's lines`;
+    const changes = sessionChanges(saved);
+    const done = ledgerChanges(ledger.plan, ledger.exercises);
+    if (!changes) {
+      out.push({ code: "journal/changes", what: `${where}: none drawn for a session with a plan` });
+    } else {
+      const kinds = changes.cues.map(c => c?.kind ?? "-");
+      const swapped = kinds.flatMap((k, i) => (k === "swapped" ? [i] : []));
+      const added = kinds.flatMap((k, i) => (k === "added" ? [i] : []));
+      if (swapped.join(",") !== done.swapped.join(",")) out.push({ code: "journal/changes", what: `${where}: "Instead of" on ${swapped.join(", ") || "none"}; swapped were ${done.swapped.join(", ") || "none"}` });
+      if (added.join(",") !== done.added.join(",")) out.push({ code: "journal/changes", what: `${where}: "Added" on ${added.join(", ") || "none"}; added were ${done.added.join(", ") || "none"}` });
+      const skipped = changes.skipped.map(s => s.id);
+      if (skipped.join(",") !== done.skipped.join(",")) out.push({ code: "journal/changes", what: `${where}: Skipped rows for ${skipped.join(", ") || "none"}; left out ${done.skipped.join(", ") || "none"}` });
+      // "Planned Nth" names its place in the plan, and what's left unmarked is
+      // in plan order with no more marked than had to move.
+      const marked = new Set<string>();
+      changes.cues.forEach((c, i) => {
+        if (c?.kind !== "moved") return;
+        const place = ledger.exercises[i].place;
+        if (place) marked.add(place);
+        const at = ledger.plan!.findIndex(p => p.id === place) + 1;
+        if (c.plannedPosition !== at) out.push({ code: "journal/changes", what: `${where}: "Planned ${c.plannedPosition}" on ${ledger.exercises[i].name}, planned ${at}` });
+      });
+      if (!movesAccountFor(done, ledger.exercises, marked)) {
+        out.push({ code: "journal/changes", what: `${where}: ${marked.size} marked moved; ${done.moves} had to move (${ledger.exercises.map(e => e.place ?? "+").join(" ")})` });
+      }
+      if ((changes.counts.moved > 0) !== (done.moves > 0)) out.push({ code: "journal/changes", what: `${where}: the card ${changes.counts.moved > 0 ? "says" : "doesn't say"} the order changed; ${done.moves} moved` });
+    }
   }
   void lifter;
   return out;

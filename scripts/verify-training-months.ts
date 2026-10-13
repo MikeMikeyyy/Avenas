@@ -25,7 +25,7 @@ import { crossesDst } from "./harness/solo/env";
 import { Lifter } from "./harness/training/lifter";
 import {
   checkChartLayout, checkHints, checkHome, checkProgramPages, checkProgressBars, checkProgressDays, checkSave,
-  newChartMemory, snapshot, type Problem,
+  snapshot, type Problem,
 } from "./harness/training/checks";
 import { addDaysYMD } from "../utils/dates";
 
@@ -69,7 +69,6 @@ function startFor(seed: number): string {
 }
 
 async function runLifter(seed: number) {
-  const memory = newChartMemory();
   const lifter: Lifter = new Lifter(seed, {
     beforeLog: b => record(lifter, checkHints(b)),
     afterSave: a => { sessionsLogged += 1; record(lifter, checkSave(a)); },
@@ -94,7 +93,7 @@ async function runLifter(seed: number) {
     record(lifter, checkProgressBars(lifter, snap));
     const { problems, charts } = checkProgressDays(lifter, snap);
     record(lifter, problems);
-    record(lifter, checkChartLayout(charts, memory));
+    record(lifter, checkChartLayout(charts));
     record(lifter, checkProgramPages(lifter, snap));
     record(lifter, checkHome(lifter, snap));
     record(lifter, warnings.splice(0, warnings.length).map(w => ({ code: "app/swallowed-error", what: w.text })));

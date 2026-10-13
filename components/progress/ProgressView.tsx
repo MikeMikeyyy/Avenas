@@ -3,7 +3,7 @@
 // data (their cloud backup, via trainerStore.loadClientData) using identical
 // visuals.
 
-import { useState, useCallback, useMemo, useRef, useEffect, type ReactElement } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect, useEffectEvent, type ReactElement } from "react";
 import { View, Text, StyleSheet, Animated, type RefreshControlProps } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
@@ -23,6 +23,9 @@ import DumbbellIcon from "../DumbbellIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
+import { useRestTimer } from "../../contexts/RestTimerContext";
+import { useFloatingBars } from "../../hooks/useFloatingBars";
+import { REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H } from "../../constants/floatingBars";
 import { type CompletedWorkout, type ProgramDayRef, type SavedProgram } from "../../constants/programs";
 import { type CustomExercise, type SelectableMuscle } from "../../constants/exercises";
 import type { MuscleGroupStat, RangeKey } from "../../constants/progress";
@@ -91,6 +94,10 @@ export interface ProgressViewProps {
 
 const NO_CUSTOM: CustomExercise[] = [];
 
+/** How long after the scroll to the chart it's measured again, in case it was
+ *  still moving: a day panel's open tween (DayExerciseList) is 280ms. */
+const CHART_SETTLE_MS = 350;
+
 /**
  * Keyed by whose page it is, so each person's selections (remembered for the
  * app's run, utils/progressSession.ts) are read into a fresh body rather than
@@ -138,12 +145,26 @@ function ProgressBody({
 
   const scrollRef = useRef<any>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
+  const exerciseSectionRef = useRef<View>(null);
   const exerciseSectionY = useRef(0);
   const exerciseSectionH = useRef(0);
   const viewportH = useRef(0);
-  // The selection the page opened with. Coming back to it isn't a tap, so it
-  // doesn't scroll the page down to its chart (see the scroll effect below).
-  const restoredSelection = useRef(selectedExercise);
+  // Bumped by every tap on an exercise, the one already chosen included: what
+  // takes the page down to its chart (see the scroll effect below). A
+  // selection remembered from the last visit never bumps it, so the page comes
+  // back as it was left.
+  const [chartScrollRequest, setChartScrollRequest] = useState(0);
+
+  // What covers the foot of the page: the tab bar, and above it, while a
+  // workout's on, the workout bar (taller with a rest inside it).
+  const { workoutBarShown, workoutBarBottom, restInBar } = useFloatingBars();
+  const { restBannerActive } = useRestTimer();
+  const coveredBottom = Math.max(
+    insets.bottom + 72,
+    workoutBarShown
+      ? workoutBarBottom + WORKOUT_BAR_H + (restInBar && restBannerActive ? REST_SECTION_H + REST_DIVIDER_H : 0) + 12
+      : 0,
+  );
 
   // Reconcile scope when the upstream programs list changes (e.g. switching
   // client). Only once the data is in: a remembered program scope would
@@ -313,6 +334,7 @@ function ProgressBody({
       e1rm: dw(p.e1rm),
       e1rmWeight: dw(p.e1rmWeight),
       sessionVolume: dw(p.sessionVolume),
+      sets: p.sets.map(s => ({ ...s, weight: dw(s.weight) })),
     })),
     [exerciseHistory, isKg],
   );
@@ -325,43 +347,75 @@ function ProgressBody({
       bestSetVolume: c(prs.bestSetVolume),
       bestSessionVolume: c(prs.bestSessionVolume),
       oneRepMax: c(prs.oneRepMax),
+      // Its value is reps (a hold's seconds): only the set's weight converts.
+      mostReps: prs.mostReps && { ...prs.mostReps, ...(prs.mostReps.weight != null ? { weight: dw(prs.mostReps.weight) } : {}) },
     };
   }, [prs, isKg]);
 
+  /** Where the chart's section sits in the page's content, read from the
+   *  layout as it stands NOW. Its last onLayout isn't enough: a section that
+   *  has just appeared may not have reported one yet, and a day opening above
+   *  it (a UI-thread height tween) moves it without ever re-firing it, so the
+   *  page used to stay put, or stop short of the chart (user report,
+   *  2026-10-12). The last onLayout is only the fallback. */
+  const measureChart = useEffectEvent((then: (y: number, h: number) => void) => {
+    const section = exerciseSectionRef.current;
+    if (!section) return; // no chart showing: nowhere to go
+    const fallback = () => then(exerciseSectionY.current, exerciseSectionH.current);
+    const content = scrollRef.current?.getInnerViewRef?.();
+    if (!content || typeof section.measureLayout !== "function") return fallback();
+    section.measureLayout(content, (_x, y, _w, h) => then(y, h), fallback);
+  });
+
+  /** Scrolls to the chart's section, at `y` and `h` tall in the content. */
+  const frameChart = useEffectEvent((y: number, h: number) => {
+    const node: any = scrollRef.current;
+    const viewH = viewportH.current;
+    if (h > 0 && viewH > 0) {
+      // Bottom-anchored: scroll the LEAST amount that still leaves the
+      // section's bottom (the "See Exercise History" CTA) clear of what covers
+      // the foot of the page (the tab bar, and the workout bar during a
+      // workout), plus a breathing gap. This keeps as much of the day list
+      // above visible as possible. Capped so the section's top never
+      // disappears under the header gradient: on screens too short for both,
+      // the top wins (the bars are translucent, so a grazed CTA stays legible).
+      const needed = y + h - (viewH - coveredBottom);
+      const cap = y - (insets.top + 24);
+      node?.scrollTo?.({ y: Math.max(0, Math.min(needed, cap)), animated: true });
+    } else {
+      // No size to go by: pin the section's top near the top of the screen.
+      node?.scrollTo?.({ y: Math.max(0, y - 40), animated: true });
+    }
+  });
+
+  // A tap on an exercise takes the page down to its chart, once the chart is
+  // in the layout (the frame after the tap's render), and then once more if
+  // it has moved since: a day still opening above it, or the chart's own
+  // first layout. Only a tap asks, never a remembered selection.
   useEffect(() => {
-    if (!selectedExercise) return;
-    // Remembered from the last visit: the page comes back as it was left,
-    // rather than jumping down to the chart as it does for a tap.
-    if (selectedExercise === restoredSelection.current) return;
-    const id = requestAnimationFrame(() => {
-      const secY = exerciseSectionY.current;
-      const secH = exerciseSectionH.current;
-      const viewH = viewportH.current;
-      if (secY <= 0) return;
-      const node: any = scrollRef.current;
-      if (secH > 0 && viewH > 0) {
-        // Bottom-anchored: scroll the LEAST amount that still leaves the
-        // section's bottom (the "See Exercise History" CTA) clear of the
-        // floating tab bar (~49pt + bottom inset, plus a breathing gap).
-        // This keeps as much of the day list above visible as possible.
-        // Capped so the section's top never disappears under the header
-        // gradient — on screens too short for both, the top wins (the tab
-        // bar is translucent glass, so a grazed CTA stays legible).
-        const needed = secY + secH - (viewH - (insets.bottom + 72));
-        const cap = secY - (insets.top + 24);
-        node?.scrollTo?.({ y: Math.max(0, Math.min(needed, cap)), animated: true });
-      } else {
-        // Measurements not in yet (first-ever selection this mount) — fall
-        // back to pinning the section top near the viewport top.
-        node?.scrollTo?.({ y: Math.max(0, secY - 40), animated: true });
-      }
+    if (!chartScrollRequest) return;
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => {
+      measureChart((y, h) => {
+        if (y <= 0) return;
+        frameChart(y, h);
+        settle = setTimeout(() => {
+          measureChart((y2, h2) => {
+            if (y2 > 0 && (Math.abs(y2 - y) > 4 || Math.abs(h2 - h) > 4)) frameChart(y2, h2);
+          });
+        }, CHART_SETTLE_MS);
+      });
     });
-    return () => cancelAnimationFrame(id);
-  }, [selectedExercise, insets.top, insets.bottom]);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (settle) clearTimeout(settle);
+    };
+  }, [chartScrollRequest]);
 
   const onSelectExercise = useCallback((day: ProgramDayRef, name: string) => {
-    // Keep the previous object identity on a same-pair reselect so the
-    // scroll-into-view effect (keyed on the selection) doesn't refire.
+    // A same-pair reselect keeps the previous object, so the chart's data
+    // isn't worked out again; the page still scrolls down to it, which is what
+    // tapping an exercise does whether or not it was chosen already.
     setSelectedExercise(prev =>
       prev &&
       prev.dayKey === day.key &&
@@ -369,6 +423,7 @@ function ProgressBody({
         ? prev
         : { dayKey: day.key, name },
     );
+    setChartScrollRequest(n => n + 1);
   }, []);
 
   const showNoActiveProgramHint = scope.kind === "current" && !hasActiveProgram;
@@ -490,6 +545,7 @@ function ProgressBody({
 
         {selectedExercise && selectedDay && displayPrs ? (
           <View
+            ref={exerciseSectionRef}
             onLayout={e => {
               exerciseSectionY.current = e.nativeEvent.layout.y;
               exerciseSectionH.current = e.nativeEvent.layout.height;

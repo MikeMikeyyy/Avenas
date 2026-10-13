@@ -591,6 +591,18 @@ export function buildPrevNoteLookup(
  * Move to Tomorrow, or a journal log) and it's the same slot, so last week's
  * note is there.
  */
+/** The most recent session of `day` (before `beforeDate` when given): the one
+ *  the hints above are read from, and the one the Workout tab's "Last week"
+ *  lines describe (utils/exerciseChanges.ts), so the two never point at
+ *  different sessions. */
+export function lastSessionOfDay(
+  history: CompletedWorkout[],
+  beforeDate: string | undefined,
+  day: PrevDayScope,
+): CompletedWorkout | null {
+  return hintSessions(history, beforeDate, day)[0] ?? null;
+}
+
 export function buildPrevSessionNote(
   history: CompletedWorkout[],
   beforeDate?: string,

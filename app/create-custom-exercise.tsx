@@ -1,25 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TextInput,
   TouchableOpacity,
   Alert,
-  KeyboardAvoidingView,
-  Keyboard,
-  Linking,
-  Platform,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
-import Svg, { Circle, Path } from "react-native-svg";
+import Svg, { Circle } from "react-native-svg";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { scheduleCloudPush } from "../lib/syncManager";
+import { pickFromLibrary } from "../lib/photoPicker";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
@@ -38,22 +35,14 @@ import AppSwitch from "../components/AppSwitch";
 import { alertMessage } from "../utils/errors";
 import { exerciseByName } from "../utils/exerciseLookup";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
+import KeyboardDismissButton from "../components/KeyboardDismissButton";
+import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
 
 const SELECTABLE = MUSCLE_GROUPS.filter(g => g !== "All") as SelectableMuscle[];
 
 /** The picker's search box doesn't auto-capitalise, so a search arrives as
  *  "handstand". Capitalise each word's first letter only, so "RDL" survives. */
 const titleCaseWords = (s: string) => s.trim().replace(/\S+/g, w => w[0].toUpperCase() + w.slice(1));
-
-function KeyboardDismissIcon({ color }: { color: string }) {
-  return (
-    <Svg width={34} height={29} viewBox="0 0 26 22" fill="none">
-      <Path d="M2 2.5C2 1.67 2.67 1 3.5 1h19c.83 0 1.5.67 1.5 1.5v10c0 .83-.67 1.5-1.5 1.5h-19C2.67 14 2 13.33 2 12.5v-10z" stroke={color} strokeWidth="1.4"/>
-      <Path d="M6 5.5h1.2M10 5.5h1.2M14 5.5h1.2M18 5.5h1.2M6 8.5h1.2M10 8.5h1.2M14 8.5h1.2M18 8.5h1.2M8 11.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
-      <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-    </Svg>
-  );
-}
 
 const RING = 46;
 const RING_STROKE = 4;
@@ -104,14 +93,6 @@ export default function CreateCustomExerciseScreen() {
   const [steps, setSteps] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [slotCount, setSlotCount] = useState(0);
-  const [kbHeight, setKbHeight] = useState(0);
-  const scrollRef = useRef<ScrollView>(null);
-
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => setKbHeight(0));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
@@ -161,39 +142,19 @@ export default function CreateCustomExerciseScreen() {
     setSteps(prev => prev.filter((_, idx) => idx !== i));
   }, []);
 
-  // Returns true if permission is granted, false otherwise (shows appropriate alert)
-  const ensurePhotoPermission = async (): Promise<boolean> => {
-    const { status, canAskAgain } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status === "granted") return true;
-    if (canAskAgain) {
-      // Android: can prompt again — call once more
-      const retry = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (retry.status === "granted") return true;
-    }
-    // Permanently denied — direct user to Settings
-    Alert.alert(
-      "Photo Library Access",
-      "Avenas needs access to your photo library. Please enable it in Settings.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Open Settings", onPress: () => Linking.openSettings() },
-      ]
-    );
-    return false;
-  };
-
+  // Both through lib/photoPicker, which every photo pick in the app shares (no
+  // permission prompt first, one picker at a time).
   const pickImage = async () => {
-    if (!(await ensurePhotoPermission())) return;
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
+      const asset = await pickFromLibrary({
         mediaTypes: ["images"],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.7,
       });
-      if (!result.canceled) {
+      if (asset) {
         const dest = `${FileSystem.documentDirectory}exercise_icon_${Date.now()}.jpg`;
-        await FileSystem.copyAsync({ from: result.assets[0].uri, to: dest });
+        await FileSystem.copyAsync({ from: asset.uri, to: dest });
         setImageUri(dest);
       }
     } catch (e) {
@@ -202,16 +163,14 @@ export default function CreateCustomExerciseScreen() {
   };
 
   const pickVideo = async () => {
-    if (!(await ensurePhotoPermission())) return;
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
+      const asset = await pickFromLibrary({
         mediaTypes: ["videos"],
         // Cap the export at 720p so a 4K source is re-encoded down on pick,
         // keeping demo clips small. iOS only; Android has no transcode hook here.
         videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
       });
-      if (!result.canceled) {
-        const asset = result.assets[0];
+      if (asset) {
         // Checked before the copy, so a long video never lands in the app's
         // folder (or later in the upload). The picker's own duration limit
         // only applies to recording, so the check is here.
@@ -308,7 +267,7 @@ export default function CreateCustomExerciseScreen() {
   const slotsLeft = Math.max(0, MAX_CUSTOM - slotCount);
 
   return (
-    <KeyboardAvoidingView style={[styles.root, { backgroundColor: t.bg }]} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+    <View style={[styles.root, { backgroundColor: t.bg }]}>
       {/* Back button */}
       <BackButton />
 
@@ -324,8 +283,12 @@ export default function CreateCustomExerciseScreen() {
         </MaskedView>
       </View>
 
-      <ScrollView
-        ref={scrollRef}
+      {/* A form, so the keyboard library's scroll view, as on Profile: it
+          scrolls whichever field is focused clear of the keyboard and the
+          down key (a step low on the page included; a Step's focus used to
+          jump to the end of the page instead). */}
+      <KeyboardAwareScrollView
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{
@@ -489,7 +452,6 @@ export default function CreateCustomExerciseScreen() {
                 onChangeText={text => updateStep(i, text)}
                 multiline
                 textAlignVertical="top"
-                onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
               />
               <TouchableOpacity
                 onPress={() => removeStep(i)}
@@ -525,31 +487,10 @@ export default function CreateCustomExerciseScreen() {
             <Text style={styles.saveBtnText}>{saving ? "Saving..." : "Save Exercise"}</Text>
           </View>
         </BounceButton>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
-      {kbHeight > 0 && Platform.OS === "ios" && (
-        <TouchableOpacity
-          onPress={() => Keyboard.dismiss()}
-          activeOpacity={0.75}
-          style={{
-            position: "absolute",
-            right: 10,
-            bottom: kbHeight + 8,
-            borderRadius: 12,
-            paddingHorizontal: 14,
-            paddingVertical: 9,
-            backgroundColor: isDark ? "rgba(58,58,60,0.97)" : "#fff",
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.15,
-            shadowRadius: 4,
-            zIndex: 999,
-          }}
-        >
-          <KeyboardDismissIcon color={isDark ? "#fff" : "#333"} />
-        </TouchableOpacity>
-      )}
-    </KeyboardAvoidingView>
+      <KeyboardDismissButton />
+    </View>
   );
 }
 

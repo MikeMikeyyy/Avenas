@@ -18,13 +18,14 @@ import NeuCard from "../NeuCard";
 import JournalCalendar from "../JournalCalendar";
 import AchievementCard from "../AchievementCard";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "./JournalWorkoutCard";
+import SessionFilter, { SessionGroupHeading, useSessionFilter } from "./SessionFilter";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import type { CompletedWorkout, SavedProgram } from "../../constants/programs";
 import type { JournalEntry } from "../../constants/journal";
 import type { Achievement } from "../../constants/achievements";
-import { buildJournalFeed } from "../../utils/journalFeed";
+import { buildJournalFeed, type JournalFeedItem } from "../../utils/journalFeed";
 import { deriveClientAchievements } from "../../utils/clientAchievements";
 
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -156,6 +157,14 @@ export default function ClientJournalView({
   // client's history exactly as their own journal does it.
   const workoutInfoOf = useJournalWorkoutInfo(workoutHistory, programs);
 
+  // The client's Recent Activity narrowed to the session numbers picked, as on
+  // their own journal.
+  const sessionOf = useCallback(
+    (w: CompletedWorkout) => workoutInfoOf(w).program?.sessionNum ?? null,
+    [workoutInfoOf],
+  );
+  const sessions = useSessionFilter(workoutHistory, sessionOf);
+
   // The calendar hands over that day's latest workout, as it does on the
   // client's own journal.
   const onDayPress = useCallback((_date: string, workoutId?: string) => {
@@ -178,7 +187,19 @@ export default function ClientJournalView({
     else if (a.category === "program") onOpenPrograms();
   }, [onOpenWorkout, onOpenPrograms]);
 
-  const hasActivity = timeline.length > 0 || achievements.length > 0;
+  const hasActivity = timeline.length > 0 || achievements.length > 0 || sessions.numbers.length > 0;
+
+  const renderItem = (item: JournalFeedItem) => item.kind === "workout" ? (
+    <JournalWorkoutCard
+      key={item.data.id}
+      workout={item.data}
+      info={workoutInfoOf(item.data)}
+      isDark={isDark}
+      onPress={() => onOpenWorkout(item.data.id)}
+    />
+  ) : (
+    <EntryCard key={item.data.id} entry={item.data} isDark={isDark} />
+  );
 
   return (
     <ScrollView
@@ -198,7 +219,19 @@ export default function ClientJournalView({
         <Text style={[styles.sectionHeading, { color: t.tp }]}>Recent Activity</Text>
       )}
 
-      {achievements.length > 0 && (
+      {sessions.numbers.length > 0 && (
+        <SessionFilter
+          numbers={sessions.numbers}
+          selected={sessions.selected}
+          onToggle={sessions.toggle}
+          onClear={sessions.clear}
+          isDark={isDark}
+        />
+      )}
+
+      {/* The achievement cards aren't sessions, so a session filter sets them
+          aside with the journal entries. */}
+      {achievements.length > 0 && !sessions.groups && (
         <View style={styles.achievementList}>
           {achievements.map(a => (
             <AchievementCard
@@ -212,7 +245,7 @@ export default function ClientJournalView({
         </View>
       )}
 
-      {!hasActivity && (
+      {timeline.length === 0 && achievements.length === 0 && !sessions.groups && (
         <NeuCard dark={isDark} style={styles.emptyCard}>
           <View style={styles.emptyInner}>
             <Ionicons name="book-outline" size={28} color={ACCT} />
@@ -222,17 +255,14 @@ export default function ClientJournalView({
         </NeuCard>
       )}
 
-      {timeline.map(item => item.kind === "workout" ? (
-        <JournalWorkoutCard
-          key={item.data.id}
-          workout={item.data}
-          info={workoutInfoOf(item.data)}
-          isDark={isDark}
-          onPress={() => onOpenWorkout(item.data.id)}
-        />
-      ) : (
-        <EntryCard key={item.data.id} entry={item.data} isDark={isDark} />
-      ))}
+      {sessions.groups
+        ? sessions.groups.map(g => (
+            <View key={g.session}>
+              {sessions.groups!.length > 1 && <SessionGroupHeading session={g.session} isDark={isDark} />}
+              {g.items.map(renderItem)}
+            </View>
+          ))
+        : timeline.map(renderItem)}
     </ScrollView>
   );
 }

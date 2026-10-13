@@ -1449,22 +1449,21 @@ export default function GroupPageScreen() {
       <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
         <BackButton inline />
         {/* The group's photo, on the left beside its name, the way a chat
-            header or a contact card shows who it is. The owner can tap it to
-            change the photo (it opens Manage, where the picker lives); for
-            anyone else it's a picture, not a control. */}
-        <View style={styles.headerTitleRow}>
-          <TouchableOpacity
-            activeOpacity={group?.isOwner ? 0.8 : 1}
-            onPress={group?.isOwner ? openManage : undefined}
-            disabled={!group?.isOwner}
-            accessibilityRole={group?.isOwner ? "button" : "image"}
-            accessibilityLabel={group?.isOwner ? "Change group photo" : `${displayName} photo`}
-          >
-            <GroupAvatar uri={group?.photoUri} size={40} isDark={isDark} />
-          </TouchableOpacity>
+            header or a contact card shows who it is. The owner can tap the
+            photo or the name to open Manage (photo, name, members); for anyone
+            else it's a title, not a control. */}
+        <TouchableOpacity
+          style={styles.headerTitleRow}
+          activeOpacity={group?.isOwner ? 0.8 : 1}
+          onPress={group?.isOwner ? () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openManage(); } : undefined}
+          disabled={!group?.isOwner}
+          accessibilityRole={group?.isOwner ? "button" : "header"}
+          accessibilityLabel={group?.isOwner ? `Manage ${displayName}` : displayName}
+        >
+          <GroupAvatar uri={group?.photoUri} size={40} isDark={isDark} />
           {isFavourite && <FavouriteStar size={16} />}
           <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
-        </View>
+        </TouchableOpacity>
         {/* The group's archive, for the people who can archive here: its
             trainers. A member's Remove is a hide on their own device, with
             nothing to restore. */}
