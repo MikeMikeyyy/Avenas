@@ -8,7 +8,7 @@
 
 import type { CompletedSet, CompletedWorkout, SavedProgram } from "../constants/programs";
 import { programIncludes } from "./progressStats";
-import { exerciseKey } from "./exerciseNames";
+import { exerciseIdentity } from "./exerciseNames";
 
 export type ExerciseHistoryRow = {
   workoutId: string;
@@ -28,8 +28,11 @@ function key(s: string): string {
 export function exerciseHistoryRows(
   history: CompletedWorkout[],
   programs: SavedProgram[],
-  { exerciseName, dayName, dayId, programId, days, today = new Date() }: {
+  { exerciseName, customId, dayName, dayId, programId, days, today = new Date() }: {
     exerciseName: string;
+    /** Which custom exercise of that name (utils/exerciseNames.ts
+     *  exerciseIdentity): another later given its name lists nothing here. */
+    customId?: string;
     /** The workout day the chart was scoped to, by name. */
     dayName?: string;
     /** ...and by slot id, when it has one. */
@@ -43,7 +46,7 @@ export function exerciseHistoryRows(
     today?: Date;
   },
 ): ExerciseHistoryRow[] {
-  const want = exerciseKey(exerciseName);
+  const want = exerciseIdentity({ name: exerciseName, customId });
   const wantDay = typeof dayName === "string" && dayName.trim() ? key(dayName) : null;
   // The slot id when we have it. Sessions that recorded one are matched on it
   // (so a renamed day keeps its history, and two same-named days don't pool);
@@ -71,7 +74,7 @@ export function exerciseHistoryRows(
     if (!Number.isFinite(yy) || !Number.isFinite(mm) || !Number.isFinite(dd)) continue;
     if (new Date(yy, mm - 1, dd).getTime() < cutoffMs) continue;
     // Find the matching exercise inside this workout (case-insensitive trim).
-    const ex = w.exercises.find(e => exerciseKey(e.name) === want);
+    const ex = w.exercises.find(e => exerciseIdentity(e) === want);
     if (!ex) continue;
     // Include warmup + working — drop only un-done sets. Warmups render
     // with a neutral chip so the user can still tell them apart.

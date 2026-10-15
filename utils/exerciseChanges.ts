@@ -10,8 +10,10 @@
 //   out. The Journal card sums them up ("Order changed · 1 swap").
 //
 //   The Workout tab reads the LAST session of the day against today's plan,
-//   one quiet line on each card it concerns: "Last week: done 1st", "Last
-//   week: Pec Deck instead", "Last week: skipped". When the day has changed in
+//   one quiet line on each card it concerns: "Last session: done 1st", "Last
+//   session: Pec Deck instead", "Last session: skipped" (always "Last
+//   session", user decision, 2026-10-14: it was "Last week" for a session in
+//   the week before and "Last time" otherwise). When the day has changed in
 //   the builder since (its exercises or their order; sets, reps and weights
 //   are programming, not a different day), last session followed another plan,
 //   so there's nothing to say: next time starts fresh (user decision).
@@ -29,14 +31,13 @@
 // Pure: no RN imports, so scripts/verify-exercise-changes.ts can run it.
 
 import type { CompletedWorkout, PlannedExercise, SavedProgram } from "../constants/programs";
-import { addDaysYMD } from "./dates";
 import { indexOfDayId, workoutKey } from "./programDays";
-import { weekStartFor } from "./weekSchedule";
-import { normalizeExerciseName } from "./workout";
+import { sameExercise } from "./exerciseNames";
 
-/** A day's exercises as a plan: each by its id and name, in order. */
-export function planOf(exercises: readonly { id: string; name: string }[]): PlannedExercise[] {
-  return exercises.map(e => ({ id: e.id, name: e.name }));
+/** A day's exercises as a plan: each by its id and name (and which custom
+ *  exercise of that name), in order. */
+export function planOf(exercises: readonly { id: string; name: string; customId?: string }[]): PlannedExercise[] {
+  return exercises.map(e => ({ id: e.id, name: e.name, ...(e.customId ? { customId: e.customId } : {}) }));
 }
 
 /** The plan `program` has for its day `dayId` right now, or undefined when
@@ -50,13 +51,11 @@ export function planForDay(program: SavedProgram | null | undefined, dayId: stri
   return planOf(program.workouts[workoutKey(slot, label)] ?? []);
 }
 
-const sameName = (a?: string, b?: string) =>
-  !!a && !!b && normalizeExerciseName(a) === normalizeExerciseName(b);
-
-/** The same exercises in the same order. Sets, reps, weights and rest aren't
- *  in a plan, so changing them never makes two plans differ. */
+/** The same exercises in the same order (by identity, utils/exerciseNames.ts).
+ *  Sets, reps, weights and rest aren't in a plan, so changing them never makes
+ *  two plans differ. */
 export function samePlan(a: readonly PlannedExercise[], b: readonly PlannedExercise[]): boolean {
-  return a.length === b.length && a.every((p, i) => p.id === b[i].id && sameName(p.name, b[i].name));
+  return a.length === b.length && a.every((p, i) => p.id === b[i].id && sameExercise(p, b[i]));
 }
 
 /**
@@ -183,30 +182,23 @@ export function lastTimeCues(
   if (last.plan && !samePlan(last.plan, plan)) return {};
   const changes = sessionChanges(last);
   if (!changes) return {};
-  const nameAt = new Map(plan.map(p => [p.id, p.name]));
+  const planAt = new Map(plan.map(p => [p.id, p]));
   const out: Record<string, LastTimeCue> = {};
   last.exercises.forEach((ex, idx) => {
     const cue = changes.cues[idx];
     const pid = ex.programExerciseId;
-    if (!cue || !pid || !nameAt.has(pid)) return;
+    if (!cue || !pid || !planAt.has(pid)) return;
     if (cue.kind === "swapped") {
       // With no plan to compare, the place must still hold the exercise the
       // swap replaced: the builder's Change keeps the place for another one.
-      if (!last.plan && !sameName(nameAt.get(pid), cue.from)) return;
+      if (!last.plan && !sameExercise(planAt.get(pid), { name: cue.from, customId: ex.swappedFromId })) return;
       out[pid] = { kind: "swapped", to: ex.name };
     } else if (cue.kind === "moved") {
       out[pid] = { kind: "moved", donePosition: idx + 1 };
     }
   });
   for (const s of changes.skipped) {
-    if (nameAt.has(s.id)) out[s.id] = { kind: "skipped" };
+    if (planAt.has(s.id)) out[s.id] = { kind: "skipped" };
   }
   return out;
-}
-
-/** "Last week" when `sessionDate` fell in the Monday-to-Sunday week before
- *  `today`'s (Home's weeks), else "Last time": a missed week or a holiday
- *  never reads as last week (user decision, 2026-10-13). */
-export function lastWhen(sessionDate: string, today: string): "Last week" | "Last time" {
-  return weekStartFor(sessionDate) === addDaysYMD(weekStartFor(today), -7) ? "Last week" : "Last time";
 }

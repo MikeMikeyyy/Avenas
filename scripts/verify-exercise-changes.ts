@@ -2,13 +2,13 @@
 //
 // What a session changed about its program day (utils/exerciseChanges.ts): the
 // Journal's "Planned 2nd" / "Instead of" / "Added" / "Skipped", the Journal
-// card's summary, and the Workout tab's "Last week:" lines, including the reset
-// after the day changes in the builder.
+// card's summary, and the Workout tab's "Last session:" lines, including the
+// reset after the day changes in the builder.
 //
 // Run: npx tsx scripts/verify-exercise-changes.ts
 
 import {
-  changesSummary, lastTimeCues, lastWhen, planForDay, samePlan, sessionChanges,
+  changesSummary, lastTimeCues, planForDay, samePlan, sessionChanges,
 } from "../utils/exerciseChanges";
 import type { CompletedExercise, CompletedWorkout, PlannedExercise, SavedProgram } from "../constants/programs";
 
@@ -113,12 +113,6 @@ const oldLast = session([b2, b1, pecDeck, b4], { plan: undefined });
 eq(lastTimeCues(oldLast, PLAN), { e3: { kind: "swapped", to: "Pec Deck" } }, "pre-plan session: its swap shows, no order or skip");
 eq(lastTimeCues(oldLast, PLAN.map(p => (p.id === "e3" ? { ...p, name: "Cable Crossover" } : p))), {},
   "...unless the builder has since put another exercise in that place");
-
-// ─── last week or last time ──────────────────────────────────────────────────
-eq(lastWhen("2026-10-06", "2026-10-13"), "Last week", "Tuesday to Tuesday: last week");
-eq(lastWhen("2026-10-11", "2026-10-13"), "Last week", "a Sunday, seen on Tuesday: last week by the calendar");
-eq(lastWhen("2026-10-12", "2026-10-14"), "Last time", "earlier this week: last time");
-eq(lastWhen("2026-09-29", "2026-10-13"), "Last time", "two weeks back (a missed week): last time");
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

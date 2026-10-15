@@ -19,6 +19,7 @@ import { EXERCISES } from "../constants/exerciseData";
 import { isFavourite as isFav, sortByMuscleThenName, toggleFavourite } from "../utils/exerciseFavourites";
 import { exerciseSearchDoc, parseQuery, rankMatch, searchDoc } from "../utils/exerciseSearch";
 import { sharedExercises } from "../utils/customExerciseDetails";
+import { customIdForName, liveCustoms } from "../utils/customExercises";
 import { loadCarriedExercises } from "../lib/exerciseMedia";
 import ExerciseImage from "./ExerciseImage";
 import FavouriteStar from "./FavouriteStar";
@@ -39,13 +40,17 @@ export interface ExercisePickerProps {
   visible: boolean;
   /** Short string shown below the title, e.g. "PUSH DAY" or "CHANGE EXERCISE" */
   subtitle: string;
+  /** Your custom exercises, deleted ones included or not: the picker lists
+   *  only the live ones (utils/customExercises.ts). */
   customExercises: CustomExercise[];
   /**
    * `setCount` is the picker's "sets per exercise" stepper value — only
    * meaningful when `withSetCount` is on; callers that don't show the stepper
-   * can ignore it.
+   * can ignore it. `customIds[i]` is which custom exercise `names[i]` is (yours,
+   * or a trainer's), for it to record (`Exercise.customId`); undefined for the
+   * catalogue and for one made before ids.
    */
-  onSelectMultiple: (names: string[], setCount: number) => void;
+  onSelectMultiple: (names: string[], setCount: number, customIds: (string | undefined)[]) => void;
   /**
    * Show the "sets per exercise" stepper next to the confirm button. The value
    * is a device-local preference (DEFAULT_SET_COUNT_KEY) remembered across
@@ -103,8 +108,10 @@ const MAX_SET_COUNT = 10;
 const FALLBACK_SET_COUNT = 3;
 
 export default function ExercisePicker({
-  visible, subtitle, customExercises, onSelectMultiple, withSetCount, changing, onDeleteCustom, onEditCustom, onCreateCustom, onClose, isDark,
+  visible, subtitle, customExercises: allCustomExercises, onSelectMultiple, withSetCount, changing, onDeleteCustom, onEditCustom, onCreateCustom, onClose, isDark,
 }: ExercisePickerProps) {
+  // A deleted exercise is kept for its old sessions, never offered again.
+  const customExercises = useMemo(() => liveCustoms(allCustomExercises), [allCustomExercises]);
   const isChange = changing !== undefined;
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -349,7 +356,9 @@ export default function ExercisePicker({
 
   const confirmPicks = () => {
     if (pickedOrder.length === 0) return;
-    onSelectMultiple(pickedOrder, setCount);
+    // Each name is offered once (your exercises can't take a listed name, and a
+    // trainer's of your name is left out), so it says which exercise it is.
+    onSelectMultiple(pickedOrder, setCount, pickedOrder.map(name => customIdForName(name, customExercises, shared)));
     setPickedOrder([]);
     setSearch("");
   };
@@ -452,7 +461,7 @@ export default function ExercisePicker({
               onPress={() => {
                 Alert.alert(
                   "Delete Exercise",
-                  `Are you sure you want to delete "${e.name}"? This will free up a slot.`,
+                  `"${e.name}" comes out of any program it's in and frees up a slot. Workouts you've logged with it stay in your Journal and Progress.`,
                   [
                     { text: "Cancel", style: "cancel" },
                     { text: "Delete", style: "destructive", onPress: () => onDeleteCustom(e.name) },

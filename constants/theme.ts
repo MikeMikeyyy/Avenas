@@ -71,6 +71,20 @@ export const EXERCISE_STUDIO = ["#08090c", "#111317"] as const;
 // backgrounds — ACCT itself washes out over the mint glow. Dark mode keeps ACCT.
 export const ACCT_DEEP = "#0c9f6e";
 
+// The accent's WORDS on a light card: the Progress charts' gains ("▲ 9.4%"),
+// the tapped bar's total, the radar's ▲, the reps on a Sets block. ACCT as
+// text reads at about 1.5:1 on a light card; this reads at 4.8:1 (user
+// decision, 2026-10-14: "nicer"). Dark mode keeps ACCT, and the marks (bars,
+// lines, dots, fills, glows) stay ACCT in both themes. Not while comparing two
+// programs: there the green program's numbers are ACCT, its dot's own green
+// (user decision, the same day), all but the reps on its pale Sets blocks.
+export const ACCT_INK = "#067A54";
+
+/** The accent for text: ACCT_INK on a light card, ACCT on a dark one. */
+export function accentTextColor(isDark: boolean): string {
+  return isDark ? ACCT : ACCT_INK;
+}
+
 // ─── Danger ───────────────────────────────────────────────────────────────────
 // Two reds, split by job. Import them, never hardcode a red literal.
 //
@@ -144,7 +158,7 @@ export const REPLACED_ORANGE = PAUSED_ORANGE;
 export const CUE_INK      = "#5F6E83";
 export const CUE_INK_DARK = "#8E97B8";
 // The replaced orange's WORDS ("Instead of Push", "Instead of Cable Fly",
-// "Last week: Pec Deck instead"), deepened for a light card, where
+// "Last session: Pec Deck instead"), deepened for a light card, where
 // REPLACED_ORANGE as text reads at 2:1 (this, 4.7:1). Dark mode keeps
 // REPLACED_ORANGE itself. Dots and glows stay REPLACED_ORANGE in both themes:
 // they're marks, not text (user decision, 2026-10-14).
@@ -153,6 +167,28 @@ export const REPLACED_ORANGE_INK = "#A65800";
 /** The replaced orange for text: REPLACED_ORANGE_INK on a light card. */
 export function replacedTextColor(isDark: boolean): string {
   return isDark ? REPLACED_ORANGE : REPLACED_ORANGE_INK;
+}
+
+// ─── Comparing two programs ───────────────────────────────────────────────────
+// The Progress page compares the program picked at the top (green, ACCT) with a
+// finished one: periwinkle (user pick, 2026-10-14, of three blues on the
+// Program Compare canvas). The marks (lines, bars, rings, the radar's shape)
+// are COMPARE_BLUE, lifted on dark; its words are COMPARE_BLUE_INK on a light
+// card, 5.8:1, lighter again on dark. Its dots are rings, so the two programs
+// read apart without colour.
+export const COMPARE_BLUE          = "#7C83F7";
+export const COMPARE_BLUE_DARK     = "#969CFA";
+export const COMPARE_BLUE_INK      = "#4A4FC9";
+export const COMPARE_BLUE_INK_DARK = "#ABB0FB";
+
+/** The compared program's marks: lines, bars, rings, fills. */
+export function compareBlue(isDark: boolean): string {
+  return isDark ? COMPARE_BLUE_DARK : COMPARE_BLUE;
+}
+
+/** The compared program's words and numbers. */
+export function compareBlueText(isDark: boolean): string {
+  return isDark ? COMPARE_BLUE_INK_DARK : COMPARE_BLUE_INK;
 }
 
 // ─── Aurora (soft pastel gradient system) ─────────────────────────────────────
@@ -182,6 +218,20 @@ export const ORB_GRADS = {
   aqua:  { colors: ["#94f8ffff", "#47daffff"] as const, glow: "#3dbdf8ff" },
   blush: { colors: ["#ffc7ecff", "#ed64ffff"] as const, glow: "#c17ff7ff" },
 } as const;
+
+// ─── The timer and the rest ───────────────────────────────────────────────────
+// The Workout tab's timer ring, the rest pop-up's ring and the workout bar's
+// rest line: the aurora sky into the brand mint (user decision, 2026-10-15,
+// the Workout Timer canvas).
+export const TIMER_GRADIENT = [AURORA.sky, ACCT] as const;
+
+/** The timer dial's quiet marks: the ring's track and the ticks not yet lit.
+ *  Lit ticks are the accent, deepened on light as small marks need. */
+export function timerDialInk(isDark: boolean): { track: string; tickOff: string; tickOn: string } {
+  return isDark
+    ? { track: "rgba(255,255,255,0.08)", tickOff: "rgba(255,255,255,0.18)", tickOn: ACCT }
+    : { track: "rgba(163,175,192,0.28)", tickOff: "rgba(136,150,167,0.45)", tickOn: ACCT_DEEP };
+}
 
 
 // ─── Bubble pill ──────────────────────────────────────────────────────────────

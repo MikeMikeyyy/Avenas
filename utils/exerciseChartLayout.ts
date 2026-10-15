@@ -441,25 +441,30 @@ function roundedRectD(x: number, y: number, w: number, h: number, r: number): st
 
 /** Sets' blocks as one path, from triplets: a block's centre x, then the reps
  *  stacked under it and the reps at its top (as setStacks lays them). */
-export function blocksPathD(blocks: number[], min: number, max: number): string {
+export function blocksPathD(blocks: number[], min: number, max: number, grow = 1): string {
   "worklet";
+  // `grow`, 0 to 1: how far the stacks have risen from the baseline as the
+  // tab comes in (useChartEntrance), each the same share of its height.
+  if (grow <= 0) return "";
   let d = "";
   for (let i = 0; i + 2 < blocks.length; i += 3) {
-    const bottom = valueY(blocks[i + 1], min, max);
-    const top = valueY(blocks[i + 2], min, max) + BLOCK_GAP;
+    const bottom = valueY(blocks[i + 1] * grow, min, max);
+    const top = valueY(blocks[i + 2] * grow, min, max) + BLOCK_GAP * grow;
     const h = Math.max(1, bottom - top);
     d += roundedRectD(blocks[i] - BAR_WIDTH / 2, bottom - h, BAR_WIDTH, h, BLOCK_RADIUS);
   }
   return d;
 }
 
-/** Volume's bars as one path, rounded at the top, standing on the baseline. */
-export function barsPathD(xs: number[], vs: number[], min: number, max: number): string {
+/** Volume's bars as one path, rounded at the top, standing on the baseline,
+ *  risen `grow` (0 to 1) of the way as the tab comes in. */
+export function barsPathD(xs: number[], vs: number[], min: number, max: number, grow = 1): string {
   "worklet";
+  if (grow <= 0) return "";
   const base = PLOT_TOP + CHART_HEIGHT;
   let d = "";
   for (let i = 0; i < xs.length; i++) {
-    const top = valueY(vs[i], min, max);
+    const top = valueY(vs[i] * grow, min, max);
     const h = Math.max(1, base - top);
     const k = Math.min(5, BAR_WIDTH / 2, h);
     const x = xs[i] - BAR_WIDTH / 2;

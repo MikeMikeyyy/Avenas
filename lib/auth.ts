@@ -5,7 +5,7 @@
 import * as WebBrowser from "expo-web-browser";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { oauthRedirectTo } from "./authRedirect";
-import { supabase } from "./supabase";
+import { signOutHere, supabase } from "./supabase";
 import { flushCloudPushNow } from "./syncManager";
 import { localCounts } from "./cloud";
 import { unregisterPushToken } from "./push";
@@ -167,6 +167,38 @@ export async function signInWithEmail(email: string, password: string): Promise<
   if (error) throw error;
 }
 
+/**
+ * Forgot Password, step 1: Supabase emails a reset code to this address (the
+ * Reset Password template must show `{{ .Token }}`). It answers the same for an
+ * address with no account, so nobody can learn who has one; the screen checks
+ * for a Google/Apple-only account first, which has no password to reset.
+ *
+ * A code rather than a link: a link signs in only on the phone that asked (the
+ * PKCE verifier lives there), never opens in Expo Go, and would point at the
+ * project's Site URL.
+ */
+export async function sendPasswordResetCode(email: string): Promise<void> {
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+  if (error) throw error;
+}
+
+/**
+ * Forgot Password, step 2: the code signs the user in (AuthContext treats its
+ * PASSWORD_RECOVERY event as a sign-in). A code works once, so the screen calls
+ * this once and retries only `setNewPassword` if that part fails.
+ */
+export async function verifyPasswordResetCode(email: string, code: string): Promise<void> {
+  const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "recovery" });
+  if (error) throw error;
+}
+
+/** Forgot Password, step 3: the signed-in user's new password. Setting the
+ *  password it already was counts as done. */
+export async function setNewPassword(password: string): Promise<void> {
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error && (error as { code?: string }).code !== "same_password") throw error;
+}
+
 /** Thrown when sign-out is refused because the final backup push failed while
  *  this device still holds the account's data. Signing out anyway would let the
  *  next account's sign-in wipe the only up-to-date copy. */
@@ -195,7 +227,9 @@ export async function signOut(opts?: { force?: boolean }): Promise<void> {
     if (hasData) throw new SignOutBackupError();
   }
   // Stop this device receiving the account's pushes. Best effort, and it must
-  // run BEFORE auth.signOut() (deleting the row needs the session).
+  // run BEFORE the sign-out (deleting the row needs the session).
   await unregisterPushToken();
-  await supabase.auth.signOut();
+  // Signed out on this phone even with no signal: left to supabase-js, an
+  // offline sign-out kept the session and the next launch opened on it.
+  await signOutHere();
 }

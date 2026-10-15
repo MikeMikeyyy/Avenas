@@ -79,8 +79,9 @@ export type LedgerSession = {
   plan?: PlannedExercise[];
 };
 
-/** One run of a program: from activation to completion or shelving. */
-export type ProgramRun = { programId: string; startYMD: string; endYMD?: string };
+/** One run of a program: from activation to completion or shelving, and
+ *  which (`finished`), once it's over. */
+export type ProgramRun = { programId: string; startYMD: string; endYMD?: string; finished?: boolean };
 
 /** The day the Workout tab is showing, as resolveWorkoutForDate returns it. */
 type Day = { name: string; exercises: Exercise[]; programId?: string; dayId?: string };
@@ -222,7 +223,10 @@ export class Lifter {
     await this.activateNext(startYMD);
   }
 
-  private async activateNext(today: string) {
+  /** Make the next program in the rotation active. `ended` says how the run
+   *  going until now ended, when the lifter decided: marked complete, or
+   *  shelved; otherwise it's finished if the activation finished it. */
+  private async activateNext(today: string, ended?: "completed" | "shelved") {
     const id = this.rotation[this.next % this.rotation.length];
     this.next += 1;
     const programs = await this.readPrograms();
@@ -233,7 +237,11 @@ export class Lifter {
       // My Programs awards a program the activation finished (handleActivate).
       if (finished) await awardProgramAchievement(finished.program, finished.week);
     });
-    for (const r of this.runs) if (!r.endYMD && r.programId !== id) r.endYMD = today;
+    for (const r of this.runs) {
+      if (r.endYMD || r.programId === id) continue;
+      r.endYMD = today;
+      r.finished = ended ? ended === "completed" : finished?.program.id === r.programId;
+    }
     this.runs.push({ programId: id, startYMD: today });
     this.note(today, `made ${updated.find(p => p.id === id)!.name} active${finished ? ` (${finished.program.name} finished)` : ""}`);
   }
@@ -370,6 +378,8 @@ export class Lifter {
           await awardProgramAchievement(done.find(p => p.id === active.id)!, weekReached);
         });
         this.note(date, `marks ${active.name} complete`);
+        await this.activateNext(date, "completed");
+        return;
       }
       await this.activateNext(date);
       return;
@@ -381,7 +391,7 @@ export class Lifter {
         await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
       });
       this.note(date, `shelves ${active.name}`);
-      await this.activateNext(date);
+      await this.activateNext(date, "shelved");
     }
   }
 
@@ -524,7 +534,7 @@ export class Lifter {
     for (const c of cards) {
       const swapFor = LIFTS[c.name]?.swapFor;
       if (swapFor && this.chance(0.05)) {
-        c.swappedFrom = swapOrigin({ name: c.name }, swapFor);
+        c.swappedFrom = swapOrigin({ name: c.name }, { name: swapFor }).swappedFrom;
         c.name = swapFor;
         c.kind = LIFTS[swapFor].kind;
       }

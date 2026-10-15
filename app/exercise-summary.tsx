@@ -31,7 +31,7 @@ import { getJSON, setJSON } from "../utils/storage";
 import { isFavourite as isFav, toggleFavourite } from "../utils/exerciseFavourites";
 import { exerciseByName, exerciseIdByName } from "../utils/exerciseLookup";
 import { carriedExercises, knownCustomExercises } from "../utils/customExerciseDetails";
-import { normalizeExerciseName } from "../utils/workout";
+import { customFor } from "../utils/customExercises";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // "middle back" → "Middle Back". Catalogue secondary muscles are free-text
@@ -55,7 +55,7 @@ function parseDetails(raw: string | undefined): CarriedExercise | null {
 
 export default function ExerciseSummaryScreen() {
   const router = useRouter();
-  const { exerciseName, details } = useLocalSearchParams<{ exerciseName: string; details?: string }>();
+  const { exerciseName, customId, details } = useLocalSearchParams<{ exerciseName: string; customId?: string; details?: string }>();
   const name = exerciseName ?? "";
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -116,11 +116,12 @@ export default function ExerciseSummaryScreen() {
           fromRow ? [fromRow] : [],
           carriedExercises(Array.isArray(programs) ? programs : []),
         );
-        const key = normalizeExerciseName(name);
-        setCustom(known.find(c => normalizeExerciseName(c.name) === key) ?? null);
+        // By its id, so a deleted exercise and a new one given its name each
+        // open as themselves (utils/customExercises.ts).
+        setCustom(customFor({ name, customId }, known) ?? null);
       })();
       return () => { cancelled = true; };
-    }, [bundled, name, details]),
+    }, [bundled, name, customId, details]),
   );
 
   const primaryMuscle = bundled?.primaryMuscle ?? custom?.muscles?.[0];

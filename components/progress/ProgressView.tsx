@@ -4,7 +4,9 @@
 // visuals.
 
 import { useState, useCallback, useMemo, useRef, useEffect, useEffectEvent, type ReactElement } from "react";
-import { View, Text, StyleSheet, Animated, type RefreshControlProps } from "react-native";
+import {
+  View, Text, StyleSheet, Animated, type NativeScrollEvent, type NativeSyntheticEvent, type RefreshControlProps,
+} from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -19,16 +21,25 @@ import StrengthRadarChart from "../StrengthRadarChart";
 import DayExerciseList from "../DayExerciseList";
 import ExerciseProgressionChart from "../ExerciseProgressionChart";
 import DumbbellIcon from "../DumbbellIcon";
+import CompareButton from "./CompareButton";
+import CompareHeader from "./CompareHeader";
+import CompareSheet, { type CompareSheetSide } from "./CompareSheet";
+import CompareGlanceCard from "./CompareGlanceCard";
+import CompareWeeksChart from "./CompareWeeksChart";
+import CompareLiftList from "./CompareLiftList";
+import CompareExerciseCard from "./CompareExerciseCard";
+import { RevealOnScrollContext, type RevealWatcher } from "./revealOnScroll";
 
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, accentTextColor } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { useRestTimer } from "../../contexts/RestTimerContext";
 import { useFloatingBars } from "../../hooks/useFloatingBars";
 import { REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H } from "../../constants/floatingBars";
 import { type CompletedWorkout, type ProgramDayRef, type SavedProgram } from "../../constants/programs";
+import { sameExercise, type ExerciseRef } from "../../utils/exerciseNames";
 import { type CustomExercise, type SelectableMuscle } from "../../constants/exercises";
-import type { MuscleGroupStat, RangeKey } from "../../constants/progress";
+import type { ExerciseDataPoint, MuscleGroupStat, PRs, RangeKey } from "../../constants/progress";
 import { RANGE_OPTIONS } from "../../constants/progress";
 import { progressSessionKey } from "../../utils/progressSession";
 import { useProgressSelection } from "../../hooks/useProgressSelection";
@@ -53,6 +64,48 @@ import {
 } from "../../utils/progressStats";
 import { toDisplayWeight } from "../../utils/units";
 import { carriedExercises, knownCustomExercises } from "../../utils/customExerciseDetails";
+import { getEffectiveToday } from "../../utils/workout";
+import { findRunView, programRunViews, sameRun, type ProgramRunView, type RunRef } from "../../utils/programRuns";
+import {
+  compareCandidates, compareLifts, glanceStats, greenRunFor, liftSlots, missedDates, muscleStatsPerWeek, runDates, runName, runStatus,
+  sharedStrength, spanCaption, spanDays, weekOfDay, weeklyTotals,
+} from "../../utils/programCompare";
+
+/** A view waiting to be scrolled into sight, and where it sits in the page's
+ *  content once measured. */
+type Watched = { view: View; onReveal: () => void; y?: number; h?: number };
+/** How far into the screen a view comes before it counts as seen. */
+const REVEAL_INSET = 24;
+
+/** A session's numbers in the unit shown (stats are kept in kg). */
+function displayPoints(points: ExerciseDataPoint[], isKg: boolean): ExerciseDataPoint[] {
+  const dw = (n: number) => toDisplayWeight(n, isKg);
+  return points.map(p => ({
+    ...p,
+    topWeight: dw(p.topWeight),
+    bestSetVolume: dw(p.bestSetVolume),
+    bestSetWeight: dw(p.bestSetWeight),
+    e1rm: dw(p.e1rm),
+    e1rmWeight: dw(p.e1rmWeight),
+    sessionVolume: dw(p.sessionVolume),
+    sets: p.sets.map(s => ({ ...s, weight: dw(s.weight) })),
+  }));
+}
+
+/** An exercise's records in the unit shown. */
+function displayRecords(prs: PRs, isKg: boolean): PRs {
+  const dw = (n: number) => toDisplayWeight(n, isKg);
+  const c = <T extends { value: number; weight?: number } | null>(pr: T): T =>
+    pr ? ({ ...pr, value: dw(pr.value), ...(pr.weight != null ? { weight: dw(pr.weight) } : {}) }) : pr;
+  return {
+    heaviest: c(prs.heaviest),
+    bestSetVolume: c(prs.bestSetVolume),
+    bestSessionVolume: c(prs.bestSessionVolume),
+    oneRepMax: c(prs.oneRepMax),
+    // Its value is reps (a hold's seconds): only the set's weight converts.
+    mostReps: prs.mostReps && { ...prs.mostReps, ...(prs.mostReps.weight != null ? { weight: dw(prs.mostReps.weight) } : {}) },
+  };
+}
 
 // kg → display-unit lens for the radar stats: volume is the only weight-valued
 // field, sessions/sets pass through. Unit-invariant consumers (the load set
@@ -141,6 +194,9 @@ function ProgressBody({
   const [expandedProgram, setExpandedProgram] = useProgressSelection(sessionKey, "expandedProgram");
   const [expandedDay, setExpandedDay] = useProgressSelection(sessionKey, "expandedDay");
   const [exerciseMetric, setExerciseMetric] = useProgressSelection(sessionKey, "exerciseMetric");
+  const [compare, setCompare] = useProgressSelection(sessionKey, "compare");
+  const [compareSpan, setCompareSpan] = useProgressSelection(sessionKey, "compareSpan");
+  const [compareLift, setCompareLift] = useProgressSelection(sessionKey, "compareLift");
   const [scopeFallbackNote, setScopeFallbackNote] = useState<string | null>(null);
 
   const scrollRef = useRef<any>(null);
@@ -301,8 +357,10 @@ function ProgressBody({
   const { exerciseHistory, prs } = useMemo(() => {
     if (!selectedExercise || !selectedDay) return { exerciseHistory: [], prs: null };
     // Day-scoped: only sessions of the selected day row feed the chart + PRs.
-    const eh = collectExerciseHistory(scopedWorkouts, selectedExercise.name, selectedDay);
-    const p = computePRs(eh, scopedWorkouts, selectedExercise.name, selectedDay);
+    // By identity, so a deleted custom exercise and a new one later given its
+    // name chart apart.
+    const eh = collectExerciseHistory(scopedWorkouts, selectedExercise, selectedDay);
+    const p = computePRs(eh, scopedWorkouts, selectedExercise, selectedDay);
     return { exerciseHistory: eh, prs: p };
   }, [scopedWorkouts, selectedExercise, selectedDay]);
 
@@ -325,32 +383,182 @@ function ProgressBody({
     () => convertMuscleVolumes(prevMuscleStats, isKg),
     [prevMuscleStats, isKg],
   );
-  const displayExerciseHistory = useMemo(
-    () => exerciseHistory.map((p) => ({
-      ...p,
-      topWeight: dw(p.topWeight),
-      bestSetVolume: dw(p.bestSetVolume),
-      bestSetWeight: dw(p.bestSetWeight),
-      e1rm: dw(p.e1rm),
-      e1rmWeight: dw(p.e1rmWeight),
-      sessionVolume: dw(p.sessionVolume),
-      sets: p.sets.map(s => ({ ...s, weight: dw(s.weight) })),
-    })),
-    [exerciseHistory, isKg],
+  const displayExerciseHistory = useMemo(() => displayPoints(exerciseHistory, isKg), [exerciseHistory, isKg]);
+  const displayPrs = useMemo(() => (prs ? displayRecords(prs, isKg) : null), [prs, isKg]);
+
+  // ── Comparing two programs ───────────────────────────────────────────────
+  // Green is the program picked at the top when the comparison started (or
+  // changed since from its row), blue a finished one (utils/programCompare.ts).
+  // The day things are read up to is the one the Workout tab is on.
+  const todayYMD = useMemo(() => getEffectiveToday(activeProgram, history), [activeProgram, history]);
+  const startGreen = useMemo(() => greenRunFor(scope, programs, history), [scope, programs, history]);
+  const greenView = useMemo(() => (compare ? findRunView(compare.green, programs, history) : null), [compare, programs, history]);
+  const blueView = useMemo(() => (compare ? findRunView(compare.blue, programs, history) : null), [compare, programs, history]);
+  const comparing = !!(greenView && blueView);
+  const blueCandidates = useMemo(
+    () => compareCandidates(programs, history, (greenView ?? startGreen)?.ref ?? null),
+    [programs, history, greenView, startGreen],
   );
-  const displayPrs = useMemo(() => {
-    if (!prs) return null;
-    const c = <T extends { value: number; weight?: number } | null>(pr: T): T =>
-      pr ? ({ ...pr, value: dw(pr.value), ...(pr.weight != null ? { weight: dw(pr.weight) } : {}) }) : pr;
+  // Green can be the program on the go, or any finished one but blue.
+  const greenCandidates = useMemo(() => {
+    const out: ProgramRunView[] = [];
+    const active = programs.find(p => p.status === "active");
+    const current = active ? programRunViews(active, history).find(v => v.ref.run === "latest") : undefined;
+    if (current) out.push(current);
+    for (const v of compareCandidates(programs, history, blueView?.ref ?? null)) {
+      if (!out.some(o => sameRun(o.ref, v.ref))) out.push(v);
+    }
+    return out;
+  }, [programs, history, blueView]);
+  const canCompare = !comparing && !!startGreen && blueCandidates.length > 0;
+
+  // A program in the comparison that's since been deleted ends it.
+  useEffect(() => {
+    if (loaded && compare && !comparing) setCompare(null);
+  }, [loaded, compare, comparing]);
+
+  const cmp = useMemo(() => {
+    if (!greenView || !blueView) return null;
+    const span = spanDays(greenView, blueView, compareSpan, todayYMD);
+    const whole = spanDays(greenView, blueView, "whole", todayYMD);
+    const lifts = compareLifts(greenView, blueView);
+    // The days each program missed each lift on: each keeps its place in the
+    // lift's row (liftSlots).
+    const missed: Record<string, { green: string[]; blue: string[] }> = {};
+    for (const l of [...lifts.both, ...lifts.onlyGreen, ...lifts.onlyBlue]) {
+      missed[l.key] = {
+        green: missedDates(greenView, l, l.green, todayYMD),
+        blue: missedDates(blueView, l, l.blue, todayYMD),
+      };
+    }
     return {
-      heaviest: c(prs.heaviest),
-      bestSetVolume: c(prs.bestSetVolume),
-      bestSessionVolume: c(prs.bestSessionVolume),
-      oneRepMax: c(prs.oneRepMax),
-      // Its value is reps (a hold's seconds): only the set's weight converts.
-      mostReps: prs.mostReps && { ...prs.mostReps, ...(prs.mostReps.weight != null ? { weight: dw(prs.mostReps.weight) } : {}) },
+      span,
+      whole,
+      glance: { green: glanceStats(greenView, span.green, history, todayYMD), blue: glanceStats(blueView, span.blue, history, todayYMD) },
+      strength: sharedStrength(lifts.both, compareSpan),
+      lifts,
+      missed,
     };
-  }, [prs, isKg]);
+  }, [greenView, blueView, compareSpan, todayYMD, history]);
+
+  const cmpNames = useMemo(
+    () => (greenView && blueView ? { green: runName(greenView), blue: runName(blueView) } : { green: "", blue: "" }),
+    [greenView, blueView],
+  );
+
+  const cmpWeeks = useMemo(() => {
+    if (!cmp || !greenView || !blueView) return null;
+    const conv = (n: number) => (metric === "volume" ? toDisplayWeight(n, isKg) : n);
+    const avg = (view: ProgramRunView, days: number) =>
+      conv(weeklyTotals(view, days, metric).reduce((s, v) => s + v, 0) / Math.max(1, days / 7));
+    return {
+      green: weeklyTotals(greenView, cmp.whole.green, metric).map(conv),
+      blue: weeklyTotals(blueView, cmp.whole.blue, metric).map(conv),
+      averages: { green: avg(greenView, cmp.span.green), blue: avg(blueView, cmp.span.blue) },
+    };
+  }, [cmp, greenView, blueView, metric, isKg]);
+
+  const cmpRadar = useMemo(() => {
+    if (!cmp || !greenView || !blueView) return null;
+    return {
+      green: convertMuscleVolumes(muscleStatsPerWeek(greenView, cmp.span.green, knownCustoms), isKg),
+      blue: convertMuscleVolumes(muscleStatsPerWeek(blueView, cmp.span.blue, knownCustoms), isKg),
+    };
+  }, [cmp, greenView, blueView, knownCustoms, isKg]);
+
+  const cmpGlance = useMemo(() => {
+    if (!cmp) return null;
+    const conv = (g: typeof cmp.glance.green) => ({ ...g, volumePerWeekKg: toDisplayWeight(g.volumePerWeekKg, isKg) });
+    return { green: conv(cmp.glance.green), blue: conv(cmp.glance.blue) };
+  }, [cmp, isKg]);
+
+  // What At a glance covers, in words, both programs named.
+  const glanceCaption = useMemo(
+    () => (greenView && blueView ? spanCaption(greenView, blueView, compareSpan, todayYMD) : ""),
+    [greenView, blueView, compareSpan, todayYMD],
+  );
+
+  const selectedLift = useMemo(() => {
+    if (!cmp || !compareLift) return null;
+    return [...cmp.lifts.both, ...cmp.lifts.onlyGreen, ...cmp.lifts.onlyBlue].find(l => l.key === compareLift) ?? null;
+  }, [cmp, compareLift]);
+  const selectedLiftView = useMemo(() => {
+    if (!cmp || !selectedLift || !greenView || !blueView) return null;
+    const green = displayPoints(selectedLift.green, isKg);
+    const blue = displayPoints(selectedLift.blue, isKg);
+    const missed = cmp.missed[selectedLift.key] ?? { green: [], blue: [] };
+    return {
+      lift: { ...selectedLift, green, blue },
+      // Every time it came round in each, its sessions in the unit shown.
+      slots: { green: liftSlots(green, missed.green), blue: liftSlots(blue, missed.blue) },
+      prs: {
+        green: selectedLift.green.length ? displayRecords(computePRs(selectedLift.green, greenView.sessions, selectedLift), isKg) : null,
+        blue: selectedLift.blue.length ? displayRecords(computePRs(selectedLift.blue, blueView.sessions, selectedLift), isKg) : null,
+      },
+    };
+  }, [cmp, selectedLift, greenView, blueView, isKg]);
+
+  // The sheet, and which side it's open for.
+  const [sheetSide, setSheetSide] = useState<CompareSheetSide | null>(null);
+  const openSheet = (side: CompareSheetSide) => setSheetSide(side);
+  const onPickRun = (ref: RunRef) => {
+    if (sheetSide === "green") {
+      setCompare(prev => (prev ? { ...prev, green: ref } : prev));
+      return;
+    }
+    setCompare(prev => (prev ? { ...prev, blue: ref } : startGreen ? { green: startGreen.ref, blue: ref } : prev));
+  };
+  const stopComparing = useCallback(() => {
+    setCompare(null);
+    setCompareLift(null);
+  }, []);
+  const onSelectLift = useCallback((key: string) => {
+    setCompareLift(key);
+    setChartScrollRequest(n => n + 1);
+  }, []);
+
+  // ── What comes in the first time it's scrolled into sight
+  // (revealOnScroll.ts): the comparison's little exercise charts. Each is
+  // measured in the page's content once, again when the content changes size,
+  // and checked where the page comes to rest (a drag let go, a fling's end),
+  // so it draws out where it can be watched rather than flying past. ─────
+  const watched = useRef(new Set<Watched>());
+  const scrollTop = useRef(0);
+  const checkReveals = useCallback(() => {
+    const top = scrollTop.current;
+    const bottom = top + viewportH.current;
+    if (bottom <= top) return;
+    for (const w of [...watched.current]) {
+      if (w.y === undefined || w.h === undefined) continue;
+      if (w.y < bottom - REVEAL_INSET && w.y + w.h > top) {
+        watched.current.delete(w);
+        w.onReveal();
+      }
+    }
+  }, []);
+  const measureWatched = useCallback((w: Watched) => {
+    const content = scrollRef.current?.getInnerViewRef?.();
+    if (!content || typeof w.view.measureLayout !== "function") return;
+    w.view.measureLayout(content, (_x, y, _w, h) => {
+      w.y = y;
+      w.h = h;
+      checkReveals();
+    }, () => {});
+  }, [checkReveals]);
+  const revealWatcher = useMemo<RevealWatcher>(() => ({
+    watch: (view, onReveal) => {
+      const w: Watched = { view, onReveal };
+      watched.current.add(w);
+      measureWatched(w);
+      return () => {
+        watched.current.delete(w);
+      };
+    },
+  }), [measureWatched]);
+  const onScrollStop = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollTop.current = e.nativeEvent.contentOffset.y;
+    if (watched.current.size > 0) checkReveals();
+  }, [checkReveals]);
 
   /** Where the chart's section sits in the page's content, read from the
    *  layout as it stands NOW. Its last onLayout isn't enough: a section that
@@ -412,16 +620,14 @@ function ProgressBody({
     };
   }, [chartScrollRequest]);
 
-  const onSelectExercise = useCallback((day: ProgramDayRef, name: string) => {
+  const onSelectExercise = useCallback((day: ProgramDayRef, ex: ExerciseRef) => {
     // A same-pair reselect keeps the previous object, so the chart's data
     // isn't worked out again; the page still scrolls down to it, which is what
     // tapping an exercise does whether or not it was chosen already.
     setSelectedExercise(prev =>
-      prev &&
-      prev.dayKey === day.key &&
-      prev.name.trim().toLowerCase() === name.trim().toLowerCase()
+      prev && prev.dayKey === day.key && sameExercise(prev, ex)
         ? prev
-        : { dayKey: day.key, name },
+        : { dayKey: day.key, name: ex.name, ...(ex.customId ? { customId: ex.customId } : {}) },
     );
     setChartScrollRequest(n => n + 1);
   }, []);
@@ -452,50 +658,121 @@ function ProgressBody({
         </Animated.View>
       )}
 
+      <RevealOnScrollContext.Provider value={revealWatcher}>
       <Animated.ScrollView
         ref={scrollRef as any}
         showsVerticalScrollIndicator={false}
         automaticallyAdjustContentInsets={false}
         contentInsetAdjustmentBehavior="never"
-        onLayout={e => { viewportH.current = e.nativeEvent.layout.height; }}
+        onLayout={e => {
+          viewportH.current = e.nativeEvent.layout.height;
+          checkReveals();
+        }}
+        onContentSizeChange={() => watched.current.forEach(measureWatched)}
         contentContainerStyle={[styles.scroll, { paddingTop: topPad, paddingBottom: botPad }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+        onScrollEndDrag={onScrollStop}
+        onMomentumScrollEnd={onScrollStop}
         scrollEventThrottle={16}
         refreshControl={refreshControl}
       >
         {title !== "" && (
-          <View style={styles.titleRow}>
+          <View style={[styles.titleRow, styles.titleRowSplit]}>
             <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
+            {canCompare ? <CompareButton onPress={() => openSheet("blue")} /> : null}
           </View>
         )}
 
-        <View style={{ marginTop: 18 }}>
-          {/* The page's two filters: which program, and over what dates. Both
-              apply to the Volume and Strength cards alike. */}
-          <View style={styles.filterRow}>
-            <ProgramScopePicker
-              scope={scope}
-              programs={programs}
-              onChange={s => { setScope(s); setScopeFallbackNote(null); }}
-              style={{ flex: 1 }}
+        <View style={{ marginTop: comparing ? 10 : 18 }}>
+          {comparing && greenView && blueView ? (
+            // Comparing: the two programs in place of the filters. Each
+            // program is read whole, so there's no time range. A finished
+            // program says when it ran, which tells two of one name apart;
+            // the one going says where it's up to.
+            <CompareHeader
+              green={{ name: cmpNames.green, status: greenView.finished ? runDates(greenView, todayYMD) : runStatus(greenView, todayYMD) }}
+              blue={{ name: cmpNames.blue, status: runDates(blueView, todayYMD) }}
+              onChangeGreen={() => openSheet("green")}
+              onChangeBlue={() => openSheet("blue")}
+              onStop={stopComparing}
             />
-            <DropdownPicker<RangeKey>
-              value={range}
-              options={RANGE_OPTIONS}
-              onChange={setRange}
-              sheetTitle="Time range"
-              size="bar"
-              leadingIcon="calendar-outline"
-            />
-          </View>
-          {scopeFallbackNote ? (
+          ) : (
+            // The page's two filters: which program, and over what dates. Both
+            // apply to the Volume and Strength cards alike.
+            <View style={styles.filterRow}>
+              <ProgramScopePicker
+                scope={scope}
+                programs={programs}
+                onChange={s => { setScope(s); setScopeFallbackNote(null); }}
+                style={{ flex: 1 }}
+              />
+              <DropdownPicker<RangeKey>
+                value={range}
+                options={RANGE_OPTIONS}
+                onChange={setRange}
+                sheetTitle="Time range"
+                size="bar"
+                leadingIcon="calendar-outline"
+              />
+              {/* No title on a trainer's client page: the button sits here. */}
+              {title === "" && canCompare ? <CompareButton onPress={() => openSheet("blue")} size={44} /> : null}
+            </View>
+          )}
+          {scopeFallbackNote && !comparing ? (
             <View style={{ marginHorizontal: 20, marginTop: 8 }}>
-              <Text style={[styles.note, { color: ACCT }]}>{scopeFallbackNote}</Text>
+              <Text style={[styles.note, { color: accentTextColor(isDark) }]}>{scopeFallbackNote}</Text>
             </View>
           ) : null}
         </View>
 
-        {showNoActiveProgramHint && loaded ? (
+        {comparing && cmp && cmpGlance && cmpWeeks && cmpRadar && greenView ? (
+          <>
+            <CompareGlanceCard
+              names={cmpNames}
+              green={cmpGlance.green}
+              blue={cmpGlance.blue}
+              strength={cmp.strength}
+              span={compareSpan}
+              onSpanChange={setCompareSpan}
+              caption={glanceCaption}
+              unit={unit}
+            />
+            <CompareWeeksChart
+              green={cmpWeeks.green}
+              blue={cmpWeeks.blue}
+              averages={cmpWeeks.averages}
+              greenCurrentWeek={greenView.finished ? null : weekOfDay(cmp.whole.green)}
+              names={cmpNames}
+              metric={metric}
+              onMetricChange={setMetric}
+              unit={unit}
+            />
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionHeader, { color: t.tp }]}>Strength</Text>
+            </View>
+            <StrengthRadarChart
+              stats={cmpRadar.green}
+              unit={unit}
+              windowDays={7}
+              rangeLabel=""
+              currentLegend=""
+              previousLegend=""
+              metric={strengthMetric}
+              onMetricChange={setStrengthMetric}
+              compare={{ stats: cmpRadar.blue, greenName: cmpNames.green, blueName: cmpNames.blue }}
+            />
+            <CompareLiftList
+              // Another pair of programs: its little charts draw out afresh.
+              key={`${greenView.ref.programId}|${greenView.ref.run}|${blueView?.ref.programId}|${blueView?.ref.run}`}
+              lifts={cmp.lifts}
+              missed={cmp.missed}
+              names={cmpNames}
+              selected={compareLift}
+              onSelect={onSelectLift}
+              customExercises={knownCustoms}
+            />
+          </>
+        ) : showNoActiveProgramHint && loaded ? (
           <NeuCard dark={isDark} radius={16} style={{ marginHorizontal: 20, marginTop: 16 }}>
             <View style={styles.hintInner}>
               <DumbbellIcon size={26} color={t.ts} />
@@ -533,6 +810,7 @@ function ProgressBody({
               workouts={scopedWorkouts}
               selectedExercise={selectedExercise}
               onSelectExercise={onSelectExercise}
+              customExercises={knownCustoms}
               expandedDay={expandedDay}
               onExpandedDayChange={setExpandedDay}
               groupByProgram={scope.kind === "all"}
@@ -543,7 +821,27 @@ function ProgressBody({
           </>
         )}
 
-        {selectedExercise && selectedDay && displayPrs ? (
+        {comparing && cmp && selectedLiftView && compare ? (
+          <View
+            ref={exerciseSectionRef}
+            onLayout={e => {
+              exerciseSectionY.current = e.nativeEvent.layout.y;
+              exerciseSectionH.current = e.nativeEvent.layout.height;
+            }}
+          >
+            <CompareExerciseCard
+              lift={selectedLiftView.lift}
+              slots={selectedLiftView.slots}
+              names={cmpNames}
+              prs={selectedLiftView.prs}
+              metric={exerciseMetric}
+              onMetricChange={setExerciseMetric}
+              unit={unit}
+              clientId={clientId}
+              seriesKey={`${compare.green.programId}|${compare.green.run}|${compare.blue.programId}|${compare.blue.run}|${selectedLiftView.lift.key}`}
+            />
+          </View>
+        ) : !comparing && selectedExercise && selectedDay && displayPrs ? (
           <View
             ref={exerciseSectionRef}
             onLayout={e => {
@@ -553,6 +851,7 @@ function ProgressBody({
           >
             <ExerciseProgressionChart
               exerciseName={selectedExercise.name}
+              customId={selectedExercise.customId}
               dayName={selectedDay.label}
               dayId={selectedDay.dayId}
               programId={selectedDay.programId}
@@ -566,6 +865,17 @@ function ProgressBody({
           </View>
         ) : null}
       </Animated.ScrollView>
+      </RevealOnScrollContext.Provider>
+
+      <CompareSheet
+        side={sheetSide}
+        options={sheetSide === "green" ? greenCandidates : blueCandidates}
+        selected={sheetSide === "green" ? greenView?.ref ?? null : blueView?.ref ?? null}
+        other={sheetSide === "green" ? blueView : greenView ?? startGreen}
+        todayYMD={todayYMD}
+        onPick={onPickRun}
+        onClose={() => setSheetSide(null)}
+      />
     </Wrapper>
   );
 }
@@ -574,6 +884,7 @@ const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll: { paddingTop: 0 },
   titleRow: { paddingHorizontal: 24, marginBottom: 8 },
+  titleRowSplit: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: 16 },
   filterRow: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20 },
   title: { fontFamily: FontFamily.bold, fontSize: 32 },
   sectionHeaderRow: { paddingHorizontal: 24, marginTop: 28 },

@@ -19,10 +19,18 @@
 // push is running, whether the last real attempt failed, and when this account
 // last backed up. Failures used to be silent, so a device could sit offline for
 // days holding data the cloud didn't, with nothing on screen to say so.
+//
+// A backup that can't go is OWED (BACKUP_OWED_KEY, saved on the phone): every
+// scheduled push sets it and only one that went through clears it. A workout
+// logged with no signal used to be retried only if the signal came back with
+// the app still open; closed first, the app forgot, and the cloud and a
+// trainer's view went without it until the next change (user report,
+// 2026-10-14). pushOwedBackup now sends it a moment after the next launch and
+// whenever the signal comes back.
 
 import { supabase } from "./supabase";
-import { getCacheOwner, pushAllLocalDataToCloud } from "./cloud";
-import { getJSON, setJSON } from "../utils/storage";
+import { BACKUP_OWED_KEY, getCacheOwner, pushAllLocalDataToCloud } from "./cloud";
+import { getJSON, removeKey, setJSON } from "../utils/storage";
 
 const DEBOUNCE_MS = 2500;
 
@@ -34,6 +42,9 @@ type LastBackup = { uid: string; at: number };
 let timer: ReturnType<typeof setTimeout> | null = null;
 let current: Promise<PushOutcome> | null = null;
 let rearm = false;
+// Bumped by every scheduled push, so a push clears the owed flag only when
+// nothing changed while it ran (the push re-armed after it does that).
+let changes = 0;
 
 /** "skipped" = nothing to push for the signed-in account (signed out, or the
  *  cache belongs to another account). It is neither a backup nor a failure. */
@@ -48,8 +59,14 @@ const listeners = new Set<() => void>();
 const emit = () => listeners.forEach(l => l());
 
 async function doPush(): Promise<PushOutcome> {
+  const changesAtStart = changes;
   try {
-    const { data } = await supabase.auth.getSession();
+    const { data, error } = await supabase.auth.getSession();
+    // No signal and a token over an hour old: supabase-js can't renew it, and
+    // answers with an error and no session. That's a backup that couldn't go,
+    // not a phone nobody is signed in on. Taken for a skip, it was never
+    // retried and let a sign-out past its backup check (lib/auth.ts).
+    if (error) return "failed";
     const uid = data.session?.user.id;
     if (!uid) return "skipped";
     const owner = await getCacheOwner();
@@ -57,6 +74,7 @@ async function doPush(): Promise<PushOutcome> {
     // sets it on sign-in, so treat a mismatch (not absence) as "don't push".
     if (owner !== null && owner !== uid) return "skipped";
     await pushAllLocalDataToCloud(uid);
+    if (changes === changesAtStart) await removeKey(BACKUP_OWED_KEY);
     lastBackup = { uid, at: Date.now() };
     lastBackupLoaded = true;
     // setJSON swallows its own errors: the status is a convenience, never a
@@ -95,8 +113,10 @@ function runPush(): Promise<PushOutcome> {
 }
 
 export type BackupStatus = {
-  /** "backing_up" while a push runs; "failed" when the last real attempt did. */
-  state: "idle" | "backing_up" | "failed";
+  /** "backing_up" while a push runs; "failed" when the last real attempt did;
+   *  "waiting" while a change hasn't reached the cloud (about to go, or owed
+   *  from before the app closed). */
+  state: "idle" | "backing_up" | "failed" | "waiting";
   /** When `uid` last backed up from this device (epoch ms), or null if never. */
   lastBackupAt: number | null;
 };
@@ -109,8 +129,9 @@ export async function getBackupStatus(uid: string): Promise<BackupStatus> {
     if (!lastBackupLoaded) lastBackup = stored;
     lastBackupLoaded = true;
   }
+  const owed = await getJSON<boolean>(BACKUP_OWED_KEY, false);
   return {
-    state: running ? "backing_up" : lastFailed ? "failed" : "idle",
+    state: running ? "backing_up" : lastFailed ? "failed" : owed ? "waiting" : "idle",
     lastBackupAt: lastBackup && lastBackup.uid === uid ? lastBackup.at : null,
   };
 }
@@ -123,6 +144,10 @@ export function subscribeBackupStatus(listener: () => void): () => void {
 
 /** Debounce a cloud push. Call after any local data write. */
 export function scheduleCloudPush(): void {
+  changes += 1;
+  // Owed from this moment, on the phone: if the push can't go, or the app
+  // closes before it does, the next launch still sends it.
+  void setJSON(BACKUP_OWED_KEY, true).then(emit);
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
@@ -130,11 +155,15 @@ export function scheduleCloudPush(): void {
   }, DEBOUNCE_MS);
 }
 
-/** Back online: push again if the last attempt failed (a workout logged with
- *  no signal), rather than waiting for the next change or the next time the
- *  app is left. Nothing to redo if it went through, or none has run. */
-export function retryFailedCloudPush(): void {
-  if (lastFailed && !current) scheduleCloudPush();
+/** Push if this phone holds a change the cloud doesn't: a workout logged with
+ *  no signal, maybe before the app was closed. Run a moment after launch and
+ *  whenever the signal comes back (app/_layout.tsx); leaving the app pushes
+ *  regardless (flushCloudPush). Nothing to do while a push is on its way. */
+export async function pushOwedBackup(): Promise<void> {
+  if (current || timer) return;
+  if (!lastFailed && !(await getJSON<boolean>(BACKUP_OWED_KEY, false))) return;
+  if (current || timer) return; // one started while the flag was read
+  void runPush();
 }
 
 /** Push now (cancelling any pending debounce). Used on app background/inactive. */

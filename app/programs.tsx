@@ -677,6 +677,8 @@ export default function ProgramsScreen() {
       // Your own copy to change: a trainer's update of the original must not
       // land on it (copyToUpdate matches copies by their origin).
       shareOrigin: undefined,
+      // The original's earlier runs are its own history, not the copy's.
+      runs: undefined,
     };
     const updated = [...programs, copy];
     setPrograms(updated);

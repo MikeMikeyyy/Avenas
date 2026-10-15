@@ -19,7 +19,7 @@ import { MONTH_NAMES, toYMD, parseStoredDate } from "./dates";
 import { historicalDays, markDayRefLabels, programDaysWithExtras } from "./programDays";
 import { runStartYMD } from "./programHolds";
 import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
-import { currentExerciseName, exerciseKey } from "./exerciseNames";
+import { currentExerciseName, exerciseIdentity, type ExerciseRef } from "./exerciseNames";
 import type {
   ExerciseDataPoint,
   ExerciseSetPoint,
@@ -155,7 +155,7 @@ export function computeMuscleGroupStats(
     const sessionCredit = {} as Record<SelectableMuscle, number>;
 
     for (const ex of w.exercises) {
-      const groups = musclesForExercise(ex.name, customExercises);
+      const groups = musclesForExercise(ex, customExercises);
       if (groups.length === 0) continue;
       const share = 1 / groups.length;
 
@@ -555,13 +555,17 @@ export function bucketVolumeByMonth(
  * mixes the two contexts' numbers, and two days that merely share a NAME stay
  * separate too (see workoutMatchesDay). Omit it for the day-agnostic view
  * (e.g. the post-workout summary's PR check).
+ *
+ * The exercise is matched by identity (utils/exerciseNames.ts): a bare name is
+ * a catalogue exercise or a custom one made before ids, and a custom exercise
+ * with an id never takes in the sessions of another of its name.
  */
 export function collectExerciseHistory(
   workouts: CompletedWorkout[],
-  exerciseName: string,
+  exercise: string | ExerciseRef,
   day?: ProgramDayRef,
 ): ExerciseDataPoint[] {
-  const want = exerciseKey(exerciseName);
+  const want = exerciseIdentity(typeof exercise === "string" ? { name: exercise } : exercise);
   const points: ExerciseDataPoint[] = [];
   for (const w of workouts) {
     if (day && !workoutMatchesDay(w, day)) continue;
@@ -581,7 +585,7 @@ export function collectExerciseHistory(
     let did = false;
     let isHold = false;
     for (const ex of w.exercises) {
-      if (exerciseKey(ex.name) !== want) continue;
+      if (exerciseIdentity(ex) !== want) continue;
       if (ex.isIsometric) isHold = true;
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done) continue;
@@ -677,7 +681,7 @@ function epley(weight: number, reps: number): number {
  * is its reps), and it's the session's set itself (`setIndex`), the block the
  * chart's Sets tab draws gold.
  */
-export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exerciseName: string, day?: ProgramDayRef): PRs {
+export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exercise: string | ExerciseRef, day?: ProgramDayRef): PRs {
   const heaviest = history.reduce<{ p: ExerciseDataPoint; reps: number } | null>((acc, p) => {
     if (p.topWeight <= 0) return acc;
     if (!acc || p.topWeight > acc.p.topWeight) return { p, reps: p.topReps };
@@ -708,13 +712,13 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
   // 1RM walks raw sets. Same optional day scoping as collectExerciseHistory —
   // `history` arrives already day-filtered, so the raw walk must match or a
   // set from the other day's session could take the 1RM crown.
-  const want = exerciseKey(exerciseName);
+  const want = exerciseIdentity(typeof exercise === "string" ? { name: exercise } : exercise);
   let oneRm: { value: number; workoutId: string; date: string; weight: number; reps: number; completedAt: string } | null = null;
   for (const w of workouts) {
     if (day && !workoutMatchesDay(w, day)) continue;
     for (const ex of w.exercises) {
       // A hold's "reps" are seconds: no rep max to estimate.
-      if (exerciseKey(ex.name) !== want || ex.isIsometric) continue;
+      if (exerciseIdentity(ex) !== want || ex.isIsometric) continue;
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done) continue;
         const wt = parsePositive(s.weight);
@@ -959,11 +963,12 @@ export function collectLoggedExercisesForDay(
   workouts: CompletedWorkout[],
   day: ProgramDayRef,
 ): LoggedExerciseRow[] {
-  // exerciseKey → { name (preserve case), latestSet, lastDate, lastCompletedAt, sessionCount }
+  // identity → { name (preserve case), latestSet, lastDate, lastCompletedAt, sessionCount }
   const acc = new Map<
     string,
     {
       name: string;
+      customId?: string;
       lastWeight: string;
       lastReps: string;
       lastDate: string;
@@ -976,7 +981,9 @@ export function collectLoggedExercisesForDay(
     // For each exercise in this workout, find the latest "working+done" set
     // to use as the "lastWeight × lastReps" preview.
     for (const ex of w.exercises) {
-      const ek = exerciseKey(ex.name);
+      // By identity: a deleted custom exercise and a new one later given its
+      // name are two rows (utils/exerciseNames.ts).
+      const ek = ex.name ? exerciseIdentity(ex) : "";
       if (!ek) continue;
       const lastWorking = [...ex.sets].reverse().find(s => s.type === "working" && s.done);
       const prev = acc.get(ek);
@@ -985,7 +992,8 @@ export function collectLoggedExercisesForDay(
         acc.set(ek, {
           // The name it goes by now, so sessions logged before a rename share
           // one row under the new name.
-          name: currentExerciseName(ex.name),
+          name: ex.customId ? ex.name : currentExerciseName(ex.name),
+          ...(ex.customId ? { customId: ex.customId } : {}),
           lastWeight: lastWorking?.weight ?? "",
           lastReps: lastWorking?.reps ?? "",
           lastDate: w.date,
@@ -1013,11 +1021,12 @@ export function collectLoggedExercisesForDay(
     .sort((a, b) => b.lastCompletedAt.localeCompare(a.lastCompletedAt))
     .map(r => ({
       name: r.name,
+      ...(r.customId ? { customId: r.customId } : {}),
       lastWeight: r.lastWeight,
       lastReps: r.lastReps,
       lastDate: r.lastDate,
       sessionCount: r.sessionCount,
-      inProgram: !comparable || programmed.has(exerciseKey(r.name)),
+      inProgram: !comparable || programmed.has(exerciseIdentity(r)),
     }));
 }
 

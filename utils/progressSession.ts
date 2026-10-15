@@ -18,6 +18,8 @@ import type {
   RangeKey,
   StrengthMetricKey,
 } from "../constants/progress";
+import type { RunRef } from "./programRuns";
+import type { CompareSpan } from "./programCompare";
 
 export type ProgressSelections = {
   scope: ProgramScope;
@@ -33,8 +35,17 @@ export type ProgressSelections = {
   expandedProgram: string | null;
   /** The day row open in the Exercise Progress list (ProgramDayRef.key). */
   expandedDay: string | null;
-  /** The exercise chart's tab (Strength / Sets / Volume). */
+  /** The exercise chart's tab (Strength / Sets / Volume), comparing or not. */
   exerciseMetric: ExerciseMetricKey;
+  /** Two programs side by side (utils/programCompare.ts): green, the program
+   *  that was picked at the top, and blue, a finished one. Null when the page
+   *  isn't comparing. */
+  compare: { green: RunRef; blue: RunRef } | null;
+  /** What At a glance and the averages read: the first days of each ("same")
+   *  or each start to finish ("whole"). */
+  compareSpan: CompareSpan;
+  /** The exercise charted while comparing (its exerciseKey). */
+  compareLift: string | null;
 };
 
 export const DEFAULT_PROGRESS_SELECTIONS: ProgressSelections = {
@@ -46,6 +57,9 @@ export const DEFAULT_PROGRESS_SELECTIONS: ProgressSelections = {
   expandedProgram: null,
   expandedDay: null,
   exerciseMetric: "strength",
+  compare: null,
+  compareSpan: "same",
+  compareLift: null,
 };
 
 const sessions = new Map<string, ProgressSelections>();

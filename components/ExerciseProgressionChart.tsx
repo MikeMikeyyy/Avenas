@@ -8,7 +8,7 @@ import BounceButton from "./BounceButton";
 import SegmentedControl from "./SegmentedControl";
 import DumbbellIcon from "./DumbbellIcon";
 import ExerciseChartPlot, { type ChartRecords } from "./progress/ExerciseChartPlot";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK, accentTextColor } from "../constants/theme";
 import { pill, pillGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { MONTH_NAMES } from "../utils/dates";
@@ -19,6 +19,10 @@ import { EXERCISE_METRIC_OPTIONS } from "../constants/progress";
 
 interface Props {
   exerciseName: string;
+  /** Which custom exercise it is (utils/exerciseNames.ts exerciseIdentity),
+   *  forwarded so the full-history page reads that one and not another of its
+   *  name. */
+  customId?: string;
   /**
    * Workout-day label the `history`/`prs` are scoped to (progress is tracked
    * per (day, exercise) pair — see ExerciseSelection). Shown in the header so
@@ -97,6 +101,7 @@ type RecordRow = {
  */
 export default function ExerciseProgressionChart({
   exerciseName,
+  customId,
   dayName,
   dayId,
   programId,
@@ -206,8 +211,8 @@ export default function ExerciseProgressionChart({
             </Text>
           </View>
           {change ? (() => {
-            // Up in the accent, down in grey, as the Strength radar's
-            // arrows: a lighter week isn't a warning.
+            // Up in the accent's text green, down in grey, as the Strength
+            // radar's arrows: a lighter week isn't a warning.
             const c = fmtChange(change.pct);
             const since = fmtShortDate(change.sinceYMD);
             return (
@@ -216,7 +221,7 @@ export default function ExerciseProgressionChart({
                 accessible
                 accessibilityLabel={c.dir === "flat" ? `No change since ${since}` : `${c.dir === "up" ? "Up" : "Down"} ${c.text} since ${since}`}
               >
-                <Text style={[styles.changeValue, { color: c.dir === "up" ? ACCT : t.ts }]} numberOfLines={1}>
+                <Text style={[styles.changeValue, { color: c.dir === "up" ? accentTextColor(isDark) : t.ts }]} numberOfLines={1}>
                   {`${changeArrow(c.dir)}${c.text}`}
                 </Text>
                 <Text style={[styles.changeSince, { color: t.ts }]} numberOfLines={1}>{`since ${since}`}</Text>
@@ -310,7 +315,7 @@ export default function ExerciseProgressionChart({
       onPress={() => {
         router.navigate({
           pathname: "/exercise-history",
-          params: { exerciseName, ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}), ...(programId ? { programId } : {}), ...(clientId ? { clientId } : {}) },
+          params: { exerciseName, ...(customId ? { customId } : {}), ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}), ...(programId ? { programId } : {}), ...(clientId ? { clientId } : {}) },
         });
       }}
       accessibilityRole="button"

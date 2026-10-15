@@ -21,6 +21,12 @@ import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// "Forgot password?" stays hidden until Supabase sends the reset CODE: that
+// needs custom SMTP (a domain + Resend) and the Reset Password template showing
+// {{ .Token }}. Without them the email is Supabase's dead link, or never arrives
+// (the built-in sender mails only the project's team). User decision, 2026-10-14.
+const PASSWORD_RESET_READY = false;
+
 function SocialButton({
   icon, label, dark, onPress,
 }: { icon: React.ReactNode; label: string; dark: boolean; onPress: () => void }) {
@@ -210,7 +216,21 @@ export default function LoginScreen() {
           </View>
         </NeuCard>
 
-        <View style={styles.ctaSection}>
+        {PASSWORD_RESET_READY && (
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push({ pathname: "/forgot-password", params: { email: email.trim() } });
+            }}
+            style={styles.forgotRow}
+            hitSlop={8}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.forgotText, { color: t.ts }]}>Forgot password?</Text>
+          </TouchableOpacity>
+        )}
+
+        <View style={[styles.ctaSection, !PASSWORD_RESET_READY && styles.ctaSectionNoForgot]}>
           <BounceButton onPress={onSubmit} accessibilityRole="button" accessibilityLabel="Log in">
             <View style={[styles.ctaWrap, { backgroundColor: btnBg, shadowColor: btnShadow }, (!canSubmit || busy) && styles.ctaDisabled]}>
               <View style={[styles.cta, { backgroundColor: btnBg }]}>
@@ -264,7 +284,10 @@ const styles = StyleSheet.create({
   passwordRow:   { flexDirection: "row", alignItems: "center" },
   passwordInput: { flex: 1, paddingRight: 8 },
   eyeBtn:        { paddingHorizontal: 16, paddingVertical: 16, alignItems: "center", justifyContent: "center" },
-  ctaSection:    { marginTop: 28, gap: 16 },
+  forgotRow:     { alignSelf: "flex-end", marginTop: 12, marginRight: 4 },
+  forgotText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
+  ctaSection:    { marginTop: 20, gap: 16 },
+  ctaSectionNoForgot: { marginTop: 28 },
   ctaWrap:       { borderRadius: 28, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
   ctaDisabled:   { opacity: 0.4 },
   cta:           { ...pill(PILL_H) },

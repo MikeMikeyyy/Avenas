@@ -74,7 +74,7 @@ export default function ExerciseHistoryScreen() {
   // client's Progress tab: it reads the copy the client page loaded (never your
   // own storage, where none of their sessions exist) and a card opens the
   // session read-only, exactly as tapping it on their journal does.
-  const { exerciseName, dayName, dayId, programId, clientId } = useLocalSearchParams<{ exerciseName: string; dayName?: string; dayId?: string; programId?: string; clientId?: string }>();
+  const { exerciseName, customId, dayName, dayId, programId, clientId } = useLocalSearchParams<{ exerciseName: string; customId?: string; dayName?: string; dayId?: string; programId?: string; clientId?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg: ownIsKg } = useUnit();
@@ -122,9 +122,9 @@ export default function ExerciseHistoryScreen() {
   // Which sessions, and their sets: utils/exerciseHistory.ts.
   const sessions: SessionRow[] = useMemo(() => {
     if (!exerciseName) return [];
-    return exerciseHistoryRows(history, programs, { exerciseName, dayName, dayId, programId, days: rangeOption.days })
+    return exerciseHistoryRows(history, programs, { exerciseName, customId, dayName, dayId, programId, days: rangeOption.days })
       .map(r => ({ ...r, displayDate: fmtSessionDate(r.date) }));
-  }, [history, programs, exerciseName, dayName, dayId, programId, rangeOption.days]);
+  }, [history, programs, exerciseName, customId, dayName, dayId, programId, rangeOption.days]);
 
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

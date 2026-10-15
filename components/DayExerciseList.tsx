@@ -25,6 +25,9 @@ import {
 } from "../utils/progressStats";
 import type { CompletedWorkout, ProgramDayRef, SavedProgram } from "../constants/programs";
 import type { ExerciseSelection, LoggedExerciseRow } from "../constants/progress";
+import type { CustomExercise } from "../constants/exercises";
+import { exerciseIdentity, type ExerciseRef } from "../utils/exerciseNames";
+import { isDeletedExercise } from "../utils/customExercises";
 
 interface Props {
   /** Every non-Rest day of the in-scope program(s), as identified refs. Two
@@ -39,7 +42,10 @@ interface Props {
    * shares the selected day's name.
    */
   selectedExercise: ExerciseSelection | null;
-  onSelectExercise: (day: ProgramDayRef, name: string) => void;
+  onSelectExercise: (day: ProgramDayRef, ex: ExerciseRef) => void;
+  /** Every custom exercise the rows can be (knownCustomExercises), deleted ones
+   *  included: a deleted one's row says so. */
+  customExercises: CustomExercise[];
   /** The open day row (ProgramDayRef.key), or null. Keyed by the ref, not the
    *  name, so two "Upper" rows expand independently. Held by the page, which
    *  remembers it between visits (utils/progressSession.ts). */
@@ -56,9 +62,6 @@ interface Props {
   expandedProgram: string | null;
   onExpandedProgramChange: (programId: string | null) => void;
 }
-
-// Lowercase-trim match used across the codebase for exercise/day names.
-const norm = (s: string) => s.trim().toLowerCase();
 
 const sessionsText = (n: number) => (n === 0 ? "No sessions yet" : `${n} session${n === 1 ? "" : "s"}`);
 
@@ -231,6 +234,7 @@ export default function DayExerciseList({
   workouts,
   selectedExercise,
   onSelectExercise,
+  customExercises,
   expandedDay,
   onExpandedDayChange,
   groupByProgram,
@@ -274,6 +278,7 @@ export default function DayExerciseList({
       workouts={workouts}
       selectedExercise={selectedExercise}
       onSelectExercise={onSelectExercise}
+      customExercises={customExercises}
     />
   );
 
@@ -368,6 +373,7 @@ function DayRow({
   workouts,
   selectedExercise,
   onSelectExercise,
+  customExercises,
 }: {
   day: ProgramDayRef;
   underProgram: boolean;
@@ -376,7 +382,8 @@ function DayRow({
   onToggle: () => void;
   workouts: CompletedWorkout[];
   selectedExercise: ExerciseSelection | null;
-  onSelectExercise: (day: ProgramDayRef, name: string) => void;
+  onSelectExercise: (day: ProgramDayRef, ex: ExerciseRef) => void;
+  customExercises: CustomExercise[];
 }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -408,6 +415,7 @@ function DayRow({
           day={day}
           selectedExercise={selectedExercise}
           onSelectExercise={onSelectExercise}
+          customExercises={customExercises}
           textSecondary={t.ts}
           divider={t.div}
           isDark={isDark}
@@ -422,6 +430,7 @@ function ExpandedExercises({
   day,
   selectedExercise,
   onSelectExercise,
+  customExercises,
   textSecondary,
   divider,
   isDark,
@@ -429,7 +438,8 @@ function ExpandedExercises({
   workouts: CompletedWorkout[];
   day: ProgramDayRef;
   selectedExercise: ExerciseSelection | null;
-  onSelectExercise: (day: ProgramDayRef, name: string) => void;
+  onSelectExercise: (day: ProgramDayRef, ex: ExerciseRef) => void;
+  customExercises: CustomExercise[];
   textSecondary: string;
   divider: string;
   isDark: boolean;
@@ -450,11 +460,12 @@ function ExpandedExercises({
   }
 
   // Highlight only within the selection's own day row — the same exercise
-  // name under another day is a different (day, exercise) pair, and so is the
-  // same name under a day that merely reads the same.
+  // under another day is a different (day, exercise) pair, and so is the same
+  // exercise under a day that merely reads the same. By identity, so a deleted
+  // custom exercise and a new one given its name are two rows.
   const selKey =
     selectedExercise && selectedExercise.dayKey === day.key
-      ? norm(selectedExercise.name)
+      ? exerciseIdentity(selectedExercise)
       : "";
 
   // Each exercise is a pill, the white control-surface button the Trainer page
@@ -463,18 +474,27 @@ function ExpandedExercises({
   return (
     <View style={[styles.expandedBody, { borderTopColor: divider }]}>
       {rows.map((r, i) => {
-        const k = norm(r.name);
+        const k = exerciseIdentity(r);
         const selected = k === selKey;
+        // A deleted custom exercise is out of every program, so it would read
+        // "Swapped out"; it says what happened instead, which also tells it
+        // apart from a new exercise later given its name.
+        const deleted = isDeletedExercise(r, customExercises);
+        const note = deleted ? "Deleted" : r.inProgram ? null : "Swapped out";
         return (
           <SheetPill
             key={`${k}-${i}`}
             compact
             label={r.name}
             selected={selected}
-            onPress={() => onSelectExercise(day, r.name)}
-            accessibilityLabel={r.inProgram ? r.name : `${r.name}, swapped out of this day`}
+            onPress={() => onSelectExercise(day, r)}
+            accessibilityLabel={
+              deleted ? `${r.name}, a deleted exercise`
+                : r.inProgram ? r.name
+                  : `${r.name}, swapped out of this day`
+            }
             accessibilityState={{ selected }}
-            badge={r.inProgram ? null : (
+            badge={note ? (
               // Logged on this day, but the program doesn't prescribe it any
               // more. Shown so a trend that stops mid-run reads as a change to
               // the programming rather than as someone quietly dropping the
@@ -482,10 +502,10 @@ function ExpandedExercises({
               // colour, never the accent — so it annotates the row instead of
               // flagging it as a problem.
               <View style={[styles.swappedChip, { backgroundColor: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.05)" }]}>
-                <Ionicons name="swap-horizontal" size={11} color={textSecondary} />
-                <Text style={[styles.swappedText, { color: textSecondary }]}>Swapped out</Text>
+                <Ionicons name={deleted ? "trash-outline" : "swap-horizontal"} size={11} color={textSecondary} />
+                <Text style={[styles.swappedText, { color: textSecondary }]}>{note}</Text>
               </View>
-            )}
+            ) : null}
           />
         );
       })}

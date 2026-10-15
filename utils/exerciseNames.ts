@@ -36,3 +36,25 @@ export function exerciseKey(name: string): string {
 export function isFormerExerciseName(name: string): boolean {
   return CURRENT_BY_FORMER.has(lower(name));
 }
+
+/** An exercise as anything that names one carries it: a program exercise, a
+ *  logged one, a plan entry, a card asking for its hints. */
+export type ExerciseRef = { name: string; customId?: string };
+
+/**
+ * Which exercise this is. A custom exercise with an id is known by its id, so
+ * one deleted and a new one later given its name are two exercises, each with
+ * its own history, "last time" numbers, chart and records (user request,
+ * 2026-10-15). Everything else is known by its name (`exerciseKey`): the
+ * catalogue, and custom exercises made before ids, whose sessions were never
+ * rewritten. Key maps and comparisons by this wherever an exercise object is at
+ * hand; `exerciseKey` alone is for a bare name.
+ */
+export function exerciseIdentity(ex: ExerciseRef): string {
+  return ex.customId ? `custom:${ex.customId}` : exerciseKey(ex.name);
+}
+
+/** The same exercise (exerciseIdentity). */
+export function sameExercise(a: ExerciseRef | null | undefined, b: ExerciseRef | null | undefined): boolean {
+  return !!a && !!b && !!a.name && !!b.name && exerciseIdentity(a) === exerciseIdentity(b);
+}

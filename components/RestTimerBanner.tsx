@@ -4,15 +4,21 @@
 // (components/WorkoutActiveBar.tsx), which grows to hold it. Both draw the
 // same countdown and buttons (components/RestControls.tsx), and the pill is
 // the workout bar's own shape, surface and size (constants/floatingBars.ts).
+//
+// Its countdown is the timer's ring in small, in the pill's rounded left end,
+// and a tap on it or the time opens the timer on the rest (user decision,
+// 2026-10-15). The set that's next isn't here: it doesn't fit, and the timer
+// and the workout bar both show it.
 
 import React from "react";
-import { View, StyleSheet } from "react-native";
+import { View, StyleSheet, Pressable } from "react-native";
 import Reanimated, { useAnimatedStyle, SlideInDown, SlideOutDown } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useRestTimer } from "../contexts/RestTimerContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { useFloatingBars } from "../hooks/useFloatingBars";
-import { RestActions, RestLine, RestTime, useRestProgress } from "./RestControls";
+import { useOpenWorkoutTimer } from "../hooks/useOpenWorkoutTimer";
+import { RestActions, RestRing, RestTime, formatRestTime, useRestProgress } from "./RestControls";
 import { APP_LIGHT, APP_DARK } from "../constants/theme";
 import { ABOVE_KEYBOARD_TOOLS, BAR_INSET_X, BAR_SHADOW, REST_PILL_H } from "../constants/floatingBars";
 
@@ -21,6 +27,7 @@ export default function RestTimerBanner() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const progress = useRestProgress();
+  const openTimer = useOpenWorkoutTimer();
 
   // Where it sits (constants/floatingBars.ts): straight above the tab bar on
   // the Workout page. With the keyboard up it rides above the keyboard's own
@@ -58,13 +65,16 @@ export default function RestTimerBanner() {
       pointerEvents="box-none"
     >
       <View style={[styles.pill, BAR_SHADOW, { backgroundColor: t.nav, borderColor: t.navEdge }]}>
-        {/* The countdown round the pill's top and through both its ends, its
-            glow clipped to the pill. Its own layer: iOS drops a shadow on a
-            view that clips. */}
-        <View style={styles.clip} pointerEvents="none">
-          <RestLine progress={progress} isDark={isDark} holder="pill" />
-        </View>
-        <RestTime seconds={restDisplay} size={18} isDark={isDark} />
+        <Pressable
+          style={styles.open}
+          onPress={openTimer}
+          accessibilityRole="button"
+          accessibilityLabel={`Rest, ${formatRestTime(restDisplay)} left`}
+          accessibilityHint="Opens the timer"
+        >
+          <RestRing progress={progress} isDark={isDark} />
+          <RestTime seconds={restDisplay} size={18} isDark={isDark} />
+        </Pressable>
         <RestActions isDark={isDark} />
       </View>
     </Reanimated.View>
@@ -73,9 +83,10 @@ export default function RestTimerBanner() {
 
 const styles = StyleSheet.create({
   outer: { position: "absolute", left: BAR_INSET_X, right: BAR_INSET_X },
+  // The ring sits in the left end, centred on its curve: (56 − 38) / 2 in.
   pill:  {
     height: REST_PILL_H, borderRadius: REST_PILL_H / 2, borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: "row", alignItems: "center", gap: 14, paddingLeft: 18, paddingRight: 10,
+    flexDirection: "row", alignItems: "center", gap: 12, paddingLeft: 9, paddingRight: 10,
   },
-  clip:  { ...StyleSheet.absoluteFill, borderRadius: REST_PILL_H / 2, overflow: "hidden" },
+  open:  { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
 });

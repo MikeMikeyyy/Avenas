@@ -24,7 +24,7 @@ import type {
   SavedProgram,
   WorkoutMap,
 } from "../constants/programs";
-import { exerciseKey } from "./exerciseNames";
+import { exerciseIdentity } from "./exerciseNames";
 
 /** Trim + lowercase, the name-matching convention used across the codebase. */
 export function normalizeDayName(name: string): string {
@@ -358,9 +358,10 @@ export function forkChangedDayIds(
  *  every exercise changed). */
 function exercisesAt(workouts: WorkoutMap, index: number, label: string): string[] {
   const key = workoutKey(index, label.trim() || "Workout");
-  // Exercise keys (utils/exerciseNames.ts), so an exercise the catalogue has
-  // renamed still counts as the one the program lists.
-  return (workouts[key] ?? []).map(e => exerciseKey(e.name)).filter(n => n.length > 0);
+  // Exercise identities (utils/exerciseNames.ts), so an exercise the catalogue
+  // has renamed still counts as the one the program lists, and a custom
+  // exercise is the one it is, not another later given its name.
+  return (workouts[key] ?? []).filter(e => !!e.name).map(e => exerciseIdentity(e));
 }
 
 /** Do two exercise-name lists hold the same names? Order-independent, and

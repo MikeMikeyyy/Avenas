@@ -5,15 +5,17 @@
 // RN-only (imports the Supabase client + AsyncStorage) — not for the node harness.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { supabase } from "./supabase";
+import { signOutHere, supabase } from "./supabase";
 import { getJSON, removeKey, setJSON } from "../utils/storage";
 import { ACHIEVEMENTS_KEY } from "../constants/achievements";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DRAFT_KEY, WORKOUT_DAY_OVERRIDE_KEY,
+  UNFINISHED_NOTICE_KEY,
   type CompletedWorkout, type SavedProgram,
 } from "../constants/programs";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { CUSTOM_KEY, EXERCISE_MEDIA_UPLOADS_KEY, type CustomExercise } from "../constants/exercises";
+import { liveCustoms } from "../utils/customExercises";
 import {
   customFromRow,
   journalFromRow,
@@ -82,11 +84,14 @@ export async function pushAllLocalDataToCloud(userId: string): Promise<SyncCount
     programs: programs.length,
     workouts: history.length,
     journal: journal.length,
-    customExercises: custom.length,
+    customExercises: liveCustoms(custom).length,
   };
 }
 
-/** Row counts currently in the cloud for this user (for the test screen). */
+/** Row counts currently in the cloud for this user (Data & Sync, and whether
+ *  either side has anything). Custom exercises are the ones you can see: a
+ *  deleted one stays in the backup for its sessions (0048) but isn't counted,
+ *  or Data & Sync would show it there after you'd deleted it. */
 export async function cloudCounts(userId: string): Promise<SyncCounts> {
   const count = async (table: "programs" | "workouts" | "journal_entries" | "custom_exercises") => {
     const { count: c, error } = await supabase
@@ -96,11 +101,20 @@ export async function cloudCounts(userId: string): Promise<SyncCounts> {
     if (error) throw new Error(`count ${table}: ${error.message}`);
     return c ?? 0;
   };
+  // A server without 0048 has no deleted_at to filter on: there, all of them.
+  const liveCustomCount = async () => {
+    const { count: c, error } = await supabase
+      .from("custom_exercises")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .is("deleted_at", null);
+    return error ? count("custom_exercises") : c ?? 0;
+  };
   const [programs, workouts, journal, customExercises] = await Promise.all([
     count("programs"),
     count("workouts"),
     count("journal_entries"),
-    count("custom_exercises"),
+    liveCustomCount(),
   ]);
   return { programs, workouts, journal, customExercises };
 }
@@ -170,7 +184,7 @@ const snapshotCounts = (s: CloudSnapshot): SyncCounts => ({
   programs: s.programs.length,
   workouts: s.workouts.length,
   journal: s.journal.length,
-  customExercises: s.custom.length,
+  customExercises: liveCustoms(s.custom).length,
 });
 
 /**
@@ -196,7 +210,7 @@ export async function localCounts(): Promise<SyncCounts> {
     programs: programs.length,
     workouts: history.length,
     journal: journal.length,
-    customExercises: custom.length,
+    customExercises: liveCustoms(custom).length,
   };
 }
 
@@ -226,6 +240,12 @@ export async function syncOnLogin(
 // Which user the local AsyncStorage cache currently belongs to. Used to detect
 // account switches so one account's data never leaks into another.
 export const CACHE_OWNER_KEY = "@avenas/cache_owner";
+
+/** `true` while this phone holds changes its account's backup doesn't have yet:
+ *  set by every scheduled backup, cleared by one that went through
+ *  (lib/syncManager.ts). Saved, so a backup that couldn't go (no signal) is
+ *  still owed after the app closes. Cleared with the account's data. */
+export const BACKUP_OWED_KEY = "@avenas/backup_owed";
 
 export async function getCacheOwner(): Promise<string | null> {
   return getJSON<string | null>(CACHE_OWNER_KEY, null);
@@ -264,7 +284,7 @@ export async function deleteAccount(): Promise<void> {
   await unregisterPushToken();
   await clearLocalUserData();
   await removeKey(CACHE_OWNER_KEY);
-  await supabase.auth.signOut();
+  await signOutHere();
 }
 
 /** Wipe the locally-cached user data + in-progress drafts (not auth/theme/unit).
@@ -284,6 +304,11 @@ export async function clearLocalUserData(): Promise<void> {
     removeKey(EXERCISE_MEDIA_UPLOADS_KEY),
     removeKey(WORKOUT_DRAFT_KEY),
     removeKey(WORKOUT_DAY_OVERRIDE_KEY),
+    // It names this account's workout, which the next account doesn't have.
+    removeKey(UNFINISHED_NOTICE_KEY),
+    // What was owed was this account's; the next account's data comes from
+    // its own backup.
+    removeKey(BACKUP_OWED_KEY),
     // Local-only, but it describes THIS account's training: the next account on
     // the device mustn't inherit its PR cards or its already-earned milestones.
     removeKey(ACHIEVEMENTS_KEY),

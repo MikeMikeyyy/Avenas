@@ -18,6 +18,10 @@
 //
 // Each tab's record is gold, and every few seconds light passes over it: a
 // glint up the bar or block, a sparkle on the dot.
+//
+// Each tab comes in as it opens (components/progress/chartEntrance.ts): the
+// bars and blocks rise from the baseline, the numbers on them following, and
+// Strength's line draws itself out left to right across what's on screen.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, TouchableOpacity, useWindowDimensions } from "react-native";
@@ -42,7 +46,7 @@ import Svg, { Circle, Defs, Line, LinearGradient, Path, Rect, Stop } from "react
 import * as Haptics from "expo-haptics";
 import { useFocusEffect } from "expo-router";
 import {
-  ACCT, ACCT_DEEP, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK, GOLD_SHINE, NEU_BG, NEU_BG_DARK,
+  ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK, GOLD_SHINE, NEU_BG, NEU_BG_DARK, accentTextColor,
 } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { ExerciseDataPoint, ExerciseMetricKey } from "../../constants/progress";
@@ -55,6 +59,7 @@ import {
 } from "../../utils/exerciseChartLayout";
 import { MONTH_NAMES } from "../../utils/dates";
 import { trimNumber } from "../../utils/units";
+import { useChartEntrance } from "./chartEntrance";
 
 const AnimatedPath = Reanimated.createAnimatedComponent(Path);
 const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
@@ -286,12 +291,24 @@ function PlotBody({
   const dotsProps = useAnimatedProps(() => ({ d: dotsPathD(shapes.dotXs, shapes.dotVs, aMin.value, aMax.value, DOT_R) }), [shapes]);
   const goldHaloProps = useAnimatedProps(() => ({ cy: valueY(shapes.goldV, aMin.value, aMax.value) }), [shapes]);
   const goldDotProps = useAnimatedProps(() => ({ cy: valueY(shapes.goldV, aMin.value, aMax.value) }), [shapes]);
-  const blocksProps = useAnimatedProps(() => ({ d: blocksPathD(shapes.blocks, aMin.value, aMax.value) }), [shapes]);
-  const lighterProps = useAnimatedProps(() => ({ d: blocksPathD(shapes.lighterBlocks, aMin.value, aMax.value) }), [shapes]);
-  const goldBlockProps = useAnimatedProps(() => ({ d: blocksPathD(shapes.goldBlock, aMin.value, aMax.value) }), [shapes]);
-  const barsProps = useAnimatedProps(() => ({ d: barsPathD(shapes.barXs, shapes.barVs, aMin.value, aMax.value) }), [shapes]);
+  // ── How the tab comes in: the bars and blocks rise, the line draws out ──
+  const enter = useChartEntrance(metric === "strength" ? "draw" : "rise");
+  // Strength's drawing is shown from the left as far as the line has drawn,
+  // starting where the row opens, so it draws across what's on screen.
+  const revealStyle = useAnimatedStyle(() => ({
+    width: metric !== "strength" || enter.value >= 1 ? g.contentWidth : initialX + enter.value * g.viewportWidth,
+  }));
+  // The numbers on the bars and blocks come in as they finish rising.
+  const onDrawingStyle = useAnimatedStyle(() => ({
+    opacity: metric === "strength" ? 1 : interpolate(enter.value, [0.65, 1], [0, 1], Extrapolation.CLAMP),
+  }));
+
+  const blocksProps = useAnimatedProps(() => ({ d: blocksPathD(shapes.blocks, aMin.value, aMax.value, enter.value) }), [shapes]);
+  const lighterProps = useAnimatedProps(() => ({ d: blocksPathD(shapes.lighterBlocks, aMin.value, aMax.value, enter.value) }), [shapes]);
+  const goldBlockProps = useAnimatedProps(() => ({ d: blocksPathD(shapes.goldBlock, aMin.value, aMax.value, enter.value) }), [shapes]);
+  const barsProps = useAnimatedProps(() => ({ d: barsPathD(shapes.barXs, shapes.barVs, aMin.value, aMax.value, enter.value) }), [shapes]);
   const goldBarProps = useAnimatedProps(() => ({
-    d: shapes.goldX < 0 ? "" : barsPathD([shapes.goldX], [shapes.goldV], aMin.value, aMax.value),
+    d: shapes.goldX < 0 ? "" : barsPathD([shapes.goldX], [shapes.goldV], aMin.value, aMax.value, enter.value),
   }), [shapes]);
 
   // ── The record's shine ───────────────────────────────────────────────────
@@ -354,7 +371,7 @@ function PlotBody({
   const stacks = useMemo(() => (metric === "sets" ? setStacks(points, g, axis) : []), [points, metric, g, axis]);
   const bars = useMemo(() => (metric === "volume" ? volumeBars(points, g, axis) : []), [points, metric, g, axis]);
 
-  const blockText = isDark ? ACCT : ACCT_DEEP;
+  const blockText = accentTextColor(isDark);
   const holdUnit = (p: ExerciseDataPoint) => !!p.isHold;
 
   // ── The pop-up over a tapped session ─────────────────────────────────────
@@ -486,7 +503,10 @@ function PlotBody({
               request, 2026-10-08). */}
           <Pressable accessible={false} onPress={clearFocus} style={StyleSheet.absoluteFill} />
 
-          <Svg width={g.contentWidth} height={CHART_TOTAL_H} style={StyleSheet.absoluteFill} pointerEvents="none">
+          {/* The drawing and the numbers on it, shown as far as Strength's line
+              has drawn out (all of it on the other tabs). */}
+          <Reanimated.View pointerEvents="none" style={[styles.reveal, revealStyle]}>
+          <Svg width={g.contentWidth} height={CHART_TOTAL_H} style={styles.revealed} pointerEvents="none">
             {metric === "strength" ? (
               <>
                 <Defs>
@@ -563,7 +583,8 @@ function PlotBody({
           {/* The numbers that sit on the drawing: reps over each dot, each
               set's reps and the weight over each stack, the kilos over each
               bar. Placed on the settled axis, they fade across when it
-              changes. */}
+              changes, and come in as the bars finish rising. */}
+          <Reanimated.View pointerEvents="none" style={[styles.revealed, { width: g.contentWidth, height: CHART_TOTAL_H }, onDrawingStyle]}>
           <Reanimated.View
             key={axisKey}
             entering={reduceMotion ? undefined : FadeIn.duration(AXIS_MS)}
@@ -610,6 +631,8 @@ function PlotBody({
                 {fmtTotal(points[b.slot].sessionVolume)}
               </Text>
             ))}
+          </Reanimated.View>
+          </Reanimated.View>
           </Reanimated.View>
 
           {/* Each session's number: the Nth time it was done on this day. A
@@ -711,6 +734,20 @@ const styles = StyleSheet.create({
     left: Y_AXIS_LABEL_WIDTH,
     top: 0,
     height: CHART_TOTAL_H,
+  },
+  // What the drawing is shown through as Strength's line draws out: its width
+  // grows, its contents keep their own.
+  reveal: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    height: CHART_TOTAL_H,
+    overflow: "hidden",
+  },
+  revealed: {
+    position: "absolute",
+    left: 0,
+    top: 0,
   },
   edge: {
     position: "absolute",

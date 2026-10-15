@@ -18,10 +18,15 @@
 //   program-page/  the program page the Journal opens: weeks and totals
 //   home/          this week's ring and totals, Recent Activity
 //   hints/         the Workout tab's "Previous" sets and notes, and its "Last
-//                  week:" lines (what the last session moved, swapped, skipped)
+//                  session:" lines (what the last session moved, swapped, skipped)
 //   save/          a saved session: weights read back as typed, PR cards
 //   journal/       a saved session's "Planned 2nd" / "Instead of" / "Added"
 //                  lines, its Skipped rows and its card's summary
+//   compare/       the Progress page comparing the program on the go with a
+//                  finished one: which runs it offers, which it starts from
+//                  with nothing on the go, each run's sessions, its weekly
+//                  volume, At a glance, and the exercises both did with each
+//                  one's sessions lined up and the gap at the same point
 
 import {
   bucketMetricByDay, bucketMetricByMonth, bucketMetricByRollingWeeks, collectExerciseHistory,
@@ -49,6 +54,10 @@ import {
 import { formatPrevHint, formatWeightForDisplay, trimNumber } from "../../../utils/units";
 import { detectWorkoutAchievements } from "../../../utils/achievements";
 import { EMPTY_ACHIEVEMENTS } from "../../../constants/achievements";
+import {
+  aheadAtSamePoint, compareCandidates, compareLifts, glanceStats, greenRunFor, liftSlots, missedDates, runDays, weeklyTotals,
+} from "../../../utils/programCompare";
+import type { ProgramRunView } from "../../../utils/programRuns";
 import type { AfterSave, BeforeLog, LedgerExercise, LedgerSession, Lifter, ProgramRun } from "./lifter";
 import { LIFTS } from "./programs";
 
@@ -855,14 +864,14 @@ export function checkHints(b: BeforeLog): Problem[] {
     }
   }
 
-  // "Last week:" lines: what the last session of this day did, against today's
-  // plan; nothing when the day has changed since that session's plan.
+  // "Last session:" lines: what the last session of this day did, against
+  // today's plan; nothing when the day has changed since that session's plan.
   if (b.plan) {
     const shown = lastTimeCues(lastSessionOfDay(b.history, undefined, scope), b.plan);
     const prev = day[0];
     const same = !!prev?.plan && prev.plan.length === b.plan.length
       && prev.plan.every((p, i) => p.id === b.plan![i].id && p.name === b.plan![i].name);
-    const where = `${workout.name} (${workout.dayId}), last week's lines`;
+    const where = `${workout.name} (${workout.dayId}), the last-session lines`;
     if (!same) {
       if (Object.keys(shown).length) out.push({ code: "hints/changes-after-edit", what: `${where}: ${Object.keys(shown).length} shown, but the day isn't planned as it was last time` });
     } else {
@@ -915,6 +924,199 @@ function movesAccountFor(want: ReturnType<typeof ledgerChanges>, exercises: Ledg
 }
 
 // ─── A save ──────────────────────────────────────────────────────────────────
+
+// ─── Comparing two programs ──────────────────────────────────────────────────
+
+/** A ledger session's heaviest working set of a lift with reps in it, in kg
+ *  (0 at bodyweight), and whether it did the lift at all (a working set ticked
+ *  with its reps in: what puts a session on the exercise's chart). */
+function ledgerLift(s: LedgerSession, key: string): { did: boolean; topKg: number } {
+  let did = false;
+  let topKg = 0;
+  for (const e of s.exercises) {
+    if (liftKey(e.name) !== key) continue;
+    for (const x of workingDone(s, e)) {
+      if (!x.reps || x.reps <= 0) continue;
+      did = true;
+      if (x.kg && x.kg > topKg) topKg = x.kg;
+    }
+  }
+  return { did, topKg };
+}
+
+/** The lifts a run's ledger sessions did, each with those sessions, in order. */
+function ledgerLifts(sessions: LedgerSession[]): Map<string, LedgerSession[]> {
+  const out = new Map<string, LedgerSession[]>();
+  const ordered = [...sessions].sort((a, b) => a.finishedAt - b.finishedAt);
+  for (const s of ordered) {
+    for (const key of new Set(s.exercises.map(e => liftKey(e.name)))) {
+      if (!ledgerLift(s, key).did) continue;
+      (out.get(key) ?? out.set(key, []).get(key)!).push(s);
+    }
+  }
+  return out;
+}
+
+/** Personal records a run's stored sessions set, by the PR card's rule worked
+ *  out here (a strictly heavier top set on a lift logged with weight before),
+ *  each against every session finished before it. */
+function prsSet(run: CompletedWorkout[], history: CompletedWorkout[]): number {
+  const top = (w: CompletedWorkout, key: string) => {
+    let t = 0;
+    for (const e of w.exercises) {
+      if (liftKey(e.name) !== key) continue;
+      for (const x of e.sets) {
+        const kg = num(x.weight);
+        const reps = num(x.reps);
+        if (x.type === "working" && x.done && kg && kg > 0 && reps && reps > 0 && kg > t) t = kg;
+      }
+    }
+    return t;
+  };
+  let n = 0;
+  for (const w of run) {
+    const before = history.filter(h => h.completedAt < w.completedAt);
+    for (const key of new Set(w.exercises.map(e => liftKey(e.name)))) {
+      const best = before.reduce((m, h) => Math.max(m, top(h, key)), 0);
+      if (best > 0 && top(w, key) > best) n += 1;
+    }
+  }
+  return n;
+}
+
+export function checkCompare(l: Lifter, snap: Snapshot): Problem[] {
+  const out: Problem[] = [];
+  const green = greenRunFor({ kind: "current" }, snap.programs, snap.history);
+  if (!green) return out;
+  const candidates = compareCandidates(snap.programs, snap.history, green.ref);
+
+  // What can be compared: every run the lifter FINISHED with a session in it,
+  // never the one going now (shelved runs aren't offered).
+  const inRun = (r: ProgramRun, end: string) => (s: LedgerSession) => s.programId === r.programId && s.date >= r.startYMD && s.date <= end;
+  const finished = l.runs.filter(r => r.endYMD && r.finished && l.sessions.some(inRun(r, r.endYMD)));
+  const want = finished.map(r => `${programName(snap, r.programId)} from ${r.startYMD}`).sort();
+  const got = candidates.map(c => `${programName(snap, c.ref.programId)} from ${c.startYMD}`).sort();
+  if (want.join(", ") !== got.join(", ")) {
+    out.push({ code: "compare/candidates", what: `offered ${got.join(", ") || "nothing"} to compare with; finished were ${want.join(", ") || "none"}` });
+  }
+
+  // With nothing on the go, green is the run that finished last, so two
+  // finished programs can be compared (user request, 2026-10-14). The lifter
+  // always starts the next program the day one ends, so it's played here by
+  // shelving the one going now.
+  {
+    const idle = snap.programs.map(p => (p.status === "active" ? { ...p, status: "paused" as const } : p));
+    const g = greenRunFor({ kind: "current" }, idle, snap.history);
+    const last = [...finished].sort((a, b) => (b.endYMD ?? "").localeCompare(a.endYMD ?? ""))[0];
+    const gotKey = g ? `${programName(snap, g.ref.programId)} from ${g.startYMD}` : "nothing";
+    const wantKey = last ? `${programName(snap, last.programId)} from ${last.startYMD}` : "nothing";
+    if (gotKey !== wantKey) {
+      out.push({ code: "compare/green", what: `with nothing on the go, green was ${gotKey}; the run that finished last was ${wantKey}` });
+    }
+  }
+
+  // The latest finished run, and the program's own last finished run when
+  // it's been run before: two pairs at most, which covers both kinds.
+  const pairs = candidates.slice(0, 1);
+  const own = candidates.find(c => c.ref.programId === green.ref.programId);
+  if (own && !pairs.includes(own)) pairs.push(own);
+
+  const ledgerOf = (view: ProgramRunView): LedgerSession[] => {
+    const run = view.ref.run === "latest" && !view.finished
+      ? currentRun(l.runs, view.ref.programId)
+      : l.runs.find(r => r.programId === view.ref.programId && r.startYMD === view.startYMD) ?? null;
+    if (!run) return [];
+    return l.sessions.filter(inRun(run, run.endYMD ?? snap.today));
+  };
+
+  for (const blue of pairs) {
+    const pair = `${programName(snap, green.ref.programId)} vs ${programName(snap, blue.ref.programId)} from ${blue.startYMD}`;
+    for (const view of [green, blue]) {
+      const side = view === green ? "green" : "blue";
+      const where = `${pair}, ${side}`;
+      const mine = ledgerOf(view);
+      // Its sessions are the run's, by the ledger.
+      if (ids(view.sessions) !== ids(mine)) {
+        out.push({ code: "compare/sessions", what: `${where}: ${view.sessions.length} sessions read as the run's; the run logged ${mine.length}` });
+        continue;
+      }
+      const days = runDays(view, snap.today);
+      const tons = mine.reduce((n, s) => n + tonnage(s), 0);
+      const weeks = weeklyTotals(view, days, "volume");
+      const total = weeks.reduce((n, v) => n + v, 0);
+      if (!near(total, tons, tolFor(mine))) {
+        out.push({ code: "compare/weekly", what: `${where}: the weeks add to ${fmt(total)} kg; the run moved ${fmt(tons)} kg` });
+      }
+      if (mine.length && weeks.length < Math.ceil(days / 7)) {
+        out.push({ code: "compare/weekly", what: `${where}: ${weeks.length} weeks drawn for a run ${days} days long` });
+      }
+      // At a glance, over the whole run.
+      const g = glanceStats(view, days, snap.history, snap.today);
+      const trained = new Set(mine.map(s => s.date)).size;
+      if (g.workoutsDone !== trained) out.push({ code: "compare/glance", what: `${where}: ${g.workoutsDone} workouts done; trained on ${trained} days` });
+      if (g.workoutsPlanned < g.workoutsDone) out.push({ code: "compare/glance", what: `${where}: ${g.workoutsDone} done of only ${g.workoutsPlanned} planned` });
+      const perWeek = Math.max(1, days / 7);
+      if (!near(g.volumePerWeekKg * perWeek, tons, tolFor(mine))) {
+        out.push({ code: "compare/glance", what: `${where}: ${fmt(g.volumePerWeekKg)} kg a week over ${days} days; the run moved ${fmt(tons)} kg` });
+      }
+      const sets = mine.reduce((n, s) => n + s.exercises.reduce((k, e) => k + e.sets.filter(x => x.type === "working" && x.done).length, 0), 0);
+      if (!near(g.setsPerWeek * perWeek, sets, 1e-6)) out.push({ code: "compare/glance", what: `${where}: ${fmt(g.setsPerWeek)} sets a week; the run did ${sets} working sets in ${days} days` });
+      const prs = prsSet(view.sessions, snap.history);
+      if (g.prs !== prs) out.push({ code: "compare/glance", what: `${where}: ${g.prs} PRs; its sessions set ${prs}` });
+    }
+
+    // The exercises both did, and each one's sessions in order.
+    const lifts = compareLifts(green, blue);
+    const lg = ledgerLifts(ledgerOf(green));
+    const lb = ledgerLifts(ledgerOf(blue));
+    const keys = (xs: { name: string }[]) => xs.map(x => liftKey(x.name)).sort().join(", ");
+    const wantBoth = [...lg.keys()].filter(k => lb.has(k)).sort().join(", ");
+    if (keys(lifts.both) !== wantBoth) out.push({ code: "compare/lifts", what: `${pair}: in both ${keys(lifts.both) || "none"}; both did ${wantBoth || "none"}` });
+    const wantOnlyG = [...lg.keys()].filter(k => !lb.has(k)).sort().join(", ");
+    const wantOnlyB = [...lb.keys()].filter(k => !lg.has(k)).sort().join(", ");
+    if (keys(lifts.onlyGreen) !== wantOnlyG) out.push({ code: "compare/lifts", what: `${pair}: only in green ${keys(lifts.onlyGreen) || "none"}; ${wantOnlyG || "none"} were` });
+    if (keys(lifts.onlyBlue) !== wantOnlyB) out.push({ code: "compare/lifts", what: `${pair}: only in blue ${keys(lifts.onlyBlue) || "none"}; ${wantOnlyB || "none"} were` });
+    for (const lift of lifts.both) {
+      const key = liftKey(lift.name);
+      const gs = lg.get(key) ?? [];
+      const bs = lb.get(key) ?? [];
+      const where = `${pair}, ${lift.name}`;
+      if (lift.green.length !== gs.length || lift.blue.length !== bs.length) {
+        out.push({ code: "compare/lift-sessions", what: `${where}: ${lift.green.length} and ${lift.blue.length} sessions charted; done ${gs.length} and ${bs.length}` });
+        continue;
+      }
+      if (kindOf(lift.name) !== "weighted") continue;
+      const tops = (pts: ExerciseDataPoint[], led: LedgerSession[]) => pts.findIndex((p, i) => !near(p.topWeight, ledgerLift(led[i], key).topKg, 0.01));
+      const gBad = tops(lift.green, gs);
+      const bBad = tops(lift.blue, bs);
+      if (gBad >= 0 || bBad >= 0) {
+        out.push({ code: "compare/lift-tops", what: `${where}: session ${(gBad >= 0 ? gBad : bBad) + 1} of ${gBad >= 0 ? "green" : "blue"} charts a top set that wasn't lifted` });
+        continue;
+      }
+      // Each one's row: its sessions and the days it missed the lift on, never
+      // a day the lifter lifted it in that run.
+      const gMissed = missedDates(green, lift.name, lift.green, snap.today);
+      const bMissed = missedDates(blue, lift.name, lift.blue, snap.today);
+      const wrong = gMissed.find(d => gs.some(s => s.date === d)) ?? bMissed.find(d => bs.some(s => s.date === d));
+      if (wrong) out.push({ code: "compare/missed", what: `${where}: ${wrong} drawn as missed; the lift was lifted that day` });
+      // At the same point: the latest place in both rows both did, numbered
+      // as the chart numbers it, missed places counted.
+      const gRow = liftSlots(lift.green, gMissed);
+      const bRow = liftSlots(lift.blue, bMissed);
+      const ahead = aheadAtSamePoint(gRow, bRow);
+      let k = Math.min(gRow.length, bRow.length) - 1;
+      while (k >= 0 && !(gRow[k].point && bRow[k].point)) k--;
+      if (k >= 0) {
+        const gTop = ledgerLift(gs[lift.green.indexOf(gRow[k].point!)], key).topKg;
+        const bTop = ledgerLift(bs[lift.blue.indexOf(bRow[k].point!)], key).topKg;
+        if (gTop > 0 && bTop > 0 && (!ahead || ahead.session !== k + 1 || !near(ahead.diff, gTop - bTop, 0.01))) {
+          out.push({ code: "compare/ahead", what: `${where}: ${ahead ? `${ahead.session}th session ${fmt(ahead.diff)} kg` : "nothing"} at the same point; the ${k + 1}th places lifted ${fmt(gTop)} and ${fmt(bTop)} kg` });
+        }
+      }
+    }
+  }
+  return out;
+}
 
 export function checkSave(a: AfterSave): Problem[] {
   const out: Problem[] = [];

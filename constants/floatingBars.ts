@@ -8,8 +8,9 @@
 //    the tab bar on the other tabs (above the home indicator on a pushed
 //    screen), never on the Workout tab.
 //  - A rest between sets shows INSIDE it there: the bar grows upward by the
-//    rest's section (REST_SECTION_H) to hold the countdown and its buttons, the
-//    workout's row staying where it was, and shrinks back when the rest ends.
+//    rest's section (REST_SECTION_H) to hold the countdown and its buttons and
+//    the set that's next, the workout's row staying where it was, and shrinks
+//    back when the rest ends.
 //    It was a second bar stacked on top, a card with a progress strip across its
 //    top edge, which matched neither the pill under it nor the card's own
 //    rounded corners, which cut the strip's ends to points.
@@ -40,8 +41,9 @@ export const BAR_INSET_X = 20;
 export const WORKOUT_BAR_H = 56;
 export const REST_PILL_H = WORKOUT_BAR_H;
 
-/** What a rest adds to the top of the workout bar: its countdown row, and the
- *  hairline between that and the workout's row. */
+/** What a rest adds to the top of the workout bar: its countdown row and the
+ *  "Up next" line under it, and the hairline between that and the workout's
+ *  row (the countdown drains along it). */
 export const REST_SECTION_H = 72;
 export const REST_DIVIDER_H = 1;
 

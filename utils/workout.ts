@@ -13,7 +13,7 @@ import { parseStoredDate, toYMD, todayYMD } from "./dates";
 import { cycleDrift } from "./cycleDrift";
 import { heldOn, programAsOf } from "./programHolds";
 import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
-import { exerciseKey } from "./exerciseNames";
+import { exerciseIdentity, exerciseKey, sameExercise, type ExerciseRef } from "./exerciseNames";
 import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
@@ -489,8 +489,8 @@ export function buildPrevNotesByName(
   );
   const out: Record<string, string> = {};
   const seen = new Set<string>();
-  const claim = (name: string, notes: string | undefined) => {
-    const key = normalizeExerciseName(name);
+  const claim = (ex: ExerciseRef, notes: string | undefined) => {
+    const key = ex.name ? exerciseIdentity(ex) : "";
     if (!key || seen.has(key)) return; // newest session wins, note or no note
     seen.add(key);
     const note = (notes ?? "").trim();
@@ -499,21 +499,34 @@ export function buildPrevNotesByName(
   for (const workout of sorted) {
     if (beforeDate && !(workout.date < beforeDate)) continue;
     if (day && !sessionIsOnDay(workout, day)) continue;
-    for (const ex of workout.exercises) claim(ex.name, ex.notes);
-    for (const ex of workout.exercises) if (ex.swappedFrom) claim(ex.swappedFrom, ex.notes);
+    for (const ex of workout.exercises) claim(ex, ex.notes);
+    for (const ex of workout.exercises) {
+      const origin = originOf(ex);
+      if (origin) claim(origin, ex.notes);
+    }
   }
   return out;
+}
+
+/** The exercise a swap-in stood in for (CompletedExercise.swappedFrom), as an
+ *  exercise, with which custom one of that name it was. */
+function originOf(ex: { swappedFrom?: string; swappedFromId?: string }): ExerciseRef | null {
+  return ex.swappedFrom ? { name: ex.swappedFrom, customId: ex.swappedFromId } : null;
 }
 
 /** What an exercise card asks the note lookup with. */
 export type PrevExerciseKey = {
   name: string;
+  /** Which custom exercise of that name it is (utils/exerciseNames.ts
+   *  exerciseIdentity): a new one given a deleted one's name has no history. */
+  customId?: string;
   /** Which program exercise the card is (its id in the day's WorkoutMap).
    *  Absent for one added during the session, which has no place in the
    *  program. */
   programExerciseId?: string;
   /** Set on a swap-in (see CompletedExercise.swappedFrom). */
   swappedFrom?: string;
+  swappedFromId?: string;
 };
 
 /** The sessions a hint may draw on, newest first: strictly before
@@ -524,9 +537,6 @@ function hintSessions(history: CompletedWorkout[], beforeDate?: string, day?: Pr
     .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
     .filter(w => (!beforeDate || w.date < beforeDate) && (!day || sessionIsOnDay(w, day)));
 }
-
-const sameExercise = (a?: string, b?: string) =>
-  !!a && !!b && normalizeExerciseName(a) === normalizeExerciseName(b);
 
 /** One logged exercise's sets as "weight×reps" hints, either side left blank
  *  when it was ("×8" a bodyweight set, "80×" one with no reps), or "—" for an
@@ -567,13 +577,13 @@ export function buildPrevNoteLookup(
   const sessions = hintSessions(history, beforeDate, day);
   const byName = buildPrevNotesByName(history, beforeDate, day);
   return ex => {
-    if (!ex.programExerciseId || ex.swappedFrom) return byName[normalizeExerciseName(ex.name)];
+    if (!ex.programExerciseId || ex.swappedFrom) return byName[exerciseIdentity(ex)];
     for (const w of sessions) {
       const placed = w.exercises.some(x => x.programExerciseId);
       const hit = placed
         ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId
-            && (sameExercise(x.name, ex.name) || sameExercise(x.swappedFrom, ex.name)))
-        : w.exercises.find(x => sameExercise(x.name, ex.name)) ?? w.exercises.find(x => sameExercise(x.swappedFrom, ex.name));
+            && (sameExercise(x, ex) || sameExercise(originOf(x), ex)))
+        : w.exercises.find(x => sameExercise(x, ex)) ?? w.exercises.find(x => sameExercise(originOf(x), ex));
       if (hit) return (hit.notes ?? "").trim() || undefined;
     }
     return undefined;
@@ -592,7 +602,7 @@ export function buildPrevNoteLookup(
  * note is there.
  */
 /** The most recent session of `day` (before `beforeDate` when given): the one
- *  the hints above are read from, and the one the Workout tab's "Last week"
+ *  the hints above are read from, and the one the Workout tab's "Last session"
  *  lines describe (utils/exerciseChanges.ts), so the two never point at
  *  different sessions. */
 export function lastSessionOfDay(
@@ -613,17 +623,19 @@ export function buildPrevSessionNote(
 }
 
 /**
- * What `swappedFrom` becomes when the exercise now called `current.name` is
- * swapped for `newName`: the FIRST exercise in that place, so swapping A for B
+ * What `swappedFrom` (and `swappedFromId`) become when the exercise `current`
+ * is swapped for `next`: the FIRST exercise in that place, so swapping A for B
  * and then B for C still records A (the one the program has). Swapping back to
- * the original records nothing, since nothing was replaced.
+ * the original records nothing, since nothing was replaced. Both keys always
+ * come back, so spreading the result over the exercise clears an old one.
  */
 export function swapOrigin(
-  current: { name: string; swappedFrom?: string },
-  newName: string,
-): string | undefined {
-  const origin = current.swappedFrom ?? current.name;
-  return normalizeExerciseName(origin) === normalizeExerciseName(newName) ? undefined : origin;
+  current: { name: string; customId?: string; swappedFrom?: string; swappedFromId?: string },
+  next: ExerciseRef,
+): { swappedFrom: string | undefined; swappedFromId: string | undefined } {
+  const origin: ExerciseRef = originOf(current) ?? { name: current.name, customId: current.customId };
+  if (sameExercise(origin, next)) return { swappedFrom: undefined, swappedFromId: undefined };
+  return { swappedFrom: origin.name, swappedFromId: origin.customId };
 }
 
 export function buildPrevByName(
@@ -639,7 +651,7 @@ export function buildPrevByName(
     if (beforeDate && !(workout.date < beforeDate)) continue;
     if (day && !sessionIsOnDay(workout, day)) continue;
     for (const ex of workout.exercises) {
-      const key = normalizeExerciseName(ex.name);
+      const key = exerciseIdentity(ex);
       if (out[key]) continue; // newest session wins
       out[key] = formatPrevSets(ex);
     }
@@ -673,13 +685,13 @@ export function buildPrevSetsLookup(
   const sessions = hintSessions(history, beforeDate, day);
   const byName = buildPrevByName(history, beforeDate, day);
   return ex => {
-    const ownName = byName[normalizeExerciseName(ex.name)];
+    const ownName = byName[exerciseIdentity(ex)];
     if (!ex.programExerciseId || ex.swappedFrom) return ownName;
     for (const w of sessions) {
       const placed = w.exercises.some(x => x.programExerciseId);
       const hit = placed
-        ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId && sameExercise(x.name, ex.name))
-        : w.exercises.find(x => sameExercise(x.name, ex.name));
+        ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId && sameExercise(x, ex))
+        : w.exercises.find(x => sameExercise(x, ex));
       if (hit) return formatPrevSets(hit);
     }
     return ownName;

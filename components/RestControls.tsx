@@ -6,62 +6,32 @@
 // hold it everywhere else (components/WorkoutActiveBar.tsx). One countdown and
 // one row of buttons, so the two can't drift apart.
 //
-// The countdown is a line along the top edge, as it always was, now fitted to
-// the pill: it follows the edge's own outline and carries on all the way
-// through the rounded ends. The old strip ran straight across the full width
-// of a rounded card, so the corners cut its ends to points, and a line that
-// stopped partway round a curve looked cut off too. A green ring, a gradient
-// bar under the time and a wash behind it all were tried in its place, and
-// the line won (user decision, 2026-10-02).
+// The rest drains in the timer's aurora gradient (sky into mint, the Workout
+// tab's timer ring; user decisions, 2026-10-15, the Workout Timer canvas): on
+// the pill a small ring in its rounded left end (`RestRing`), on the workout
+// bar a line where the rest meets the workout's row (`RestDrainLine`). It was a
+// green line round the pill's edge, through the rounded ends, which the user
+// went off once the timer had its ring.
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import Reanimated, { Easing, useAnimatedProps, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
-import Svg, { Path } from "react-native-svg";
+import Reanimated, { Easing, useAnimatedProps, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
+import Svg, { Circle, Defs, LinearGradient as SvgGradient, Stop } from "react-native-svg";
+import { LinearGradient } from "expo-linear-gradient";
 
 import BounceButton from "./BounceButton";
+import DumbbellIcon from "./DumbbellIcon";
 import { useRestTimer } from "../contexts/RestTimerContext";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, TIMER_GRADIENT } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
-import { WORKOUT_BAR_H, barButtonFill } from "../constants/floatingBars";
+import { barButtonFill } from "../constants/floatingBars";
 
-const AnimatedPath = Reanimated.createAnimatedComponent(Path);
+const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
 
-/** The line's thickness. */
-const LINE_W = 3;
-/** The bars' corners: the pill's round ends, half its height across, and the
- *  same radius on the taller bar that holds a rest. */
-const CORNER = WORKOUT_BAR_H / 2;
-
-/** What the line runs round: the whole pill, or the rest's section at the top
- *  of the taller bar (rounded top corners, straight sides). */
-export type RestLineHolder = "pill" | "section";
-
-/** The line's path round a holder `width` by `height`, and its length. It goes
- *  all the way through each curve, never stopping partway round one: on the
- *  pill from the foot of the left end up round it, over the top and down
- *  round the right end to its foot; on the section up the left side, round
- *  the top corners, and down the right side to where the workout's row
- *  begins. Stopped partway round a curve, its end looked cut off. Drawn half
- *  its thickness inside the edge, so it lies flush against it. */
-function linePath(holder: RestLineHolder, width: number, height: number): { d: string; length: number } {
-  const r = CORNER - LINE_W / 2;
-  const e = LINE_W / 2;
-  const across = Math.max(0, width - 2 * CORNER);
-  const top = `A ${r} ${r} 0 0 1 ${CORNER} ${e} L ${width - CORNER} ${e} A ${r} ${r} 0 0 1 ${width - e} ${CORNER}`;
-  if (holder === "pill") {
-    const foot = 2 * CORNER - e;
-    return {
-      d: `M ${CORNER} ${foot} A ${r} ${r} 0 0 1 ${e} ${CORNER} ${top} A ${r} ${r} 0 0 1 ${width - CORNER} ${foot}`,
-      length: 2 * Math.PI * r + across,
-    };
-  }
-  const side = Math.max(0, height - CORNER);
-  return {
-    d: `M ${e} ${height} L ${e} ${CORNER} ${top} L ${width - e} ${height}`,
-    length: 2 * side + Math.PI * r + across,
-  };
-}
+/** The pill's ring: in its rounded left end, centred on the end's own curve. */
+export const REST_RING = 38;
+const RING_W = 4;
+const RING_R = REST_RING / 2 - RING_W / 2 - 1;
 
 /** "01:12", minutes and seconds. */
 export function formatRestTime(secs: number): string {
@@ -85,49 +55,57 @@ export function useRestProgress(): SharedValue<number> {
   return progress;
 }
 
-/** The countdown: a green line round the edge of whatever holds it (the pill,
- *  or the bar's rest section, whose top is the bar's), through the rounded
- *  ends, on a faint track of the same path, draining from its right-hand end
- *  back round to its left. The holder clips it at its edge, so its glow falls
- *  inward rather than haloing the bar. */
-export function RestLine({ progress, isDark, holder }: {
-  progress: SharedValue<number>;
-  isDark: boolean;
-  holder: RestLineHolder;
-}) {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  const { width, height } = size;
-  const { d, length } = linePath(holder, width, height);
-  const drain = useAnimatedProps(() => ({ strokeDashoffset: length * (1 - progress.value) }));
+/** The pill's countdown: a gradient ring round a small dumbbell, draining
+ *  anticlockwise back to the top, the timer's dial in miniature. */
+export function RestRing({ progress, isDark }: { progress: SharedValue<number>; isDark: boolean }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const c = REST_RING / 2;
+  const circ = 2 * Math.PI * RING_R;
+  const drain = useAnimatedProps(() => ({ strokeDashoffset: circ * (1 - progress.value) }));
   return (
-    <View
-      style={StyleSheet.absoluteFill}
-      pointerEvents="none"
-      onLayout={e => setSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
-    >
-      {width > 0 && height > 0 && (
-        <>
-          <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
-            <Path d={d} stroke={barButtonFill(isDark)} strokeWidth={LINE_W} strokeLinecap="round" fill="none" />
-          </Svg>
-          {/* Its own layer for the glow: a shadow on a view with no fill
-              follows what it draws, so only the green line glows. */}
-          <View style={[StyleSheet.absoluteFill, styles.lineGlow, { shadowOpacity: isDark ? 0.45 : 0.6 }]}>
-            <Svg width={width} height={height}>
-              <AnimatedPath
-                d={d}
-                stroke={ACCT}
-                strokeWidth={LINE_W}
-                strokeLinecap="round"
-                strokeDasharray={[length, length]}
-                fill="none"
-                animatedProps={drain}
-              />
-            </Svg>
-          </View>
-        </>
-      )}
+    <View style={styles.ring} pointerEvents="none">
+      <Svg width={REST_RING} height={REST_RING} style={StyleSheet.absoluteFill}>
+        <Circle cx={c} cy={c} r={RING_R} stroke={barButtonFill(isDark)} strokeWidth={RING_W} fill="none" />
+      </Svg>
+      {/* Its own layer for the glow: a shadow on a view with no fill follows
+          what it draws, so only the gradient glows, not the track. */}
+      <View style={[StyleSheet.absoluteFill, styles.glow, { shadowOpacity: isDark ? 0.4 : 0.5 }]}>
+        <Svg width={REST_RING} height={REST_RING}>
+          <Defs>
+            <SvgGradient id="restRing" x1="0" y1="0" x2="1" y2="1">
+              <Stop offset="0" stopColor={TIMER_GRADIENT[0]} />
+              <Stop offset="1" stopColor={TIMER_GRADIENT[1]} />
+            </SvgGradient>
+          </Defs>
+          <AnimatedCircle
+            cx={c}
+            cy={c}
+            r={RING_R}
+            stroke="url(#restRing)"
+            strokeWidth={RING_W}
+            strokeLinecap="round"
+            fill="none"
+            strokeDasharray={[circ, circ]}
+            rotation={-90}
+            origin={`${c}, ${c}`}
+            animatedProps={drain}
+          />
+        </Svg>
+      </View>
+      <DumbbellIcon size={15} color={t.ts} />
     </View>
+  );
+}
+
+/** The workout bar's countdown: a gradient line over the hairline between the
+ *  rest and the workout's row, draining from its right-hand end. Its holder
+ *  places it; the hairline under it is the bar's own. */
+export function RestDrainLine({ progress }: { progress: SharedValue<number> }) {
+  const drain = useAnimatedStyle(() => ({ transform: [{ scaleX: progress.value }] }));
+  return (
+    <Reanimated.View style={[styles.drain, drain]} pointerEvents="none">
+      <LinearGradient colors={TIMER_GRADIENT} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={styles.drainFill} />
+    </Reanimated.View>
   );
 }
 
@@ -169,7 +147,13 @@ export function RestActions({ isDark }: { isDark: boolean }) {
 // and below (a BounceButton takes a set height onto its touch area, not its
 // fill, so the height comes from padding).
 const styles = StyleSheet.create({
-  lineGlow:  { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowRadius: 4 },
+  ring:      { width: REST_RING, height: REST_RING, alignItems: "center", justifyContent: "center" },
+  glow:      { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowRadius: 3 },
+  drain:     {
+    height: 3, transformOrigin: "left",
+    shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 4,
+  },
+  drainFill: { flex: 1, borderRadius: 1.5 },
   time:      { flex: 1, flexDirection: "row", alignItems: "baseline", gap: 6 },
   timeText:  { fontFamily: FontFamily.bold, letterSpacing: 0.5, fontVariant: ["tabular-nums"] },
   timeLabel: { fontFamily: FontFamily.bold, fontSize: 11, letterSpacing: 1.2 },

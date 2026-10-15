@@ -59,6 +59,8 @@ import {
   toReplaceUserDataPayload,
 } from "../lib/mappers";
 import { migrationFiles, readMigration, SUPABASE_STANDINS } from "./harness/db";
+import { compareCandidates, greenRunFor } from "../utils/programCompare";
+import type { ProgramRunView } from "../utils/programRuns";
 
 let passed = 0;
 const failures: string[] = [];
@@ -108,6 +110,23 @@ const fullProgram: Required<SavedProgram> = {
   // A copy accepted from a trainer's send (0044): which of whose programs it
   // is, so an update or re-send still finds it after a restore.
   shareOrigin: `${TRAINER}|program_9`,
+  // An earlier run (0047), with every field it keeps: without it a restore
+  // loses the run the Progress page compares this one with.
+  runs: [{
+    startDate: "01 Jun 2026",
+    cycleOffset: 1,
+    holds: [{ from: "2026-06-20", to: "2026-06-23", shift: 3, offsetShift: 0 }],
+    skippedDates: ["2026-06-10"],
+    pushedDates: ["2026-06-12"],
+    pulledDates: ["2026-06-14"],
+    totalWeeks: 8,
+    cycleDays: 4,
+    cyclePattern: ["Push", "Pull", "Legs", "Rest"],
+    dayIds: ["d0", "d1", "d2", "d3"],
+    currentWeek: 8,
+    status: "completed",
+    endDate: "2026-07-29",
+  }],
   trainingDays: 3,
   cycleDays: 4,
   cyclePattern: ["Push", "Pull", "Legs", "Rest"],
@@ -217,7 +236,10 @@ const fullEntry: Required<JournalEntry> = {
   id: "journal_1", title: "Week 1", body: "Solid start.\nSleep was good.", createdAt: "2026-09-03T07:30:00.000Z",
 };
 
+/** Every field, its id and its deletion included (0048): a deleted exercise is
+ *  kept for the sessions logged with it, and must come back deleted. */
 const fullCustom: Required<CustomExercise> = {
+  id: "cx_band_1",
   name: "Band Pull-Apart",
   muscles: ["Back", "Shoulders"],
   imageUri: "file:///photo.jpg",
@@ -225,8 +247,13 @@ const fullCustom: Required<CustomExercise> = {
   muted: true,
   steps: ["Grip the band", "Pull apart"],
   description: "Old single-paragraph description",
+  deletedAt: "2026-10-15",
 };
-/** No steps: the case that failed every backup until 0032. */
+/** A new exercise later given the deleted one's name: another exercise, with
+ *  its own id, which must not come back merged with it. */
+const recreated: CustomExercise = { id: "cx_band_2", name: "Band Pull-Apart", muscles: ["Back"] };
+/** No steps: the case that failed every backup until 0032. Made before ids, so
+ *  it has none, and must come back without one (it's known by its name). */
 const stepless: CustomExercise = { name: "Cable Fly", muscles: ["Chest"] };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -313,7 +340,7 @@ async function main() {
     [fullProgram, bareProgram],
     [fullWorkout, oldBlockWorkout, freeWorkout, legacyWorkout],
     [fullEntry],
-    [fullCustom, stepless],
+    [fullCustom, recreated, stepless],
   );
   try {
     await backUpEverything();
@@ -325,7 +352,7 @@ async function main() {
     return finish(db);
   }
   const cloud = await pull(CLIENT);
-  eq([cloud.programs.length, cloud.workouts.length, cloud.journal.length, cloud.custom.length], [2, 4, 1, 2],
+  eq([cloud.programs.length, cloud.workouts.length, cloud.journal.length, cloud.custom.length], [2, 4, 1, 3],
     "backup: a second backup replaces the first rather than adding to it");
 
   const byName = new Map(cloud.programs.map(p => [p.name, p]));
@@ -358,8 +385,15 @@ async function main() {
   }
   const entry = cloud.journal[0];
   if (entry) sameFields("journal entry", entry, fullEntry, ["id"]);
-  const [bandPull, cableFly] = cloud.custom;
+  // Two of one name (rows come back in name order, so found by id), and one
+  // from before ids.
+  const bandPull = cloud.custom.find(c => c.id === fullCustom.id);
+  const newBand = cloud.custom.find(c => c.id === recreated.id);
+  const cableFly = cloud.custom.find(c => c.name === stepless.name);
   if (bandPull) sameFields("custom exercise with every field", bandPull, fullCustom);
+  else failures.push("✗ backup: a deleted custom exercise didn't come back under its own id (0048)");
+  if (newBand) sameFields("custom exercise given a deleted one's name", newBand, recreated);
+  else failures.push("✗ backup: a new exercise of a deleted one's name didn't come back under its own id (0048)");
   if (cableFly) sameFields("custom exercise with no steps", cableFly, stepless);
 
   // Another account's backup never touches this one's rows.
@@ -381,6 +415,20 @@ async function main() {
     await backup(GYM_USER, [], [], [], []);
   }
 
+  // A backup from an app before 0048 carries neither a custom exercise's id nor
+  // its deletion: it reads back live and known by its name, as it always was.
+  {
+    await as(GYM_USER);
+    const old = toReplaceUserDataPayload([], [], [], [recreated], GYM_USER);
+    const without = old.p_custom.map(({ local_id: _id, deleted_at: _deleted, ...rest }) => rest);
+    await db.query(`select public.replace_user_data($1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb)`,
+      ["[]", "[]", "[]", JSON.stringify(without)]);
+    const legacy = await pull(GYM_USER);
+    eq(legacy.custom.map(c => [c.name, c.id ?? null, c.deletedAt ?? null]), [[recreated.name, null, null]],
+      "backup from an older app: a custom exercise reads back live, known by its name");
+    await backup(GYM_USER, [], [], [], []);
+  }
+
   // ─── 3. Who reads whose training ──────────────────────────────────────────
   const training = async (of: string) =>
     (await db.query<{ j: Record<string, unknown[]> & { backed_up_at: string | null } | null }>(
@@ -391,8 +439,12 @@ async function main() {
   eq(read !== null, true, "access: a connected trainer reads a client's training");
   if (read) {
     const { programs, workouts } = snapshotFromRows(read.programs as ProgramRow[], read.workouts as WorkoutRow[]);
-    eq([programs.length, workouts.length, read.journal.length, read.custom.length], [2, 4, 1, 2],
+    eq([programs.length, workouts.length, read.journal.length, read.custom.length], [2, 4, 1, 3],
       "access: all four lists come through");
+    const theirCustoms = (read.custom as CustomExerciseRow[]).map(customFromRow);
+    eq(theirCustoms.filter(c => c.name === fullCustom.name).map(c => [c.id, c.deletedAt ?? null]).sort(),
+      [[fullCustom.id, fullCustom.deletedAt], [recreated.id, null]].sort(),
+      "access: the trainer reads a deleted exercise as deleted and a new one of its name apart from it, by their ids");
     eq(workouts.filter(w => w.programId).every(w => programs.some(p => p.id === w.programId)), true,
       "access: every program session points at a program in the same read");
     eq(programs.map(p => p.id).sort(), [fullProgram.id, bareProgram.id].sort(),
@@ -411,6 +463,58 @@ async function main() {
   const coached = await training(COACHED_PT);
   eq(coached && [coached.programs.length, coached.backed_up_at], [0, null],
     "access: a trainer taken on as a client reads like anyone else (nothing backed up: empty, no sync time)");
+
+  // Compare on a client's Progress tab (user request, 2026-10-15): the trainer
+  // is offered the same programs to compare as the client is on their own
+  // phone, each run with the same sessions in it. The client finished Upper
+  // Lower in the summer and is on Push Pull Legs again, whose run in the spring
+  // is kept in `runs` (0047): without that column the earlier run never reached
+  // the trainer, and only the finished program was offered.
+  {
+    const cycle = ["Push", "Rest", "Legs", "Rest", "Pull", "Rest", "Rest"];
+    const days = ["d0", "d1", "d2", "d3", "d4", "d5", "d6"];
+    const ppl: SavedProgram = {
+      id: "PPL", name: "Push Pull Legs", totalWeeks: 8, currentWeek: 5, status: "active",
+      startDate: "14 Sep 2026", trainingDays: 3, cycleDays: 7, cyclePattern: cycle, dayIds: days,
+      workouts: { "0:Push": [{ id: "e1", name: "Barbell Bench Press", sets: [] }] },
+      runs: [{
+        startDate: "02 Mar 2026", totalWeeks: 8, cycleDays: 7, cyclePattern: cycle, dayIds: days,
+        currentWeek: 8, status: "completed", endDate: "2026-04-26",
+      }],
+    };
+    const ul: SavedProgram = {
+      id: "UL", name: "Upper Lower", totalWeeks: 8, currentWeek: 8, status: "completed",
+      startDate: "01 Jun 2026", completedDate: "26 Jul 2026", trainingDays: 2, cycleDays: 7,
+      cyclePattern: ["Upper", "Lower", "Rest", "Rest", "Rest", "Rest", "Rest"], dayIds: days,
+      workouts: { "0:Upper": [{ id: "u1", name: "Barbell Bench Press", sets: [] }] },
+    };
+    const lifted = (id: string, programId: string, date: string, workoutName: string): CompletedWorkout => ({
+      id, date, completedAt: `${date}T08:00:00.000Z`, workoutName, durationSeconds: 3600, programId, dayId: "d0",
+      exercises: [{ name: "Barbell Bench Press", notes: "", sets: [{ type: "working", weight: "80", reps: "8", done: true }] }],
+    });
+    const history = [
+      lifted("now-2", "PPL", "2026-09-21", "Push"), lifted("now-1", "PPL", "2026-09-14", "Push"),
+      lifted("ul-2", "UL", "2026-06-08", "Upper"), lifted("ul-1", "UL", "2026-06-01", "Upper"),
+      lifted("spring-1", "PPL", "2026-03-02", "Push"),
+    ];
+    // Sessions by date: a backup gives workouts new ids (programs keep theirs,
+    // 0044), and a trainer's page only ever opens the ids of its own copy.
+    const offered = (programs: SavedProgram[], workouts: CompletedWorkout[]) => {
+      const view = (v: ProgramRunView) => ({ ...v.ref, finished: v.finished, sessions: v.sessions.map(w => w.date).sort() });
+      const green = greenRunFor({ kind: "current" }, programs, workouts);
+      return { green: green && view(green), blue: compareCandidates(programs, workouts, green?.ref ?? null).map(view) };
+    };
+    const own = offered([ppl, ul], history);
+    eq([own.green?.programId, own.blue.map(b => `${b.programId}:${b.run}`)], ["PPL", ["UL:latest", "PPL:0"]],
+      "compare: the client is offered the finished program and the spring run of the one on the go");
+
+    await backup(COACHED_PT, [ppl, ul], history, [], []);
+    await as(TRAINER);
+    const theirs = await training(COACHED_PT);
+    const seen = theirs ? snapshotFromRows(theirs.programs as ProgramRow[], theirs.workouts as WorkoutRow[]) : null;
+    eq(seen && offered(seen.programs, seen.workouts), own,
+      "compare: the trainer, on the client's Progress tab, is offered the same, each run with the same sessions");
+  }
   eq(await training(TRAINER), null, "access: nobody reads themselves through it");
   eq(await training("99999999-0000-4000-8000-000000000009"), null, "access: an unknown account gives nothing");
 

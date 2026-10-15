@@ -15,18 +15,30 @@
 // having been updated, so there's no way to tap past it and carry on.
 //
 // FAILS OPEN. Offline, signed out, migration not applied, unparseable version:
-// every one of those renders the app normally. A gate that bricks a working
-// install on a network blip is far worse than one stale build slipping through.
+// with no minimum saved, every one of those renders the app normally. A gate
+// that bricks a working install on a network blip is far worse than one stale
+// build slipping through.
+//
+// NEVER WAITS ON THE SERVER. It decides at launch from the last minimum the
+// server gave, saved on the phone, then asks the server in the background and
+// blocks if the answer says to. It used to put a spinner in place of the app
+// until the server answered, which on a phone with no signal, or a connection
+// that hangs, was forever (user report, 2026-10-14). The cost: on the one
+// launch after the minimum is first raised, the app shows for a moment before
+// the gate does.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
+import { Alert, AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
 import Constants from "expo-constants";
 import { Ionicons } from "@expo/vector-icons";
 
 import BounceButton from "./BounceButton";
 import { APP_DARK, APP_LIGHT, ACCT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
-import { APP_STORE_ID, appStoreUrl, appStoreWebUrl, fetchMinIosVersion } from "../lib/appConfig";
+import {
+  APP_STORE_ID, appStoreUrl, appStoreWebUrl,
+  fetchMinIosVersion, loadSavedMinIosVersion, saveMinIosVersion,
+} from "../lib/appConfig";
 import { isBelowMinimum } from "../utils/version";
 
 const TITLE = "Update Required";
@@ -60,24 +72,36 @@ async function openAppStore(): Promise<void> {
 export default function ForceUpdateGate({ children }: { children: React.ReactNode }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  // null = still checking. Children render as soon as we know we're allowed.
+  // null = the saved minimum not read yet: a moment, off the phone.
   const [blocked, setBlocked] = useState<boolean | null>(GATED ? null : false);
   const alerting = useRef(false);
 
-  const check = useCallback(async () => {
-    if (!GATED) return;
-    const min = await fetchMinIosVersion();
+  // The server's answer, saved for the next launch. No answer (offline) keeps
+  // the decision made from the saved one.
+  const takeAnswer = useCallback((min: string | null | undefined) => {
+    if (min === undefined) return;
+    void saveMinIosVersion(min);
     setBlocked(isBelowMinimum(currentVersion(), min));
   }, []);
 
-  useEffect(() => { void check(); }, [check]);
+  useEffect(() => {
+    if (!GATED) return;
+    // From the phone first; the server's answer wins whenever it comes.
+    void loadSavedMinIosVersion().then(saved => {
+      setBlocked(prev => prev ?? isBelowMinimum(currentVersion(), saved));
+    });
+    void fetchMinIosVersion().then(takeAnswer);
+  }, [takeAnswer]);
 
   // Re-check on foreground: the user may have just updated, and if they didn't
   // the alert needs re-presenting.
   useEffect(() => {
-    const sub = AppState.addEventListener("change", s => { if (s === "active") void check(); });
+    if (!GATED) return;
+    const sub = AppState.addEventListener("change", s => {
+      if (s === "active") void fetchMinIosVersion().then(takeAnswer);
+    });
     return () => sub.remove();
-  }, [check]);
+  }, [takeAnswer]);
 
   const promptUpdate = useCallback(() => {
     if (alerting.current) return; // never stack alerts
@@ -96,15 +120,9 @@ export default function ForceUpdateGate({ children }: { children: React.ReactNod
     if (blocked) promptUpdate();
   }, [blocked, promptUpdate]);
 
-  if (blocked === null) {
-    // Brief: one Supabase read. Showing the app first and yanking it away would
-    // be worse than a moment of nothing.
-    return (
-      <View style={[styles.root, { backgroundColor: t.bg }]}>
-        <ActivityIndicator color={ACCT} />
-      </View>
-    );
-  }
+  // One read off the phone, which the splash normally still covers: no spinner,
+  // just the page's colour for the moment it takes.
+  if (blocked === null) return <View style={[styles.root, { backgroundColor: t.bg }]} />;
 
   if (!blocked) return <>{children}</>;
 

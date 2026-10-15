@@ -549,6 +549,8 @@ async function materialiseSnapshot(snap: SavedProgram, priorId?: string, origin?
     pushedDates: undefined,
     pulledDates: undefined,
     archivedAt: undefined,
+    // A new copy has run nothing yet.
+    runs: undefined,
     // Whose program this copy is, so an update or re-send of it lands here
     // (copyToUpdate), restored from a backup or not.
     shareOrigin: origin,
@@ -829,10 +831,11 @@ async function prepareSnapshot(snapshot: SavedProgram, unit: WeightUnit): Promis
 
 /** A program as it leaves this phone: its programming, without this phone's
  *  record of whose program it was (shareOrigin), which would hand another
- *  person's account id to the recipient and is set afresh by their accept. */
+ *  person's account id to the recipient and is set afresh by their accept, and
+ *  without its earlier runs (runs), which are the sender's own history. */
 function outgoing(snapshot: SavedProgram): SavedProgram {
-  if (snapshot.shareOrigin === undefined) return snapshot;
-  const { shareOrigin: _origin, ...rest } = snapshot;
+  if (snapshot.shareOrigin === undefined && snapshot.runs === undefined) return snapshot;
+  const { shareOrigin: _origin, runs: _runs, ...rest } = snapshot;
   return rest;
 }
 
@@ -1829,6 +1832,8 @@ async function materialiseSnapshotOverExisting(snap: SavedProgram, candidates: s
       cycleOffset: undefined,
       completedDate: undefined,
       archivedAt: undefined,
+      // A new copy has run nothing yet.
+      runs: undefined,
       // Your own program, reviewed and made again because the original is
       // gone: which program it stands in for, so the next accept of this
       // review lands here, restored from a backup or not.

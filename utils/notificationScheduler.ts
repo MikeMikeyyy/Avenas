@@ -120,7 +120,7 @@ export async function ensureNotificationPermissions(interactive: boolean): Promi
 
 // ── the resync pipeline ───────────────────────────────────────────────────────
 
-type Kind = "scheduled" | "restTimer";
+type Kind = "scheduled" | "restTimer" | "forgottenWorkout";
 
 async function cancelByKind(kind: Kind): Promise<void> {
   const all = await Notifications.getAllScheduledNotificationsAsync();
@@ -314,6 +314,50 @@ export function cancelRestTimerAlert(): void {
   if (!isNative) return;
   restAlertGen++;
   restAlertChain = restAlertChain.then(cancelRestTimerAlertAsync).catch((e) => warn("restTimerCancel", e));
+}
+
+// ── a workout left running ────────────────────────────────────────────────────
+
+// Same discipline as the rest alert: one after another, each call superseding
+// the ones before, so a reminder still being scheduled can't land after the
+// cancel that came back into the app. Its own kind, so a resync (on every
+// background) never cancels it, and found by kind, so one left from before the
+// app was closed is cancelled too.
+let forgottenChain: Promise<void> = Promise.resolve();
+let forgottenGen = 0;
+
+/** Remind someone who left the app mid-workout, at `atMs` (an hour after they
+ *  last logged anything: utils/unfinishedSession.ts forgottenReminderAt), that
+ *  it's still running. A workout reminder, so that setting silences it, and
+ *  silent in the foreground, where the app asks itself
+ *  (components/UnfinishedWorkoutWatcher.tsx). Tapping it opens the app, which
+ *  asks then. */
+export function scheduleForgottenWorkoutReminder(atMs: number, workoutName: string | null): void {
+  if (!isNative) return;
+  const gen = ++forgottenGen;
+  forgottenChain = forgottenChain.then(async () => {
+    await cancelByKind("forgottenWorkout");
+    if (gen !== forgottenGen) return;
+    if (!(await isCategoryEnabled("workoutReminders"))) return;
+    if (!(await ensureNotificationPermissions(false))) return;
+    if (gen !== forgottenGen || atMs <= Date.now()) return;
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Still training?",
+        body: `Your ${workoutName ? `${workoutName} ` : ""}workout is still running. Open the app to finish it.`,
+        sound: "default",
+        data: { kind: "forgottenWorkout", category: "workoutReminders" },
+      },
+      trigger: { type: SchedulableTriggerInputTypes.DATE, date: new Date(atMs) },
+    });
+  }).catch((e) => warn("forgottenWorkout", e));
+}
+
+/** Cancel the reminder: back in the app, or the workout's over. */
+export function cancelForgottenWorkoutReminder(): void {
+  if (!isNative) return;
+  forgottenGen++;
+  forgottenChain = forgottenChain.then(() => cancelByKind("forgottenWorkout")).catch((e) => warn("forgottenWorkoutCancel", e));
 }
 
 // ── achievements ──────────────────────────────────────────────────────────────

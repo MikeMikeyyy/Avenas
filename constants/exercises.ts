@@ -26,6 +26,17 @@ export type MuscleGroup = typeof MUSCLE_GROUPS[number];
 export type SelectableMuscle = Exclude<MuscleGroup, "All">;
 
 export type CustomExercise = {
+  /** Its own identity, so a deleted exercise and a new one made later with the
+   *  same name are two exercises (user request, 2026-10-15): every program day
+   *  and logged session using it records it (`customId`). Absent on one made
+   *  before ids, which is known by its name, as it always was
+   *  (utils/customExercises.ts). */
+  id?: string;
+  /** When it was deleted ("YYYY-MM-DD"). A deleted exercise stays in the list,
+   *  hidden: out of the picker and the slots, and out of every program, but
+   *  still what its logged sessions are read with (their muscles on the radar,
+   *  its steps on the exercise screen). Its photo and video go with it. */
+  deletedAt?: string;
   name: string;
   muscles: SelectableMuscle[];
   imageUri?: string;

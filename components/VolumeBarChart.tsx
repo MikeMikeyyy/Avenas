@@ -6,7 +6,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "./NeuCard";
 import SegmentedControl from "./SegmentedControl";
 import DumbbellIcon from "./DumbbellIcon";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, accentTextColor } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { niceAxis } from "../utils/niceAxis";
 import { MONTH_NAMES, fmtDuration } from "../utils/dates";
@@ -342,7 +342,7 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
             it sets the window for the Strength radar as well. */}
         <View>
           <Text style={[styles.title, { color: t.tp }]}>{METRIC_TITLES[metric]}</Text>
-          <Text style={[styles.headerValue, { color: focusedIndex == null ? t.ts : ACCT }]} numberOfLines={1}>
+          <Text style={[styles.headerValue, { color: focusedIndex == null ? t.ts : accentTextColor(isDark) }]} numberOfLines={1}>
             {headerLabel}
           </Text>
         </View>

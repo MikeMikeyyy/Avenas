@@ -1,5 +1,5 @@
-import { useRef, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { useRef, useEffect, useState } from "react";
+import { View, Text, StyleSheet, ScrollView, type StyleProp, type TextStyle } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import type { TimeVal } from "../utils/sessionTime";
@@ -24,9 +24,15 @@ export const PERIODS = ["AM", "PM"];
 // component). Defining it inside a render function creates a new type on every
 // parent re-render, causing React to unmount/remount and losing scroll position.
 
-export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColor }: {
+export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColor, rowH = WHEEL_H, textStyle, band = true }: {
   items: string[]; initialIdx: number; onSelect: (idx: number) => void;
   isDark: boolean; width: number; bgColor: string;
+  /** A row's height (three show); the journal's and the finish sheet's by default. */
+  rowH?: number;
+  /** The items' text, over the default semibold 20. */
+  textStyle?: StyleProp<TextStyle>;
+  /** The hairlines round the middle row; off where the caller draws its own. */
+  band?: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const scrollRef = useRef<ScrollView>(null);
@@ -34,35 +40,44 @@ export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColo
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
-  // Scroll to initial position after layout settles
+  // The wheel opens on its starting item from its first frame. It used to open
+  // at the top and scroll there 60ms later, so a timer set to 2 minutes opened
+  // on "01" and jumped to "02" (user report, 2026-10-15). The offset is the
+  // one it opened with, for good: iOS moves a scroll view to any new
+  // contentOffset at once, and a caller whose initialIdx follows the value
+  // (the journal's time) would stop a fling the moment a drag let go. The
+  // scroll after layout stays, as a fallback for a platform that drops the
+  // offset while the content has no size yet.
+  const [openedAt] = useState(() => ({ x: 0, y: initialIdx * rowH }));
   useEffect(() => {
     const id = setTimeout(() => {
-      scrollRef.current?.scrollTo({ y: initialIdx * WHEEL_H, animated: false });
+      scrollRef.current?.scrollTo({ y: initialIdx * rowH, animated: false });
     }, 60);
     return () => clearTimeout(id);
   }, []); // intentionally runs only on mount
 
   const commit = (y: number) => {
-    const idx = Math.min(items.length - 1, Math.max(0, Math.round(y / WHEEL_H)));
+    const idx = Math.min(items.length - 1, Math.max(0, Math.round(y / rowH)));
     onSelectRef.current(idx);
   };
 
   const fadeColor = bgColor;
 
   return (
-    <View style={{ width, height: WHEEL_H * 3 }}>
+    <View style={{ width, height: rowH * 3 }}>
       <ScrollView
         ref={scrollRef}
-        snapToInterval={WHEEL_H}
+        contentOffset={openedAt}
+        snapToInterval={rowH}
         decelerationRate="fast"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingVertical: WHEEL_H }}
+        contentContainerStyle={{ paddingVertical: rowH }}
         onMomentumScrollEnd={e => commit(e.nativeEvent.contentOffset.y)}
         onScrollEndDrag={e => commit(e.nativeEvent.contentOffset.y)}
       >
         {items.map((item, i) => (
-          <View key={i} style={{ height: WHEEL_H, width, alignItems: "center", justifyContent: "center" }}>
-            <Text style={{ fontFamily: FontFamily.semibold, fontSize: 20, color: t.tp }}>
+          <View key={i} style={{ height: rowH, width, alignItems: "center", justifyContent: "center" }}>
+            <Text style={[{ fontFamily: FontFamily.semibold, fontSize: 20, color: t.tp }, textStyle]}>
               {item}
             </Text>
           </View>
@@ -73,20 +88,22 @@ export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColo
       <LinearGradient
         pointerEvents="none"
         colors={[fadeColor, fadeColor + "00"]}
-        style={{ position: "absolute", top: 0, left: 0, right: 0, height: WHEEL_H + 6 }}
+        style={{ position: "absolute", top: 0, left: 0, right: 0, height: rowH + 6 }}
       />
       <LinearGradient
         pointerEvents="none"
         colors={[fadeColor + "00", fadeColor]}
-        style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: WHEEL_H + 6 }}
+        style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: rowH + 6 }}
       />
 
       {/* Center selection band */}
-      <View pointerEvents="none" style={{
-        position: "absolute", top: WHEEL_H, left: 0, right: 0, height: WHEEL_H,
-        borderTopWidth: 1, borderBottomWidth: 1,
-        borderColor: isDark ? "rgba(255,255,255,0.13)" : "rgba(0,0,0,0.09)",
-      }} />
+      {band ? (
+        <View pointerEvents="none" style={{
+          position: "absolute", top: rowH, left: 0, right: 0, height: rowH,
+          borderTopWidth: 1, borderBottomWidth: 1,
+          borderColor: isDark ? "rgba(255,255,255,0.13)" : "rgba(0,0,0,0.09)",
+        }} />
+      ) : null}
     </View>
   );
 }

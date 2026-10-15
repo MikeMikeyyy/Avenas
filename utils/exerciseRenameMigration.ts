@@ -14,8 +14,8 @@
 // screen reads a program halfway through.
 //
 // A name that belongs to a custom exercise is the user's or a trainer's own
-// word and is never renamed: an exercise carrying custom details, or named like
-// one of the user's own custom exercises.
+// word and is never renamed: an exercise with a custom id or carrying custom
+// details, or named like one of the user's own custom exercises.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, type Exercise, type SavedProgram } from "../constants/programs";
@@ -26,7 +26,7 @@ const lower = (s: string) => s.trim().toLowerCase();
 
 /** `ex` under its current catalogue name, or `ex` itself when nothing changes. */
 function renamed(ex: Exercise, customNames: ReadonlySet<string>): Exercise {
-  if (ex.customDetails || customNames.has(lower(ex.name)) || !isFormerExerciseName(ex.name)) return ex;
+  if (ex.customId || ex.customDetails || customNames.has(lower(ex.name)) || !isFormerExerciseName(ex.name)) return ex;
   return { ...ex, name: currentExerciseName(ex.name) };
 }
 

@@ -22,10 +22,11 @@ import * as FileSystem from "expo-file-system/legacy";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "./supabase";
 import { getMyUid } from "./shares";
 import { getJSON, setJSON } from "../utils/storage";
-import { normalizeExerciseName } from "../utils/workout";
+import { liveCustoms } from "../utils/customExercises";
 import {
   carriedExercises,
-  exerciseNamesIn,
+  customIdentity,
+  exerciseIdentitiesIn,
   isRemoteUri,
   knownCustomExercises,
   stampCustomDetails,
@@ -144,9 +145,11 @@ export async function detailsForSend(snapshot: SavedProgram): Promise<SavedProgr
       getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
       getMyUid(),
     ]);
-    const ownList = Array.isArray(own) ? own : [];
-    const used = exerciseNamesIn(snapshot.workouts);
-    const ownUsed = ownList.filter(c => used.has(normalizeExerciseName(c.name)));
+    // Your live exercises this program uses, by identity: a deleted one has no
+    // media left to upload, and a new one given its name is another exercise.
+    const ownList = liveCustoms(Array.isArray(own) ? own : []);
+    const used = exerciseIdentitiesIn(snapshot.workouts);
+    const ownUsed = ownList.filter(c => used.has(customIdentity(c)));
     const uploads = await uploadExerciseMedia(ownUsed);
     const workouts = stampCustomDetails(snapshot.workouts ?? {}, {
       own: ownUsed.map(c => withRemoteMedia(c, uploads)),

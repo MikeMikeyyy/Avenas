@@ -1,10 +1,10 @@
 import { createContext, useContext, useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { WORKOUT_DRAFT_KEY } from "../constants/programs";
+import { WORKOUT_DRAFT_KEY, WORKOUT_TIMER_PAUSED_KEY, WORKOUT_TIMER_START_KEY } from "../constants/programs";
 
-const TIMER_KEY = "@avenas/workout_timer_start";
-const PAUSE_KEY = "@avenas/workout_timer_paused_ms";
+const TIMER_KEY = WORKOUT_TIMER_START_KEY;
+const PAUSE_KEY = WORKOUT_TIMER_PAUSED_KEY;
 
 interface WorkoutTimerContextValue {
   isRunning: boolean;

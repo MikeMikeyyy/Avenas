@@ -177,6 +177,10 @@ export function sessionTimeRange(completedAt: string, durationSeconds: number): 
   if (Number.isNaN(end.getTime())) return null;
   const secs = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0;
   const start = new Date(end.getTime() - secs * 1000);
-  const clock = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
-  return `${clock(start)} – ${clock(end)}`;
+  return `${fmtClock(start)} – ${fmtClock(end)}`;
+}
+
+/** A time of day the way sessions show one: "6:02 pm". */
+export function fmtClock(d: Date): string {
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
 }

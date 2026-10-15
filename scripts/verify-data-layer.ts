@@ -465,11 +465,18 @@ eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate:
     ["95×5"], "sets by place: older history without places is read by name");
 
   // What a swap records.
-  eq(swapOrigin({ name: "Bench Press" }, "Dumbbell Press"), "Bench Press", "swapOrigin: records what it replaced");
-  eq(swapOrigin({ name: "Dumbbell Press", swappedFrom: "Bench Press" }, "Machine Press"), "Bench Press",
+  eq(swapOrigin({ name: "Bench Press" }, { name: "Dumbbell Press" }), { swappedFrom: "Bench Press", swappedFromId: undefined },
+    "swapOrigin: records what it replaced");
+  eq(swapOrigin({ name: "Dumbbell Press", swappedFrom: "Bench Press" }, { name: "Machine Press" }).swappedFrom, "Bench Press",
     "swapOrigin: a second swap still records the original");
-  eq(swapOrigin({ name: "Dumbbell Press", swappedFrom: "Bench Press" }, "bench press"), undefined,
+  eq(swapOrigin({ name: "Dumbbell Press", swappedFrom: "Bench Press" }, { name: "bench press" }), { swappedFrom: undefined, swappedFromId: undefined },
     "swapOrigin: swapping back to the original records nothing");
+  // A custom exercise is recorded by its id too, and a new exercise of a
+  // deleted one's name isn't "swapping back" to it (verify-custom-identity has more).
+  eq(swapOrigin({ name: "Landmine Twist", customId: "cxA" }, { name: "Cable Twist", customId: "cxB" }),
+    { swappedFrom: "Landmine Twist", swappedFromId: "cxA" }, "swapOrigin: a custom exercise's id is recorded with its name");
+  eq(swapOrigin({ name: "Cable Twist", customId: "cxB", swappedFrom: "Landmine Twist", swappedFromId: "cxA" }, { name: "Landmine Twist", customId: "cxC" }),
+    { swappedFrom: "Landmine Twist", swappedFromId: "cxA" }, "swapOrigin: a new exercise given the original's name is not the original");
 }
 
 // ── Notes follow the DAY, not the date ─────────────────────────────────────────
@@ -1052,7 +1059,10 @@ for (const bw of ["BW", "", "—"]) {
   const push = { name: "Push", programId: "P", dayId: "d0" };
   const legs = { name: "Legs", programId: "P", dayId: "d2" };
   const held = (over: Partial<Parameters<typeof keepsHeldSession>[0]>) =>
-    ({ day: MON, live: false, started: false, shaped: false, workout: push, ...over });
+    ({ day: MON, live: false, lastActivityAt: null, started: false, shaped: false, workout: push, ...over });
+  // 12:30am on Monday, for the sessions carried past midnight below.
+  const NOW = new Date(2026, 9, 5, 0, 30).getTime();
+  const MIN = 60_000;
   eq(keepsHeldSession(held({ day: null, workout: null }), MON, push), false, "held: nothing held, the day is built from the program");
   eq(keepsHeldSession(held({}), MON, push), false, "held: an untouched session is rebuilt (a program edit shows)");
   eq(keepsHeldSession(held({ started: true }), MON, push), true, "held: a ticked session is kept on its own day");
@@ -1061,8 +1071,12 @@ for (const bw of ["BW", "", "—"]) {
     "held: a week on, last week's reordered session starts again in the program's order");
   eq(keepsHeldSession(held({ day: "2026-10-04", started: true }), MON, push), false,
     "held: yesterday's unfinished session, its clock stopped, doesn't become today's");
-  eq(keepsHeldSession(held({ day: "2026-10-04", live: true, started: true }), MON, push), true,
-    "held: a session still running past midnight carries on");
+  eq(keepsHeldSession(held({ day: "2026-10-04", live: true, started: true, lastActivityAt: NOW - 10 * MIN }), MON, push, NOW), true,
+    "held: a session still being logged past midnight carries on");
+  eq(keepsHeldSession(held({ day: "2026-10-04", live: true, started: true, lastActivityAt: NOW - 61 * MIN }), MON, push, NOW), false,
+    "held: one whose clock still runs but nothing's been logged for an hour was forgotten: it goes (to the Journal)");
+  eq(keepsHeldSession(held({ day: "2026-10-04", live: true, started: true }), MON, push, NOW), false,
+    "held: ...and one with no record of when it was last touched (saved before that was kept)");
 
   // Shaped before starting.
   eq(keepsHeldSession(held({ shaped: true }), MON, push), true, "held: reordered before starting, it's kept on its day");

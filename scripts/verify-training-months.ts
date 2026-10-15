@@ -24,7 +24,7 @@ import { warnings } from "./harness/app";
 import { crossesDst } from "./harness/solo/env";
 import { Lifter } from "./harness/training/lifter";
 import {
-  checkChartLayout, checkHints, checkHome, checkProgramPages, checkProgressBars, checkProgressDays, checkSave,
+  checkChartLayout, checkCompare, checkHints, checkHome, checkProgramPages, checkProgressBars, checkProgressDays, checkSave,
   snapshot, type Problem,
 } from "./harness/training/checks";
 import { addDaysYMD } from "../utils/dates";
@@ -96,6 +96,7 @@ async function runLifter(seed: number) {
     record(lifter, checkChartLayout(charts));
     record(lifter, checkProgramPages(lifter, snap));
     record(lifter, checkHome(lifter, snap));
+    record(lifter, checkCompare(lifter, snap));
     record(lifter, warnings.splice(0, warnings.length).map(w => ({ code: "app/swallowed-error", what: w.text })));
   }
   if (ONLY !== null) console.log(lifter.story.join("\n"));

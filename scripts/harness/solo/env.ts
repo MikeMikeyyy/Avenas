@@ -98,7 +98,7 @@ stubModule({ request: "react-native" }, {
 stubModule({ file: "lib/syncManager.ts" }, {
   scheduleCloudPush: () => {},
   flushCloudPush: () => {},
-  retryFailedCloudPush: () => {},
+  pushOwedBackup: async () => {},
 });
 stubModule({ file: "utils/notificationScheduler.ts" }, {
   resyncScheduledNotifications: () => {},

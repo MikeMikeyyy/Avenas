@@ -14,9 +14,14 @@
 // The tab used to keep any session it judged in progress, whatever day it was
 // built for, so a session left held in the app carried its swapped order into
 // the same day a week later (user report, 2026-10-05). Now one from another day
-// is kept only while its workout clock is still going: a late-night session
-// carried past midnight, which getEffectiveToday mostly keeps on its own day
-// anyway. On the same day it's kept while live or started, as before.
+// is kept only while it's still going: its clock running (or paused) AND
+// something ticked or typed in it within the hour (stillGoing): a late-night
+// session carried past midnight, which getEffectiveToday mostly keeps on its
+// own day anyway. A clock alone used to be enough, so a workout forgotten with
+// the app left open stayed open all night, its clock counting, and was filed
+// under the next day when finished (user decision, 2026-10-15). One that isn't
+// still going goes to the Journal (utils/unfinishedSession.ts). On the same day
+// it's kept while live or started, as before.
 //
 // A session SHAPED before it started is kept as well: exercises moved, swapped,
 // added or removed, sets added or removed, a Hold switched, an exercise note
@@ -30,6 +35,17 @@
 //
 // Pure, so scripts/verify-data-layer.ts covers it.
 
+/** How long a workout can go with nothing ticked or typed in it before it
+ *  counts as forgotten: rest between sets is minutes, so an hour of nothing
+ *  almost always means the person has left (user decision, 2026-10-15). */
+export const FORGOTTEN_AFTER_MS = 60 * 60 * 1000;
+
+/** Whether a workout is still being done: its clock is going (or paused) and
+ *  something was ticked or typed in it within FORGOTTEN_AFTER_MS of `now`. */
+export function stillGoing(live: boolean, lastActivityAt: number | null, now: number): boolean {
+  return live && lastActivityAt !== null && now - lastActivityAt < FORGOTTEN_AFTER_MS;
+}
+
 /** Which workout a session is: its program and day, by the day's id where it
  *  has one. */
 export type SessionWorkout = { name: string; programId?: string; dayId?: string };
@@ -40,6 +56,8 @@ export type HeldSession = {
   day: string | null;
   /** Its workout clock is running or paused. */
   live: boolean;
+  /** When something was last ticked or typed in it (epoch ms), null if never. */
+  lastActivityAt: number | null;
   /** It has started: a set touched, a session note, a custom workout begun. */
   started: boolean;
   /** It was shaped before it started (see above). */
@@ -51,9 +69,14 @@ export type HeldSession = {
 /** Whether the tab keeps the session it holds on `today`, rather than starting
  *  the day again from the program. `scheduled` is the workout the day resolves
  *  to now, null for a rest day. */
-export function keepsHeldSession(held: HeldSession, today: string, scheduled: SessionWorkout | null): boolean {
+export function keepsHeldSession(
+  held: HeldSession,
+  today: string,
+  scheduled: SessionWorkout | null,
+  now: number = Date.now(),
+): boolean {
   if (held.day === null) return false;
-  if (held.day !== today) return held.live;
+  if (held.day !== today) return stillGoing(held.live, held.lastActivityAt, now);
   if (held.live || held.started) return true;
   return held.shaped && held.workout !== null && scheduled !== null && sameWorkout(held.workout, scheduled);
 }

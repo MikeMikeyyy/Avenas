@@ -15,6 +15,7 @@ import { addDaysYMD, formatStoredDate } from "./dates";
 import { clearShifts, repairMoves, skipDate } from "./skippedDates";
 import { cycleIndexForDate, getEffectiveToday, normalizeDriftDates } from "./workout";
 import { runStartYMD } from "./programHolds";
+import { endingRun } from "./programRuns";
 
 /** The program that was active, when making another one active finished it. */
 export type FinishedProgram = { program: SavedProgram; week: number };
@@ -30,6 +31,11 @@ export type FinishedProgram = { program: SavedProgram; week: number };
  * all of them would count as drift against day 1, landing the fresh run's first
  * day several slots into the cycle and moving its finish date out by as much.
  *
+ * A program that ran before (finished or shelved) keeps the run that's ending
+ * in `runs` first (utils/programRuns.ts endingRun), since the new run re-dates
+ * every field it's read from: the Progress page compares this run with the
+ * last. Its finish date goes with it: a run under way has none.
+ *
  * The program it replaces is demoted by the week it reached: finished when it
  * ran its full length (which earns the achievement Mark Complete would), else
  * shelved ("paused" past week 1, "created" before), with its week snapshotted
@@ -43,18 +49,21 @@ export function activateProgram(
   let finished: FinishedProgram | null = null;
   const updated = programs.map((p): SavedProgram => {
     if (p.id === id) {
+      const ending = endingRun(p, todayStr);
       return {
         ...p,
         status: "active",
         startDate: todayStr,
         currentWeek: 1,
         cycleOffset: undefined,
+        completedDate: undefined,
         pausedAt: undefined,
         // The last run's holds belong to it: this run starts unmoved.
         holds: undefined,
         skippedDates: undefined,
         pushedDates: undefined,
         pulledDates: undefined,
+        ...(ending ? { runs: [...(p.runs ?? []), ending] } : {}),
       };
     }
     if (p.status === "active") {

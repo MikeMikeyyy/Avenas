@@ -97,7 +97,7 @@ eq(clientOwn.length, 1, "slots: the client's own list is untouched, so no slot i
 eq(clientKnown.map(c => c.name), ["Towel Pull-Apart", "Landmine Twist"], "lookup: the client can look up the trainer's exercise by name");
 eq(clientKnown.find(c => c.name === "Landmine Twist")?.imageUri, URL("exercise_icon_1.jpg"),
   "lookup: ...and gets the trainer's photo (the exercise screen's hero)");
-eq(musclesForExercise("landmine twist", clientKnown), ["Core", "Shoulders"], "lookup: ...and the trainer's muscles");
+eq(musclesForExercise({ name: "landmine twist" }, clientKnown), ["Core", "Shoulders"], "lookup: ...and the trainer's muscles");
 
 // The Progress radar places a logged set of it by those muscles.
 const session: CompletedWorkout = {
@@ -132,7 +132,7 @@ eq(saved["0:Legs"][0].customDetails, sentTwist.customDetails, "builder: a picked
 eq(saved["0:Legs"][1].customDetails, undefined, "builder: the client's own custom exercise isn't stamped (their list has it)");
 // ...so it outlives the trainer's program.
 const clientProgram = program("mine", "created", saved);
-eq(musclesForExercise("Landmine Twist", knownCustomExercises(clientOwn, carriedExercises([clientProgram]))), ["Core", "Shoulders"],
+eq(musclesForExercise({ name: "Landmine Twist" }, knownCustomExercises(clientOwn, carriedExercises([clientProgram]))), ["Core", "Shoulders"],
   "builder: with the trainer's program deleted, the client's own program still knows it");
 
 // A builder swap renames the row and leaves the old details on it; the save

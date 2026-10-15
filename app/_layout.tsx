@@ -3,7 +3,7 @@ import * as Notifications from "expo-notifications";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useRef, useState } from "react";
-import { View, AppState } from "react-native";
+import { View, AppState, Alert } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ThemeProvider } from "../contexts/ThemeContext";
@@ -19,9 +19,10 @@ import { ConnectivityProvider, useOffline } from "../contexts/ConnectivityContex
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_DARK, APP_LIGHT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import WorkoutActiveBar from "../components/WorkoutActiveBar";
+import UnfinishedWorkoutWatcher from "../components/UnfinishedWorkoutWatcher";
 import RestTimerBanner from "../components/RestTimerBanner";
 import ForceUpdateGate from "../components/ForceUpdateGate";
-import { flushCloudPush, retryFailedCloudPush } from "../lib/syncManager";
+import { flushCloudPush, pushOwedBackup } from "../lib/syncManager";
 import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
@@ -29,6 +30,7 @@ import { runDayIdMigrationIfNeeded } from "../utils/dayIdMigration";
 import { runHoldMigrationIfNeeded } from "../utils/holdMigration";
 import { runExerciseRenames } from "../utils/exerciseRenameMigration";
 import { linkAcceptedCopies } from "../utils/trainerStore";
+import { fileStaleDraft } from "../utils/unfinishedSessionStore";
 import { autoPauseIfIdle } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 
@@ -37,6 +39,10 @@ SplashScreen.preventAutoHideAsync();
 // How often to refresh "last active" while the app is foregrounded, so connected
 // accounts can show "active now". Cleared on background.
 const HEARTBEAT_MS = 120000;
+
+// How long after launch a backup owed from before the app closed goes: clear of
+// the splash and Home's first draw (lib/syncManager.ts pushOwedBackup).
+const OWED_BACKUP_DELAY_MS = 2000;
 
 // Insights modal options. `detachPreviousScreen: false` keeps Home mounted behind
 // the modal — without it the native stack tears Home down while the modal is up
@@ -64,7 +70,7 @@ const NAV_DARK: Theme = {
 function AppShell() {
   const { isDark, loaded: themeLoaded } = useTheme();
   const { loaded: profileLoaded } = useUserProfile();
-  const { loaded: authLoaded } = useAuth();
+  const { loaded: authLoaded, userId, endedElsewhere } = useAuth();
   const router = useRouter();
 
   // Local notifications: install the foreground-presentation handler once, then
@@ -88,10 +94,37 @@ function AppShell() {
   // Hold the native splash until the profile flag and the auth session are
   // read, so app/index.tsx can redirect to the right first screen (login vs
   // home) without a blank flash or flicker, and the saved theme, so that
-  // screen isn't drawn light for a frame before turning dark.
+  // screen isn't drawn light for a frame before turning dark. All three are
+  // read off the phone: nothing on the way to Home may wait on the server,
+  // which with no signal can be forever (user report, 2026-10-14).
   useEffect(() => {
     if (profileLoaded && authLoaded && themeLoaded) SplashScreen.hideAsync();
   }, [profileLoaded, authLoaded, themeLoaded]);
+
+  // The server ended this phone's sign-in (signed out on another phone, the
+  // account deleted elsewhere), seen when a token renewal is refused. The app's
+  // own sign-outs go to the start themselves; this one would leave the person
+  // in the app signed out, every backup skipped. A workout in progress stays on
+  // the phone and comes back when the same account signs in again.
+  useEffect(() => {
+    if (endedElsewhere === 0) return;
+    if (router.canDismiss()) router.dismissAll();
+    router.replace("/onboarding");
+    Alert.alert("You've been signed out", "Sign in again to keep backing up your training.");
+  }, [endedElsewhere, router]);
+
+  // A backup owed from before the app closed (a workout logged with no
+  // signal) goes a moment after launch, once per launch. Offline it fails and
+  // stays owed for when the signal comes back (below).
+  const owedChecked = useRef(false);
+  useEffect(() => {
+    if (!authLoaded || !userId || owedChecked.current) return;
+    const id = setTimeout(() => {
+      owedChecked.current = true;
+      void pushOwedBackup();
+    }, OWED_BACKUP_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [authLoaded, userId]);
 
   // Repair accounts whose server-side account_type drifted from the one this
   // device uses (the Profile toggle was local-only before migration 0015). Until
@@ -139,13 +172,13 @@ function AppShell() {
     return () => { sub.remove(); if (beat) clearInterval(beat); };
   }, []);
 
-  // Back online: a backup that failed while the phone had no signal goes now,
-  // which is what the Workout page's offline banner promises a session logged
-  // then. Only on the change back, never at launch.
+  // Back online: a backup owed while the phone had no signal goes now, which
+  // is what the Workout page's offline banner promises a session logged then.
+  // Only on the change back; at launch it's the delayed check above.
   const offline = useOffline();
   const wasOffline = useRef(offline);
   useEffect(() => {
-    if (wasOffline.current && !offline) retryFailedCloudPush();
+    if (wasOffline.current && !offline) void pushOwedBackup();
     wasOffline.current = offline;
   }, [offline]);
 
@@ -175,6 +208,10 @@ function AppShell() {
                       (constants/floatingBars.ts). */}
                   <WorkoutActiveBar />
                   <RestTimerBanner />
+                  {/* A workout forgotten: asks to finish it, says when one
+                      was saved to the Journal unfinished, and reminds on the
+                      way out. Draws nothing. */}
+                  <UnfinishedWorkoutWatcher />
                 </View>
               </NavThemeProvider>
             </ForceUpdateGate>
@@ -200,7 +237,10 @@ export default function RootLayout() {
   // Then the catalogue's exercise renames, on every launch (programs and
   // favourites only; utils/exerciseRenameMigration.ts), and each accepted copy's
   // origin learnt from this phone's share links while they're here, so the
-  // next backup carries it (utils/trainerStore.ts linkAcceptedCopies).
+  // next backup carries it (utils/trainerStore.ts linkAcceptedCopies). Last, a
+  // workout left unfinished on a day that's over goes to the Journal with what
+  // was entered in it, so Home and the Journal open with it and the Workout
+  // tab and its clock start on the new day (utils/unfinishedSessionStore.ts).
   const [migrated, setMigrated] = useState(false);
   useEffect(() => {
     runWeightUnitMigrationIfNeeded()
@@ -208,6 +248,7 @@ export default function RootLayout() {
       .then(runHoldMigrationIfNeeded)
       .then(runExerciseRenames)
       .then(linkAcceptedCopies)
+      .then(() => fileStaleDraft())
       .finally(() => setMigrated(true));
   }, []);
 

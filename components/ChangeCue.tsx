@@ -3,7 +3,7 @@
 // swap's words, in the replaced orange the Journal's "Instead of Push" uses.
 //
 //   Workout tab, about the last session of the day:
-//     "Last week: done 1st" · "Last week: Pec Deck instead" · "Last week: skipped"
+//     "Last session: done 1st" · "Last session: Pec Deck instead" · "Last session: skipped"
 //   Journal, about that session:
 //     "Planned 2nd" · "Instead of Cable Fly" · "Added" · "Skipped"
 //
@@ -30,7 +30,7 @@ const GLYPH: Record<Kind, keyof typeof Ionicons.glyphMap> = {
 
 function CueLine({ kind, lead, fact, isDark, style }: {
   kind: Kind;
-  /** Plain words before the fact ("Last week: "). */
+  /** Plain words before the fact ("Last session: "). */
   lead?: string;
   fact: string;
   isDark: boolean;
@@ -49,11 +49,10 @@ function CueLine({ kind, lead, fact, isDark, style }: {
   );
 }
 
-/** The Workout tab's line about the last session of the day; `when` is
- *  "Last week" or "Last time" (utils/exerciseChanges.ts lastWhen). */
-export function LastTimeCueLine({ cue, when, isDark, style }: {
+/** The Workout tab's line about the last session of the day: always "Last
+ *  session", however long ago it was (user decision, 2026-10-14). */
+export function LastTimeCueLine({ cue, isDark, style }: {
   cue: LastTimeCue;
-  when: string;
   isDark: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
@@ -61,7 +60,7 @@ export function LastTimeCueLine({ cue, when, isDark, style }: {
     cue.kind === "moved" ? `done ${ordinal(cue.donePosition)}`
     : cue.kind === "swapped" ? `${cue.to} instead`
     : "skipped";
-  return <CueLine kind={cue.kind} lead={`${when}: `} fact={fact} isDark={isDark} style={style} />;
+  return <CueLine kind={cue.kind} lead="Last session: " fact={fact} isDark={isDark} style={style} />;
 }
 
 /** The Journal's line about what a session did with one of its exercises. */

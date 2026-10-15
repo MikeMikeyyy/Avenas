@@ -57,8 +57,8 @@ eq(normalizeExerciseName("Dumbbell Curl"), exerciseKey("Biceps Curl"), "normaliz
 ok(isFormerExerciseName("Barbell Row") && !isFormerExerciseName("Bent-Over Row"), "former names are recognised as such");
 eq(exerciseByName("Dumbbell Curl")?.name, "Biceps Curl", "the catalogue entry is found by a former name");
 eq(exerciseIdByName("Dumbbell Lateral Raise"), exerciseIdByName("Lateral Raise"), "...and so is its picture");
-eq(musclesForExercise("Dumbbell Lateral Raise", []), ["Shoulders"], "a former name keeps its muscle on the radar");
-eq(musclesForExercise("Cuban Press", []), ["Shoulders"], "a retired exercise still counts toward its muscle");
+eq(musclesForExercise({ name: "Dumbbell Lateral Raise" }, []), ["Shoulders"], "a former name keeps its muscle on the radar");
+eq(musclesForExercise({ name: "Cuban Press" }, []), ["Shoulders"], "a retired exercise still counts toward its muscle");
 ok(exerciseByName("Cuban Press")?.hidden === true, "a retired exercise is kept, hidden");
 
 // ─── history logged under the old name ───────────────────────────────────────

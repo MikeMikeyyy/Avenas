@@ -12,7 +12,8 @@
 
 import { EXERCISES } from "../constants/exerciseData";
 import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
-import { exerciseKey } from "./exerciseNames";
+import { exerciseKey, type ExerciseRef } from "./exerciseNames";
+import { customFor } from "./customExercises";
 
 // Canonical axis order for the Strength radar. The hexagon is flat-topped:
 // Chest sits top-left, then clockwise — Back (top-right), Legs (right),
@@ -36,24 +37,28 @@ const PRIMARY_BY_NAME = new Map<string, SelectableMuscle>(
 );
 
 /**
- * Muscle group(s) an exercise name trains.
+ * Muscle group(s) an exercise trains.
  *   - bundled exercise → `[primaryMuscle]`
- *   - custom exercise  → its `muscles` array (deduped, drops empties)
+ *   - custom exercise  → its `muscles` array (deduped, drops empties): the one
+ *     it IS (utils/customExercises.ts customFor), by its id when it has one, so
+ *     a deleted exercise's sessions keep its muscles and a new one later given
+ *     its name doesn't lend them its own
  *   - no match         → `[]` (uncategorized; excluded from the radar)
  *
  * Custom exercises win over bundled only when a name isn't in the catalogue;
  * bundled names are unique slugs so collisions are not expected. Callers pass
- * the loaded `CustomExercise[]` explicitly to keep this pure/testable.
+ * the loaded `CustomExercise[]` (deleted ones included) explicitly to keep this
+ * pure/testable.
  */
 export function musclesForExercise(
-  name: string,
+  ex: ExerciseRef,
   customExercises: CustomExercise[],
 ): SelectableMuscle[] {
-  const primary = PRIMARY_BY_NAME.get(exerciseKey(name));
-  if (primary) return [primary];
-  // A custom exercise is the user's own name: matched as typed, never renamed.
-  const key = name.trim().toLowerCase();
-  const custom = customExercises.find(c => c.name.trim().toLowerCase() === key);
+  if (!ex.customId) {
+    const primary = PRIMARY_BY_NAME.get(exerciseKey(ex.name));
+    if (primary) return [primary];
+  }
+  const custom = customFor(ex, customExercises);
   if (custom && custom.muscles.length > 0) {
     return Array.from(new Set(custom.muscles));
   }

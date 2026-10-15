@@ -7,8 +7,17 @@ export const WORKOUT_DATES_KEY = "@avenas/workout_dates";
 export const WORKOUT_HISTORY_KEY = "@avenas/workout_history";
 export const WORKOUT_DAY_OVERRIDE_KEY = "@avenas/today_workout_override";
 export const WORKOUT_DRAFT_KEY = "@avenas/workout_draft";
+// The workout clock (contexts/WorkoutTimerContext.tsx): its effective start
+// while running, the time it had run while paused.
+export const WORKOUT_TIMER_START_KEY = "@avenas/workout_timer_start";
+export const WORKOUT_TIMER_PAUSED_KEY = "@avenas/workout_timer_paused_ms";
+// A workout filed unfinished because its day was over, waiting to be
+// announced once (utils/unfinishedSession.ts UnfinishedNotice).
+export const UNFINISHED_NOTICE_KEY = "@avenas/unfinished_notice";
 export const WORKOUT_VIEW_MODE_KEY = "@avenas/workout_view_mode"; // "focus" | "list"
 export const LOG_DRAFT_KEY_PREFIX = "@avenas/log_draft:";
+// The program builder's create/edit-in-progress state (app/new-program.tsx).
+export const NEW_PROGRAM_DRAFT_KEY = "@avenas/new_program_draft";
 export const logDraftKey = (date: string, workoutName: string) =>
   `${LOG_DRAFT_KEY_PREFIX}${date}:${workoutName}`;
 // One-shot flag: has the user seen the "tap a day to switch Training/Rest"
@@ -39,6 +48,11 @@ export type CompletedSet = {
 
 export type CompletedExercise = {
   name: string;
+  /** The custom exercise this was (CustomExercise.id), so its history never
+   *  joins a later exercise given the same name. Absent for a catalogue
+   *  exercise, a custom one made before ids, and every session from before
+   *  them: those are known by name. Rides in the exercises jsonb. */
+  customId?: string;
   sets: CompletedSet[];
   notes: string;
   /**
@@ -51,6 +65,9 @@ export type CompletedExercise = {
    * WEIGHTS stay by name, since another lift's numbers would be wrong.
    */
   swappedFrom?: string;
+  /** `customId` of the exercise in `swappedFrom`, when that was a custom one
+   *  with an id: which one of that name it replaced. */
+  swappedFromId?: string;
   /**
    * The program exercise this was logged against: that exercise's `id` in the
    * day's WorkoutMap. Kept through a swap (the place is the same, the exercise
@@ -118,8 +135,9 @@ export type CompletedWorkout = {
   plan?: PlannedExercise[];
 };
 
-/** One exercise of a session's plan (CompletedWorkout.plan). */
-export type PlannedExercise = { id: string; name: string };
+/** One exercise of a session's plan (CompletedWorkout.plan). `customId` as on
+ *  the program exercise it was. */
+export type PlannedExercise = { id: string; name: string; customId?: string };
 
 export type ProgramSet = {
   type: "warmup" | "working";
@@ -141,6 +159,12 @@ export type ProgramSet = {
 export type Exercise = {
   id: string;
   name: string;
+  /** A custom exercise's own id (CustomExercise.id): which one of that name it
+   *  is, so a deleted exercise and a new one with its name stay apart. Absent
+   *  for a catalogue exercise and for a custom one made before ids, which are
+   *  known by name (utils/exerciseNames.ts exerciseIdentity). Rides in the
+   *  workouts jsonb, so it syncs with no column. */
+  customId?: string;
   sets: ProgramSet[];
   isIsometric?: boolean;
   restSeconds?: number;
@@ -256,6 +280,36 @@ export function programFinishDate(program: SavedProgram): Date | null {
  *  "Today", 0 for "Carry on"). */
 export type ProgramHold = { from: string; to: string; shift: number; offsetShift: number };
 
+/**
+ * One earlier run of a program the user has since started again. Making a
+ * program active starts it over under the same program (utils/programLifecycle.ts
+ * activateProgram), which re-dates its own fields, so the run before is kept
+ * here as it ended: enough of its timeline to read its days exactly as they
+ * were lived (utils/programRuns.ts programAsRun), which is what lets the
+ * Progress page compare this run with the last. Its sessions are this
+ * program's sessions dated from its first day to `endDate`.
+ */
+export type ProgramRun = {
+  /** As the run left them. */
+  startDate: string;
+  cycleOffset?: number;
+  holds?: ProgramHold[];
+  skippedDates?: string[];
+  pushedDates?: string[];
+  pulledDates?: string[];
+  totalWeeks: number;
+  cycleDays: number;
+  cyclePattern: string[];
+  dayIds?: string[];
+  /** The week it reached. */
+  currentWeek: number;
+  /** "completed": it was finished. "paused": it was shelved part way. */
+  status: "completed" | "paused";
+  /** "YYYY-MM-DD" its last day: the day it was finished, or for a shelved run
+   *  the day before the program was started again. */
+  endDate: string;
+};
+
 export type SavedProgram = {
   id: string;
   name: string;
@@ -311,6 +365,14 @@ export type SavedProgram = {
    * 0044).
    */
   shareOrigin?: string;
+  /**
+   * The runs before this one, oldest first: added each time a finished or
+   * shelved program is made active again (ProgramRun). The program's own fields
+   * are always its latest run. The user's own history, so never sent on: a
+   * snapshot leaving the phone drops it, a copy accepted from someone starts
+   * without, and so does a duplicate. Synced (migration 0047).
+   */
+  runs?: ProgramRun[];
   trainingDays: number;
   cycleDays: number;
   cyclePattern: string[];

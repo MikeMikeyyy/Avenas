@@ -8,6 +8,12 @@
 // readable by anon and writable by nobody — change it in the dashboard.
 
 import { supabase } from "./supabase";
+import { getJSON, removeKey, setJSON } from "../utils/storage";
+
+/** The last minimum the server gave, so the gate decides at launch from the
+ *  phone. A gate that waited on the server kept a phone with no signal out of
+ *  the app (user report, 2026-10-14). Not account data: kept across sign-ins. */
+export const MIN_IOS_VERSION_KEY = "@avenas/min_ios_version";
 
 /** Avenas' App Store "Apple ID" (App Store Connect → App Information). The
  *  itms-apps scheme opens the App Store app straight on the product page rather
@@ -38,14 +44,13 @@ export function appStoreReviewWebUrl(): string {
 }
 
 /**
- * The lowest version allowed to run, or null when it can't be determined.
- *
- * null on ANY failure — offline, signed out, table missing, migration not yet
- * applied. The gate treats null as "don't block": an app that bricks itself
- * because the network was down would be far worse than one stale install
- * slipping through.
+ * The lowest version allowed to run, null when none is set, or undefined when
+ * the server couldn't be read: offline, table missing, migration not yet
+ * applied. The gate keeps the minimum it last saved on undefined, and treats
+ * null as "don't block": an app that bricks itself because the network was
+ * down would be far worse than one stale install slipping through.
  */
-export async function fetchMinIosVersion(): Promise<string | null> {
+export async function fetchMinIosVersion(): Promise<string | null | undefined> {
   try {
     const { data, error } = await supabase
       .from("app_config")
@@ -54,11 +59,22 @@ export async function fetchMinIosVersion(): Promise<string | null> {
       .maybeSingle();
     if (error) {
       if (__DEV__) console.warn("[avenas] fetchMinIosVersion", error.message);
-      return null;
+      return undefined;
     }
     return (data?.min_ios_version as string | null) ?? null;
   } catch (err) {
     if (__DEV__) console.warn("[avenas] fetchMinIosVersion", err);
-    return null;
+    return undefined;
   }
+}
+
+/** The minimum the server last gave (MIN_IOS_VERSION_KEY), or null. */
+export function loadSavedMinIosVersion(): Promise<string | null> {
+  return getJSON<string | null>(MIN_IOS_VERSION_KEY, null);
+}
+
+/** Saves the server's answer for the next launch; null forgets it. */
+export async function saveMinIosVersion(min: string | null): Promise<void> {
+  if (min) await setJSON(MIN_IOS_VERSION_KEY, min);
+  else await removeKey(MIN_IOS_VERSION_KEY);
 }

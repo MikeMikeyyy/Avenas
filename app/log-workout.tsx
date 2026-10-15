@@ -34,6 +34,7 @@ import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { MONTH_FULL } from "../utils/dates";
 import { programsAfterPastLog } from "../utils/programLifecycle";
 import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type PrevExerciseKey } from "../utils/workout";
+import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
 import { useUnit } from "../contexts/UnitContext";
@@ -58,12 +59,15 @@ type WorkingSet = { type: "warmup" | "working"; weight: string; reps: string; do
 type LogExercise = {
   id: string;
   name: string;
+  /** Which custom exercise it is (CompletedExercise.customId). */
+  customId?: string;
   sets: WorkingSet[];
   notes: string;
   programNotes?: string;
   isIsometric?: boolean;
   /** What this was swapped in for; saved as CompletedExercise.swappedFrom. */
   swappedFrom?: string;
+  swappedFromId?: string;
   /** Which program exercise this is: its id in the day's template. `id` above
    *  is this screen's own row id, freshly made, so the program's is kept here.
    *  Absent for one added here. Saved as CompletedExercise.programExerciseId. */
@@ -1023,6 +1027,7 @@ export default function LogWorkoutScreen() {
         return {
           id: makeId(),
           name: ex.name,
+          ...(ex.customId ? { customId: ex.customId } : {}),
           sets: sets.map(ps => ({ type: ps.type, weight: "", reps: "", done: false, programSet: ps })),
           notes: "",
           programNotes: ex.programNotes,
@@ -1168,8 +1173,8 @@ export default function LogWorkoutScreen() {
     setExercises(prev => prev.filter(ex => ex.id !== exId));
   }, []);
 
-  const addExercise = useCallback((name: string) => {
-    setExercises(prev => [...prev, { id: makeId(), name, sets: [defaultSet("working")], notes: "" }]);
+  const addExercise = useCallback((name: string, customId?: string) => {
+    setExercises(prev => [...prev, { id: makeId(), name, ...(customId ? { customId } : {}), sets: [defaultSet("working")], notes: "" }]);
   }, []);
 
   // As on the Workout screen: the numbers and the note were written about the
@@ -1179,14 +1184,15 @@ export default function LogWorkoutScreen() {
   // what it replaced, so the note written on the new one becomes the original's
   // "Previous:" hint (buildPrevNoteLookup). programExerciseId stays: same
   // place in the program, different exercise in it.
-  const changeExercise = useCallback((exId: string, newName: string) => {
+  const changeExercise = useCallback((exId: string, newName: string, customId?: string) => {
     setExercises(prev => prev.map(ex => ex.id === exId
       ? {
           ...ex,
           name: newName,
+          customId,
           sets: ex.sets.map(s => ({ type: s.type, weight: "", reps: "", done: false, programSet: s.programSet })),
           notes: "",
-          swappedFrom: swapOrigin(ex, newName),
+          ...swapOrigin(ex, { name: newName, customId }),
         }
       : ex));
   }, []);
@@ -1199,12 +1205,10 @@ export default function LogWorkoutScreen() {
     setExercises(prev => prev.map(ex => ex.id === exId ? { ...ex, notes: exNotes } : ex));
   }, []);
 
+  // Deleted everywhere it's used, its logged sessions kept
+  // (utils/customExerciseStore.ts).
   const deleteCustomExercise = useCallback((name: string) => {
-    setCustomExercises(prev => {
-      const next = prev.filter(e => e.name !== name);
-      AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next)).catch(() => {});
-      return next;
-    });
+    deleteCustomEverywhere(name).then(setCustomExercises).catch(() => {});
   }, []);
 
   // ── Save ──
@@ -1262,10 +1266,13 @@ export default function LogWorkoutScreen() {
       sessionNotes: notes.trim() || undefined,
       exercises: exercises.map(ex => ({
         name: ex.name,
+        // Which custom exercise it was (utils/exerciseNames.ts exerciseIdentity).
+        ...(ex.customId ? { customId: ex.customId } : {}),
         // Inputs are in the user's display unit → store canonical kg.
         sets: ex.sets.map(s => ({ type: s.type, weight: parseWeightToKg(s.weight, isKg), reps: s.reps, done: s.done })),
         notes: ex.notes,
         ...(ex.swappedFrom ? { swappedFrom: ex.swappedFrom } : {}),
+        ...(ex.swappedFrom && ex.swappedFromId ? { swappedFromId: ex.swappedFromId } : {}),
         ...(ex.programExerciseId ? { programExerciseId: ex.programExerciseId } : {}),
         // The Hold switch (CompletedExercise.isIsometric).
         ...(ex.isIsometric ? { isIsometric: true as const } : {}),
@@ -1558,7 +1565,7 @@ export default function LogWorkoutScreen() {
         visible={addExVisible}
         subtitle={workoutName ?? "WORKOUT"}
         customExercises={customExercises}
-        onSelectMultiple={names => { names.forEach(addExercise); setAddExVisible(false); }}
+        onSelectMultiple={(names, _sets, customIds) => { names.forEach((n, i) => addExercise(n, customIds[i])); setAddExVisible(false); }}
         onDeleteCustom={deleteCustomExercise}
         onEditCustom={() => {}}
         onCreateCustom={() => {}}
@@ -1572,8 +1579,8 @@ export default function LogWorkoutScreen() {
         subtitle="CHANGE EXERCISE"
         changing={exercises.find(ex => ex.id === changingExId)?.name ?? ""}
         customExercises={customExercises}
-        onSelectMultiple={names => {
-          if (names.length > 0 && changingExId) changeExercise(changingExId, names[0]);
+        onSelectMultiple={(names, _sets, customIds) => {
+          if (names.length > 0 && changingExId) changeExercise(changingExId, names[0], customIds[0]);
           setChangingExId(null);
         }}
         onDeleteCustom={deleteCustomExercise}

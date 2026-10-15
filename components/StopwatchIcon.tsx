@@ -1,5 +1,5 @@
-// The stopwatch on the Workout tab's top-right button, which opens the interval
-// timer / stopwatch (components/IntervalTimerModal.tsx). Replaces Ionicons'
+// The stopwatch on the Workout tab's top-right button, which opens the timer
+// (components/WorkoutTimerScreen.tsx), and in its dial. Replaces Ionicons'
 // timer-outline there: a round-capped stopwatch with a crown on top, a side
 // button at two o'clock, and hands at four.
 //

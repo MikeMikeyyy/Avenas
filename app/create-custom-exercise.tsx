@@ -27,7 +27,8 @@ import {
   CUSTOM_KEY, MAX_CUSTOM, MAX_MEDIA_BYTES, MAX_VIDEO_SECONDS, MUSCLE_GROUPS,
   type SelectableMuscle, type CustomExercise,
 } from "../constants/exercises";
-import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
+import { customNameTaken, liveCustoms, liveIndexOf, newCustomId } from "../utils/customExercises";
+import { renameCustomExercise } from "../utils/customExerciseStore";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import { useTheme } from "../contexts/ThemeContext";
@@ -94,11 +95,13 @@ export default function CreateCustomExerciseScreen() {
   const [saving, setSaving] = useState(false);
   const [slotCount, setSlotCount] = useState(0);
 
+  // Slots are taken by your live exercises: a deleted one stays in the list,
+  // hidden, for the sessions logged with it (utils/customExercises.ts).
   useEffect(() => {
     AsyncStorage.getItem(CUSTOM_KEY).then(v => {
       if (!v) return;
       const parsed: unknown = JSON.parse(v);
-      if (Array.isArray(parsed)) setSlotCount(parsed.length);
+      if (Array.isArray(parsed)) setSlotCount(liveCustoms(parsed as CustomExercise[]).length);
     }).catch(() => {});
   }, []);
 
@@ -109,7 +112,8 @@ export default function CreateCustomExerciseScreen() {
       if (!v) return;
       const parsed: unknown = JSON.parse(v);
       if (!Array.isArray(parsed)) return;
-      const ex = (parsed as CustomExercise[]).find(e => e.name === editName);
+      const list = parsed as CustomExercise[];
+      const ex = list[liveIndexOf(list, editName)];
       if (!ex) return;
       setExerciseName(ex.name);
       setSelectedMuscles(ex.muscles);
@@ -218,37 +222,35 @@ export default function CreateCustomExerciseScreen() {
     try {
       const raw = await AsyncStorage.getItem(CUSTOM_KEY);
       const current: CustomExercise[] = raw ? JSON.parse(raw) : [];
+      const idx = isEditMode ? liveIndexOf(current, editName) : -1;
+      if (isEditMode && idx === -1) { Alert.alert("Error", "Original exercise not found."); setSaving(false); return; }
+      // Two of your exercises can't share a name. A deleted one's name is free,
+      // and the new exercise is a new one: none of the old one's history.
+      if (customNameTaken(name, current, idx)) {
+        Alert.alert("That name is taken", `You already have an exercise called "${name}". Give this one a different name.`);
+        setSaving(false);
+        return;
+      }
+      const before = idx >= 0 ? current[idx] : null;
+      // An edit keeps the exercise's id (one made before ids stays without, as
+      // its history is by name); a new exercise gets its own.
+      const id = before ? before.id : newCustomId();
       const cleanSteps = steps.map(s => s.trim()).filter(Boolean);
       const updated: CustomExercise = {
+        ...(id ? { id } : {}),
         name,
         muscles: selectedMuscles,
         ...(imageUri ? { imageUri } : {}),
         ...(videoUri ? { videoUri, ...(muted ? { muted: true } : {}) } : {}),
         ...(cleanSteps.length > 0 ? { steps: cleanSteps } : {}),
       };
-      if (isEditMode) {
-        const idx = current.findIndex(e => e.name === editName);
-        if (idx === -1) { Alert.alert("Error", "Original exercise not found."); setSaving(false); return; }
+      if (before) {
         current[idx] = updated;
         await AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(current));
-        // Cascade rename through saved programs if name changed
-        if (name !== editName) {
-          const progRaw = await AsyncStorage.getItem(PROGRAMS_KEY);
-          if (progRaw) {
-            const programs: SavedProgram[] = JSON.parse(progRaw);
-            let changed = false;
-            for (const prog of programs) {
-              for (const key of Object.keys(prog.workouts)) {
-                for (const ex of prog.workouts[key]) {
-                  if (ex.name === editName) { ex.name = name; changed = true; }
-                }
-              }
-            }
-            if (changed) await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(programs));
-          }
-        }
+        // A rename reaches every program, the builder's draft and the star.
+        if (name !== before.name) await renameCustomExercise(before, name);
       } else {
-        if (current.length >= MAX_CUSTOM) {
+        if (liveCustoms(current).length >= MAX_CUSTOM) {
           Alert.alert("Limit reached", `You have used all ${MAX_CUSTOM} custom exercise slots.`);
           setSaving(false);
           return;

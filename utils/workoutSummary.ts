@@ -7,7 +7,7 @@
 
 import type { CompletedWorkout } from "../constants/programs";
 import { collectExerciseHistory, computePRs } from "./progressStats";
-import { normalizeExerciseName } from "./workout";
+import { exerciseIdentity } from "./exerciseNames";
 
 export type SessionRecordKind = "heaviest" | "oneRepMax" | "bestSetVolume";
 
@@ -49,16 +49,18 @@ export function computeSessionRecords(
   const seen = new Set<string>();
 
   for (const ex of completed.exercises) {
-    const norm = normalizeExerciseName(ex.name);
+    // By identity: a new custom exercise given a deleted one's name has no
+    // records yet, so its first session is a first, not a PR against the old.
+    const norm = ex.name ? exerciseIdentity(ex) : "";
     if (!norm || seen.has(norm)) continue;
     seen.add(norm);
 
-    const session = computePRs(collectExerciseHistory([completed], ex.name), [completed], ex.name);
+    const session = computePRs(collectExerciseHistory([completed], ex), [completed], ex);
     // No weighted completed working sets this session (e.g. all bodyweight /
     // nothing ticked) → nothing measurable to compare.
     if (!session.heaviest) continue;
 
-    const prior = computePRs(collectExerciseHistory(priorHistory, ex.name), priorHistory, ex.name);
+    const prior = computePRs(collectExerciseHistory(priorHistory, ex), priorHistory, ex);
     if (!prior.heaviest) {
       records.push({ exerciseName: ex.name, kind: "heaviest", valueKg: session.heaviest.value, prevKg: null });
       continue;

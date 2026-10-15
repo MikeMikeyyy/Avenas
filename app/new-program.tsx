@@ -27,7 +27,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE } from "../constants/theme";
 import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
-import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
+import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, NEW_PROGRAM_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
 import { activateProgram, type FinishedProgram } from "../utils/programLifecycle";
 import { marksAfterEdit } from "../utils/skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -50,16 +50,18 @@ import { fetchPeopleUnits } from "../lib/clientTraining";
 import { formatStoredDate } from "../utils/dates";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { musclesForExercise } from "../utils/muscleGroups";
-import { carriedIn, exerciseSummaryParams, knownCustomExercises, stampCustomDetails } from "../utils/customExerciseDetails";
+import { carriedIn, customIdentity, exerciseSummaryParams, knownCustomExercises, stampCustomDetails } from "../utils/customExerciseDetails";
 import { loadCarriedExercises } from "../lib/exerciseMedia";
 import { canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, reorderCycleSlots, trainingDayKeys } from "../utils/programDays";
 import { alertMessage } from "../utils/errors";
-import { normalizeExerciseName } from "../utils/workout";
+import { exerciseIdentity, sameExercise } from "../utils/exerciseNames";
+import { liveIndexOf, withCurrentCustomNames, withoutCustomExercise } from "../utils/customExercises";
+import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DRAFT_KEY = "@avenas/new_program_draft";
+const DRAFT_KEY = NEW_PROGRAM_DRAFT_KEY;
 
 // Stable empty list, so a closed sheet doesn't hand its list a fresh array
 // identity on every render (which would rebuild its drag PanResponders).
@@ -196,7 +198,7 @@ interface ExerciseRowProps {
   onEditExercise: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   /** Lowercased exercise name → custom photo URI, for custom exercises. */
-  customImageByName: Record<string, string>;
+  customImageById: Record<string, string>;
 }
 
 /**
@@ -255,7 +257,7 @@ function WeightSetInput({
 // exercise's row, not every row in the day. All function props are stable, and
 // updateExerciseSets preserves the identity of untouched Exercise objects, so
 // the shallow compare bails for every row except the one being edited.
-const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExercises, isDark, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onStartCollapse, onOpenReorder, onEditExercise, onInputFocus, customImageByName }: ExerciseRowProps) {
+const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExercises, isDark, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onStartCollapse, onOpenReorder, onEditExercise, onInputFocus, customImageById }: ExerciseRowProps) {
   const router = useRouter();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
@@ -448,7 +450,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
         >
           <ExerciseImage
             exerciseId={exerciseIdByName(exercise.name) ?? ""}
-            overrideUri={customImageByName[exercise.name.trim().toLowerCase()]}
+            overrideUri={customImageById[exerciseIdentity(exercise)]}
             variant="thumb"
             size={52}
             radius={12}
@@ -1541,7 +1543,7 @@ function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercis
         const exs = isTraining ? (workouts[`${i}:${label}`] ?? []) : [];
         const setCount = exs.reduce((n, e) => n + normaliseSets(e).length, 0);
         const muscles = isTraining
-          ? Array.from(new Set(exs.flatMap(e => musclesForExercise(e.name, customExercises))))
+          ? Array.from(new Set(exs.flatMap(e => musclesForExercise(e, customExercises))))
           : [];
         const isActive = activeIdx === i;
         return (
@@ -1806,7 +1808,7 @@ interface DayCardProps {
   exercises: Exercise[];
   isDark: boolean;
   collapsingIds: Set<string>;
-  customImageByName: Record<string, string>;
+  customImageById: Record<string, string>;
   onOpenPicker: (day: string) => void;
   onEditExercise: (day: string, id: string) => void;
   onUpdateExercise: (day: string, id: string, field: keyof Exercise, value: string | number | boolean) => void;
@@ -1824,7 +1826,7 @@ interface DayCardProps {
 // referentially stable by the parent (callbacks via useCallback), so untouched
 // days bail out.
 const DayCard = memo(function DayCard({
-  day, exercises, isDark, collapsingIds, customImageByName,
+  day, exercises, isDark, collapsingIds, customImageById,
   onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll,
   onRemoveExercise, onStartCollapse,
   onInputFocus, onOpenReorder, onMeasureDay,
@@ -1885,7 +1887,7 @@ const DayCard = memo(function DayCard({
                   onOpenReorder={onOpenReorder}
                   onEditExercise={onEditExercise}
                   onInputFocus={onInputFocus}
-                  customImageByName={customImageByName}
+                  customImageById={customImageById}
                 />
               </NeuCard>
             );
@@ -1913,7 +1915,7 @@ const DayCard = memo(function DayCard({
 });
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, isDark, collapsingIds, onStartCollapse, onInputFocus, customImageByName, onMeasureDay, onOpenReorder,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, isDark, collapsingIds, onStartCollapse, onInputFocus, customImageById, onMeasureDay, onOpenReorder,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1926,7 +1928,7 @@ function Step2({
   collapsingIds: Set<string>;
   onStartCollapse: (day: string, id: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
-  customImageByName: Record<string, string>;
+  customImageById: Record<string, string>;
   onMeasureDay: (day: string, y: number) => void;
   /** Opens the Reorder sheet, which the SCREEN owns — every modal on this
       screen is mounted from one place so two can never be presented at once. */
@@ -1943,7 +1945,7 @@ function Step2({
           exercises={workouts[day] ?? []}
           isDark={isDark}
           collapsingIds={collapsingIds}
-          customImageByName={customImageByName}
+          customImageById={customImageById}
           onOpenPicker={onOpenPicker}
           onEditExercise={onEditExercise}
           onUpdateExercise={onUpdateExercise}
@@ -2053,7 +2055,7 @@ export default function NewProgramScreen() {
   // And the ones THIS program carries, which matters when it isn't in your list
   // (a client's program you're reviewing). Keyed by content: `workouts` changes
   // on every keystroke, what it carries almost never, and a new identity here
-  // would re-render every exercise row through customImageByName.
+  // would re-render every exercise row through customImageById.
   const carriedHereKey = useMemo(() => JSON.stringify(carriedIn(workouts)), [workouts]);
   const carriedHere = useMemo(() => JSON.parse(carriedHereKey) as CarriedExercise[], [carriedHereKey]);
   // Every custom exercise a name here can mean: yours first, then this
@@ -2063,12 +2065,15 @@ export default function NewProgramScreen() {
     () => knownCustomExercises(customExercises, carriedHere, programCarried),
     [customExercises, carriedHere, programCarried],
   );
-  // Lowercased name → custom photo URI, so the builder's exercise rows can show
-  // the photo (custom exercises aren't in the bundled image maps).
-  const customImageByName = useMemo(() => {
+  // Exercise identity → custom photo URI, so the builder's exercise rows can
+  // show the photo (custom exercises aren't in the bundled image maps). By
+  // identity, the first (yours) winning, so a trainer's exercise of the same
+  // name never lends a row its photo.
+  const customImageById = useMemo(() => {
     const map: Record<string, string> = {};
     for (const c of knownCustoms) {
-      if (c.imageUri) map[c.name.trim().toLowerCase()] = c.imageUri;
+      const k = customIdentity(c);
+      if (c.imageUri && !(k in map)) map[k] = c.imageUri;
     }
     return map;
   }, [knownCustoms]);
@@ -2212,7 +2217,19 @@ export default function NewProgramScreen() {
       if (!v) return;
       const parsed: unknown = JSON.parse(v);
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] !== "string") {
-        setCustomExercises(parsed as CustomExercise[]);
+        const list = parsed as CustomExercise[];
+        setCustomExercises(list);
+        // A rename made from the picker reaches the days held here too, or the
+        // next save would put the old name back. In your own program the
+        // rename has already reached the saved copy, so the edit's baseline
+        // takes it as well: it isn't an unsaved change.
+        setWorkouts(prev => withCurrentCustomNames(prev, list));
+        if (isEditMode && originalEdit.current) {
+          originalEdit.current = {
+            ...originalEdit.current,
+            workouts: withCurrentCustomNames(originalEdit.current.workouts, list),
+          };
+        }
       }
     }).catch((e) => warnStorage("getItem", CUSTOM_KEY, e));
     loadCarriedExercises()
@@ -2223,7 +2240,7 @@ export default function NewProgramScreen() {
       setPickerState(pendingPicker.current);
       pendingPicker.current = null;
     }
-  }, []));
+  }, [isEditMode]));
 
   // Load custom exercises and draft on mount
   useEffect(() => {
@@ -2560,7 +2577,7 @@ export default function NewProgramScreen() {
     setStep(2);
   }, [cyclePattern, isTrainingDay]);
 
-  const addExercise = useCallback((day: string, exName: string, setCount = 1) => {
+  const addExercise = useCallback((day: string, exName: string, setCount = 1, customId?: string) => {
     setWorkouts(prev => {
       // A stale day key must not conjure a phantom day into the map (it would
       // render as a bogus day card and get saved with the program).
@@ -2592,6 +2609,8 @@ export default function NewProgramScreen() {
         [day]: [...(prev[day] ?? []), {
           id: makeExerciseId(),
           name: exName,
+          // Which custom exercise it is (utils/exerciseNames.ts exerciseIdentity).
+          ...(customId ? { customId } : {}),
           sets,
           ...(inheritedRest !== undefined ? { restSeconds: inheritedRest } : {}),
         }],
@@ -2618,19 +2637,20 @@ export default function NewProgramScreen() {
   // custom exercise's carried details belong to the old name and go with it
   // (the save's stamp would drop them too; this keeps the card right until then).
   // Like removeExercise, a stale day key falls back to the day holding the id.
-  const swapExercise = useCallback((day: string, id: string, name: string) => {
+  const swapExercise = useCallback((day: string, id: string, name: string, customId?: string) => {
     setWorkouts(prev => {
       const owner = prev[day]?.some(e => e.id === id)
         ? day
         : Object.keys(prev).find(k => prev[k]?.some(e => e.id === id));
       if (!owner) return prev;
+      const next = { name, customId };
       return {
         ...prev,
         [owner]: prev[owner].map(e => {
-          if (e.id !== id || e.name === name) return e;
-          const { customDetails, ...rest } = e;
-          const keepsDetails = customDetails && normalizeExerciseName(customDetails.name) === normalizeExerciseName(name);
-          return { ...rest, name, ...(keepsDetails ? { customDetails } : {}) };
+          if (e.id !== id || sameExercise(e, next)) return e;
+          const { customDetails, customId: _was, ...rest } = e;
+          const keepsDetails = customDetails && customIdentity(customDetails) === exerciseIdentity(next);
+          return { ...rest, name, ...(customId ? { customId } : {}), ...(keepsDetails ? { customDetails } : {}) };
         }),
       };
     });
@@ -2751,20 +2771,16 @@ export default function NewProgramScreen() {
     setWorkouts(next.workouts);
   }, [cyclePattern, isTrainingDay, dayIds, workouts]);
 
+  // Deleted everywhere it's used, its logged sessions kept
+  // (utils/customExerciseStore.ts): out of every saved program, and out of the
+  // one being built here.
   const deleteCustomExercise = useCallback((exName: string) => {
-    const next = customExercises.filter(e => e.name !== exName);
-    setCustomExercises(next);
-    AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next))
-      .then(() => scheduleCloudPush())
-      .catch((e) => warnStorage("setItem", CUSTOM_KEY, e));
-    // Also remove this exercise from every day in the current program
-    setWorkouts(prev => {
-      const updated: WorkoutMap = {};
-      for (const day of Object.keys(prev)) {
-        updated[day] = prev[day].filter(e => e.name !== exName);
-      }
-      return updated;
-    });
+    const i = liveIndexOf(customExercises, exName);
+    const target = i >= 0 ? customExercises[i] : null;
+    if (target) setWorkouts(prev => withoutCustomExercise(prev, target));
+    deleteCustomEverywhere(exName)
+      .then(setCustomExercises)
+      .catch((e) => warnStorage("deleteCustomExercise", CUSTOM_KEY, e));
   }, [customExercises]);
 
   const handleFinish = useCallback(() => {
@@ -3243,7 +3259,7 @@ export default function NewProgramScreen() {
             collapsingIds={collapsingIds}
             onStartCollapse={startCollapse}
             onInputFocus={handleInputFocus}
-            customImageByName={customImageByName}
+            customImageById={customImageById}
             onMeasureDay={onMeasureDay}
             onOpenReorder={openReorderForDay}
           />
@@ -3391,11 +3407,11 @@ export default function NewProgramScreen() {
           customExercises={customExercises}
           withSetCount={!pickerState.replaceId}
           changing={pickerState.replaceId ? exerciseNameById(pickerState.replaceId) : undefined}
-          onSelectMultiple={(exNames, setCount) => {
+          onSelectMultiple={(exNames, setCount, customIds) => {
             if (pickerState.replaceId) {
-              swapExercise(pickerState.day, pickerState.replaceId, exNames[0]);
+              swapExercise(pickerState.day, pickerState.replaceId, exNames[0], customIds[0]);
             } else {
-              exNames.forEach((name) => addExercise(pickerState.day, name, setCount));
+              exNames.forEach((name, i) => addExercise(pickerState.day, name, setCount, customIds[i]));
             }
             setPickerState(null);
           }}

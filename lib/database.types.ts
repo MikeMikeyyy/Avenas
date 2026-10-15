@@ -196,6 +196,9 @@ export type ProgramRow = {
   /** The holds this run came back from (migration 0043), oldest first; null
    *  for none, and on a row written before the column. See SavedProgram.holds. */
   holds: { from: string; to: string; shift: number; offsetShift: number }[] | null;
+  /** The program's earlier runs (migration 0047), oldest first; null for none,
+   *  and on a row written before the column. See SavedProgram.runs. */
+  runs: unknown[] | null;
   workouts: Record<string, unknown>;  // WorkoutMap — Exercise[] per "idx:Name" key
   extra_workouts: string[];
   created_at: string;
@@ -240,6 +243,9 @@ export type JournalRow = {
 export type CustomExerciseRow = {
   id: string;
   user_id: string;
+  /** The exercise's own id (migration 0048), which program days and sessions
+   *  record as customId. Null for one made before ids, known by its name. */
+  local_id: string | null;
   name: string;
   muscles: string[];
   image_uri: string | null;
@@ -247,6 +253,9 @@ export type CustomExerciseRow = {
   description: string | null;
   steps: string[] | null;
   muted: boolean;
+  /** "YYYY-MM-DD" it was deleted (migration 0048): kept, hidden, for the
+   *  sessions logged with it. Null while it's live. See CustomExercise.deletedAt. */
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 };

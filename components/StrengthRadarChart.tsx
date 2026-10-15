@@ -6,7 +6,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import NeuCard from "./NeuCard";
 import DropdownPicker from "./DropdownPicker";
 import DumbbellIcon from "./DumbbellIcon";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, accentTextColor, compareBlue, compareBlueText } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { RADAR_GROUPS } from "../utils/muscleGroups";
 import { toDisplayWeight } from "../utils/units";
@@ -43,6 +43,18 @@ interface Props {
   previousLegend: string;
   metric: StrengthMetricKey;
   onMetricChange: (m: StrengthMetricKey) => void;
+  /**
+   * Comparing two programs (utils/programCompare.ts): `stats` is green's and
+   * this is blue's, both per program week, so `windowDays` is 7. Blue's shape
+   * is drawn in periwinkle where the grey earlier-window one goes (the earlier
+   * window isn't drawn while comparing: user decision, 2026-10-14), each label
+   * carries both numbers, and the legend names the two programs.
+   */
+  compare?: {
+    stats: Record<SelectableMuscle, MuscleGroupStat>;
+    greenName: string;
+    blueName: string;
+  };
 }
 
 // Leading icon per metric: a heavy weight for Total Volume, a rotating icon
@@ -192,9 +204,11 @@ export default function StrengthRadarChart({
   previousLegend,
   metric,
   onMetricChange,
+  compare,
 }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const blueMark = compareBlue(isDark);
   const { width: screenWidth } = useWindowDimensions();
 
   // Chart width = the card's inner content width (card = screen − 40 margins;
@@ -233,7 +247,7 @@ export default function StrengthRadarChart({
   // open on six ▼s. (Sets are counted for every completed working set,
   // weighted or not, so sets === 0 means the window truly holds no training.)
   const hasTrendBaseline =
-    prevStats != null && prevTotals != null && prevTotals.sets > 0 && totals.sets > 0;
+    !compare && prevStats != null && prevTotals != null && prevTotals.sets > 0 && totals.sets > 0;
 
   // Per-group raw value (drives the polygon vertex) + display string + trend.
   const points = useMemo(() => {
@@ -255,11 +269,19 @@ export default function StrengthRadarChart({
       }
       const prevRaw = prevStats ? metricRaw(prevStats[g], metric) : 0;
       const trend: Trend = hasTrendBaseline ? trendFor(raw, prevRaw) : null;
-      return { group: g, angle: axisAngle(i), raw, prevRaw, display, trend };
+      const cmpRaw = compare ? metricRaw(compare.stats[g], metric) : 0;
+      return { group: g, angle: axisAngle(i), raw, prevRaw, cmpRaw, display, trend };
     });
-  }, [stats, prevStats, hasTrendBaseline, metric, unit]);
+  }, [stats, prevStats, hasTrendBaseline, metric, unit, compare]);
 
-  const hasData = useMemo(() => points.some(p => p.raw > 0), [points]);
+  // A program's number a week on a label, short: the caption says what it is.
+  const perWeek = (v: number): string => {
+    if (metric === "volume") return fmtVolume(v);
+    if (metric === "frequency") return `${Math.round(v * 10) / 10}×`;
+    return String(Math.round(v));
+  };
+
+  const hasData = useMemo(() => points.some(p => p.raw > 0 || p.cmpRaw > 0), [points]);
 
   // Hexagonal grid: GRID_LEVELS concentric rings plus a spoke out to each
   // vertex. Straight-sided (polygon) rings, not circles — the spider-chart
@@ -306,7 +328,7 @@ export default function StrengthRadarChart({
         ? toDisplayWeight(perWeek * weeks, unit === "kg")
         : perWeek * weeks;
     const peak = points.reduce(
-      (m, p) => Math.max(m, p.raw, hasTrendBaseline ? p.prevRaw : 0),
+      (m, p) => Math.max(m, p.raw, hasTrendBaseline ? p.prevRaw : 0, p.cmpRaw),
       0,
     );
     return Math.max(benchmark, peak);
@@ -318,6 +340,11 @@ export default function StrengthRadarChart({
     if (!hasData) return null;
     return polygonPath(cx, cy, points.map(p => vertexRadius(p.raw)));
   }, [points, hasData, fullScale, cx, cy, R]);
+
+  const comparePath = useMemo(() => {
+    if (!compare || !hasData) return null;
+    return polygonPath(cx, cy, points.map(p => vertexRadius(p.cmpRaw)));
+  }, [compare, points, hasData, fullScale, cx, cy, R]);
 
   const prevPath = useMemo(() => {
     if (!hasTrendBaseline) return null;
@@ -352,7 +379,7 @@ export default function StrengthRadarChart({
             period-vs-period comparison is the legend's. Two lines at most, so
             a large text size wraps the range rather than cutting it off. */}
         <Text style={[styles.caption, { color: t.ts }]} numberOfLines={2}>
-          {`${METRIC_CAPTIONS[metric]} (${rangeLabel.toLowerCase()})`}
+          {compare ? `${METRIC_CAPTIONS[metric]}, average per week` : `${METRIC_CAPTIONS[metric]} (${rangeLabel.toLowerCase()})`}
         </Text>
 
         <View style={[styles.chartWrap, { width: S, height: H }]}>
@@ -380,11 +407,22 @@ export default function StrengthRadarChart({
                 strokeLinejoin="round"
               />
             ) : null}
+            {/* The program compared with, behind green's. */}
+            {comparePath ? (
+              <Path
+                d={comparePath}
+                fill={blueMark}
+                fillOpacity={0.16}
+                stroke={blueMark}
+                strokeWidth={2}
+                strokeLinejoin="round"
+              />
+            ) : null}
             {currentPath ? (
               <Path
                 d={currentPath}
                 fill={ACCT}
-                fillOpacity={0.28}
+                fillOpacity={compare ? 0.22 : 0.28}
                 stroke={ACCT}
                 strokeWidth={2}
                 strokeLinejoin="round"
@@ -442,11 +480,18 @@ export default function StrengthRadarChart({
                   adjustsFontSizeToFit
                   minimumFontScale={0.65}
                 >
-                  {p.display}
+                  {compare ? (
+                    <>
+                      <Text style={{ color: ACCT }}>{perWeek(p.raw)}</Text>
+                      <Text>{" · "}</Text>
+                      <Text style={{ color: compareBlueText(isDark) }}>{perWeek(p.cmpRaw)}</Text>
+                    </>
+                  ) : p.display}
                   {p.trend ? (
                     // Direction is carried by the glyph itself; color is only a
-                    // secondary cue (ACCT highlights gains, muted keeps dips calm).
-                    <Text style={[styles.labelTrend, { color: p.trend === "up" ? ACCT : t.ts }]}>
+                    // secondary cue (the accent's text green highlights gains,
+                    // muted keeps dips calm).
+                    <Text style={[styles.labelTrend, { color: p.trend === "up" ? accentTextColor(isDark) : t.ts }]}>
                       {p.trend === "up" ? " ▲" : " ▼"}
                     </Text>
                   ) : null}
@@ -464,7 +509,21 @@ export default function StrengthRadarChart({
           })}
         </View>
 
-        {prevPath ? (
+        {compare ? (
+          // Each program's whole name: two long ones take a line each, and
+          // a name too long for one wraps, its dot centred on it, the two
+          // dots level when they share a line.
+          <View style={[styles.legendRow, styles.legendWrap]}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: ACCT }]} />
+              <Text style={[styles.legendText, styles.legendName, { color: t.ts }]}>{compare.greenName}</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, styles.legendRing, { borderColor: blueMark }]} />
+              <Text style={[styles.legendText, styles.legendName, { color: t.ts }]}>{compare.blueName}</Text>
+            </View>
+          </View>
+        ) : prevPath ? (
           <View style={styles.legendRow}>
             <View style={[styles.legendDot, { backgroundColor: ACCT }]} />
             <Text style={[styles.legendText, { color: t.ts }]}>{currentLegend}</Text>
@@ -543,5 +602,24 @@ const styles = StyleSheet.create({
   legendText: {
     fontFamily: FontFamily.regular,
     fontSize: 12,
+  },
+  legendWrap: {
+    flexWrap: "wrap",
+    columnGap: 14,
+    rowGap: 4,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexShrink: 1,
+    maxWidth: "100%",
+  },
+  legendName: {
+    flexShrink: 1,
+    lineHeight: 16,
+  },
+  legendRing: {
+    backgroundColor: "transparent",
+    borderWidth: 2,
   },
 });

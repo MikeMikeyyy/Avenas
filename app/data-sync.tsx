@@ -126,6 +126,11 @@ export default function DataSyncScreen() {
     if (status.state === "failed") {
       return { icon: "cloud-offline-outline" as const, tint: `${DANGER}1F`, color: DANGER, title: "Couldn't back up", body: "Your changes are still safe on this phone. Check your connection, then tap Back Up Now." };
     }
+    // A change about to go, or one owed from before the app was closed (a
+    // workout logged with no signal): "Backed up" would say the cloud has it.
+    if (status.state === "waiting") {
+      return { icon: "cloud-upload-outline" as const, tint: neutralTint, color: t.ts, title: "Waiting to back up", body: "Your latest changes are safe on this phone and back up by themselves once you're online. Or tap Back Up Now." };
+    }
     if (status.lastBackupAt !== null) {
       return { icon: "cloud-done-outline" as const, tint: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.16)", color: ACCT, title: "Backed up", body: `Last backed up ${fmtLastBackup(status.lastBackupAt, now)}.` };
     }

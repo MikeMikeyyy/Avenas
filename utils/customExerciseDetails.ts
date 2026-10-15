@@ -21,12 +21,24 @@
 //   * OFFERED in the picker as "From your trainer" (`sharedExercises`), which
 //     leaves out your own names, the catalogue's, and anything you authored.
 //
+// Everything here goes by an exercise's IDENTITY (utils/exerciseNames.ts
+// exerciseIdentity): a custom exercise with an id by its id, anything else by
+// its name. So a deleted exercise, kept hidden for its old sessions, and a new
+// one later given its name are two entries, never merged into one
+// (utils/customExercises.ts).
+//
 // Pure: no storage, no network. scripts/verify-custom-details.ts covers it.
 
 import { exerciseByName } from "./exerciseLookup";
-import { normalizeExerciseName } from "./workout";
+import { exerciseIdentity } from "./exerciseNames";
+import { liveCustoms } from "./customExercises";
 import type { CarriedExercise, CustomExercise } from "../constants/exercises";
 import type { Exercise, SavedProgram, WorkoutMap } from "../constants/programs";
+
+/** A custom exercise's identity: its id when it has one, else its name. */
+export function customIdentity(c: CustomExercise): string {
+  return exerciseIdentity({ name: c.name, customId: c.id });
+}
 
 /** A URL another phone can load, rather than a file on this one. */
 export function isRemoteUri(uri: string | undefined): uri is string {
@@ -59,27 +71,32 @@ export function withRemoteMedia(c: CustomExercise, uploads: Record<string, strin
  *  leaves the old exercise's details on it until the next stamp. */
 function ownDetails(ex: Exercise): CarriedExercise | undefined {
   const d = ex.customDetails;
-  return d && normalizeExerciseName(d.name) === normalizeExerciseName(ex.name) ? d : undefined;
+  return d && customIdentity(d) === exerciseIdentity(ex) ? d : undefined;
 }
 
 /**
- * Route params for app/exercise-summary.tsx: the name, plus the details this
- * row carries. A program that isn't in your own list (one you're reviewing in
- * the builder) still opens its author's exercise, not a blank one.
+ * Route params for app/exercise-summary.tsx: the name, which custom exercise it
+ * is, and the details this row carries. A program that isn't in your own list
+ * (one you're reviewing in the builder) still opens its author's exercise, not
+ * a blank one.
  */
-export function exerciseSummaryParams(ex: Exercise): { exerciseName: string; details?: string } {
+export function exerciseSummaryParams(ex: Exercise): { exerciseName: string; customId?: string; details?: string } {
   const d = ownDetails(ex);
-  return d ? { exerciseName: ex.name, details: JSON.stringify(d) } : { exerciseName: ex.name };
+  return {
+    exerciseName: ex.name,
+    ...(ex.customId ? { customId: ex.customId } : {}),
+    ...(d ? { details: JSON.stringify(d) } : {}),
+  };
 }
 
-/** Every custom exercise one program's days carry, first copy per name. */
+/** Every custom exercise one program's days carry, the first copy of each. */
 export function carriedIn(workouts: WorkoutMap | undefined): CarriedExercise[] {
   const out = new Map<string, CarriedExercise>();
   for (const list of Object.values(workouts ?? {})) {
     if (!Array.isArray(list)) continue;
     for (const ex of list) {
       const d = ownDetails(ex);
-      const k = d && normalizeExerciseName(d.name);
+      const k = d && customIdentity(d);
       if (d && k && !out.has(k)) out.set(k, d);
     }
   }
@@ -97,15 +114,15 @@ export function carriedExercises(programs: SavedProgram[]): CarriedExercise[] {
     ...programs.filter(p => p.status === "active"),
     ...programs.filter(p => p.status !== "active").reverse(),
   ];
-  return mergeByName(...ordered.map(p => carriedIn(p.workouts)));
+  return mergeByIdentity(...ordered.map(p => carriedIn(p.workouts)));
 }
 
-/** Lists merged by name (trim + lowercase), the first list's copy winning. */
-export function mergeByName<T extends CustomExercise>(...lists: T[][]): T[] {
+/** Lists merged by identity (customIdentity), the first list's copy winning. */
+export function mergeByIdentity<T extends CustomExercise>(...lists: T[][]): T[] {
   const out = new Map<string, T>();
   for (const list of lists) {
     for (const c of list) {
-      const k = normalizeExerciseName(c.name);
+      const k = customIdentity(c);
       if (!out.has(k)) out.set(k, c);
     }
   }
@@ -113,14 +130,15 @@ export function mergeByName<T extends CustomExercise>(...lists: T[][]): T[] {
 }
 
 /**
- * Everything a name can be looked up in: your own custom exercises, then the
+ * Everything an exercise can be looked up in: your own custom exercises, the
+ * deleted ones included (their sessions are still read with them), then the
  * ones your programs carry. Your own win a clash, so an exercise you made is
  * never shown as someone else's version of it. This is the list every
- * name → details lookup takes (`musclesForExercise`, the exercise screen, the
- * builder's photos); it is never a list of your slots.
+ * exercise → details lookup takes (`musclesForExercise`, the exercise screen,
+ * the builder's photos); it is never a list of your slots.
  */
 export function knownCustomExercises(own: CustomExercise[], ...carried: CarriedExercise[][]): CustomExercise[] {
-  return mergeByName<CustomExercise>(own, ...carried);
+  return mergeByIdentity<CustomExercise>(own, ...carried);
 }
 
 /**
@@ -135,20 +153,21 @@ export function sharedExercises(
   carried: CarriedExercise[],
   me: string | null,
 ): CarriedExercise[] {
-  const ownNames = new Set(own.map(c => normalizeExerciseName(c.name)));
+  // Your live exercises' names: a deleted one's name is free.
+  const ownNames = new Set(liveCustoms(own).map(c => c.name.trim().toLowerCase()));
   return carried
-    .filter(c => !ownNames.has(normalizeExerciseName(c.name)))
+    .filter(c => !ownNames.has(c.name.trim().toLowerCase()))
     .filter(c => !exerciseByName(c.name))
     .filter(c => !me || c.by !== me)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** The normalized names a program's days use. */
-export function exerciseNamesIn(workouts: WorkoutMap | undefined): Set<string> {
+/** The exercises a program's days use, by identity. */
+export function exerciseIdentitiesIn(workouts: WorkoutMap | undefined): Set<string> {
   const out = new Set<string>();
   for (const list of Object.values(workouts ?? {})) {
     if (!Array.isArray(list)) continue;
-    for (const ex of list) out.add(normalizeExerciseName(ex.name));
+    for (const ex of list) out.add(exerciseIdentity(ex));
   }
   return out;
 }
@@ -179,17 +198,18 @@ export type StampSources = {
  *   5. and a row whose details were for a different name (a swap) loses them.
  */
 export function stampCustomDetails(workouts: WorkoutMap, sources: StampSources): WorkoutMap {
-  const ownByName = new Map(sources.own.map(c => [normalizeExerciseName(c.name), c]));
-  const carriedByName = new Map(mergeByName(sources.carried).map(c => [normalizeExerciseName(c.name), c]));
+  // Your live exercises only: a deleted one is out of every program.
+  const ownById = new Map(liveCustoms(sources.own).map(c => [customIdentity(c), c]));
+  const carriedById = new Map(mergeByIdentity(sources.carried).map(c => [customIdentity(c), c]));
 
   const detailsFor = (ex: Exercise): CarriedExercise | undefined => {
-    if (exerciseByName(ex.name)) return undefined;
-    const k = normalizeExerciseName(ex.name);
-    const mine = ownByName.get(k);
+    if (!ex.customId && exerciseByName(ex.name)) return undefined;
+    const k = exerciseIdentity(ex);
+    const mine = ownById.get(k);
     if (mine && sources.stampOwn) return sources.by ? { ...mine, by: sources.by } : { ...mine };
     const kept = ownDetails(ex);
     if (kept || mine) return kept;
-    return carriedByName.get(k);
+    return carriedById.get(k);
   };
 
   let changed = false;

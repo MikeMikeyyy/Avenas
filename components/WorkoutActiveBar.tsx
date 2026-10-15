@@ -8,10 +8,13 @@ import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../contexts/RestTimerContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { useFloatingBars } from "../hooks/useFloatingBars";
+import { useOpenWorkoutTimer } from "../hooks/useOpenWorkoutTimer";
+import { useUpNext } from "../hooks/useWorkoutTimerStore";
 import BounceButton from "./BounceButton";
 import TrashIcon from "./TrashIcon";
-import { RestActions, RestLine, RestTime, useRestProgress } from "./RestControls";
-import { FontFamily, ACCT, APP_LIGHT, APP_DARK } from "../constants/theme";
+import { RestActions, RestDrainLine, RestTime, formatRestTime, useRestProgress } from "./RestControls";
+import { upNextTail } from "../utils/workoutTimer";
+import { FontFamily, ACCT, APP_LIGHT, APP_DARK, CUE_INK, CUE_INK_DARK } from "../constants/theme";
 import {
   BAR_HIDE_Y, BAR_INSET_X, BAR_SHADOW, REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H, barButtonFill,
 } from "../constants/floatingBars";
@@ -72,6 +75,11 @@ export default function WorkoutActiveBar() {
     restOpen.value = resting ? withSpring(1, RISE) : withTiming(0, { duration: 250 });
   }, [resting, restOpen]);
   const progress = useRestProgress();
+  // The set that's next, which only this bigger card has room for (the pill on
+  // the Workout page leaves it out; user decision, 2026-10-15). The Workout tab
+  // publishes it (utils/workoutTimerStore.ts).
+  const upNext = useUpNext();
+  const openTimer = useOpenWorkoutTimer();
   const sizeStyle = useAnimatedStyle(() => ({
     height: WORKOUT_BAR_H + (REST_SECTION_H + REST_DIVIDER_H) * restOpen.value,
   }));
@@ -121,14 +129,35 @@ export default function WorkoutActiveBar() {
           clips (iOS drops a shadow on a view that clips). */}
       <Reanimated.View style={[styles.bar, BAR_SHADOW, { backgroundColor: t.nav, borderColor: t.navEdge }, sizeStyle, pressStyle]}>
         <View style={styles.clip}>
-          <Reanimated.View style={[styles.restRow, restFade]} pointerEvents={resting ? "box-none" : "none"}>
-            {/* The countdown round the section: up its sides and through the
-                bar's rounded top corners. */}
-            <RestLine progress={progress} isDark={isDark} holder="section" />
-            <RestTime seconds={restDisplay} size={24} isDark={isDark} />
-            <RestActions isDark={isDark} />
+          <Reanimated.View style={[styles.restSection, restFade]} pointerEvents={resting ? "box-none" : "none"}>
+            <View style={styles.restTop}>
+              {/* The time opens the timer on the rest. */}
+              <Pressable
+                style={styles.restOpen}
+                onPress={openTimer}
+                accessibilityRole="button"
+                accessibilityLabel={`Rest, ${formatRestTime(restDisplay)} left`}
+                accessibilityHint="Opens the timer"
+              >
+                <RestTime seconds={restDisplay} size={24} isDark={isDark} />
+              </Pressable>
+              <RestActions isDark={isDark} />
+            </View>
+            {upNext ? (
+              // The name is what gives way; the set and its numbers stay whole.
+              <View style={styles.upNext} accessible accessibilityLabel={`Up next: ${upNext.exerciseName}, ${upNext.setLabel}${upNext.numbers ? `, ${upNext.numbers}` : ""}`}>
+                <Text style={[styles.upNextLabel, { color: isDark ? CUE_INK_DARK : CUE_INK }]}>UP NEXT</Text>
+                <Text style={[styles.upNextName, { color: t.tp }]} numberOfLines={1}>{upNext.exerciseName}</Text>
+                <Text style={[styles.upNextTail, { color: isDark ? CUE_INK_DARK : CUE_INK }]} numberOfLines={1}>{upNextTail(upNext)}</Text>
+              </View>
+            ) : null}
           </Reanimated.View>
           <Reanimated.View style={[styles.divider, { backgroundColor: t.div }, restFade]} />
+          {/* The countdown: the line between the rest and the workout's row,
+              in the timer's gradient, draining from the right. */}
+          <Reanimated.View style={[styles.drainHolder, restFade]} pointerEvents="none">
+            <RestDrainLine progress={progress} />
+          </Reanimated.View>
           <View style={styles.workoutRow}>
             {/* The timer side is the way back in. The whole bar gives under your
                 finger, like a BounceButton; the two buttons keep their own taps. */}
@@ -171,11 +200,19 @@ const styles = StyleSheet.create({
   bar:        { borderRadius: WORKOUT_BAR_H / 2, borderWidth: StyleSheet.hairlineWidth },
   clip:       { ...StyleSheet.absoluteFill, borderRadius: WORKOUT_BAR_H / 2, overflow: "hidden" },
   // Everything stands on the bar's bottom edge, which stays put as it grows.
-  restRow:    {
+  restSection: {
     position: "absolute", left: 0, right: 0, bottom: WORKOUT_BAR_H + REST_DIVIDER_H, height: REST_SECTION_H,
-    flexDirection: "row", alignItems: "center", gap: 14, paddingLeft: 18, paddingRight: 10,
+    justifyContent: "center", paddingLeft: 18, paddingRight: 10,
   },
+  restTop:    { flexDirection: "row", alignItems: "center", gap: 14 },
+  restOpen:   { flex: 1 },
+  upNext:     { flexDirection: "row", alignItems: "baseline", gap: 6, marginTop: 1, paddingRight: 8 },
+  upNextLabel: { fontFamily: FontFamily.bold, fontSize: 10, letterSpacing: 1.1 },
+  upNextName: { flexShrink: 1, fontFamily: FontFamily.bold, fontSize: 12 },
+  upNextTail: { flexShrink: 0, fontFamily: FontFamily.semibold, fontSize: 12 },
   divider:    { position: "absolute", left: 16, right: 16, bottom: WORKOUT_BAR_H, height: REST_DIVIDER_H },
+  // Over the divider, centred on it.
+  drainHolder: { position: "absolute", left: 16, right: 16, bottom: WORKOUT_BAR_H - 1, height: 3 },
   workoutRow: {
     position: "absolute", left: 0, right: 0, bottom: 0, height: WORKOUT_BAR_H,
     flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14,

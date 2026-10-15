@@ -7,13 +7,15 @@
 // backup mints them afresh. A program's own id travels as `local_id` (migration
 // 0044) and comes back as its id, so a program keeps one id for life; read a
 // backup through snapshotFromRows, which also points each workout at its program
-// by that id. Workouts, journal entries and custom exercises take the row's uuid.
+// by that id. A custom exercise's own id travels the same way (0048). Workouts
+// and journal entries take the row's uuid.
 
 import { parseStoredDate, formatStoredDate, toYMD } from "../utils/dates";
 import type {
   CompletedExercise,
   CompletedWorkout,
   PlannedExercise,
+  ProgramRun,
   SavedProgram,
   WorkoutMap,
 } from "../constants/programs";
@@ -70,6 +72,7 @@ export function programToRow(p: SavedProgram, userId: string): ProgramInsert {
     pushed_dates: p.pushedDates ?? [],
     pulled_dates: p.pulledDates ?? [],
     holds: p.holds && p.holds.length > 0 ? p.holds : null,
+    runs: p.runs && p.runs.length > 0 ? p.runs : null,
     workouts: p.workouts as Record<string, unknown>,
     extra_workouts: p.extraWorkouts ?? [],
   };
@@ -107,6 +110,8 @@ export function programFromRow(r: ProgramRow): SavedProgram {
     // Absent on a row from a server without 0043: no holds recorded, which is
     // how every program read before it.
     holds: Array.isArray(r.holds) && r.holds.length > 0 ? r.holds : undefined,
+    // Absent on a row from a server without 0047: no earlier runs recorded.
+    ...(Array.isArray(r.runs) && r.runs.length > 0 ? { runs: r.runs as ProgramRun[] } : {}),
     workouts: r.workouts as unknown as WorkoutMap,
     extraWorkouts: r.extra_workouts,
   };
@@ -239,10 +244,14 @@ export function journalFromRow(r: JournalRow): JournalEntry {
   return { id: r.id, title: r.title, body: r.body, createdAt: r.created_at };
 }
 
-// ── custom exercises (no local id — keyed by name in AsyncStorage) ─────────────
+// ── custom exercises ──────────────────────────────────────────────────────────
+// Its own id travels as `local_id` (migration 0048), like a program's: one made
+// before ids has none and is known by its name. A deleted one travels too,
+// marked, since the sessions logged with it are still read with it.
 export function customToRow(c: CustomExercise, userId: string): CustomExerciseInsert {
   return {
     user_id: userId,
+    local_id: c.id ?? null,
     name: c.name,
     muscles: c.muscles,
     image_uri: c.imageUri ?? null,
@@ -250,11 +259,13 @@ export function customToRow(c: CustomExercise, userId: string): CustomExerciseIn
     description: c.description ?? null,
     steps: c.steps && c.steps.length > 0 ? c.steps : null,
     muted: c.muted ?? false,
+    deleted_at: c.deletedAt ?? null,
   };
 }
 
 export function customFromRow(r: CustomExerciseRow): CustomExercise {
   return {
+    ...(r.local_id ? { id: r.local_id } : {}),
     name: r.name,
     muscles: r.muscles as CustomExercise["muscles"],
     imageUri: r.image_uri ?? undefined,
@@ -262,5 +273,6 @@ export function customFromRow(r: CustomExerciseRow): CustomExercise {
     description: r.description ?? undefined,
     steps: r.steps && r.steps.length > 0 ? r.steps : undefined,
     muted: r.muted ? true : undefined,
+    ...(r.deleted_at ? { deletedAt: r.deleted_at.slice(0, 10) } : {}),
   };
 }

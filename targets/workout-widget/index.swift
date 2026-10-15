@@ -12,7 +12,9 @@
 // it and −15s +15s Skip; the workout bar's dot, green running and amber
 // paused; and the exercise's sets as dots, like the app's session track. Every
 // state fits in the 160pt iOS gives a lock-screen card: the old one, resting,
-// was about 186pt and lost its rest buttons off the bottom.
+// was about 186pt and lost its rest buttons off the bottom. A long exercise
+// name takes a second line rather than hide the weight and reps beside it
+// (2026-10-15, RestBlock), still inside 160pt.
 
 import ActivityKit
 import AppIntents
@@ -382,9 +384,19 @@ struct RestRing: View {
   }
 }
 
-/// "Bench Press · 80 kg × 8", the set that's next, in a line.
-func upNextLine(_ state: CardState, _ p: CardPalette) -> Text {
-  let name: Text = Text(state.exerciseName)
+/// The longest name the set that's next shows whole on the lock screen: the
+/// longest in the exercise list. Only a custom exercise's can be longer, and
+/// it's shortened, so a name and its numbers always fit in two lines.
+let upNextNameMax = 32
+
+/// "Bench Press · 80 kg × 8", the set that's next. `maxName` shortens a longer
+/// name with an ellipsis, so the name gives way rather than its numbers.
+func upNextLine(_ state: CardState, _ p: CardPalette, maxName: Int? = nil) -> Text {
+  var shown = state.exerciseName
+  if let maxName, shown.count > maxName {
+    shown = String(shown.prefix(maxName - 1)).trimmingCharacters(in: .whitespaces) + "…"
+  }
+  let name: Text = Text(shown)
     .font(.system(size: 16, weight: .heavy))
     .foregroundStyle(p.tp)
   let numbers = setNumbersText(state)
@@ -393,6 +405,30 @@ func upNextLine(_ state: CardState, _ p: CardPalette) -> Text {
     .font(.system(size: 16, weight: .bold))
     .foregroundStyle(p.ts)
   return name + rest
+}
+
+/// The set that's next on one line, for the island: its name is cut short
+/// when the line is full, never its numbers.
+struct UpNextOneLine: View {
+  let state: CardState
+  let p: CardPalette
+
+  var body: some View {
+    let numbers = setNumbersText(state)
+    HStack(alignment: .firstTextBaseline, spacing: 0) {
+      Text(state.exerciseName)
+        .font(.system(size: 16, weight: .heavy))
+        .foregroundStyle(p.tp)
+        .lineLimit(1)
+      if !numbers.isEmpty {
+        Text("  ·  \(numbers)")
+          .font(.system(size: 16, weight: .bold))
+          .foregroundStyle(p.ts)
+          .lineLimit(1)
+          .fixedSize()
+      }
+    }
+  }
 }
 
 // ─── lock screen card ────────────────────────────────────────────────────────
@@ -435,6 +471,8 @@ struct CardHeader: View {
 }
 
 /// The set that's up: the exercise, its numbers big, its dots, and the tick.
+/// A long name takes a second line and the card grows to hold it (about 155pt
+/// at most, inside the 160pt iOS draws).
 struct SetBlock: View {
   let state: CardState
   let p: CardPalette
@@ -445,7 +483,7 @@ struct SetBlock: View {
         Text(state.exerciseName)
           .font(.system(size: 17, weight: .heavy))
           .foregroundStyle(p.tp)
-          .lineLimit(1)
+          .lineLimit(2)
         SetNumbers(state: state, size: 32, p: p)
         HStack(spacing: 8) {
           SetDots(state: state, size: 8, p: p)
@@ -464,14 +502,37 @@ struct SetBlock: View {
 
 /// A rest between sets: its line counting down beside the workout's time, the
 /// time left with the rest buttons, and the set that's next with its tick.
+///
+/// The set that's next reads on one line when it fits, as designed. When it
+/// doesn't, it takes two rather than cut its numbers off ("Bench Pre…" hid the
+/// weight and reps; user report, 2026-10-15), and the card's gaps close up to
+/// make room, since iOS cuts a lock-screen card off at 160pt: about 154pt on
+/// one line, 156pt on two. ViewThatFits takes the first layout whose width
+/// fits, which only the set that's next can fail.
 struct RestBlock: View {
   let state: CardState
   let p: CardPalette
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    ViewThatFits(in: .horizontal) {
+      RestLayout(state: state, p: p, twoLines: false)
+      RestLayout(state: state, p: p, twoLines: true)
+    }
+  }
+}
+
+/// One of RestBlock's two layouts.
+struct RestLayout: View {
+  let state: CardState
+  let p: CardPalette
+  let twoLines: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: twoLines ? 8 : 12) {
       HStack(spacing: 10) {
+        // Asks for no width of its own, so it never decides which layout fits.
         RestLine(state: state)
+          .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity)
         ElapsedTimer(state: state, width: 60)
           .font(.system(size: 13, weight: .heavy))
           .foregroundStyle(p.ts)
@@ -485,7 +546,7 @@ struct RestBlock: View {
       .frame(height: 40)
       if !state.exerciseName.isEmpty {
         HStack(spacing: 12) {
-          VStack(alignment: .leading, spacing: 3) {
+          VStack(alignment: .leading, spacing: twoLines ? 2 : 3) {
             HStack(spacing: 8) {
               Text("UP NEXT")
                 .font(.system(size: 11, weight: .heavy))
@@ -497,7 +558,16 @@ struct RestBlock: View {
                 .foregroundStyle((state.isWarmup ?? false) ? warmupOrange : p.ts)
                 .lineLimit(1)
             }
-            upNextLine(state, p).lineLimit(1)
+            if twoLines {
+              // A custom name past the longest in the list is shortened, and
+              // the middle of the last line is what gives way past that, so
+              // the numbers at its end always show.
+              upNextLine(state, p, maxName: upNextNameMax)
+                .lineLimit(2)
+                .truncationMode(.middle)
+            } else {
+              upNextLine(state, p).lineLimit(1)
+            }
           }
           Spacer(minLength: 0)
           TickButton(size: 44)
@@ -641,7 +711,7 @@ struct IslandBottom: View {
                   .tracking(1.2)
                   .foregroundStyle(p.ts)
                   .lineLimit(1)
-                upNextLine(state, p).lineLimit(1)
+                UpNextOneLine(state: state, p: p)
               }
               Spacer(minLength: 0)
               TickButton(size: 40)

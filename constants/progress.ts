@@ -215,11 +215,16 @@ export const CUSTOM_PROGRAM_ID = "__custom__";
 export type ExerciseSelection = {
   dayKey: string;
   name: string; // exercise name, matched case-insensitively (trim + lowercase)
+  /** Which custom exercise of that name (utils/exerciseNames.ts exerciseIdentity). */
+  customId?: string;
 };
 
 // Exercise row data used by the day drill-down.
 export type LoggedExerciseRow = {
   name: string;
+  /** Which custom exercise of that name it is: a deleted one and a new one
+   *  later given its name are two rows (utils/exerciseNames.ts). */
+  customId?: string;
   lastWeight: string;   // raw stored string ("80", "BW", "")
   lastReps: string;     // raw stored string
   lastDate: string;     // YYYY-MM-DD

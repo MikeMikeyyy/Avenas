@@ -58,6 +58,8 @@ import { formatWeightForDisplay, parseWeightToKg, unitLabel, unitOf } from "../u
 import { useTheme } from "../contexts/ThemeContext";
 import { loadCachedClientData } from "../utils/trainerStore";
 import { swapOrigin } from "../utils/workout";
+import { customIdForName } from "../utils/customExercises";
+import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { fromYMD } from "../utils/dates";
 import { achievementsForWorkout } from "../utils/achievements";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
@@ -579,19 +581,21 @@ export default function WorkoutDetailScreen() {
   // swap on the Workout screen, so the next session's hint still finds that
   // place (utils/workout.ts buildPrevNoteLookup). The note is kept: this is an
   // edit of a record, and the note may be exactly what was meant.
-  const changeExercise = (exIdx: number, newName: string) => {
-    setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name: newName, swappedFrom: swapOrigin(ex, newName) }));
+  const changeExercise = (exIdx: number, newName: string, customId?: string) => {
+    setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex
+      : { ...ex, name: newName, customId, ...swapOrigin(ex, { name: newName, customId }) }));
   };
 
   // Append exercises picked from the ExercisePicker, each starting with one
   // empty working set (same default as log-workout). The isometric flags array
   // must grow in lockstep — it's index-aligned with editedExercises.
-  const addExercises = (names: string[]) => {
+  const addExercises = (names: string[], customIds: (string | undefined)[] = []) => {
     if (names.length === 0) return;
     setEditedExercises(prev => [
       ...prev,
-      ...names.map(name => ({
+      ...names.map((name, i) => ({
         name,
+        ...(customIds[i] ? { customId: customIds[i] } : {}),
         sets: [{ type: "working" as const, weight: "", reps: "", done: false }],
         notes: "",
       })),
@@ -722,9 +726,18 @@ export default function WorkoutDetailScreen() {
 
   // Typing a different name is the same correction as Change above. Safe per
   // keystroke: swapOrigin keeps the FIRST name typed over, and typing it back
-  // records nothing.
+  // records nothing, since it's that exercise again (its custom id and all). A
+  // name that's one of your live custom exercises is that one.
   const updateExName = (exIdx: number, name: string) => {
-    setEditedExercises(prev => prev.map((ex, i) => i !== exIdx ? ex : { ...ex, name, swappedFrom: swapOrigin(ex, name) }));
+    setEditedExercises(prev => prev.map((ex, i) => {
+      if (i !== exIdx) return ex;
+      const was = ex.swappedFrom ?? ex.name;
+      const wasId = ex.swappedFrom ? ex.swappedFromId : ex.customId;
+      const customId = was.trim().toLowerCase() === name.trim().toLowerCase()
+        ? wasId
+        : customIdForName(name, customExercises);
+      return { ...ex, name, customId, ...swapOrigin(ex, { name, customId }) };
+    }));
   };
 
   const toggleSetType = (exIdx: number, setIdx: number) => {
@@ -1248,20 +1261,18 @@ export default function WorkoutDetailScreen() {
         subtitle={addingExercise ? "ADD EXERCISES" : "CHANGE EXERCISE"}
         changing={addingExercise ? undefined : (changingExIdx !== null ? editedExercises[changingExIdx]?.name : undefined) ?? ""}
         customExercises={customExercises}
-        onSelectMultiple={names => {
+        onSelectMultiple={(names, _sets, customIds) => {
           if (addingExercise) {
-            addExercises(names);
+            addExercises(names, customIds);
             setAddingExercise(false);
           } else {
-            if (names.length > 0 && changingExIdx !== null) changeExercise(changingExIdx, names[0]);
+            if (names.length > 0 && changingExIdx !== null) changeExercise(changingExIdx, names[0], customIds[0]);
             setChangingExIdx(null);
           }
         }}
-        onDeleteCustom={name => {
-          const next = customExercises.filter(e => e.name !== name);
-          setCustomExercises(next);
-          AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(next)).catch(() => {});
-        }}
+        // Deleted everywhere it's used, its logged sessions kept
+        // (utils/customExerciseStore.ts).
+        onDeleteCustom={name => { deleteCustomEverywhere(name).then(setCustomExercises).catch(() => {}); }}
         onEditCustom={() => {}}
         onCreateCustom={() => {}}
         onClose={() => { setChangingExIdx(null); setAddingExercise(false); }}
