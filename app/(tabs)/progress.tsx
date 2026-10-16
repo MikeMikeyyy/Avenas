@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { useFocusEffect } from "expo-router";
 import ProgressView from "../../components/progress/ProgressView";
+import { tabScreen } from "../../components/TabScreen";
 import { getJSON } from "../../utils/storage";
 import {
   PROGRAMS_KEY,
@@ -10,7 +11,9 @@ import {
 } from "../../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 
-export default function ProgressScreen() {
+export default tabScreen(ProgressScreen);
+
+function ProgressScreen() {
   const [history, setHistory] = useState<CompletedWorkout[]>([]);
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);

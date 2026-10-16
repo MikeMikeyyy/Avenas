@@ -23,6 +23,7 @@ import {
   detectStreakAchievement,
   detectWorkoutAchievements,
   pickHeadline,
+  withMilestoneCardMoved,
 } from "./achievements";
 import { notifyAchievement } from "./notificationScheduler";
 import { getJSON, setJSON } from "./storage";
@@ -59,12 +60,17 @@ export async function loadAchievements(): Promise<AchievementsState> {
 // a workout is saved can't overwrite the other's card.
 let chain: Promise<unknown> = Promise.resolve();
 
-function record(detect: (state: AchievementsState, now: Date) => Achievement[]): Promise<Achievement[]> {
+function record(
+  detect: (state: AchievementsState, now: Date) => Achievement[],
+  /** A change to the cards that announces nothing (withMilestoneCardMoved). */
+  quietly: (state: AchievementsState) => AchievementsState = state => state,
+): Promise<Achievement[]> {
   const run = chain.then(async () => {
-    const state = await loadAchievements();
+    const loaded = await loadAchievements();
+    const state = quietly(loaded);
     const now = new Date();
     const earned = detect(state, now);
-    if (earned.length > 0) await setJSON(ACHIEVEMENTS_KEY, applyAchievements(state, earned, now));
+    if (earned.length > 0 || state !== loaded) await setJSON(ACHIEVEMENTS_KEY, applyAchievements(state, earned, now));
     return earned;
   });
   chain = run.catch(() => {});
@@ -85,7 +91,11 @@ export async function awardWorkoutAchievements(
   isKg: boolean,
 ): Promise<void> {
   try {
-    const earned = await record((state, now) => detectWorkoutAchievements(completed, priorHistory, state, now));
+    const earned = await record(
+      (state, now) => detectWorkoutAchievements(completed, priorHistory, state, now),
+      // A milestone redone after a delete gets its card back, unannounced.
+      state => withMilestoneCardMoved(state, completed, priorHistory),
+    );
     notifyHeadline(earned, isKg);
   } catch (e) {
     warn("awardWorkoutAchievements", e);

@@ -1,81 +1,31 @@
 import { Tabs } from "expo-router";
+import { NativeTabs } from "expo-router/unstable-native-tabs";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   Animated,
+  PlatformColor,
   useWindowDimensions,
+  type ImageSourcePropType,
 } from "react-native";
-import DumbbellIcon from "../../components/DumbbellIcon";
-import Svg, { Path, Circle } from "react-native-svg";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRef, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
+import DrawnIcon from "../../components/DrawnIcon";
+import { WindowInsetsContext } from "../../components/TabScreen";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
+import { BAR_INSET_X, NAV_BAR_BOTTOM, NAV_BAR_H } from "../../constants/floatingBars";
+import { TAB_ICONS, TAB_ICON_SIZE } from "../../constants/tabIcons";
 import { useTheme } from "../../contexts/ThemeContext";
+import { NATIVE_TAB_BAR } from "../../hooks/useTabBar";
 import { useTrainerHubPrefetch } from "../../hooks/useTrainerHubPrefetch";
-let LiquidGlassView: any = View;
-let LiquidGlassContainerView: any = View;
-let isLiquidGlassSupported = false;
-try {
-  const lg = require("@callstack/liquid-glass");
-  LiquidGlassView = lg.LiquidGlassView;
-  LiquidGlassContainerView = lg.LiquidGlassContainerView;
-  isLiquidGlassSupported = lg.isLiquidGlassSupported ?? false;
-} catch {
-  // Native module not available — Expo Go or iOS < 26
-}
 
-// ─── Icons ───────────────────────────────────────────────────────────────────
-
-const HomeIcon = ({ size, color }: { size: number; color: string }) => (
-  <Svg width={size} height={size} viewBox="0 0 256 256" fill="none">
-    <Path d="M219.31,108.68l-80-80a16,16,0,0,0-22.62,0l-80,80A15.87,15.87,0,0,0,32,120v96a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8V160h32v56a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8V120A15.87,15.87,0,0,0,219.31,108.68ZM208,208H160V152a8,8,0,0,0-8-8H104a8,8,0,0,0-8,8v56H48V120l80-80,80,80Z" fill={color} />
-  </Svg>
-);
-
-const ProgressIcon = ({ size, color }: { size: number; color: string }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M3 3v16a2 2 0 0 0 2 2h16" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <Path d="M18 17V9" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <Path d="M13 17V5" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <Path d="M8 17v-3" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-);
-
-
-// The Trainer tab's previous icon, kept so it can be switched back in
-// renderIcon if the Users icon below doesn't stick.
-const CommunityIcon = ({ size, color }: { size: number; color: string }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M9.15957 11.62C9.12957 11.62 9.10957 11.62 9.07957 11.62C9.02957 11.61 8.95957 11.61 8.89957 11.62C5.99957 11.53 3.80957 9.25 3.80957 6.44C3.80957 3.58 6.13957 1.25 8.99957 1.25C11.8596 1.25 14.1896 3.58 14.1896 6.44C14.1796 9.25 11.9796 11.53 9.18957 11.62C9.17957 11.62 9.16957 11.62 9.15957 11.62ZM8.99957 2.75C6.96957 2.75 5.30957 4.41 5.30957 6.44C5.30957 8.44 6.86957 10.05 8.85957 10.12C8.91957 10.11 9.04957 10.11 9.17957 10.12C11.1396 10.03 12.6796 8.42 12.6896 6.44C12.6896 4.41 11.0296 2.75 8.99957 2.75Z" fill={color} />
-    <Path d="M16.5396 11.75C16.5096 11.75 16.4796 11.75 16.4496 11.74C16.0396 11.78 15.6196 11.49 15.5796 11.08C15.5396 10.67 15.7896 10.3 16.1996 10.25C16.3196 10.24 16.4496 10.24 16.5596 10.24C18.0196 10.16 19.1596 8.96 19.1596 7.49C19.1596 5.97 17.9296 4.74 16.4096 4.74C15.9996 4.75 15.6596 4.41 15.6596 4C15.6596 3.59 15.9996 3.25 16.4096 3.25C18.7496 3.25 20.6596 5.16 20.6596 7.5C20.6596 9.8 18.8596 11.66 16.5696 11.75C16.5596 11.75 16.5496 11.75 16.5396 11.75Z" fill={color} />
-    <Path d="M9.16961 22.55C7.20961 22.55 5.23961 22.05 3.74961 21.05C2.35961 20.13 1.59961 18.87 1.59961 17.5C1.59961 16.13 2.35961 14.86 3.74961 13.93C6.74961 11.94 11.6096 11.94 14.5896 13.93C15.9696 14.85 16.7396 16.11 16.7396 17.48C16.7396 18.85 15.9796 20.12 14.5896 21.05C13.0896 22.05 11.1296 22.55 9.16961 22.55ZM4.57961 15.19C3.61961 15.83 3.09961 16.65 3.09961 17.51C3.09961 18.36 3.62961 19.18 4.57961 19.81C7.06961 21.48 11.2696 21.48 13.7596 19.81C14.7196 19.17 15.2396 18.35 15.2396 17.49C15.2396 16.64 14.7096 15.82 13.7596 15.19C11.2696 13.53 7.06961 13.53 4.57961 15.19Z" fill={color} />
-    <Path d="M18.3397 20.75C17.9897 20.75 17.6797 20.51 17.6097 20.15C17.5297 19.74 17.7897 19.35 18.1897 19.26C18.8197 19.13 19.3997 18.88 19.8497 18.53C20.4197 18.1 20.7297 17.56 20.7297 16.99C20.7297 16.42 20.4197 15.88 19.8597 15.46C19.4197 15.12 18.8697 14.88 18.2197 14.73C17.8197 14.64 17.5597 14.24 17.6497 13.83C17.7397 13.43 18.1397 13.17 18.5497 13.26C19.4097 13.45 20.1597 13.79 20.7697 14.26C21.6997 14.96 22.2297 15.95 22.2297 16.99C22.2297 18.03 21.6897 19.02 20.7597 19.73C20.1397 20.21 19.3597 20.56 18.4997 20.73C18.4397 20.75 18.3897 20.75 18.3397 20.75Z" fill={color} />
-  </Svg>
-);
-
-const UsersIcon = ({ size, color }: { size: number; color: string }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <Path d="M16 3.128a4 4 0 0 1 0 7.744" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <Path d="M22 21v-2a4 4 0 0 0-3-3.87" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <Circle cx="9" cy="7" r="4" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-);
-
-const renderIcon = (name: string, size: number, color: string) => {
-  switch (name) {
-    case "home":         return <HomeIcon size={size} color={color} />;
-    case "workout":      return <DumbbellIcon size={size} color={color} />;
-    case "progress":     return <ProgressIcon size={size} color={color} />;
-    case "trainer-hub":  return <UsersIcon size={size} color={color} />;
-    default:             return null;
-  }
-};
-
-
-// ─── Tab Item ─────────────────────────────────────────────────────────────────
+// Two tab bars, one per launch (NATIVE_TAB_BAR): on iOS 26 and later Apple's
+// own, Liquid Glass, which a finger can press, hold and slide across between
+// tabs (user request, 2026-10-16); below that and on Android, the app's own.
+// Both show the same four icons (constants/tabIcons.ts) and labels.
 
 const TAB_LABELS: Record<string, string> = {
   home:          "Home",
@@ -84,12 +34,14 @@ const TAB_LABELS: Record<string, string> = {
   "trainer-hub": "Trainer",
 };
 
-const BAR_HEIGHT = 64;
+// ─── Tab Item ─────────────────────────────────────────────────────────────────
+
 const PILL_INSET = 4;
 
 function TabItem({ route, focused, onPress, color }: { route: any; focused: boolean; onPress: () => void; color: string }) {
   const scale = useRef(new Animated.Value(1)).current;
   const label = TAB_LABELS[route.name] || route.name;
+  const icon = TAB_ICONS[route.name];
 
   const handlePressIn = () =>
     Animated.spring(scale, { toValue: 0.88, useNativeDriver: true, speed: 50, bounciness: 4 }).start();
@@ -111,7 +63,7 @@ function TabItem({ route, focused, onPress, color }: { route: any; focused: bool
       accessibilityState={{ selected: focused }}
     >
       <Animated.View style={[styles.iconContent, { transform: [{ scale }] }]}>
-        {renderIcon(route.name, 24, color)}
+        {icon && <DrawnIcon drawing={icon} size={TAB_ICON_SIZE} color={color} />}
         <Text style={[styles.label, { color }, focused && styles.labelActive]} numberOfLines={1}>
           {label}
         </Text>
@@ -122,13 +74,14 @@ function TabItem({ route, focused, onPress, color }: { route: any; focused: bool
 
 // ─── Animated Tab Bar ─────────────────────────────────────────────────────────
 
+/** The app's own bar, below iOS 26 and on Android. */
 function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const pillScale  = useRef(new Animated.Value(1)).current;
   const [tabWidth, setTabWidth] = useState(0);
   const { width: screenWidth } = useWindowDimensions();
   const { isDark } = useTheme();
-  const barWidth = screenWidth - 40;
+  const barWidth = screenWidth - BAR_INSET_X * 2;
   const computedTabWidth = barWidth / state.routes.length;
   const isFirstRender = useRef(true);
 
@@ -158,7 +111,7 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
   }, [state.index, tabWidth]);
 
   const pillWidth  = tabWidth - PILL_INSET * 2;
-  const pillHeight = BAR_HEIGHT - PILL_INSET * 2;
+  const pillHeight = NAV_BAR_H - PILL_INSET * 2;
 
   const tabColor = () => isDark ? "#FFFFFF" : "#000000";
 
@@ -172,38 +125,9 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
     />
   ));
 
-  if (isLiquidGlassSupported) {
-    return (
-      <View style={styles.tabBarWrapper}>
-        <LiquidGlassContainerView style={{ width: barWidth, height: BAR_HEIGHT }} spacing={12}>
-          {/* Glass bar background */}
-          <LiquidGlassView
-            effect="regular"
-            colorScheme={isDark ? "dark" : "light"}
-            style={{ position: "absolute", width: barWidth, height: BAR_HEIGHT, borderRadius: BAR_HEIGHT / 2, overflow: "hidden" }}
-          />
-          {/* Glass sliding pill */}
-          <Animated.View style={{ position: "absolute", top: PILL_INSET, left: 0, width: pillWidth, height: pillHeight, transform: [{ translateX }, { scale: pillScale }] }}>
-            <LiquidGlassView
-              effect="clear"
-              interactive
-              colorScheme={isDark ? "dark" : "light"}
-              style={{ width: pillWidth, height: pillHeight, borderRadius: pillHeight / 2, overflow: "hidden" }}
-            />
-          </Animated.View>
-        </LiquidGlassContainerView>
-        {/* Tab items sit on top */}
-        <View style={{ position: "absolute", flexDirection: "row", width: barWidth, height: BAR_HEIGHT }}>
-          {tabItems}
-        </View>
-      </View>
-    );
-  }
-
-  // Fallback for Expo Go / iOS < 26. The bar has to read as a surface floating
-  // ABOVE the page: t.nav is a rung lighter than the cards, the hairline defines
-  // its edge (carrying dark mode, where a shadow barely registers), and the
-  // shadow lifts it in light mode.
+  // The bar has to read as a surface floating ABOVE the page: t.nav is a rung
+  // lighter than the cards, the hairline defines its edge (carrying dark mode,
+  // where a shadow barely registers), and the shadow lifts it in light mode.
   const t       = isDark ? APP_DARK : APP_LIGHT;
   const pillBg  = isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.07)";
   return (
@@ -211,11 +135,11 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
       {/* Two views on purpose: the shadow can't live on the same node as
           overflow:"hidden" (iOS clips it), and the bar needs that overflow to
           clip the sliding pill to its rounded ends. Outer casts, inner clips. */}
-      <View style={[styles.barShadow, { width: barWidth, height: BAR_HEIGHT, backgroundColor: t.nav }]}>
+      <View style={[styles.barShadow, { width: barWidth, height: NAV_BAR_H, backgroundColor: t.nav }]}>
         <View
           style={[
             styles.bar,
-            { width: barWidth, height: BAR_HEIGHT, backgroundColor: t.nav, borderColor: t.navEdge },
+            { width: barWidth, height: NAV_BAR_H, backgroundColor: t.nav, borderColor: t.navEdge },
           ]}
         >
           <Animated.View style={[styles.pill, { width: pillWidth, height: pillHeight, backgroundColor: pillBg, transform: [{ translateX }, { scale: pillScale }] }]} />
@@ -226,7 +150,83 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
   );
 }
 
+// ─── Apple's Tab Bar ──────────────────────────────────────────────────────────
+
+/** The tabs in order, with the images Apple's bar shows: it can't draw an
+ *  SVG, so scripts/build-tab-icons.ts renders the app's own drawings into them. */
+const NATIVE_TABS: { name: string; image: ImageSourcePropType }[] = [
+  { name: "home",        image: require("../../assets/images/tab-icons/home.png") },
+  { name: "workout",     image: require("../../assets/images/tab-icons/workout.png") },
+  { name: "progress",    image: require("../../assets/images/tab-icons/progress.png") },
+  { name: "trainer-hub", image: require("../../assets/images/tab-icons/trainer-hub.png") },
+];
+
+// Icons and labels in the label colour, black or white as on the app's bar,
+// the selected tab marked by Apple's highlight and a heavier label rather than
+// iOS blue. The glass turns light or dark over what's behind it, and a system
+// colour turns with it, where a fixed one wouldn't.
+const NATIVE_INK = PlatformColor("label");
+const NATIVE_LABEL = { fontFamily: FontFamily.regular, fontSize: 10, color: NATIVE_INK };
+const NATIVE_LABEL_SELECTED = { ...NATIVE_LABEL, fontFamily: FontFamily.semibold };
+
+/** Apple's own bar, iOS 26 and later. Each page inside it keeps the window's
+ *  safe area (tabScreen, components/TabScreen.tsx), read here, outside the
+ *  tabs, before they give each page one that takes the bar in. */
+function NativeTabLayout({ bg }: { bg: string }) {
+  const windowInsets = useSafeAreaInsets();
+  return (
+    <WindowInsetsContext.Provider value={windowInsets}>
+      <NativeTabs
+        // The workout bar and the rest timer stand on it (hooks/useTabBar.ts),
+        // so it never shrinks away on a scroll.
+        minimizeBehavior="never"
+        tintColor={NATIVE_INK}
+        iconColor={NATIVE_INK}
+        labelStyle={{ default: NATIVE_LABEL, selected: NATIVE_LABEL_SELECTED }}
+        screenListeners={{
+          tabPress: () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          },
+        }}
+      >
+        {NATIVE_TABS.map(({ name, image }) => (
+          <NativeTabs.Trigger
+            key={name}
+            name={name}
+            // The pages leave room for the bar themselves, so iOS mustn't
+            // add its own on top.
+            disableAutomaticContentInsets
+            // A second tap on Workout would scroll the session away from the
+            // set it's up to.
+            disableScrollToTop={name === "workout"}
+            contentStyle={{ backgroundColor: bg }}
+          >
+            <NativeTabs.Trigger.Icon src={image} renderingMode="template" />
+            <NativeTabs.Trigger.Label>{TAB_LABELS[name]}</NativeTabs.Trigger.Label>
+          </NativeTabs.Trigger>
+        ))}
+      </NativeTabs>
+    </WindowInsetsContext.Provider>
+  );
+}
+
 // ─── Root Layout ──────────────────────────────────────────────────────────────
+
+function AppTabLayout({ bg }: { bg: string }) {
+  return (
+    <Tabs
+      screenOptions={{ headerShown: false, animation: "none", lazy: false, sceneStyle: { backgroundColor: bg } }}
+      tabBar={(props) => (
+        <AnimatedTabBar state={props.state} navigation={props.navigation} />
+      )}
+    >
+      <Tabs.Screen name="home" />
+      <Tabs.Screen name="workout" />
+      <Tabs.Screen name="progress" />
+      <Tabs.Screen name="trainer-hub" />
+    </Tabs>
+  );
+}
 
 export default function TabLayout() {
   const { isDark } = useTheme();
@@ -240,17 +240,7 @@ export default function TabLayout() {
 
   return (
     <View style={{ flex: 1, backgroundColor: bg }}>
-      <Tabs
-        screenOptions={{ headerShown: false, animation: "none", lazy: false, sceneStyle: { backgroundColor: bg } }}
-        tabBar={(props) => (
-          <AnimatedTabBar state={props.state} navigation={props.navigation} />
-        )}
-      >
-        <Tabs.Screen name="home" />
-        <Tabs.Screen name="workout" />
-        <Tabs.Screen name="progress" />
-        <Tabs.Screen name="trainer-hub" />
-      </Tabs>
+      {NATIVE_TAB_BAR ? <NativeTabLayout bg={bg} /> : <AppTabLayout bg={bg} />}
     </View>
   );
 }
@@ -260,19 +250,19 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabBarWrapper: {
     position: "absolute",
-    bottom: 28,
-    left: 20,
-    right: 20,
+    bottom: NAV_BAR_BOTTOM,
+    left: BAR_INSET_X,
+    right: BAR_INSET_X,
   },
   bar: {
-    borderRadius: BAR_HEIGHT / 2,
+    borderRadius: NAV_BAR_H / 2,
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
   },
   barShadow: {
-    borderRadius: BAR_HEIGHT / 2,
+    borderRadius: NAV_BAR_H / 2,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.12,
@@ -283,13 +273,13 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: PILL_INSET,
     left: 0,
-    borderRadius: (BAR_HEIGHT - PILL_INSET * 2) / 2,
+    borderRadius: (NAV_BAR_H - PILL_INSET * 2) / 2,
   },
   tabItem: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    height: BAR_HEIGHT,
+    height: NAV_BAR_H,
     zIndex: 2,
   },
   iconContent: {

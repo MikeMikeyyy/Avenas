@@ -10,9 +10,9 @@
 
 import type { CompletedExercise, CompletedWorkout, SavedProgram } from "../constants/programs";
 import { activateProgram } from "../utils/programLifecycle";
-import { programRunViews, sameRun } from "../utils/programRuns";
+import { endingRun, programRunViews, sameRun } from "../utils/programRuns";
 import {
-  aheadAtSamePoint, compareCandidates, compareLifts, glanceStats, greenRunFor, liftChange, liftSlots, missedDates, type LiftSlot,
+  aheadAtSamePoint, compareCandidates, compareLifts, compareReadiness, compareStartGreen, glanceStats, greenRunFor, liftChange, liftSlots, missedDates, type LiftSlot,
   muscleStatsPerWeek, programDayOf, runDates, runDays, runName, runStatus, runSummary, sessionsWithin, sharedStrength,
   spanCaption, spanDays, weekOfDay, weeklyTotals,
 } from "../utils/programCompare";
@@ -119,6 +119,36 @@ eq(greenRunFor({ kind: "all" }, programs, history)?.ref, { programId: "PPL", run
   const g = greenRunFor({ kind: "all" }, [donePPL, UL], history)!;
   eq(g.ref, { programId: "PPL", run: "latest" }, "two finished: the one that finished last is green");
   eq(compareCandidates([donePPL, UL], history, g.ref).map(c => c.ref.programId), ["UL"], "and the other is offered as blue");
+}
+{
+  // The button is always there; what it needs before it compares
+  // (compareReadiness), and green whenever both steps are done.
+  const donePPL = { ...PPL, status: "completed" as const, completedDate: "14 Oct 2026" };
+  const shelvedPPL = { ...PPL, status: "paused" as const };
+  eq(compareReadiness([PPL], history), { finished: false, another: false }, "only a program on the go: nothing finished yet");
+  eq(compareReadiness([], history), { finished: false, another: false }, "no programs: nothing finished");
+  eq(compareReadiness([donePPL], history), { finished: true, another: false }, "one finished, nothing after it: start another");
+  eq(compareReadiness([shelvedPPL, UL], history), { finished: true, another: false }, "a shelved program isn't another");
+  eq(compareReadiness(programs, history), { finished: true, another: true }, "a finished one and one on the go: ready");
+  eq(compareReadiness([donePPL, UL], history), { finished: true, another: true }, "two finished: ready");
+  eq(compareReadiness([PPL, { ...UL, id: "empty" }], []), { finished: false, another: false },
+    "a finished program with no sessions doesn't count");
+  {
+    // Run again: its earlier run is the finished one, the run on the go another.
+    const run = endingRun({ ...PPL, status: "completed", completedDate: "11 Oct 2026" }, "12 Oct 2026")!;
+    const again: SavedProgram = { ...PPL, startDate: "12 Oct 2026", runs: [run] };
+    const r = compareReadiness([again], history);
+    const g = compareStartGreen({ kind: "current" }, [again], history);
+    eq(r.finished && r.another ? compareCandidates([again], history, g!.ref).length > 0 : "not ready", true,
+      "the same program run again: ready, and its earlier run is offered");
+  }
+  // The picked program is the one finished: the current one takes green, so it
+  // can go in blue.
+  eq(greenRunFor({ kind: "program", programId: "UL" }, programs, history)?.ref, { programId: "UL", run: "latest" }, "picked: green as picked");
+  const sg = compareStartGreen({ kind: "program", programId: "UL" }, programs, history)!;
+  eq(sg.ref, { programId: "PPL", run: "latest" }, "picked the one finished program: the current one takes green");
+  eq(compareCandidates(programs, history, sg.ref).map(c => c.ref.programId), ["UL"], "and the picked one is offered in blue");
+  eq(compareStartGreen({ kind: "current" }, programs, history)?.ref, green.ref, "otherwise green is greenRunFor's");
 }
 const candidates = compareCandidates(programs, history, green.ref);
 eq(candidates.map(c => c.ref), [{ programId: "UL", run: "latest" }], "blue: finished runs only, never green itself");

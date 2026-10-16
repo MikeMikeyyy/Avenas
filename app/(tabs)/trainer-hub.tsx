@@ -11,8 +11,11 @@ import { hubKindFor, hydrateTrainerHub } from "../../utils/trainerHub";
 import PTHome from "../../components/trainer/PTHome";
 import MyPTHome from "../../components/trainer/MyPTHome";
 import CommunityGuidelinesGate from "../../components/trainer/CommunityGuidelinesGate";
+import { tabScreen } from "../../components/TabScreen";
 
-export default function TrainerHubScreen() {
+export default tabScreen(TrainerHubScreen);
+
+function TrainerHubScreen() {
   const { accountType } = useAccountType();
   const { userId } = useAuth();
   const owner = userId ?? "";

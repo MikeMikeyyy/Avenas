@@ -17,7 +17,6 @@ import { changesSummary, sessionChanges } from "../../utils/exerciseChanges";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, replacedTextColor } from "../../constants/theme";
 import type { CompletedWorkout, SavedProgram } from "../../constants/programs";
 import { fmtDuration, fromYMD } from "../../utils/dates";
-import { indexOfDayId } from "../../utils/programDays";
 import { workoutBelongsToProgram } from "../../utils/progressStats";
 import { buildSessionTracks } from "../../utils/sessionTrack";
 import { getEffectiveToday } from "../../utils/workout";
@@ -70,6 +69,8 @@ export type JournalProgramRow = {
   missed?: number[];
   /** Occurrences trained with something else on their date (orange). */
   replaced?: number[];
+  /** Occurrences logged, after this one as well as before (green). */
+  done?: number[];
 };
 
 /**
@@ -84,10 +85,12 @@ export type JournalProgramRow = {
  * The session number counts SCHEDULED occurrences, not completions
  * (utils/sessionTrack.ts): a week you were ill still costs its number, so the
  * days you did train and the days you didn't stay in step. Derived off the
- * same effective day as Home. Numbered within the owning program AND the day,
- * so two programs reusing a name don't share a counter, and neither do two
- * same-named days of one program. Anything the schedule can't place keeps the
- * rank among completed sessions and no grey dots.
+ * same effective day as Home. Numbered within the owning program, its run AND
+ * the day, so two programs reusing a name don't share a counter, neither do
+ * two same-named days of one program, and a program run again counts again.
+ * Every card's track is drawn as it stands today, its own session marked.
+ * Anything the schedule can't place keeps the rank among completed sessions
+ * and no grey dots.
  *
  * `insteadOf` comes from the same tracks as the orange dots, so a session that
  * says "Instead of Push" is exactly the one Push's orange dot is about.
@@ -120,25 +123,19 @@ export function useJournalWorkoutInfo(
     const changes = changesSummary(sessionChanges(w));
     const prog = owningProgramByWorkoutId[w.id];
     if (!prog) return { program: null, insteadOf, changes };
-    // A dayId names ONE slot, so the program schedules it once per cycle. The
-    // name count is the fallback for sessions with no dayId, and it reads 0
-    // once the day has been renamed, which is why the id is preferred.
-    const perCycle =
-      w.dayId && indexOfDayId(prog, w.dayId) >= 0
-        ? 1
-        : prog.cyclePattern.filter(n => n === w.workoutName).length;
-    const totalCycles = Math.ceil(prog.totalWeeks * 7 / prog.cycleDays);
     const sessionNum = sessionTracks.numberById[w.id] ?? 1;
     return {
       program: {
         programName: prog.name,
-        totalSessions: perCycle * totalCycles,
+        // Of the run it was in: a program run again may have changed length.
+        totalSessions: sessionTracks.totalById[w.id] ?? 0,
         sessionNum,
         // The dot is where this sits in the PROGRAM, which is past the session
         // count whenever a week was missed.
         position: sessionTracks.positionById[w.id] ?? sessionNum,
         missed: sessionTracks.missedById[w.id],
         replaced: sessionTracks.replacedById[w.id],
+        done: sessionTracks.doneById[w.id],
       },
       insteadOf,
       changes,
@@ -195,6 +192,7 @@ function JournalWorkoutCard({ workout, info, isDark, onPress }: {
                   total={prog.totalSessions}
                   missed={prog.missed}
                   replaced={prog.replaced}
+                  done={prog.done}
                   accent={ACCT}
                   track={t.div}
                   missedColor={t.ts}

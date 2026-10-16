@@ -14,7 +14,8 @@
 // Run:  npx tsx scripts/verify-session-track.ts
 // Exits non-zero if any assertion fails.
 
-import { buildSessionTrack, buildSessionTracks, occurrencesOfDay } from "../utils/sessionTrack";
+import { buildSessionTrack, buildSessionTracks, occurrencesOfDay, trackDots } from "../utils/sessionTrack";
+import { activateProgram, deactivateProgram } from "../utils/programLifecycle";
 import { pushDate, skipDate } from "../utils/skippedDates";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 
@@ -331,6 +332,122 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
   const tracks = buildSessionTracks([theirs, mine], [program, other], MON_W3);
   eq(tracks.numberById["mine"], 1, "the other program's d0 sessions don't shift this one's count");
   eq(tracks.positionById["mine"], 3, "and this one still sits on its own program's 3rd dot");
+}
+
+// ─── every card draws the whole track ────────────────────────────────────────
+// The reported card (2026-10-16): an older session's track drew a later
+// session as an empty ring ("not come round yet") beside a later miss in grey,
+// so a week that was trained read as neither. Every card now draws the track
+// as it stands, its own session marked and every session logged in green.
+const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
+{
+  // Week 1 missed, weeks 2 and 3 trained, week 4 missed, today week 5.
+  const tracks = buildSessionTracks([session("w2", MON_W2), session("w3", MON_W3)], [program], MON_W5);
+  eq([tracks.positionById["w2"], tracks.doneById["w2"], tracks.missedById["w2"]], [2, [2, 3], [1, 4]],
+    "week 2's card knows week 3 was trained, as well as weeks 1 and 4 missed");
+  eq(trackDots({ current: 2, total: 8, missed: tracks.missedById["w2"], done: tracks.doneById["w2"] }),
+    ["missed", "current", "done", "missed", "future", "future", "future", "future"],
+    "so it draws week 3 green, not as an empty ring between a session and a miss");
+  eq(trackDots({ current: 3, total: 8, missed: [1, 4], done: [2, 3] }).slice(0, 4), ["missed", "done", "current", "missed"],
+    "and week 3's card draws the same track with its own dot marked");
+  eq(trackDots({ current: 3, total: 4, missed: [1] }), ["missed", "done", "current", "future"],
+    "with nothing to say what was logged, the dots before it read as done, as before");
+}
+
+// ─── a program that stops counting ───────────────────────────────────────────
+// On hold, made inactive, or finished early: the weeks after it stopped asked
+// for nothing, so none of them is missed, and every card stays where it was.
+{
+  const history = [session("w1", MON_W1), session("w3", MON_W3)];
+
+  const held = buildSessionTracks(history, [{ ...program, pausedAt: "2026-09-24" }], MON_W6);
+  eq([held.missedById["w3"], held.doneById["w3"]], [[2], [1, 3]], "on hold: the weeks since the hold aren't missed");
+
+  const inactive = buildSessionTracks(history, deactivateProgram([program], "P"), MON_W6);
+  eq([inactive.missedById["w3"], inactive.doneById["w3"]], [[2], [1, 3]],
+    "made inactive: the weeks since its last session aren't missed, the one before still is");
+  eq(inactive.numberById["w3"], 2, "and its sessions keep their numbers");
+
+  const finishedEarly: SavedProgram = { ...program, status: "completed", completedDate: "25 Sep 2026", currentWeek: 3 };
+  const finished = buildSessionTracks(history, [finishedEarly], MON_W6);
+  eq(finished.missedById["w3"], [2], "marked complete in week 3: the weeks it no longer asked for aren't missed");
+
+  const running = buildSessionTracks(history, [program], MON_W6);
+  eq(running.missedById["w3"], [2, 4, 5], "while it runs, the weeks since do count");
+}
+
+// ─── run again ───────────────────────────────────────────────────────────────
+// Made active again, a program starts over from week 1: a new track and a new
+// count, and the cards of the run before stay as they were.
+{
+  const finishedEarly: SavedProgram = { ...program, status: "completed", completedDate: "25 Sep 2026", currentWeek: 3 };
+  const { programs: [again] } = activateProgram([finishedEarly], "P", "5 Oct 2026");
+  const history = [session("w1", MON_W1), session("w3", MON_W3), session("n1", MON_W5), session("n2", MON_W6)];
+  const tracks = buildSessionTracks(history, [again], MON_W6);
+  eq([tracks.numberById["w3"], tracks.positionById["w3"], tracks.missedById["w3"], tracks.doneById["w3"]], [2, 3, [2], [1, 3]],
+    "the earlier run's cards stay where they were");
+  eq([tracks.numberById["n1"], tracks.positionById["n1"], tracks.missedById["n1"]], [1, 1, []],
+    "the new run starts again at its 1st session, on its 1st dot");
+  eq([tracks.numberById["n2"], tracks.doneById["n2"]], [2, [1, 2]], "and counts from there");
+  eq(tracks.totalById["n2"], 8, "on a track as long as the program");
+}
+
+// ─── delete it, do it again, delete it again ─────────────────────────────────
+// (user request, 2026-10-16) Everything on a card is worked out afresh from the
+// sessions there are, so a delete puts every card back as it was before that
+// session was logged, and doing it again puts it back in the same place.
+{
+  const all = (extra: CompletedWorkout[], p: SavedProgram[] = [program], today = MON_W5) =>
+    buildSessionTracks([session("w1", MON_W1), session("w3", MON_W3), ...extra], p, today);
+  const before = all([]);
+  const logged = all([session("w4", MON_W4)]);
+  eq(all([]), before, "deleted: every card is back as it was before it was logged");
+  const redone = all([session("redo", MON_W4)]);
+  eq([redone.numberById["redo"], redone.positionById["redo"], redone.doneById["redo"]],
+    [logged.numberById["w4"], logged.positionById["w4"], logged.doneById["w4"]], "done again: the same session, on the same dot");
+  eq([redone.missedById["w1"], redone.doneById["w1"]], [logged.missedById["w1"], logged.doneById["w1"]], "and the other cards read as they did");
+  eq(all([]), before, "deleted again: back as it was again");
+
+  // Today's, through Delete & Redo: today isn't missed in between.
+  const today = all([session("t", MON_W5)]);
+  const between = all([]);
+  eq([today.doneById["w1"], between.missedById["w1"]], [[1, 3, 5], [2, 4]], "today's deleted: today's dot is still to come, not missed");
+  eq(all([session("t2", MON_W5)]).positionById["t2"], today.positionById["t"], "and today's redo is on today's dot");
+
+  // Two sessions in one week: deleting one leaves the other where it was.
+  const two = all([session("a", MON_W4), session("b", "2026-09-30")]);
+  const oneLeft = all([session("b", "2026-09-30")]);
+  eq([two.positionById["b"], oneLeft.positionById["b"], oneLeft.missedById["b"]], [4, 4, [2]],
+    "two in one week, one deleted: the other keeps the week");
+
+  // A program made inactive: its last session deleted, the weeks after it
+  // simply never came round; done again, it's back.
+  const shelved = deactivateProgram([program], "P");
+  const shelvedAll = all([session("w4", MON_W4)], shelved, MON_W6);
+  const shelvedDeleted = all([], shelved, MON_W6);
+  eq([shelvedAll.missedById["w1"], shelvedDeleted.missedById["w1"]], [[2], [2]], "made inactive: deleting its last session marks nothing missed");
+  eq(all([session("again", MON_W4)], shelved, MON_W6).doneById["again"], shelvedAll.doneById["w4"], "and done again, it reads as before");
+
+  // Run again: deleting from the run before leaves the new run alone.
+  const finishedEarly: SavedProgram = { ...program, status: "completed", completedDate: "25 Sep 2026", currentWeek: 3 };
+  const { programs: runAgain } = activateProgram([finishedEarly], "P", "5 Oct 2026");
+  const newRun = [session("n1", MON_W5), session("n2", MON_W6)];
+  const both = buildSessionTracks([session("w1", MON_W1), session("w3", MON_W3), ...newRun], runAgain, MON_W6);
+  const oldDeleted = buildSessionTracks([session("w1", MON_W1), ...newRun], runAgain, MON_W6);
+  eq([oldDeleted.numberById["n2"], oldDeleted.positionById["n2"], oldDeleted.missedById["n2"]],
+    [both.numberById["n2"], both.positionById["n2"], both.missedById["n2"]], "a session deleted from the run before changes nothing in the new run");
+  eq(oldDeleted.missedById["w1"], [2, 3], "and the run before reads its own week as missed");
+}
+
+// ─── sessions from before the start ──────────────────────────────────────────
+// A start moved by a hold resumed before holds were kept: the sessions before
+// it can't be placed, and keep counting with the rest, as before.
+{
+  const moved: SavedProgram = { ...program, startDate: "14 Sep 2026" };
+  const tracks = buildSessionTracks([session("w1", MON_W1), session("w2", MON_W2), session("w3", MON_W3)], [moved], MON_W3);
+  eq(["w1", "w2", "w3"].map(id => tracks.numberById[id]), [1, 2, 3], "sessions before a moved start still count");
+  eq([tracks.positionById["w1"], tracks.missedById["w1"], tracks.doneById["w1"]], [1, undefined, [1]],
+    "the one before it sits where its count says, with nothing greyed");
 }
 
 // ─── report ──────────────────────────────────────────────────────────────────

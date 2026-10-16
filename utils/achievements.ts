@@ -72,6 +72,29 @@ export function detectWorkoutAchievements(
 }
 
 /**
+ * `state` with a workout milestone's card given to `completed`, when the
+ * session it was on has been deleted and `completed` reaches that count again
+ * (Delete & Redo, or the next session after a delete). The milestone was
+ * announced once and isn't again (`awarded`), but its card went with the
+ * deleted session and never came back, while a trainer's rebuild
+ * (utils/clientAchievements.ts) shows it on the new one (user request,
+ * 2026-10-16: deleting and redoing a workout mustn't lose anything). It keeps
+ * the week it was earned in. `state` itself otherwise; `priorHistory` as for
+ * detectWorkoutAchievements.
+ */
+export function withMilestoneCardMoved(
+  state: AchievementsState,
+  completed: CompletedWorkout,
+  priorHistory: CompletedWorkout[],
+): AchievementsState {
+  const key = `workouts:${priorHistory.length + 1}`;
+  const card = state.cards.find(c => c.id === key);
+  if (!card || card.category !== "workouts" || card.workoutId === completed.id) return state;
+  if (priorHistory.some(w => w.id === card.workoutId)) return state;
+  return { ...state, cards: state.cards.map(c => (c.id === key ? { ...card, workoutId: completed.id } : c)) };
+}
+
+/**
  * What `workout` earned when it was saved: its PRs, and the workout milestone
  * if it was one. Measured against every session completed BEFORE it, which is
  * what a workout finished live was compared against (the rebuild

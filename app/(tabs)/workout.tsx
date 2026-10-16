@@ -41,8 +41,10 @@ import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
 import { buildLiveActivityPayload, logWithLockScreenTicks } from "../../utils/liveActivity";
 import { nextSetOf } from "../../utils/nextSet";
 import { firstRows, flatIndexOf, nextRows, prevFillFor, rowsChanged, setRowKey, withoutSet } from "../../utils/setRows";
-import { ABOVE_KEYBOARD_TOOLS, ABOVE_REST_ON_KEYBOARD, ABOVE_REST_ON_TAB, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP, TAB_BAR_CLEARANCE } from "../../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, ABOVE_REST_ON_KEYBOARD, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP } from "../../constants/floatingBars";
 import { useFieldAboveKeyboard } from "../../hooks/useFieldAboveKeyboard";
+import { useTabBar } from "../../hooks/useTabBar";
+import { tabScreen } from "../../components/TabScreen";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { sessionTimeRange, todayYMD } from "../../utils/dates";
@@ -89,21 +91,14 @@ function fmtTime(secs: number): string {
   return `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
 }
 
-/** How far above the screen's bottom edge list mode pins the notes and +
- *  buttons: just above the nav bar, which is fixed at bottom 28 and 64 tall
- *  (top ≈ 92 on every device), so it's a fixed height rather than the safe
- *  area's, which left a big gap on notched phones and nearly touched on others. */
-const LIST_CLUSTER_BOTTOM = 100;
+/** How far above the tab bar's top edge list mode pins the notes and +
+ *  buttons: from the bar (useTabBar) rather than the safe area, which left a
+ *  big gap on notched phones and nearly touched the bar on others. */
+const LIST_CLUSTER_GAP = 8;
 
 /** Focus mode's round ‹ › buttons, which set the height of their row (the
  *  Complete Workout pill beside ‹ on the last exercise is shorter). */
 const FOCUS_NAV_BTN = 56;
-
-/** Where focus mode pins its ‹ › row: in the rest timer's own place over the
- *  nav bar, so a rest lifts it by exactly the timer and the gap between bars,
- *  and the timer fits under it. It was 80 above the safe area, which on a
- *  phone with no home indicator sat over the nav bar's top. */
-const FOCUS_NAV_BOTTOM = TAB_BAR_CLEARANCE;
 
 /** Focus mode's spacing under its one card: card to the notes and + buttons,
  *  and those to the ‹ › row once the page is scrolled to its end. The end used
@@ -1530,7 +1525,9 @@ function AddExerciseHint() {
 
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
-export default function WorkoutScreen() {
+export default tabScreen(WorkoutScreen);
+
+function WorkoutScreen() {
   const insets = useSafeAreaInsets();
   // Latch the bottom inset to its stable max. It never legitimately shrinks in
   // portrait, but react-native-safe-area-context can momentarily re-emit a smaller
@@ -1539,6 +1536,14 @@ export default function WorkoutScreen() {
   const safeBottomRef = useRef(insets.bottom);
   if (insets.bottom > safeBottomRef.current) safeBottomRef.current = insets.bottom;
   const safeBottom = safeBottomRef.current;
+  // The page's pinned buttons stand on the tab bar, Apple's on iOS 26 and
+  // later or the app's own, so they're placed from where it is. Focus mode's
+  // ‹ › row sits in the rest timer's own place over the bar (`clearance`), so
+  // a rest lifts it by exactly the timer and the gap between bars, and the
+  // timer fits under it. It was 80 above the safe area, which on a phone with
+  // no home indicator sat over the bar's top.
+  const { top: tabBarTop, clearance: focusNavBottom, aboveRest } = useTabBar();
+  const listClusterBottom = tabBarTop + LIST_CLUSTER_GAP;
   const { height: winH } = useWindowDimensions();
   const router = useRouter();
   const { isDark } = useTheme();
@@ -2873,8 +2878,8 @@ export default function WorkoutScreen() {
   // notes and +. Under it they couldn't be pressed until the rest was over.
   // While a rest runs they stand on it instead, rising and settling with it,
   // and the list's end gets the same room so it still scrolls clear of them.
-  const focusNavLift = Math.max(0, ABOVE_REST_ON_TAB - FOCUS_NAV_BOTTOM);
-  const clusterLift = Math.max(0, ABOVE_REST_ON_TAB - LIST_CLUSTER_BOTTOM);
+  const focusNavLift = Math.max(0, aboveRest - focusNavBottom);
+  const clusterLift = Math.max(0, aboveRest - listClusterBottom);
   const pinnedLift = restBannerActive ? (focusMode ? focusNavLift : clusterLift) : 0;
   const restShown = useSharedValue(restBannerActive ? 1 : 0);
   useEffect(() => {
@@ -2888,8 +2893,8 @@ export default function WorkoutScreen() {
   // their place, which the keyboard covers.
   const { height: keyboardAnim } = useReanimatedKeyboardAnimation();
   const focusNavStyle = useAnimatedStyle(() => {
-    const onRest = Math.max(ABOVE_REST_ON_TAB, -keyboardAnim.value + ABOVE_REST_ON_KEYBOARD);
-    return { transform: [{ translateY: -Math.max(0, onRest - FOCUS_NAV_BOTTOM) * restShown.value }] };
+    const onRest = Math.max(aboveRest, -keyboardAnim.value + ABOVE_REST_ON_KEYBOARD);
+    return { transform: [{ translateY: -Math.max(0, onRest - focusNavBottom) * restShown.value }] };
   });
   const clusterStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -clusterLift * restShown.value }] }));
 
@@ -3286,8 +3291,8 @@ export default function WorkoutScreen() {
         // stop FOCUS_STACK_GAP above the ‹ › row.
         contentContainerStyle={[styles.scroll, {
           paddingTop: insets.top + 50,
-          paddingBottom: todaysCompletedWorkout || !workoutInfo ? 92
-            : focusMode ? FOCUS_NAV_BOTTOM + FOCUS_NAV_BTN + FOCUS_STACK_GAP + pinnedLift
+          paddingBottom: todaysCompletedWorkout || !workoutInfo ? tabBarTop
+            : focusMode ? focusNavBottom + FOCUS_NAV_BTN + FOCUS_STACK_GAP + pinnedLift
             : safeBottom + 150 + pinnedLift,
         }]}
         onLayout={e => { scrollMetricsRef.current.viewH = e.nativeEvent.layout.height; aimAtUpTo(); }}
@@ -3482,12 +3487,12 @@ export default function WorkoutScreen() {
 
       </ScrollView>
 
-      {/* List mode: bottom-left action cluster pinned just above the nav bar
-          (LIST_CLUSTER_BOTTOM), on the rest timer while one runs. Always
+      {/* List mode: bottom-left action cluster pinned just above the tab bar
+          (listClusterBottom), on the rest timer while one runs. Always
           available while a workout is active (even with 0 exercises) so notes /
           extra exercises can be added without scrolling. */}
       {!focusMode && !todaysCompletedWorkout && workoutInfo && (
-        <Reanimated.View style={[{ position: "absolute", left: 20, bottom: LIST_CLUSTER_BOTTOM, zIndex: 6 }, clusterStyle]}>
+        <Reanimated.View style={[{ position: "absolute", left: 20, bottom: listClusterBottom, zIndex: 6 }, clusterStyle]}>
           {renderActionCluster()}
         </Reanimated.View>
       )}
@@ -3566,7 +3571,7 @@ export default function WorkoutScreen() {
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         };
         return (
-          <Reanimated.View pointerEvents="box-none" style={[{ position: "absolute", left: 20, right: 20, bottom: FOCUS_NAV_BOTTOM, zIndex: 5 }, focusNavStyle]}>
+          <Reanimated.View pointerEvents="box-none" style={[{ position: "absolute", left: 20, right: 20, bottom: focusNavBottom, zIndex: 5 }, focusNavStyle]}>
             <View style={{ flexDirection: "row", gap: 16, alignItems: "center", justifyContent: isLast ? "flex-start" : "center" }}>
               <BounceButton onPress={isFirst ? undefined : goPrev} accessibilityLabel="Previous exercise">
                 {/* The app's white control button (the pills' surface + soft

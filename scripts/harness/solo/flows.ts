@@ -196,8 +196,26 @@ async function finishWorkout(s: Snap, day: { name: string; programId?: string; d
   return completed;
 }
 
+/** workout-detail.tsx's Delete, and the Workout tab's Delete & Redo
+ *  (handleDiscardCompleted): the session goes, and its date with it when
+ *  nothing else was logged that day. */
+async function deleteWorkout(target: CompletedWorkout): Promise<void> {
+  const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+  const updated = history.filter(w => w.id !== target.id);
+  await setJSON(WORKOUT_HISTORY_KEY, updated);
+  if (!updated.some(w => w.date === target.date)) {
+    const dates = await getJSON<string[]>(WORKOUT_DATES_KEY, []);
+    await setJSON(WORKOUT_DATES_KEY, dates.filter(d => d !== target.date));
+  }
+}
+
+/** The Journal's newest workout (its list's first card) or its oldest. */
+const byDate = (a: CompletedWorkout, b: CompletedWorkout) => a.date.localeCompare(b.date) || a.completedAt.localeCompare(b.completedAt);
+const newestOf = (s: Snap) => [...s.history].sort(byDate).at(-1) ?? null;
+const oldestOf = (s: Snap) => [...s.history].sort(byDate)[0] ?? null;
+
 /** log-workout.tsx's save of a session on a past date, from the Journal. */
-async function logFromJournal(date: string, day: { name: string; programId: string; dayId?: string }): Promise<void> {
+async function logFromJournal(date: string, day: { name: string; programId: string; dayId?: string }): Promise<CompletedWorkout> {
   const completed: CompletedWorkout = {
     id: `workout_${Date.now()}_${nextId++}`,
     date,
@@ -215,6 +233,7 @@ async function logFromJournal(date: string, day: { name: string; programId: stri
   const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
   const after = programsAfterPastLog(programs, { owningProgramId: day.programId, programId: day.programId, date, workoutName: day.name });
   if (after.changed) await setJSON(PROGRAMS_KEY, after.programs);
+  return completed;
 }
 
 const writePrograms = (programs: SavedProgram[]) => setJSON(PROGRAMS_KEY, programs);
@@ -313,6 +332,47 @@ function sessionLandsOnToday(after: Snap, w: CompletedWorkout): string[] {
   return issues;
 }
 
+/** What every card shows: each session's number, its dot, and the dots
+ *  around it (utils/sessionTrack.ts). */
+const cards = (s: Snap) => buildSessionTracks(s.history, s.programs, s.today);
+
+/** A delete takes its session and nothing else: no program moves, today's
+ *  pick stays, and every other session the schedule placed keeps its dot
+ *  (user request, 2026-10-16: delete, do it again, delete again). */
+function afterDeleting(before: Snap, after: Snap, target: CompletedWorkout): string[] {
+  const issues: string[] = [];
+  if (after.history.some(w => w.id === target.id)) issues.push(`${target.workoutName} on ${target.date} is still there after deleting it`);
+  if (JSON.stringify(before.programs) !== JSON.stringify(after.programs)) issues.push("deleting a workout changed a program");
+  if (JSON.stringify(before.override) !== JSON.stringify(after.override)) issues.push("deleting a workout changed today's pick");
+  const was = cards(before);
+  const now = cards(after);
+  for (const w of after.history) {
+    // Placed on its schedule (a count's dot moves with the count, by design).
+    if (was.missedById[w.id] === undefined) continue;
+    if (now.positionById[w.id] !== was.positionById[w.id]) {
+      issues.push(`deleting ${target.workoutName} on ${target.date} moved ${w.workoutName} on ${w.date} from dot ${was.positionById[w.id]} to ${now.positionById[w.id]}`);
+    }
+  }
+  return issues;
+}
+
+/** Logged and deleted again: everything as it was, every card included. */
+function backAsItWas(before: Snap, after: Snap): string[] {
+  const issues: string[] = [];
+  for (const [what, a, b] of [
+    ["the workout history", before.history, after.history],
+    ["the workout dates", [...before.dates].sort(), [...after.dates].sort()],
+    ["the programs", before.programs, after.programs],
+    ["today's pick", before.override, after.override],
+    ["the workout cards", cards(before), cards(after)],
+    ["Home's week", activeOf(before) ? homeStrip(before) : null, activeOf(after) ? homeStrip(after) : null],
+  ] as const) {
+    if (JSON.stringify(a) !== JSON.stringify(b)) issues.push(`${what} isn't back as it was after logging and deleting`);
+  }
+  if (before.today !== after.today) issues.push(`the app moved from ${before.today} to ${after.today}`);
+  return issues;
+}
+
 const workoutSteps: Step[] = [
   {
     label: "Workout tab: log today's workout",
@@ -351,19 +411,22 @@ const workoutSteps: Step[] = [
     check: (_b, after, w) => sessionLandsOnToday(after, w as CompletedWorkout),
   },
   {
-    label: "Workout tab: discard today's logged workout",
+    label: "Workout tab: Delete & Redo today's workout",
     enabled: s => !!workoutTab(s).completed,
     changes: { history: true },
     run: async s => {
       const target = workoutTab(s).completed!;
-      const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
-      const updated = history.filter(w => w.id !== target.id);
-      await setJSON(WORKOUT_HISTORY_KEY, updated);
-      if (!updated.some(w => w.date === target.date)) {
-        const dates = await getJSON<string[]>(WORKOUT_DATES_KEY, []);
-        await setJSON(WORKOUT_DATES_KEY, dates.filter(d => d !== target.date));
-      }
+      await deleteWorkout(target);
+      return target;
     },
+    check: (b, a, target) => afterDeleting(b, a, target as CompletedWorkout),
+  },
+  {
+    label: "Workout tab: log today's workout, then Delete & Redo",
+    enabled: s => { const w = workoutTab(s); return !w.completed && !!w.shows; },
+    changes: { history: true },
+    run: async s => deleteWorkout(await finishWorkout(s, workoutTab(s).shows!)),
+    check: backAsItWas,
   },
   // Change Workout Day: every training day of either program (the sheet lists
   // the active program's days and the other, unarchived, programs').
@@ -713,6 +776,34 @@ const journalSteps: Step[] = [
       await logFromJournal(addDaysYMD(s.today, -10), { name: day.label, programId: active.id, dayId: day.dayId });
     },
   },
+  {
+    label: "Journal: log yesterday's planned workout, then delete it",
+    enabled: s => {
+      const active = activeOf(s);
+      const y = addDaysYMD(s.today, -1);
+      return !!active && !!getWorkoutForDate(active, y) && !s.history.some(w => w.date === y);
+    },
+    changes: { history: true },
+    run: async s => {
+      const active = activeOf(s)!;
+      const y = addDaysYMD(s.today, -1);
+      const planned = getWorkoutForDate(active, y)!;
+      await deleteWorkout(await logFromJournal(y, { name: planned.name, programId: active.id, dayId: planned.dayId }));
+    },
+    check: backAsItWas,
+  },
+  // workout-detail's Delete, from the Journal's list.
+  ...([["newest", newestOf], ["oldest", oldestOf]] as const).map(([which, pick]): Step => ({
+    label: `Journal: delete the ${which} workout`,
+    enabled: s => !!pick(s),
+    changes: { history: true },
+    run: async s => {
+      const target = pick(s)!;
+      await deleteWorkout(target);
+      return target;
+    },
+    check: (b, a, target) => afterDeleting(b, a, target as CompletedWorkout),
+  })),
 ];
 
 export const STEPS: Step[] = [...clockSteps, ...workoutSteps, ...stripSteps, ...programSteps, ...journalSteps];
@@ -746,6 +837,25 @@ export const STORIES: string[][] = [
   // A move, then an earlier session logged from the Journal.
   ["Workout tab: change today to Rest, Move to Tomorrow", "the next day comes (app opened at 10am)",
     "Journal: log day 1 on a date ten days ago"],
+  // Delete it, do it again, delete it again (user request, 2026-10-16): today's
+  // from the Workout tab, and yesterday's from the Journal, then the next day.
+  ["Workout tab: log today's workout", "Workout tab: Delete & Redo today's workout",
+    "Workout tab: log today's workout", "Workout tab: Delete & Redo today's workout",
+    "Workout tab: log today's workout", "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)",
+    "Workout tab: log today's workout"],
+  ["Journal: log yesterday's planned workout", "Journal: delete the newest workout",
+    "Journal: log yesterday's planned workout", "Journal: delete the newest workout",
+    "Journal: log yesterday's planned workout", "Workout tab: log today's workout"],
+  // At 1am, last night's session deleted and done again: the app goes back to
+  // last night's workout, and on to the new day once it's logged.
+  ["past midnight: 1am, still up", "Workout tab: log today's workout", "Journal: delete the newest workout",
+    "Workout tab: log today's workout", "Journal: delete the newest workout", "Workout tab: log today's workout"],
+  // On hold, and made inactive, with its last session deleted and done again.
+  ["Workout tab: log today's workout", "My Programs: pause the active program", "Journal: delete the newest workout",
+    "My Programs: resume, carrying on where I left off", "Workout tab: log today's workout"],
+  ["Workout tab: log today's workout", "My Programs: make the active program inactive", "Journal: delete the newest workout",
+    "Journal: delete the oldest workout", "My Programs: make Strength active", "Workout tab: log today's workout",
+    "Workout tab: Delete & Redo today's workout", "Workout tab: log today's workout"],
 ];
 
 // ─── Always true ─────────────────────────────────────────────────────────────
@@ -769,6 +879,15 @@ export function alwaysTrue(s: Snap): string[] {
       if (list && new Set(list).size !== list.length) issues.push(`${p.name}: a ${name} date is listed twice: ${JSON.stringify(list)}`);
     }
     if (p.dayIds && p.dayIds.length !== p.cyclePattern.length) issues.push(`${p.name} has ${p.dayIds.length} day ids for ${p.cyclePattern.length} days`);
+  }
+
+  // The dates the calendars, reminders and the week-idle hold read are the
+  // dates something is logged on: a delete takes its date only when it was the
+  // day's last session, and a redo puts it back once.
+  const logged = [...new Set(s.history.map(w => w.date))].sort();
+  const dates = [...s.dates].sort();
+  if (JSON.stringify(dates) !== JSON.stringify(logged)) {
+    issues.push(`the saved workout dates ${JSON.stringify(dates)} aren't the dates logged ${JSON.stringify(logged)}`);
   }
 
   // Home and the Workout tab agree about today.

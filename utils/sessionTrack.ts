@@ -19,11 +19,23 @@
 // session that did the replacing says so on its own card ("Instead of Push",
 // `insteadOfById`), read off the same track so the two ends always agree.
 //
+// Every card draws the track as it stands TODAY, its own session marked: every
+// occurrence logged in green wherever it falls, misses grey, the rest still to
+// come. An older card used to light only the dots up to its own, so a later
+// session read as an empty ring beside a later miss in grey: a week trained
+// looked like neither (user report, 2026-10-16).
+//
+// A program counts only while it runs. On hold, the walk stops at the hold; made
+// inactive or finished, at the day it stopped (`runEndYMD`), so the weeks since
+// aren't missed and every card stays where it was. Run again, each run keeps its
+// own track and its own count.
+//
 // Pure and RN-free (verified by scripts/verify-session-track.ts).
 
-import { addDaysYMD, toYMD } from "./dates";
+import { addDaysYMD, parseStoredDate, toYMD } from "./dates";
 import { cycleIndexForDate } from "./workout";
 import { heldOn, runStartYMD } from "./programHolds";
+import { programAsRun } from "./programRuns";
 import { isDatePushed } from "./skippedDates";
 import { workoutBelongsToProgram } from "./progressStats";
 import { dayIdAt, indexOfDayId, normalizeDayName } from "./programDays";
@@ -101,6 +113,9 @@ export type SessionTrackInfo = {
   replaced: number[];
   /** The scheduled dates of `replaced`, in the same order. */
   replacedDates: string[];
+  /** Occurrences with a session logged in them, all of them: a card draws the
+   *  sessions after its own as well as the ones before. */
+  done: number[];
   /** How many occurrences have come round up to and including today. */
   occurrences: number;
 };
@@ -127,22 +142,27 @@ export type SessionTrackInfo = {
  * just "not yet"; something else logged IS the day's session, since the Workout
  * tab treats the day as done once anything is logged on it. Should this day be
  * logged after all, the occurrence fills and the orange goes on the next read.
+ *
+ * `endYMD` is the run's last day once it has stopped (`runEndYMD`): nothing
+ * after it came round, so nothing after it is missed.
  */
-export function buildSessionTrack({ program, dayId, history, todayYMD, trainedDates }: {
+export function buildSessionTrack({ program, dayId, history, todayYMD, trainedDates, endYMD }: {
   program: SavedProgram;
   dayId: string;
   history: CompletedWorkout[];
   todayYMD: string;
   trainedDates?: ReadonlySet<string>;
+  endYMD?: string | null;
 }): SessionTrackInfo {
-  const occurrences = occurrencesOfDay(program, dayId, todayYMD);
+  const occurrences = occurrencesOfDay(program, dayId, endYMD && endYMD < todayYMD ? endYMD : todayYMD);
   const numberById: Record<string, number> = {};
-  if (occurrences.length === 0) return { numberById, missed: [], replaced: [], replacedDates: [], occurrences: 0 };
+  if (occurrences.length === 0) return { numberById, missed: [], replaced: [], replacedDates: [], done: [], occurrences: 0 };
 
   const sessions = [...history].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const missed: number[] = [];
   const replaced: number[] = [];
   const replacedDates: string[] = [];
+  const done: number[] = [];
   let next = 0; // index into `sessions`
 
   occurrences.forEach((occYMD, i) => {
@@ -156,7 +176,10 @@ export function buildSessionTrack({ program, dayId, history, todayYMD, trainedDa
       filled = true;
       next++;
     }
-    if (filled) return;
+    if (filled) {
+      done.push(i + 1);
+      return;
+    }
     if (trainedDates?.has(occYMD)) {
       replaced.push(i + 1);
       replacedDates.push(occYMD);
@@ -166,7 +189,37 @@ export function buildSessionTrack({ program, dayId, history, todayYMD, trainedDa
     }
   });
 
-  return { numberById, missed, replaced, replacedDates, occurrences: occurrences.length };
+  return { numberById, missed, replaced, replacedDates, done, occurrences: occurrences.length };
+}
+
+export type TrackDot = "done" | "current" | "replaced" | "missed" | "future";
+
+/**
+ * What each dot on a card's track is: the card's own session `current`, then
+ * missed, replaced and logged ones as `buildSessionTracks` read them, wherever
+ * they fall, and the rest `future` (not come round yet, or after a program
+ * stopped). Without `done` (nothing to say which), every dot before the card's
+ * own reads as done. Never fewer dots than the session shown: a pushed day can
+ * give a program one more occurrence than it planned.
+ */
+export function trackDots({ current, total, missed, replaced, done }: {
+  current: number;
+  total: number;
+  missed?: readonly number[];
+  replaced?: readonly number[];
+  done?: readonly number[];
+}): TrackDot[] {
+  const missedSet = new Set(missed ?? []);
+  const replacedSet = new Set(replaced ?? []);
+  const doneSet = done ? new Set(done) : null;
+  return Array.from({ length: Math.max(total, current) }, (_, i): TrackDot => {
+    const n = i + 1;
+    if (replacedSet.has(n)) return "replaced";
+    if (missedSet.has(n)) return "missed";
+    if (n === current) return "current";
+    if (doneSet) return doneSet.has(n) ? "done" : "future";
+    return n < current ? "done" : "future";
+  });
 }
 
 /**
@@ -187,19 +240,87 @@ export type SessionTracks = {
   missedById: Record<string, number[]>;
   /** Occurrences trained with something else on their date (orange dots). */
   replacedById: Record<string, number[]>;
+  /** Occurrences logged (green dots), after the card's own as well as before.
+   *  For a session the schedule can't place, the counts of the others like
+   *  it, which is where their dots sit. */
+  doneById: Record<string, number[]>;
+  /** How many sessions of its day its run schedules in all: the track's
+   *  length. 0 for an extra, which hides the track. */
+  totalById: Record<string, number>;
   /** Workout id → the scheduled day it stood in for, by the day's current
    *  label: the other end of an orange dot ("Instead of Push" on its card). */
   insteadOfById: Record<string, string>;
 };
 
+/** One run of a program as the tracks read it: the program as that run left
+ *  it (programAsRun), or as it is for the run it's on, and the day it began. */
+type TrackRun = { program: SavedProgram; startYMD: string };
+
+/** A program's runs, oldest first: each it was started again after
+ *  (SavedProgram.runs), then the one it's on. Each reads its own timeline, so
+ *  making a program active again starts a new track and leaves the cards of the
+ *  run before where they were. */
+function trackRuns(program: SavedProgram): TrackRun[] {
+  const out: TrackRun[] = [];
+  for (const run of program.runs ?? []) {
+    const asRun = programAsRun(program, run);
+    const startYMD = runStartYMD(asRun);
+    if (startYMD) out.push({ program: asRun, startYMD });
+  }
+  const startYMD = runStartYMD(program);
+  if (startYMD) out.push({ program, startYMD });
+  return out;
+}
+
+/** Which of `runs` (oldest first) a session dated `ymd` is in: the last to
+ *  have begun by then. One from before them all is counted with the first and
+ *  sits on no track (it's before every occurrence). -1 with no runs. */
+function runIndexFor(runs: readonly TrackRun[], ymd: string): number {
+  if (runs.length === 0) return -1;
+  let at = 0;
+  runs.forEach((r, i) => { if (r.startYMD <= ymd) at = i; });
+  return at;
+}
+
+/** The last day a run asks for a session on, once it has stopped; null while
+ *  it runs (to today, or the day before the hold it's on). Finished: the day it
+ *  was finished. Made inactive: no record of the day was kept, so its last
+ *  session stands in, as on the program page (utils/programHistory.ts). Read on
+ *  to today instead, every week since it stopped came out missed (user request,
+ *  2026-10-16: a program paused or made inactive stops counting and stays where
+ *  it was). */
+function runEndYMD(run: TrackRun, sessions: readonly CompletedWorkout[]): string | null {
+  const p = run.program;
+  if (p.status === "active") return null;
+  if (p.status === "completed") {
+    const finished = parseStoredDate(p.completedDate);
+    if (finished) return toYMD(finished);
+  }
+  let last: string | null = null;
+  for (const w of sessions) if (w.date >= run.startYMD && (last === null || w.date > last)) last = w.date;
+  return last ?? addDaysYMD(run.startYMD, -1);
+}
+
+/** How many sessions of `w`'s day `program` schedules in all. A dayId names
+ *  one slot, so once a cycle; the name count is the fallback for a session
+ *  with none, and it reads 0 once the day has been renamed (or for an extra,
+ *  which hides the track). */
+function scheduledSessions(program: SavedProgram, w: CompletedWorkout): number {
+  const perCycle = w.dayId && indexOfDayId(program, w.dayId) >= 0
+    ? 1
+    : program.cyclePattern.filter(n => n === w.workoutName).length;
+  return perCycle * Math.ceil(program.totalWeeks * 7 / program.cycleDays);
+}
+
 /**
  * Every workout's session number and missed occurrences, for a whole history.
  *
- * Grouped by (program, day): a `dayId` only means anything inside its program —
- * two pre-`dayIds` programs both have a positional `d0` — and a session is
- * attributed with `workoutBelongsToProgram`, the same rule the Progress page and
- * the Journal apply, so a legacy record with no `programId` still lands on the
- * program whose window it falls in. Active program wins a tie.
+ * Grouped by (program, run, day): a `dayId` only means anything inside its
+ * program — two pre-`dayIds` programs both have a positional `d0` — and a
+ * session is attributed with `workoutBelongsToProgram`, the same rule the
+ * Progress page and the Journal apply, so a legacy record with no `programId`
+ * still lands on the program whose window it falls in. Active program wins a
+ * tie. A program run again counts each run apart, on that run's own timeline.
  *
  * Sessions the schedule can't place fall back to their rank among that day's
  * completed sessions, which is what both screens did for everything before this.
@@ -217,6 +338,8 @@ export function buildSessionTracks(
   const positionById: Record<string, number> = {};
   const missedById: Record<string, number[]> = {};
   const replacedById: Record<string, number[]> = {};
+  const doneById: Record<string, number[]> = {};
+  const totalById: Record<string, number> = {};
 
   // Every date anything was trained on, whichever program (if any) owns it: a
   // free custom workout on a Push day stood in for Push just as much as one
@@ -229,14 +352,39 @@ export function buildSessionTracks(
   const ownerById = new Map<string, SavedProgram | null>();
   for (const w of history) ownerById.set(w.id, activeFirst.find(p => workoutBelongsToProgram(w, p)) ?? null);
 
-  // How many times this day has been DONE. Scoped to the owning program as well
-  // as the day: a day id is only unique inside its program (two pre-dayIds
-  // programs both have a positional "d0"), and two programs shouldn't share a
-  // counter.
+  // Each program's runs, and the run each of its sessions is in.
+  const runsByProgram = new Map<string, TrackRun[]>();
+  const runsOf = (p: SavedProgram): TrackRun[] => {
+    let runs = runsByProgram.get(p.id);
+    if (!runs) {
+      runs = trackRuns(p);
+      runsByProgram.set(p.id, runs);
+    }
+    return runs;
+  };
+  const runById = new Map<string, number>();
+  const runSessions = new Map<string, CompletedWorkout[]>();
+  for (const w of history) {
+    const owner = ownerById.get(w.id);
+    if (!owner) continue;
+    const i = runIndexFor(runsOf(owner), w.date);
+    runById.set(w.id, i);
+    const key = `${owner.id}#${i}`;
+    const list = runSessions.get(key);
+    if (list) list.push(w);
+    else runSessions.set(key, [w]);
+    totalById[w.id] = scheduledSessions(i >= 0 ? runsOf(owner)[i].program : owner, w);
+  }
+
+  // How many times this day has been DONE. Scoped to the owning program and its
+  // run as well as the day: a day id is only unique inside its program (two
+  // pre-dayIds programs both have a positional "d0"), two programs shouldn't
+  // share a counter, and a program run again starts counting again.
   const byDay: Record<string, CompletedWorkout[]> = {};
   for (const w of history) {
     const day = w.dayId ? `id:${w.dayId}` : `name:${normalizeDayName(w.workoutName)}`;
-    const key = `${ownerById.get(w.id)?.id ?? ""}:${day}`;
+    const owner = ownerById.get(w.id);
+    const key = owner ? `${owner.id}#${runById.get(w.id)}:${day}` : `:${day}`;
     (byDay[key] ??= []).push(w);
   }
   for (const group of Object.values(byDay)) {
@@ -246,46 +394,62 @@ export function buildSessionTracks(
 
   // Where each one sits on its day's schedule, and which occurrences nobody
   // trained.
-  const byTrack = new Map<string, { program: SavedProgram; dayId: string; sessions: CompletedWorkout[] }>();
+  const byTrack = new Map<string, { program: SavedProgram; run: number; dayId: string; sessions: CompletedWorkout[] }>();
   for (const w of history) {
     const program = ownerById.get(w.id);
-    if (!program || !w.dayId) continue;
-    const key = `${program.id}:${w.dayId}`;
-    const entry = byTrack.get(key) ?? { program, dayId: w.dayId, sessions: [] };
+    const run = runById.get(w.id) ?? -1;
+    if (!program || run < 0 || !w.dayId) continue;
+    const key = `${program.id}#${run}:${w.dayId}`;
+    const entry = byTrack.get(key) ?? { program, run, dayId: w.dayId, sessions: [] };
     entry.sessions.push(w);
     byTrack.set(key, entry);
   }
-  // One track per (program, day), built once: the dots below and the "Instead
-  // of" line after them both read it, so a card and the orange dot it explains
-  // can't disagree. A day nobody has logged yet still gets one (empty history).
+  // One track per (program, run, day), built once: the dots below and the
+  // "Instead of" line after them both read it, so a card and the orange dot it
+  // explains can't disagree. A day nobody has logged yet still gets one (empty
+  // history).
   const trackCache = new Map<string, SessionTrackInfo>();
-  const trackFor = (program: SavedProgram, dayId: string): SessionTrackInfo => {
-    const key = `${program.id}:${dayId}`;
+  const trackFor = (program: SavedProgram, run: number, dayId: string): SessionTrackInfo => {
+    const key = `${program.id}#${run}:${dayId}`;
     let track = trackCache.get(key);
     if (!track) {
-      track = buildSessionTrack({ program, dayId, history: byTrack.get(key)?.sessions ?? [], todayYMD, trainedDates });
+      const r = runsOf(program)[run];
+      track = buildSessionTrack({
+        program: r.program,
+        dayId,
+        history: byTrack.get(key)?.sessions ?? [],
+        todayYMD,
+        trainedDates,
+        endYMD: runEndYMD(r, runSessions.get(`${program.id}#${run}`) ?? []),
+      });
       trackCache.set(key, track);
     }
     return track;
   };
 
-  for (const { program, dayId, sessions } of byTrack.values()) {
-    const track = trackFor(program, dayId);
+  for (const { program, run, dayId, sessions } of byTrack.values()) {
+    const track = trackFor(program, run, dayId);
     for (const w of sessions) {
       const occurrence = track.numberById[w.id];
       if (occurrence === undefined) continue;
       positionById[w.id] = occurrence;
       missedById[w.id] = track.missed;
       replacedById[w.id] = track.replaced;
+      doneById[w.id] = track.done;
     }
   }
 
   // No schedule to place it against (a free workout, no slot, a start date moved
   // by a hold resumed before holds were kept): the dot sits where the count
-  // says, and nothing is greyed — an unknown schedule can't claim anything was
-  // missed.
-  for (const w of history) {
-    if (positionById[w.id] === undefined) positionById[w.id] = numberById[w.id];
+  // says, beside the others like it, and nothing is greyed — an unknown
+  // schedule can't claim anything was missed.
+  for (const group of Object.values(byDay)) {
+    const unplaced = group.filter(w => positionById[w.id] === undefined);
+    const counts = unplaced.map(w => numberById[w.id]);
+    for (const w of unplaced) {
+      positionById[w.id] = numberById[w.id];
+      doneById[w.id] = counts;
+    }
   }
 
   // What each session stood in for: the day its program scheduled on that
@@ -298,17 +462,22 @@ export function buildSessionTracks(
   for (const w of history) {
     const program = ownerById.get(w.id) ?? active;
     if (!program) continue;
-    const slot = cycleIndexForDate(program, w.date);
+    const runs = runsOf(program);
+    const run = runIndexFor(runs, w.date);
+    // Before every run, nothing was scheduled.
+    if (run < 0 || runs[run].startYMD > w.date) continue;
+    const p = runs[run].program;
+    const slot = cycleIndexForDate(p, w.date);
     if (slot === null) continue;
-    const label = program.cyclePattern[slot];
+    const label = p.cyclePattern[slot];
     if (!label || normalizeDayName(label) === "rest") continue;
     // A pushed or held date isn't an occurrence, so it can't be in here.
-    if (trackFor(program, dayIdAt(program, slot)).replacedDates.includes(w.date)) {
+    if (trackFor(program, run, dayIdAt(p, slot)).replacedDates.includes(w.date)) {
       insteadOfById[w.id] = label;
     }
   }
 
-  return { numberById, positionById, missedById, replacedById, insteadOfById };
+  return { numberById, positionById, missedById, replacedById, doneById, totalById, insteadOfById };
 }
 
 function minYMD(a: string, b: string): string {

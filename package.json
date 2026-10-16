@@ -19,7 +19,6 @@
   },
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",
-    "@callstack/liquid-glass": "^0.7.1",
     "@expo-google-fonts/nunito": "^0.4.2",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",

@@ -67,7 +67,7 @@ import { carriedExercises, knownCustomExercises } from "../../utils/customExerci
 import { getEffectiveToday } from "../../utils/workout";
 import { findRunView, programRunViews, sameRun, type ProgramRunView, type RunRef } from "../../utils/programRuns";
 import {
-  compareCandidates, compareLifts, glanceStats, greenRunFor, liftSlots, missedDates, muscleStatsPerWeek, runDates, runName, runStatus,
+  compareCandidates, compareLifts, compareReadiness, compareStartGreen, glanceStats, liftSlots, missedDates, muscleStatsPerWeek, runDates, runName, runStatus,
   sharedStrength, spanCaption, spanDays, weekOfDay, weeklyTotals,
 } from "../../utils/programCompare";
 
@@ -391,7 +391,7 @@ function ProgressBody({
   // changed since from its row), blue a finished one (utils/programCompare.ts).
   // The day things are read up to is the one the Workout tab is on.
   const todayYMD = useMemo(() => getEffectiveToday(activeProgram, history), [activeProgram, history]);
-  const startGreen = useMemo(() => greenRunFor(scope, programs, history), [scope, programs, history]);
+  const startGreen = useMemo(() => compareStartGreen(scope, programs, history), [scope, programs, history]);
   const greenView = useMemo(() => (compare ? findRunView(compare.green, programs, history) : null), [compare, programs, history]);
   const blueView = useMemo(() => (compare ? findRunView(compare.blue, programs, history) : null), [compare, programs, history]);
   const comparing = !!(greenView && blueView);
@@ -410,7 +410,10 @@ function ProgressBody({
     }
     return out;
   }, [programs, history, blueView]);
-  const canCompare = !comparing && !!startGreen && blueCandidates.length > 0;
+  // The button is always there; until there's something to compare, it opens
+  // the sheet locked, saying what comparing needs (user request, 2026-10-15).
+  const canCompare = !!startGreen && blueCandidates.length > 0;
+  const readiness = useMemo(() => compareReadiness(programs, history), [programs, history]);
 
   // A program in the comparison that's since been deleted ends it.
   useEffect(() => {
@@ -679,7 +682,7 @@ function ProgressBody({
         {title !== "" && (
           <View style={[styles.titleRow, styles.titleRowSplit]}>
             <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
-            {canCompare ? <CompareButton onPress={() => openSheet("blue")} /> : null}
+            {!comparing ? <CompareButton onPress={() => openSheet("blue")} /> : null}
           </View>
         )}
 
@@ -715,7 +718,7 @@ function ProgressBody({
                 leadingIcon="calendar-outline"
               />
               {/* No title on a trainer's client page: the button sits here. */}
-              {title === "" && canCompare ? <CompareButton onPress={() => openSheet("blue")} size={44} /> : null}
+              {title === "" ? <CompareButton onPress={() => openSheet("blue")} size={44} /> : null}
             </View>
           )}
           {scopeFallbackNote && !comparing ? (
@@ -873,6 +876,8 @@ function ProgressBody({
         selected={sheetSide === "green" ? greenView?.ref ?? null : blueView?.ref ?? null}
         other={sheetSide === "green" ? blueView : greenView ?? startGreen}
         todayYMD={todayYMD}
+        locked={!comparing && !canCompare ? readiness : null}
+        forClient={!!clientId}
         onPick={onPickRun}
         onClose={() => setSheetSide(null)}
       />

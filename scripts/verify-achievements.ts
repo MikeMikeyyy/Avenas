@@ -14,6 +14,7 @@ import {
   detectWorkoutAchievements,
   pickHeadline,
   visibleAchievements,
+  withMilestoneCardMoved,
 } from "../utils/achievements";
 
 let passed = 0;
@@ -79,6 +80,37 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
   eq(after.awarded, ["workouts:10"], "milestone: remembered once earned");
   eq(categories(detectWorkoutAchievements(workout([]), history(9), after, NOW)), [],
     "milestone: deleting and redoing the 10th doesn't award it again");
+}
+
+// ─── Delete, redo, delete: the milestone's card follows the redo ────────────
+// (user request, 2026-10-16) Announced once, but its card went with the
+// deleted session and never came back on the redo.
+{
+  const nine = Array.from({ length: 9 }, () => workout([ex("Row", [set("50", "10")])]));
+  const tenth = workout([], "tenth");
+  let state = applyAchievements(EMPTY_ACHIEVEMENTS, detectWorkoutAchievements(tenth, nine, EMPTY_ACHIEVEMENTS, NOW), NOW);
+  const shown = (s: AchievementsState, ids: string[]) =>
+    visibleAchievements(s, new Set(ids), NOW).filter(c => c.category === "workouts").map(c => ("workoutId" in c ? c.workoutId : ""));
+  const nineIds = nine.map(w => w.id);
+  eq(shown(state, [...nineIds, "tenth"]), ["tenth"], "redo: the 10th's card");
+  eq(shown(state, nineIds), [], "redo: deleted, its card goes with it");
+
+  const redo = workout([], "redo");
+  eq(detectWorkoutAchievements(redo, nine, state, NOW), [], "redo: nothing announced again");
+  state = withMilestoneCardMoved(state, redo, nine);
+  eq(shown(state, [...nineIds, "redo"]), ["redo"], "redo: done again, the card is back, on the redo");
+  eq(state.awarded, ["workouts:10"], "redo: still awarded once");
+
+  eq(shown(state, nineIds), [], "redo: deleted again, gone again");
+  const again = workout([], "again");
+  state = withMilestoneCardMoved(state, again, nine);
+  eq(shown(state, [...nineIds, "again"]), ["again"], "redo: and back again on the next redo");
+
+  // A card whose session is still there stays put, and an older session
+  // deleted doesn't hand it to the next one.
+  const tenAll = [...nine.slice(1), again];
+  eq(withMilestoneCardMoved(state, workout([], "eleventh"), tenAll), state, "redo: a card on a session still there stays put");
+  eq(withMilestoneCardMoved(state, workout([], "x"), nine.slice(1)), state, "redo: a different count leaves the card alone");
 }
 
 // ─── Programs: only a full run, once per run ─────────────────────────────────

@@ -91,7 +91,8 @@ export type ProgramRunView = {
   /** The program as the run left it (programAsRun), or as it is for the
    *  latest; an earlier run's is dated by its own sessions. */
   program: SavedProgram;
-  /** Its first and last days, "YYYY-MM-DD"; the last is null while it runs. */
+  /** Its first and last days, "YYYY-MM-DD"; the last is null while it runs
+   *  (one made inactive stopped at its last session). */
   startYMD: string;
   endYMD: string | null;
   /** Finished, rather than shelved or still going. */
@@ -187,8 +188,12 @@ export function programRunViews(program: SavedProgram, history: readonly Complet
   });
   const latestStart = runStartYMD(program);
   if (latestStart) {
-    const end = program.status === "completed" ? ymdOf(program.completedDate) : null;
-    const sessions = sessionsBetween(program, history, latestStart, end);
+    const finishedOn = program.status === "completed" ? ymdOf(program.completedDate) : null;
+    const sessions = sessionsBetween(program, history, latestStart, finishedOn);
+    // Made inactive, it stopped where it stopped: its last session stands in
+    // for the day, as for a shelved run above. Open-ended, it went on counting
+    // the weeks since (user request, 2026-10-16).
+    const end = program.status === "active" ? null : finishedOn ?? sessions.at(-1)?.date ?? latestStart;
     // One never made active has nothing to read, unless the Journal logged a
     // session onto it.
     if (program.status !== "created" || sessions.length > 0) {

@@ -83,6 +83,44 @@ export function compareCandidates(
   return out.sort((a, b) => (b.endYMD ?? "").localeCompare(a.endYMD ?? ""));
 }
 
+/** The active program's run on the go, if it has one. */
+function currentRun(programs: readonly SavedProgram[], history: readonly CompletedWorkout[]): ProgramRunView | null {
+  const active = programs.find(q => q.status === "active");
+  return active ? programRunViews(active, history).find(v => v.ref.run === "latest") ?? null : null;
+}
+
+/** Green when the compare button is tapped: `greenRunFor`, unless that has
+ *  nothing to be compared with (the program picked at the top is the one
+ *  finished program), when the current program takes green so the picked one
+ *  can go in blue, and failing that the run that finished last. So the page
+ *  can compare whenever `compareReadiness` says both steps are done. */
+export function compareStartGreen(
+  scope: ProgramScope,
+  programs: readonly SavedProgram[],
+  history: readonly CompletedWorkout[],
+): ProgramRunView | null {
+  const picked = greenRunFor(scope, programs, history);
+  const fallbacks = [picked, currentRun(programs, history), compareCandidates(programs, history, null)[0] ?? null];
+  return fallbacks.find(v => v && compareCandidates(programs, history, v.ref).length > 0) ?? picked;
+}
+
+/** What comparing needs, for the compare sheet's checklist while it can't
+ *  (user request, 2026-10-15): a FINISHED program with a session in it, and
+ *  another to set beside it, the one on the go (the same program run again
+ *  counts) or a second finished one. The second step only counts once the
+ *  first is done: before anything is finished, the program on the go is the
+ *  one to finish, not "another". */
+export function compareReadiness(
+  programs: readonly SavedProgram[],
+  history: readonly CompletedWorkout[],
+): { finished: boolean; another: boolean } {
+  const finished = compareCandidates(programs, history, null);
+  return {
+    finished: finished.length > 0,
+    another: finished.length > 0 && (currentRun(programs, history) !== null || finished.length > 1),
+  };
+}
+
 /** A run's name: the program's, with which run when it's had more than one
  *  ("Push Pull Legs, 1st run"); the one it's on now goes by the name alone. */
 export function runName(view: ProgramRunView): string {

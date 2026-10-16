@@ -16,7 +16,7 @@ import { RestActions, RestDrainLine, RestTime, formatRestTime, useRestProgress }
 import { upNextTail } from "../utils/workoutTimer";
 import { FontFamily, ACCT, APP_LIGHT, APP_DARK, CUE_INK, CUE_INK_DARK } from "../constants/theme";
 import {
-  BAR_HIDE_Y, BAR_INSET_X, BAR_SHADOW, REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H, barButtonFill,
+  BAR_INSET_X, BAR_SHADOW, REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H, barButtonFill,
 } from "../constants/floatingBars";
 
 function fmtTime(secs: number): string {
@@ -47,17 +47,17 @@ export default function WorkoutActiveBar() {
 
   // Where it sits, and whether it shows, come from the same place the rest
   // pill's do (hooks/useFloatingBars.ts), so the two never cover each other.
-  const { onTabScreen, workoutBarShown: active, workoutBarBottom, restInBar } = useFloatingBars();
+  const { onTabScreen, workoutBarShown: active, workoutBarBottom, workoutBarHideY, restInBar } = useFloatingBars();
 
   const bottomSv = useSharedValue(workoutBarBottom);
   useEffect(() => {
     bottomSv.value = withSpring(workoutBarBottom, RISE);
   }, [workoutBarBottom, bottomSv]);
-  const barY = useSharedValue(BAR_HIDE_Y);
+  const barY = useSharedValue(workoutBarHideY);
 
   useEffect(() => {
-    barY.value = active ? withSpring(0, RISE) : withTiming(BAR_HIDE_Y, { duration: 220 });
-  }, [active, barY]);
+    barY.value = active ? withSpring(0, RISE) : withTiming(workoutBarHideY, { duration: 220 });
+  }, [active, barY, workoutBarHideY]);
 
   const animStyle = useAnimatedStyle(() => ({
     bottom: bottomSv.value,

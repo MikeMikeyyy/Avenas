@@ -42,6 +42,7 @@ import { EMPTY_ACHIEVEMENTS, type Achievement, type AchievementsState } from "..
 import { visibleAchievements } from "../../utils/achievements";
 import { loadAchievements } from "../../utils/achievementStore";
 import InsightsCard from "../../components/InsightsCard";
+import { tabScreen } from "../../components/TabScreen";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
 
@@ -253,7 +254,9 @@ function StartButton({ isTodayCompleted }: { isTodayCompleted: boolean }) {
 
 
 
-export default function HomeScreen() {
+export default tabScreen(HomeScreen);
+
+function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isDark } = useTheme();

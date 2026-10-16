@@ -2,7 +2,8 @@
 //
 // The Progress page's way into comparing two programs: a round button with
 // two overlapping circles, green and periwinkle (the Program Compare canvas).
-// It shows once there's a finished program to compare with.
+// It's always there; with nothing to compare yet it opens the sheet locked,
+// saying what comparing needs (user request, 2026-10-15).
 
 import { View, StyleSheet } from "react-native";
 import Svg, { Circle } from "react-native-svg";
@@ -22,7 +23,7 @@ export default function CompareButton({ onPress, size = 40 }: { onPress: () => v
         onPress();
       }}
       accessibilityRole="button"
-      accessibilityLabel="Compare with a finished program"
+      accessibilityLabel="Compare programs"
       style={styles.hit}
     >
       <View style={[styles.circle, { width: size, height: size, borderRadius: size / 2, backgroundColor: t.ctrl }]}>

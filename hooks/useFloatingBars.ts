@@ -9,7 +9,8 @@ import { useSegments } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
-import { BAR_STACK_GAP, NO_TAB_BAR_GAP, TAB_BAR_CLEARANCE, WORKOUT_BAR_H } from "../constants/floatingBars";
+import { BAR_STACK_GAP, NO_TAB_BAR_GAP, WORKOUT_BAR_H } from "../constants/floatingBars";
+import { useTabBar } from "./useTabBar";
 
 /** Whether the keyboard is up, from the moment it starts to rise. */
 function useKeyboardUp(): boolean {
@@ -28,6 +29,7 @@ export function useFloatingBars() {
   const segments = useSegments();
   const insets = useSafeAreaInsets();
   const keyboardUp = useKeyboardUp();
+  const tabBar = useTabBar();
 
   const onTabScreen = segments.includes("(tabs)" as never);
   const onWorkoutTab = segments[segments.length - 1] === "workout";
@@ -42,7 +44,7 @@ export function useFloatingBars() {
    *  the keyboard is up, when the rest pill carries it above the keyboard. */
   const restInBar = workoutBarShown && !keyboardUp;
   /** Where the lowest bar sits: above the tab bar, or the home indicator. */
-  const base = onTabScreen ? TAB_BAR_CLEARANCE : insets.bottom + NO_TAB_BAR_GAP;
+  const base = onTabScreen ? tabBar.clearance : insets.bottom + NO_TAB_BAR_GAP;
 
   return {
     onTabScreen,
@@ -53,6 +55,8 @@ export function useFloatingBars() {
     restPillShown: !onChatScreen && !restInBar,
     /** The workout bar's bottom. */
     workoutBarBottom: base,
+    /** How far the workout bar drops to hide. */
+    workoutBarHideY: tabBar.hideY,
     /** The rest pill's bottom with the keyboard down: on top of the workout
      *  bar while that shows (beside it, the pill only shows as the keyboard
      *  rises, and starts from there), else where the bar would sit. */

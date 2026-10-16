@@ -22,13 +22,30 @@
 //    beside it for stepping between sets). On another page the workout bar
 //    hands its rest to the pill while the keyboard is up, so Skip and ±15s stay
 //    in reach above it.
+//  - What stands on the tab bar is placed from the bar's top edge
+//    (hooks/useTabBar.ts), never a fixed height: the tabs are Apple's own bar
+//    on iOS 26 and later, which sits lower than the app's.
 
 import type { ViewStyle } from "react-native";
 
 import { APP_DARK, APP_LIGHT } from "./theme";
 
-/** How far above the screen's bottom edge a bar clears the tab bar. */
-export const TAB_BAR_CLEARANCE = 112;
+/** The app's own tab bar (app/(tabs)/_layout.tsx, below iOS 26 and on
+ *  Android): this far above the screen's bottom edge and this tall, so its top
+ *  edge is NAV_BAR_TOP up on every phone. Apple's bar, on iOS 26 and later, is
+ *  measured instead (hooks/useTabBar.ts). */
+export const NAV_BAR_BOTTOM = 28;
+export const NAV_BAR_H = 64;
+export const NAV_BAR_TOP = NAV_BAR_BOTTOM + NAV_BAR_H;
+
+/** How far above the tab bar's top edge the lowest bar sits. */
+export const TAB_BAR_GAP = 20;
+
+/** How far above the screen's bottom edge a bar clears the tab bar, whose top
+ *  edge is `tabBarTop` up. Screens read it through useTabBar. */
+export function tabBarClearance(tabBarTop: number): number {
+  return tabBarTop + TAB_BAR_GAP;
+}
 
 /** How far above the home indicator a bar sits on a screen with no tab bar. */
 export const NO_TAB_BAR_GAP = 16;
@@ -52,7 +69,9 @@ export const BAR_STACK_GAP = 8;
 
 /** How far the workout bar drops to hide: clear of the screen at its tallest,
  *  a rest inside it. A shorter drop left it half on screen. */
-export const BAR_HIDE_Y = TAB_BAR_CLEARANCE + WORKOUT_BAR_H + REST_SECTION_H + REST_DIVIDER_H + 24;
+export function barHideY(tabBarTop: number): number {
+  return tabBarClearance(tabBarTop) + WORKOUT_BAR_H + REST_SECTION_H + REST_DIVIDER_H + 24;
+}
 
 /** The nav bar's shadow, which every bar shares. */
 export const BAR_SHADOW: ViewStyle = {
@@ -78,7 +97,9 @@ export const ABOVE_KEYBOARD_TOOLS = KEYBOARD_TOOLS_GAP + KEYBOARD_TOOLS_H + BAR_
  *  on the Workout page, where the pill sits straight above the tab bar: the
  *  page's pinned buttons (focus mode's ‹ › and Complete Workout, list mode's
  *  notes and +) move up to here while a rest runs. */
-export const ABOVE_REST_ON_TAB = TAB_BAR_CLEARANCE + REST_PILL_H + BAR_STACK_GAP;
+export function aboveRestOnTab(tabBarTop: number): number {
+  return tabBarClearance(tabBarTop) + REST_PILL_H + BAR_STACK_GAP;
+}
 
 /** The same with the keyboard up, measured from the keyboard's top: where the
  *  field being typed into and the session notes card end, clear of a rest

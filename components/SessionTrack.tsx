@@ -1,14 +1,17 @@
 // The progress rail under a workout card: one dot per scheduled session of that
-// day, joined by short lines, with the session you're looking at marked.
+// day, joined by short lines, with the session you're looking at marked. Every
+// card draws the track as it stands today (utils/sessionTrack.ts trackDots), so
+// a session logged after this one is green here too.
 //
 // Five dot states, and the differences between the middle three are the point of
 // this component:
-//   done      filled accent
+//   done      filled accent — a session logged, before or after this one
 //   current   filled accent, larger, brighter glow
 //   REPLACED  filled orange — the day came round and something ELSE was trained
 //             on it (a custom workout, a Change Workout Day swap)
 //   MISSED    filled grey — the day came round and nothing was logged
 //   future    hollow, a thin ring in the track colour — it hasn't come round yet
+//             (or the program stopped before it did)
 //
 // A missed dot is FILLED grey rather than hollow because it is not the same thing
 // as a session still to come: it already happened and went untrained. A replaced
@@ -24,6 +27,7 @@ import { Fragment } from "react";
 import { View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { REPLACED_ORANGE } from "../constants/theme";
+import { trackDots, type TrackDot } from "../utils/sessionTrack";
 
 /** Past `total`, dots would be thinner than the gaps between them, so the rail
  *  becomes a bar. */
@@ -47,6 +51,10 @@ interface Props {
   /** Session numbers that came round and had something else trained in their
    *  place (utils/sessionTrack). */
   replaced?: number[];
+  /** Session numbers logged, wherever they fall (utils/sessionTrack). Without
+   *  it, every dot before `current` reads as done and every one after as to
+   *  come. */
+  done?: number[];
   accent: string;
   /** The rail's own colour: future dots' ring, and the unfilled bar. */
   track: string;
@@ -55,39 +63,30 @@ interface Props {
   missedColor?: string;
 }
 
-type DotState = "done" | "current" | "replaced" | "missed" | "future";
-
 /** A dot the day came round for and didn't get: missed or replaced. Both are
  *  drawn with the held-close fade on their connectors. */
-const isOff = (s: DotState) => s === "missed" || s === "replaced";
+const isOff = (s: TrackDot) => s === "missed" || s === "replaced";
 
-export default function SessionTrack({ current, total, missed, replaced, accent, track, missedColor }: Props) {
+export default function SessionTrack({ current, total, missed, replaced, done, accent, track, missedColor }: Props) {
   const grey = missedColor ?? track;
-  const missedSet = new Set(missed ?? []);
-  const replacedSet = new Set(replaced ?? []);
 
-  const stateAt = (i: number): DotState => {
-    if (replacedSet.has(i + 1)) return "replaced";
-    if (missedSet.has(i + 1)) return "missed";
-    if (i === current - 1) return "current";
-    return i < current - 1 ? "done" : "future";
-  };
+  // Never fewer dots than the session being shown: a program can end up with one
+  // more occurrence than it scheduled (a pushed day extends it), and a rail whose
+  // current dot fell off the end would light every dot with none of them current.
+  const states = trackDots({ current, total, missed, replaced, done });
+  const stateAt = (i: number): TrackDot => states[i];
   // What the rail is drawn in AT that dot — the colour a connector fades to.
   const colorAt = (i: number): string => {
     const s = stateAt(i);
     return s === "replaced" ? REPLACED_ORANGE : s === "missed" ? grey : s === "future" ? track : accent;
   };
 
-  // Never fewer dots than the session being shown: a program can end up with one
-  // more occurrence than it scheduled (a pushed day extends it), and a rail whose
-  // current dot fell off the end would light every dot with none of them current.
-  const dots = Math.max(total, current);
+  const dots = states.length;
 
   if (dots <= MAX_DOTS) {
     return (
       <View style={{ flexDirection: "row", alignItems: "center" }}>
-        {Array.from({ length: dots }).map((_, i) => {
-          const state = stateAt(i);
+        {states.map((state, i) => {
           const isCurrent = state === "current";
           const isFuture  = state === "future";
           const isMissed  = state === "missed";
