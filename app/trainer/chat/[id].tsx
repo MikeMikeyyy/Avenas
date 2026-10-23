@@ -10,14 +10,15 @@
 // All of it is ONE sheet with steps, not a sheet per job: two RN Modals mounted
 // on a screen at once is the bug where the second never presents again.
 
-import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Keyboard } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { View, Text, StyleSheet, Alert, Keyboard } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../../components/FadeScreen";
+import GlassButton from "../../../components/GlassButton";
 import Avatar from "../../../components/Avatar";
 import ChatBubble from "../../../components/trainer/ChatBubble";
 import ChatThreadView from "../../../components/trainer/ChatThreadView";
@@ -32,9 +33,13 @@ import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
 import { loadThread, appendMessage, markThreadRead, deleteMessage } from "../../../utils/chatStore";
 import { getMyUid, isCloudContactId, subscribeToInbound } from "../../../lib/chat";
+import { getMyConnections } from "../../../lib/connections";
+import { makeInitials } from "../../../utils/trainerStore";
 import { loadHiddenMessageIds, loadBlockedIds, blockContact, unaddContact, reportPerson, reportMessage } from "../../../utils/moderation";
 import type { ChatMessage, ReportReason } from "../../../constants/chat";
-import BackButton, { BACK_TOP, BACK_LEFT } from "../../../components/BackButton";
+import BackButton, { BACK_TOP, BACK_LEFT, BACK_SIZE } from "../../../components/BackButton";
+import { useConnectionPresence } from "../../../hooks/useConnectionPresence";
+import { isActiveNow, presenceLabel } from "../../../utils/presence";
 
 export default function ChatThreadScreen() {
   const router = useRouter();
@@ -45,8 +50,27 @@ export default function ChatThreadScreen() {
   const { accountType } = useAccountType();
 
   const contactId = id ?? "";
-  const displayName = name || "Chat";
-  const displayInitials = initials || (displayName.slice(0, 2).toUpperCase());
+  // When they were last on the app, for the header (null when hidden or never
+  // active; absent for someone not connected), kept fresh while focused.
+  const { presenceById } = useConnectionPresence();
+  // A notification opens this with the id alone (the url the database puts on
+  // a message's push carries no name), and the header read "Chat". Then who
+  // they are comes from the connection list.
+  const [found, setFound] = useState<{ name: string; initials: string; photo?: string } | null>(null);
+  useEffect(() => {
+    if (name || !contactId) return;
+    let cancelled = false;
+    getMyConnections()
+      .then(conns => {
+        const c = conns.find(x => x.otherId === contactId);
+        if (!cancelled && c?.name) setFound({ name: c.name, initials: makeInitials(c.name), photo: c.photoUri });
+      })
+      .catch(err => { if (__DEV__) console.warn("[avenas] chat contact", err); });
+    return () => { cancelled = true; };
+  }, [name, contactId]);
+  const displayName = name || found?.name || "Chat";
+  const displayInitials = initials || found?.initials || (displayName.slice(0, 2).toUpperCase());
+  const avatarUri = photo || found?.photo;
   const contact = { id: contactId, name: displayName, initials: displayInitials };
 
   const [messages, setMessages] = useState<ChatMessage[]>([]); // newest-first
@@ -194,7 +218,7 @@ export default function ChatThreadScreen() {
     } else {
       // reportPerson routes an "inappropriate name or photo" report to the
       // profile kind, which snapshots both before they can be changed.
-      await reportPerson({ ...contact, photoUri: photo || undefined }, reason);
+      await reportPerson({ ...contact, photoUri: avatarUri || undefined }, reason);
       Alert.alert(
         "Report received",
         `Thanks, we review reports within 24 hours. Would you also like to block ${displayName}?`,
@@ -217,22 +241,36 @@ export default function ChatThreadScreen() {
     setMessages(prev => [msg, ...prev]); // prepend → bottom of inverted list
   }, [contactId]);
 
+  // Who it is, centred between back and ⋯, with when they were last on the
+  // app under the name (hidden, as everywhere, when they've turned Activity
+  // Status off; nothing says so). No line under the header (user decision,
+  // 2026-10-22, the Chat Redesign canvas).
+  const lastActive = presenceById.get(contactId);
   const header = (
-    <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
+    <View style={[styles.header, { paddingTop: insets.top + BACK_TOP }]}>
       <BackButton inline />
-      <Avatar
-        uri={photo || undefined}
-        initials={displayInitials}
-        size={38}
-        backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-        textStyle={[styles.avatarText, { color: ACCT }]}
-      />
-      <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
-      <TouchableOpacity onPress={() => setSheet({ step: "menu" })} activeOpacity={0.8} accessibilityLabel="Conversation options" accessibilityRole="button">
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+      <View style={styles.headerTitle} accessible accessibilityRole="header"
+        accessibilityLabel={lastActive ? `${displayName}, ${presenceLabel(lastActive)}` : displayName}>
+        <Avatar
+          uri={avatarUri || undefined}
+          initials={displayInitials}
+          size={38}
+          backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
+          textStyle={[styles.avatarText, { color: ACCT }]}
+        />
+        <View style={styles.headerText}>
+          <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
+          {lastActive ? (
+            <View style={styles.presenceRow}>
+              <View style={[styles.presenceDot, { backgroundColor: isActiveNow(lastActive) ? ACCT : t.ts }]} />
+              <Text style={[styles.headerSub, { color: t.ts }]} numberOfLines={1}>{presenceLabel(lastActive)}</Text>
+            </View>
+          ) : null}
         </View>
-      </TouchableOpacity>
+      </View>
+      <GlassButton onPress={() => setSheet({ step: "menu" })} size={BACK_SIZE} accessibilityLabel="Conversation options">
+        <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+      </GlassButton>
     </View>
   );
 
@@ -240,7 +278,8 @@ export default function ChatThreadScreen() {
     <FadeScreen style={{ backgroundColor: t.bg }}>
       <ChatThreadView
         messages={messages}
-        renderBubble={msg => <ChatBubble msg={msg} authorName={displayName} onPress={() => openMessage(msg)} />}
+        renderBubble={(msg, run) => <ChatBubble msg={msg} run={run} tone="green" authorName={displayName} onPress={() => openMessage(msg)} />}
+        tone="green"
         onSend={send}
         placeholder={`Message ${displayName}…`}
         header={header}
@@ -281,10 +320,15 @@ export default function ChatThreadScreen() {
 }
 
 const styles = StyleSheet.create({
-  header:     { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12, borderBottomWidth: 1 },
-  backBtn:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  header:     { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12 },
+  // Centred between the two round buttons, which are the same width.
+  headerTitle: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
+  headerText: { flexShrink: 1, minWidth: 0 },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 13 },
-  headerName: { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },
+  headerName: { fontFamily: FontFamily.bold, fontSize: 17, lineHeight: 22 },
+  presenceRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  presenceDot: { width: 7, height: 7, borderRadius: 4 },
+  headerSub:  { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 16 },
 
   menuName:   { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
   menu:       { paddingHorizontal: 20, paddingTop: 10, gap: 12 },

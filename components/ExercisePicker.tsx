@@ -26,6 +26,7 @@ import FavouriteStar from "./FavouriteStar";
 import TrashIcon from "./TrashIcon";
 import SquarePenIcon from "./SquarePenIcon";
 import BounceButton from "./BounceButton";
+import FilterChip from "./FilterChip";
 
 // The exercises on offer: the catalogue less the retired ones, which stay in
 // EXERCISES only so old workouts keep their muscles and steps. Searchable by
@@ -92,14 +93,6 @@ const HEADER_H = 36;
 /** Label colour on the active gold chip. GOLD and GOLD_DARK are both light, so
  *  white would sit at roughly 1.9:1 against them; this dark ink is ~8:1. */
 const GOLD_INK = APP_LIGHT.tp;
-
-/** The lift under an active filter chip, in whatever colour the chip is. */
-const chipGlow = (color: string, opacity = 0.5) => ({
-  shadowColor: color,
-  shadowOffset: { width: 0, height: 3 },
-  shadowOpacity: opacity,
-  shadowRadius: 8,
-});
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -595,53 +588,39 @@ export default function ExercisePicker({
           >
             {/* All — the reset. Active only when nothing else is, favourites
                 included, since Favourites is a second filter axis and not a
-                muscle group. */}
-            <TouchableOpacity
+                muscle group. Glass chips on iOS 26 (components/FilterChip.tsx). */}
+            <FilterChip
+              label="All"
+              picked={noFilters}
               onPress={() => { setSelectedMuscles(new Set()); setFavouritesOnly(false); }}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityState={{ selected: noFilters }}
-              style={[styles.muscleChip, noFilters
-                ? { backgroundColor: ACCT, ...chipGlow(ACCT) }
-                : { backgroundColor: t.div }]}
-            >
-              <Text style={[styles.muscleChipText, { color: noFilters ? "#fff" : t.ts }]}>All</Text>
-            </TouchableOpacity>
+            />
 
             {/* Favourites — gold rather than the accent green, so the filter
                 matches the stars it selects for. Combines with the muscle chips
-                (Favourites + Chest = starred chest exercises). */}
-            <TouchableOpacity
+                (Favourites + Chest = starred chest exercises). Gold is light in
+                both themes, so white words on it are barely legible: the picked
+                chip takes a dark ink instead. */}
+            <FilterChip
+              label="Favourites"
+              picked={favouritesOnly}
               onPress={() => setFavouritesOnly(v => !v)}
-              activeOpacity={0.7}
-              accessibilityRole="button"
+              color={gold}
+              pickedInk={GOLD_INK}
+              glowOpacity={isDark ? 0.4 : 0.55}
               accessibilityLabel="Filter to favourites"
-              accessibilityState={{ selected: favouritesOnly }}
-              style={[styles.muscleChip, styles.favChip, favouritesOnly
-                ? { backgroundColor: gold, ...chipGlow(gold, isDark ? 0.4 : 0.55) }
-                : { backgroundColor: t.div }]}
-            >
-              {/* A plain glyph, not <FavouriteStar />: on an active gold chip a
-                  gold star with a gold glow disappears into its own background.
-                  This star labels the filter, it isn't a favourite indicator. */}
-              <Ionicons
-                name={favouritesOnly ? "star" : "star-outline"}
-                size={12}
-                color={favouritesOnly ? GOLD_INK : t.ts}
-              />
-              {/* Gold is light in both themes, so white text on it is barely
-                  legible — the active label takes a dark ink instead. */}
-              <Text style={[styles.muscleChipText, { color: favouritesOnly ? GOLD_INK : t.ts }]}>
-                Favourites
-              </Text>
-            </TouchableOpacity>
+              // A plain glyph, not <FavouriteStar />: on a picked gold chip a
+              // gold star disappears into its own background. This star labels
+              // the filter, it isn't a favourite indicator.
+              icon={ink => <Ionicons name={favouritesOnly ? "star" : "star-outline"} size={12} color={ink} />}
+            />
 
             {MUSCLE_GROUPS.filter(g => g !== "All").map(group => {
               const muscle = group as SelectableMuscle;
-              const active = selectedMuscles.has(muscle);
               return (
-                <TouchableOpacity
+                <FilterChip
                   key={group}
+                  label={group}
+                  picked={selectedMuscles.has(muscle)}
                   onPress={() => {
                     setSelectedMuscles(prev => {
                       const next = new Set(prev);
@@ -650,15 +629,7 @@ export default function ExercisePicker({
                       return next;
                     });
                   }}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  style={[styles.muscleChip, active
-                    ? { backgroundColor: ACCT, ...chipGlow(ACCT) }
-                    : { backgroundColor: t.div }]}
-                >
-                  <Text style={[styles.muscleChipText, { color: active ? "#fff" : t.ts }]}>{group}</Text>
-                </TouchableOpacity>
+                />
               );
             })}
           </ScrollView>
@@ -787,9 +758,6 @@ const styles = StyleSheet.create({
   pickerSubtitle:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1 },
   muscleChipScroll:    { flexGrow: 0, flexShrink: 0 },
   muscleChipContent:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12 },
-  muscleChip:          { paddingHorizontal: 14, paddingVertical: 7, borderRadius: PILL_RADIUS, alignItems: "center", justifyContent: "center" },
-  favChip:             { flexDirection: "row", gap: 5, paddingLeft: 11 },
-  muscleChipText:      { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
   searchRow:           { flexDirection: "row", alignItems: "center", gap: 9, marginHorizontal: 16, paddingHorizontal: 14, height: 42, borderRadius: PILL_RADIUS, borderWidth: 1, ...PILL_SHADOW },
   searchInput:         { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0 },
   chromeDivider:       { height: StyleSheet.hairlineWidth },

@@ -40,7 +40,7 @@ import {
   collectLoggedExercisesForDay,
   sessionCountForDay,
 } from "../utils/progressStats";
-import { historicalDays, markDayRefLabels, programDays, programDaysWithExtras } from "../utils/programDays";
+import { displayWorkoutName, historicalDays, markDayRefLabels, programDays, programDaysWithExtras } from "../utils/programDays";
 import {
   BAR_WIDTH, BLOCK_GAP, CHART_HEIGHT, LABEL_H, LABEL_INK_DOWN, LABEL_INK_UP, LINE_STROKE, PLOT_TOP, SESSION_SPACING,
   axisLoadStep, barAxis, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, chartChange, dotY, drawsOn,
@@ -48,6 +48,16 @@ import {
   setsTotal, slotX, sparkleD, strengthDots, strengthLabel, strengthLabelInkWidth, visibleSlots, volumeBars, windowAxis,
   type StrengthDot,
 } from "../utils/exerciseChartLayout";
+import {
+  exerciseHistoryOptions,
+  exerciseHistoryRows,
+  filterLabel,
+  isPicked,
+  pickLabel,
+  togglePick,
+  type HistoryFilterItem,
+  type HistoryPick,
+} from "../utils/exerciseHistory";
 import type { ExerciseDataPoint } from "../constants/progress";
 import type { CompletedWorkout, CompletedSet, ProgramDayRef, SavedProgram } from "../constants/programs";
 import type { CustomExercise } from "../constants/exercises";
@@ -643,6 +653,11 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   const withExtras = makeProgram({ extraWorkouts: ["Conditioning"] });
   eq(programDays(withExtras).map(d => d.label), ["Push", "Pull", "Legs", "Push", "Pull"], "programDays: extraWorkouts excluded (pickers offer the cycle)");
   eq(programDaysWithExtras(withExtras).map(d => d.label).slice(-1), ["Conditioning"], "programDaysWithExtras: extras appended for the Progress list");
+  eq(
+    ["Custom WorkoutLegs", "Custom WorkoutArms Day", "Custom Workout", "Custom Workouts", "Custom Workout 2", "Legs"].map(displayWorkoutName),
+    ["Legs", "Arms Day", "Custom Workout", "Custom Workouts", "Custom Workout 2", "Legs"],
+    "displayWorkoutName: a name typed onto \"Custom Workout\" reads as the name alone; anything else is left as it is",
+  );
   // A single program's own duplicates are flagged without a scope pass.
   check(programDays(before).filter(d => d.label === "Pull").every(d => d.duplicateLabel), "programDays: same-named slots flagged within one program");
 }
@@ -753,8 +768,13 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   eq(movedDays.map(d => [d.label, d.isHistorical]), [["Upper", false]], "move: shifting a day to another slot leaves one live row");
   eq(sessionCountForDay(movedHistory, movedDays[0]), 1, "move: the day keeps its sessions across the move");
 
-  // Sessions whose program is gone don't conjure a row.
-  eq(scopedProgramDays({ kind: "all" }, [], history).length, 0, "edit: a deleted program's sessions produce no historical row");
+  // Sessions whose program is gone don't conjure a program's row: they're
+  // Custom workouts (user decision, 2026-10-23), each day of them saying it
+  // was a deleted program's.
+  const goneDays = scopedProgramDays({ kind: "all" }, [], history);
+  eq(goneDays.filter(d => !d.custom).length, 0, "edit: a deleted program's sessions produce no historical row");
+  eq(goneDays.map(d => [d.label, d.custom?.deletedProgram]), [["Upper A", true], ["Upper", true]],
+    "edit: ...they're Custom workouts' days, newest first, from a deleted program");
   // A day deleted from the cycle keeps its history the same way a forked one does.
   const shrunk = makeProgram({ id: "pF", cyclePattern: ["Rest"], cycleDays: 1, dayIds: ["d9"], workouts: {} });
   const shrunkHistory = [workout({ id: "s1", programId: "pF", dayId: "d0", workoutName: "Arms", exercises: [ex("Curl", [set("20", "12")])] })];
@@ -1132,6 +1152,144 @@ eq([isExerciseMetric("strength"), isExerciseMetric("topWeight")], [true, false],
     });
   }
   check(problems.length === 0, `reps: every shape of run keeps its labels clear\n      ${problems.join("\n      ")}`);
+}
+
+// ── The Exercise History page (utils/exerciseHistory.ts) ─────────────────────
+// Each session's sets, its top set against the session before it (the oldest
+// one listed against one outside the range), its trophies and its note.
+{
+  const on = (id: string, date: string, exercises: CompletedWorkout["exercises"]) => workout({ id, date, exercises });
+  const warm = (weight: string, reps: string) => set(weight, reps, { type: "warmup" });
+  const hist = [
+    on("a", "2026-08-01", [ex("Bench", [set("90", "8")])]),
+    on("b", "2026-10-02", [ex("Bench", [warm("60", "10"), set("95", "8"), set("92.5", "8")], "  Felt good ")]),
+    on("c", "2026-10-06", [ex("Bench", [set("95", "8"), set("95", "7")])]),
+    on("d", "2026-10-09", [ex("Bench", [set("95", "8"), set("97.5", "7")]), ex("Squat", [set("140", "5")]), ex("Bench", [set("100", "3")], "Back-off")]),
+    on("e", "2026-10-13", [ex("Bench", [set("97.5", "6"), set("95", "")])]),
+    on("f", "2026-10-16", [ex("Bench", [set("97.5", "8"), set("90", "4", { done: false })])]),
+  ];
+  const rows = exerciseHistoryRows(hist, [], { exerciseName: "Bench", days: 30, today: new Date(2026, 9, 20) });
+  eq(rows.map(r => r.workoutId), ["f", "e", "d", "c", "b"], "history page: the range's sessions, newest first");
+  eq(rows.map(r => r.sets.length), [1, 2, 3, 2, 3], "history page: done sets only, both times it was done in a day");
+  eq(rows.map(r => r.top), [0, 0, 2, 0, 1], "history page: the top set is the heaviest with its reps in (a warm-up never)");
+  eq(rows.map(r => r.change), [
+    { kind: "reps", reps: 2 },
+    { kind: "weight", kg: -2.5 },
+    { kind: "weight", kg: 5 },
+    { kind: "same" },
+    { kind: "weight", kg: 5 },
+  ], "history page: each top set against the session before it, the oldest listed against one out of range");
+  eq(rows.map(r => r.prs), [[false], [false, false], [false, true, true], [false, false], [false, true, true]],
+    "history page: a trophy on every set heavier than the best before it");
+  eq(rows.map(r => r.notes), ["", "", "Back-off", "", "Felt good"], "history page: the note written on it, trimmed");
+  eq(exerciseHistoryRows(hist, [], { exerciseName: "Bench", days: 365, today: new Date(2026, 9, 20) }).at(-1)?.change, null,
+    "history page: the first session has nothing to compare with");
+
+  const plank = (id: string, date: string, secs: string) => on(id, date, [{ ...ex("Plank", [set("", secs)]), isIsometric: true as const }]);
+  const holds = exerciseHistoryRows([plank("p1", "2026-10-01", "60"), plank("p2", "2026-10-08", "75"), on("p0", "2026-09-20", [ex("Plank", [set("", "12")])])], [],
+    { exerciseName: "Plank", days: 365, today: new Date(2026, 9, 20) });
+  eq(holds.map(r => [r.isHold, r.change]), [[true, { kind: "reps", reps: 15 }], [true, null], [false, null]],
+    "history page: a hold's seconds compare, but never with reps");
+
+  const pullups = exerciseHistoryRows([
+    on("u1", "2026-10-01", [ex("Pull-up", [set("", "8"), set("", "10")])]),
+    on("u2", "2026-10-08", [ex("Pull-up", [set("", "11")])]),
+    on("u3", "2026-10-15", [ex("Pull-up", [set("10", "5"), set("", "9")])]),
+  ], [], { exerciseName: "Pull-up", days: 365, today: new Date(2026, 9, 20) });
+  eq(pullups.map(r => [r.top, r.change]), [[0, { kind: "weight", kg: 10 }], [0, { kind: "reps", reps: 1 }], [1, null]],
+    "history page: at bodyweight the most reps is the top set, and weight on it is a change of weight");
+
+  // Typed in pounds, stored in kilos: the same typed weight is the same weight.
+  const lb = (n: number) => String(n * 0.45359237);
+  const pounds = exerciseHistoryRows([
+    on("l1", "2026-10-01", [ex("Bench", [set(lb(225), "5")])]),
+    on("l2", "2026-10-08", [ex("Bench", [set(lb(225), "5")])]),
+  ], [], { exerciseName: "Bench", days: 365, today: new Date(2026, 9, 20) });
+  eq(pounds[0].change, { kind: "same" }, "history page: the same weight typed in pounds is the same");
+  const switched = exerciseHistoryRows([
+    on("k1", "2026-10-01", [ex("Bench", [set("100", "5")])]),
+    on("k2", "2026-10-08", [ex("Bench", [set(lb(220.5), "6")])]),
+  ], [], { exerciseName: "Bench", days: 365, today: new Date(2026, 9, 20) });
+  eq(switched[0].change, { kind: "reps", reps: 1 }, "history page: across a switch of unit, 220.5 lbs is 100 kg (never \"▲ 0 lbs\")");
+}
+
+// ── The Exercise History page's filter ───────────────────────────────────────
+// What it offers, what each pick lists, how taps combine, and what it's called.
+{
+  const ppl = makeProgram({ id: "ppl", name: "Push Pull Legs", status: "active", cyclePattern: ["Push", "Pull", "Legs", "Rest"], dayIds: ["d0", "d1", "d2", "d3"] });
+  const ul = makeProgram({ id: "ul", name: "Upper Lower", status: "completed", cyclePattern: ["Upper A", "Lower", "Upper B", "Rest"], dayIds: ["d0", "d1", "d2", "d3"] });
+  const sb = makeProgram({ id: "sb", name: "Strength Block", status: "completed", cyclePattern: ["Heavy", "Rest"], dayIds: ["d0", "d1"] });
+  const progs = [ul, ppl, sb];
+  const on = (id: string, date: string, programId: string, dayId: string | undefined, workoutName: string, name = "Bench") =>
+    workout({ id, date, programId, ...(dayId ? { dayId } : {}), workoutName, exercises: [ex(name, [set("100", "5")])] });
+  const hist = [
+    on("s1", "2026-06-01", "sb", "d0", "Heavy"),
+    on("p0", "2026-07-01", "ppl", undefined, "Push"),
+    on("u1", "2026-08-04", "ul", "d0", "Upper A"),
+    on("u2", "2026-08-07", "ul", "d2", "Upper B"),
+    on("u3", "2026-08-11", "ul", "d0", "Upper A"),
+    on("g1", "2026-09-01", "gone", "d0", "Push"),
+    on("p1", "2026-10-06", "ppl", "d0", "Push"),
+    on("p2", "2026-10-09", "ppl", "d0", "Push"),
+    on("p3", "2026-10-10", "ppl", "d1", "Pull", "Row"),
+    on("f1", "2026-10-12", "", undefined, "Chest Day"),
+  ];
+  const options = exerciseHistoryOptions(hist, progs, { name: "Bench" });
+  eq(options.programs.map(o => [o.name, o.active, o.days.map(d => d.name)]), [
+    ["Push Pull Legs", true, []],
+    ["Upper Lower", false, ["Upper A", "Upper B"]],
+    ["Strength Block", false, []],
+  ], "filter: programs that did it, the running one first, then the latest; days only for one done on more than one (a slotless \"Push\" is Push)");
+  eq(options.free, true, "filter: free workouts (and a deleted program's) offered");
+
+  const listed = (picks: HistoryPick[]) =>
+    exerciseHistoryRows(hist, progs, { exerciseName: "Bench", picks, days: 365, today: new Date(2026, 9, 20) }).map(r => r.workoutId);
+  const chart: HistoryPick = { kind: "day", programId: "ppl", dayId: "d0", dayName: "Push" };
+  const upperB = options.programs[1].days[1].pick;
+  eq(listed([]), ["f1", "p2", "p1", "g1", "u3", "u2", "u1", "p0", "s1"], "filter: nothing picked lists every session");
+  eq(listed([chart]), ["p2", "p1", "p0"], "filter: the chart's day, as before");
+  eq(listed([{ kind: "program", programId: "ul" }]), ["u3", "u2", "u1"], "filter: a program, every day of it");
+  eq(listed([upperB]), ["u2"], "filter: one day of a program");
+  eq(listed([{ kind: "free" }]), ["f1", "g1"], "filter: free workouts, and a gone program's");
+  eq(listed([{ kind: "program", programId: "ppl" }, { kind: "free" }]), ["f1", "p2", "p1", "g1", "p0"], "filter: two picks list both");
+
+  // Taps.
+  const day = (programId: string, key: string): HistoryFilterItem => ({ kind: "day", programId, key });
+  let picks: HistoryPick[] = [chart];
+  check(isPicked(picks, { kind: "program", programId: "ppl" }, options), "filter: the chart's day of a one-day program shows as the program");
+  eq(togglePick(picks, { kind: "program", programId: "ppl" }, options), [], "filter: ...and tapping it takes it off");
+  picks = togglePick([], { kind: "program", programId: "ppl" }, options);
+  picks = togglePick(picks, { kind: "free" }, options);
+  picks = togglePick(picks, day("ul", "id:d0"), options);
+  check(!isPicked(picks, { kind: "all" }, options) && !isPicked(picks, { kind: "program", programId: "ul" }, options),
+    "filter: one day of two isn't the program");
+  picks = togglePick(picks, day("ul", "id:d2"), options);
+  eq(picks.filter(p => p.kind === "program"), [{ kind: "program", programId: "ppl" }, { kind: "program", programId: "ul" }],
+    "filter: both days picked is the program");
+  check(isPicked(picks, day("ul", "id:d0"), options), "filter: a whole program's days show picked");
+  picks = togglePick(picks, day("ul", "id:d0"), options);
+  eq(picks.filter(p => p.kind !== "free" && p.programId === "ul"), [upperB], "filter: a day off a whole program leaves its other");
+  eq(togglePick(picks, { kind: "all" }, options), [], "filter: All programs clears the rest");
+
+  eq([
+    filterLabel([], options, progs),
+    filterLabel([chart], options, progs),
+    filterLabel([upperB], options, progs),
+    filterLabel([{ kind: "program", programId: "ppl" }, { kind: "free" }], options, progs),
+    pickLabel({ kind: "free" }, options, progs),
+  // The sessions in no program go by the Progress page's name for them
+  // (2026-10-23).
+  ], ["All programs", "Push Pull Legs", "Upper Lower · Upper B", "Push Pull Legs + 1 more", "Custom workouts"], "filter: what it's called");
+
+  // A cycle naming two days alike, and a custom workout added to a program.
+  const twice = makeProgram({ id: "tw", name: "Twice", status: "active", cyclePattern: ["Upper", "Lower", "Upper", "Rest"], dayIds: ["d0", "d1", "d2", "d3"] });
+  const twiceOptions = exerciseHistoryOptions([
+    on("t1", "2026-10-01", "tw", "d0", "Upper"),
+    on("t2", "2026-10-03", "tw", "d2", "Upper"),
+    on("t3", "2026-10-04", "tw", undefined, "Arms"),
+  ], [twice], { name: "Bench" });
+  eq(twiceOptions.programs[0].days.map(d => d.name), ["Upper, day 1", "Upper, day 3", "Arms"],
+    "filter: two days named alike say which, and a custom workout added to it is a day of its own");
 }
 
 // ── report ────────────────────────────────────────────────────────────────────

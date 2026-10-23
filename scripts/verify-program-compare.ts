@@ -10,14 +10,17 @@
 
 import type { CompletedExercise, CompletedWorkout, SavedProgram } from "../constants/programs";
 import { activateProgram } from "../utils/programLifecycle";
-import { endingRun, programRunViews, sameRun } from "../utils/programRuns";
+import { endingRun, programRunViews, sameRun, type RunRef } from "../utils/programRuns";
 import {
-  aheadAtSamePoint, compareCandidates, compareLifts, compareReadiness, compareStartGreen, glanceStats, greenRunFor, liftChange, liftSlots, missedDates, type LiftSlot,
+  aheadAtSamePoint, compareCandidates, compareFirstPicks, compareLifts, compareReadiness, compareStartGreen, glanceStats, greenRunFor, liftChange, liftSlots, missedDates, type LiftSlot,
   muscleStatsPerWeek, programDayOf, runDates, runDays, runName, runStatus, runSummary, sessionsWithin, sharedStrength,
   spanCaption, spanDays, weekOfDay, weeklyTotals,
 } from "../utils/programCompare";
 import { compareOpenX, compareWindowAxis, missedBarValue, missedBars, missedRuns, strengthLine } from "../utils/compareChartLayout";
 import { exerciseChartGeometry, slotX, visibleSlots } from "../utils/exerciseChartLayout";
+import { exerciseDaySlots } from "../utils/exerciseDaySlots";
+import { collectExerciseHistory } from "../utils/progressStats";
+import { buildSessionTracks } from "../utils/sessionTrack";
 
 let passed = 0;
 let failed = 0;
@@ -149,6 +152,53 @@ eq(greenRunFor({ kind: "all" }, programs, history)?.ref, { programId: "PPL", run
   eq(sg.ref, { programId: "PPL", run: "latest" }, "picked the one finished program: the current one takes green");
   eq(compareCandidates(programs, history, sg.ref).map(c => c.ref.programId), ["UL"], "and the picked one is offered in blue");
   eq(compareStartGreen({ kind: "current" }, programs, history)?.ref, green.ref, "otherwise green is greenRunFor's");
+}
+{
+  // A comparison starts in two picks (user request, 2026-10-16): the first is
+  // green, the one it's compared with blue. What the first pick offers: a run
+  // only while there's a finished one left to set beside it.
+  const donePPL = { ...PPL, status: "completed" as const, completedDate: "14 Oct 2026" };
+  const shelvedPPL = { ...PPL, status: "paused" as const };
+  // A second finished program, Upper Lower run in the spring.
+  const oldUL = { ...UL, id: "oldUL", startDate: "02 Mar 2026", completedDate: "26 Apr 2026" } as SavedProgram;
+  const withOld = [
+    ...history,
+    session("oldUL", "2026-03-02", "d0", [ex("Barbell Bench Press", [[70, 8]])]),
+    session("oldUL", "2026-03-09", "d0", [ex("Barbell Bench Press", [[72.5, 8]])]),
+  ];
+  const refs = (vs: { ref: RunRef }[]) => vs.map(v => `${v.ref.programId}:${v.ref.run}`);
+
+  eq(refs(compareFirstPicks({ kind: "current" }, programs, history)), ["PPL:latest"],
+    "one on the go and one finished: only the one on the go can be green, so the first pick is skipped");
+  eq(refs(compareFirstPicks({ kind: "all" }, [donePPL, UL], history)), ["PPL:latest", "UL:latest"],
+    "two finished: either can be green, the one that finished last first");
+  eq(refs(compareFirstPicks({ kind: "current" }, [PPL, UL, oldUL], withOld)), ["PPL:latest", "UL:latest", "oldUL:latest"],
+    "one on the go and two finished: all three, the one on the go first");
+  eq(compareFirstPicks({ kind: "all" }, [donePPL], history).length, 0, "one finished and nothing else: nothing to pick, locked");
+  eq(compareFirstPicks({ kind: "current" }, [PPL], history).length, 0, "only one on the go: nothing to pick, locked");
+  eq(refs(compareFirstPicks({ kind: "program", programId: "PPL" }, [shelvedPPL, UL], history)), ["PPL:latest"],
+    "a shelved program picked at the top can still go green against a finished one");
+  eq(refs(compareFirstPicks({ kind: "program", programId: "UL" }, programs, history)), ["PPL:latest"],
+    "the one finished program picked at the top can't go green: nothing finished is left to compare it with");
+
+  // The first pick's ticked run is compareStartGreen's, always one it offers.
+  const cases: [Parameters<typeof compareFirstPicks>[0], SavedProgram[], CompletedWorkout[]][] = [
+    [{ kind: "current" }, programs, history],
+    [{ kind: "all" }, [donePPL, UL], history],
+    [{ kind: "current" }, [PPL, UL, oldUL], withOld],
+    [{ kind: "program", programId: "PPL" }, [shelvedPPL, UL], history],
+    [{ kind: "program", programId: "UL" }, programs, history],
+  ];
+  for (const [scope, ps, h] of cases) {
+    const sg = compareStartGreen(scope, ps, h)!;
+    eq(compareFirstPicks(scope, ps, h).some(v => sameRun(v.ref, sg.ref)), true, `the ticked first pick is offered (${scope.kind}, ${ps.length} programs)`);
+  }
+
+  // Whichever is picked first is green; blue is then any other finished run.
+  eq(refs(compareCandidates([donePPL, UL], history, { programId: "UL", run: "latest" })), ["PPL:latest"],
+    "Upper Lower picked first: Push Pull Legs, the other finished one, is offered in blue");
+  eq(refs(compareCandidates([PPL, UL, oldUL], withOld, { programId: "oldUL", run: "latest" })), ["UL:latest"],
+    "an older finished program picked first: the other finished one in blue, never the one on the go");
 }
 const candidates = compareCandidates(programs, history, green.ref);
 eq(candidates.map(c => c.ref), [{ programId: "UL", run: "latest" }], "blue: finished runs only, never green itself");
@@ -362,6 +412,67 @@ near(liftChange(bench.green), (87.5 / 80 - 1) * 100, "green's bench, first to la
   eq([runName(views[0]), views[0].sessions.length, views[0].finished], ["Upper Lower, earlier run", 14, true], "named, with its sessions");
   eq(missedDates(views[0], "Barbell Back Squat", compareLifts(views[0], views[0]).both[1].blue, TODAY), [],
     "an earlier run has no schedule to miss sessions on");
+}
+
+// ─── the exercise chart's places, one day at a time ──────────────────────────
+// (utils/exerciseDaySlots.ts) The Progress page's chart of one exercise on one
+// program day: every time the day came round, numbered as its workout cards
+// number the session (user decision, 2026-10-22), a miss in its own place.
+{
+  const SQUAT = "Barbell Back Squat";
+  const daySlots = (p: SavedProgram, dayId: string, h: CompletedWorkout[], today = TODAY, all: SavedProgram[] = programs) => exerciseDaySlots({
+    exercise: SQUAT,
+    points: collectExerciseHistory(h.filter(w => w.programId === p.id && w.dayId === dayId), SQUAT),
+    programPoints: collectExerciseHistory(h.filter(w => w.programId === p.id), SQUAT),
+    history: h,
+    tracks: buildSessionTracks(h, all.map(q => (q.id === p.id ? p : q)), today),
+    todayYMD: today,
+  });
+  const read = (slots: ReturnType<typeof daySlots>) => slots.map(s => `${s.number}${s.point ? "" : " missed"}`);
+
+  const legs = daySlots(PPL, "d2", history);
+  eq(read(legs), ["1", "2", "3 missed", "4", "5"], "Legs' squat: the 30 Sep it missed keeps its place, the 3rd");
+  const cards = buildSessionTracks(history, programs, TODAY);
+  eq(legs.every(s => !s.point || cards.numberById[s.point.workoutId] === s.number), true,
+    "every session on the chart is the number its card reads");
+  eq(read(daySlots(UL, "d1", history)), ["1", "2", "3", "4", "5", "6 missed", "7 missed", "8"],
+    "a finished program: two missed in a row are its 6th and 7th, the session after its 8th");
+
+  // Change Workout Day: Legs done on the Monday of the week it missed, ahead of
+  // its Wednesday. It's that week's, the 3rd, on the chart as on its card.
+  const early = session("PPL", "2026-09-28", "d2", [ex(SQUAT, [[103, 5]])]);
+  const withEarly = [...history, early];
+  eq(read(daySlots(PPL, "d2", withEarly)), ["1", "2", "3", "4", "5"], "done early in the week it was missing from: the 3rd, nothing missed");
+  eq(buildSessionTracks(withEarly, programs, TODAY).numberById[early.id], 3, "and its card says 3rd");
+
+  // Run again: the new run counts from 1, as its cards do.
+  const { programs: next } = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, UL], "UL", "15 Oct 2026");
+  const ul = next.find(p => p.id === "UL")!;
+  const again = [...history, session("UL", "2026-10-16", "d1", [ex(SQUAT, [[100, 5]])])];
+  const both = daySlots(ul, "d1", again, "2026-10-21", next);
+  eq(both.map(s => `${s.run}:${s.number}`), ["1:1", "1:2", "1:3", "1:4", "1:5", "1:6", "1:7", "1:8", "2:1"],
+    "two runs: the 1st's eight places, then the 2nd's own 1st");
+  eq(buildSessionTracks(again, next, "2026-10-21").numberById[again[again.length - 1].id], 1, "which its card calls its 1st session too");
+
+  // Counted, nothing missed, where the schedule can't place them, as their
+  // cards are.
+  const counted = exerciseDaySlots({
+    exercise: SQUAT, points: legs.flatMap(s => (s.point ? [s.point] : [])),
+    programPoints: [], history, tracks: buildSessionTracks([], [], TODAY), todayYMD: TODAY,
+  });
+  eq(read(counted), ["1", "2", "3", "4"], "sessions no track holds: counted");
+  const rerun: SavedProgram = { ...UL, status: "active", startDate: "05 Oct 2026", completedDate: "26 Jul 2026", currentWeek: 2 };
+  eq(read(daySlots(rerun, "d1", history)), ["1", "2", "3", "4", "5", "6"], "from before runs were kept: counted, no schedule to miss on");
+
+  // A run shelved in its first week isn't kept (utils/programRuns.ts endingRun),
+  // so run again, its sessions have no run of their own: the chart says what
+  // their cards say, whatever that is.
+  const shelvedEarly = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, { ...UL, status: "created", startDate: "05 Oct 2026", completedDate: undefined, currentWeek: 1 }], "UL", "19 Oct 2026").programs;
+  const odd = [...history, session("UL", "2026-10-06", "d1", [ex(SQUAT, [[100, 5]])])];
+  const oddUL = shelvedEarly.find(p => p.id === "UL")!;
+  const oddTracks = buildSessionTracks(odd, shelvedEarly, "2026-10-21");
+  eq(daySlots(oddUL, "d1", odd, "2026-10-21", shelvedEarly).every(s => !s.point || s.number === oddTracks.numberById[s.point.workoutId]), true,
+    "a session no kept run holds: the chart's number is its card's");
 }
 
 // ─── the chart's layout ──────────────────────────────────────────────────────

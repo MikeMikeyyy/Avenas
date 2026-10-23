@@ -36,6 +36,7 @@ import * as Haptics from "expo-haptics";
 
 import AuroraBackdrop from "./AuroraBackdrop";
 import BounceButton from "./BounceButton";
+import GlassButton, { GlassSurface } from "./GlassButton";
 import NeuCard from "./NeuCard";
 import StopwatchIcon from "./StopwatchIcon";
 import { WheelPicker } from "./TimeWheelPicker";
@@ -75,7 +76,7 @@ import {
 } from "../utils/workoutTimer";
 import {
   ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, CUE_INK, CUE_INK_DARK, FontFamily, NEU_BG, NEU_BG_DARK,
-  TIMER_GRADIENT, accentTextColor, replacedTextColor, timerDialInk,
+  TIMER_GRADIENT, WARMUP_ORANGE, accentTextColor, replacedTextColor, timerDialInk,
 } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
 
@@ -346,11 +347,9 @@ function TimerBody({ onClose, isDark, upNext, allDone, onTick }: Omit<Props, "vi
       <AuroraBackdrop dark={isDark} tint="aqua" />
 
       <View style={[styles.header, { paddingTop: insets.top + BACK_TOP }]}>
-        <BounceButton onPress={onClose} accessibilityRole="button" accessibilityLabel="Close the timer">
-          <View style={[styles.close, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="close" size={20} color={t.tp} />
-          </View>
-        </BounceButton>
+        <GlassButton onPress={onClose} size={BACK_SIZE} accessibilityLabel="Close the timer">
+          <Ionicons name="close" size={20} color={t.tp} />
+        </GlassButton>
         <View style={[styles.switchHolder, { top: insets.top + BACK_TOP }]} pointerEvents="box-none">
           <ModeSwitch mode={mode} onChange={switchMode} isDark={isDark} />
         </View>
@@ -394,7 +393,8 @@ function TimerBody({ onClose, isDark, upNext, allDone, onTick }: Omit<Props, "vi
 
 // ─── Timer / Stopwatch ───────────────────────────────────────────────────────
 
-/** The two modes, its green pill sliding between them as it always has. */
+/** The two modes, its green pill sliding between them as it always has, on a
+ *  glass track on iOS 26 (components/GlassButton.tsx) beside the glass ✕. */
 function ModeSwitch({ mode, onChange, isDark }: { mode: TimerMode; onChange: (m: TimerMode) => void; isDark: boolean }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const at = useSharedValue(mode === "timer" ? 0 : 1);
@@ -403,7 +403,7 @@ function ModeSwitch({ mode, onChange, isDark }: { mode: TimerMode; onChange: (m:
   }, [mode, at]);
   const pill = useAnimatedStyle(() => ({ transform: [{ translateX: at.value * SWITCH_HALF }] }));
   return (
-    <View style={[styles.switchTrack, { backgroundColor: t.div }]}>
+    <GlassSurface style={styles.switchTrack} solidStyle={{ backgroundColor: t.div }}>
       <Reanimated.View style={[styles.switchPill, pill]} />
       {(["timer", "stopwatch"] as const).map(m => (
         <Pressable
@@ -418,7 +418,7 @@ function ModeSwitch({ mode, onChange, isDark }: { mode: TimerMode; onChange: (m:
           </Text>
         </Pressable>
       ))}
-    </View>
+    </GlassSurface>
   );
 }
 
@@ -737,23 +737,34 @@ function ExerciseCard({
             <View style={{ flex: 1 }}>
               <Text style={[styles.cardName, { color: t.tp }]} numberOfLines={2}>{upNext.exerciseName}</Text>
               <View style={styles.setRow}>
-                {upNext.setDone.length > 0 && upNext.setDone.length <= 12 ? (
-                  <View style={styles.dots}>
-                    {upNext.setDone.map((done, i) => (
-                      <View
-                        key={i}
-                        style={[
-                          styles.dot,
-                          done
-                            ? { backgroundColor: ACCT, borderColor: ACCT }
-                            : i === upNext.dot
-                              ? [{ borderColor: ACCT }, styles.dotNow]
-                              : { borderColor: isDark ? t.div : APP_LIGHT.div },
-                        ]}
-                      />
-                    ))}
-                  </View>
-                ) : null}
+                {(() => {
+                  // As the lock screen card draws them: the warmups in orange,
+                  // a little apart, then the working sets in green; past 11 in
+                  // all the warmups give way, past 12 working sets there are none.
+                  const working = upNext.setDone;
+                  const warmups = upNext.warmupDone.length + working.length <= 11 ? upNext.warmupDone : [];
+                  if ((!warmups.length && !working.length) || working.length > 12) return null;
+                  const dot = (done: boolean, now: boolean, color: string, key: string) => (
+                    <View
+                      key={key}
+                      style={[
+                        styles.dot,
+                        done
+                          ? { backgroundColor: color, borderColor: color }
+                          : now
+                            ? [{ borderColor: color }, styles.dotNow, { shadowColor: color }]
+                            : { borderColor: isDark ? t.div : APP_LIGHT.div },
+                      ]}
+                    />
+                  );
+                  return (
+                    <View style={styles.dots}>
+                      {warmups.map((done, i) => dot(done, upNext.isWarmup && i === upNext.setIdx, WARMUP_ORANGE, `w${i}`))}
+                      {warmups.length && working.length ? <View style={styles.dotsGap} /> : null}
+                      {working.map((done, i) => dot(done, i === upNext.dot, ACCT, `s${i}`))}
+                    </View>
+                  );
+                })()}
                 <Text style={[styles.setLabel, { color: quiet }]}>{upNext.setLabel}</Text>
                 {upNext.numbers ? (
                   <>
@@ -778,9 +789,10 @@ function ExerciseCard({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   header: { paddingHorizontal: BACK_LEFT },
-  close: { width: BACK_SIZE, height: BACK_SIZE, borderRadius: BACK_SIZE / 2, alignItems: "center", justifyContent: "center" },
   switchHolder: { position: "absolute", left: 0, right: 0, height: BACK_SIZE, alignItems: "center", justifyContent: "center" },
-  switchTrack: { width: SWITCH_W, height: BACK_SIZE, borderRadius: PILL_RADIUS, padding: SWITCH_PAD, flexDirection: "row" },
+  // Exactly half its height rather than PILL_RADIUS: on iOS 26 the glass draws
+  // its own corners from this number.
+  switchTrack: { width: SWITCH_W, height: BACK_SIZE, borderRadius: BACK_SIZE / 2, padding: SWITCH_PAD, flexDirection: "row" },
   switchPill: {
     position: "absolute", top: SWITCH_PAD, left: SWITCH_PAD, bottom: SWITCH_PAD, width: SWITCH_HALF,
     borderRadius: PILL_RADIUS, backgroundColor: ACCT,
@@ -835,6 +847,8 @@ const styles = StyleSheet.create({
   cardSub: { fontFamily: FontFamily.semibold, fontSize: 14, marginTop: 4 },
   setRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 9, marginTop: 8 },
   dots: { flexDirection: "row", gap: 5 },
+  // A little more room between the warmups and the working sets.
+  dotsGap: { width: 3 },
   dot: { width: 9, height: 9, borderRadius: 5, borderWidth: 1.5 },
   dotNow: { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.75, shadowRadius: 3 },
   setLabel: { fontFamily: FontFamily.semibold, fontSize: 14 },

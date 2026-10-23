@@ -60,17 +60,19 @@ export const SUPABASE_STANDINS = `
 `;
 
 /**
- * Supabase's own grants: everything created in `public` is granted to the API
- * roles by default, and Row Level Security is what actually decides. Needed
- * when queries run AS those roles (verify-program-flows.ts), so the policies
- * are what's tested rather than a missing grant. Applied before the
- * migrations, so a migration that revokes something still gets its way.
+ * Supabase's own grants, as they stand from 30 October 2026: functions and
+ * sequences created in `public` are granted to the API roles by default, but
+ * TABLES no longer are, so each table's migration grants its own (0049 for
+ * every table before it). Row Level Security is what decides rows. Needed
+ * when queries run AS those roles (verify-program-flows.ts), so a table a
+ * migration forgot to grant fails here as it would on Supabase. Applied
+ * before the migrations, so a migration that revokes something still gets
+ * its way.
  */
 export const SUPABASE_API_GRANTS = `
   grant usage on schema public to anon, authenticated, service_role;
   -- So a function running as the caller can call auth.uid(), as on Supabase.
   grant usage on schema auth to anon, authenticated, service_role;
-  alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
   alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
   alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
   grant usage on schema storage to authenticated;

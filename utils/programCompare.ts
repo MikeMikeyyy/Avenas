@@ -1,9 +1,10 @@
 // utils/programCompare.ts
 //
 // The Progress page's comparison of two programs (user request and design,
-// 2026-10-14, on the Program Compare canvas): the program picked at the top
-// (green) against a FINISHED one (periwinkle), which can be another program
-// or an earlier run of the same one (utils/programRuns.ts).
+// 2026-10-14, on the Program Compare canvas): the program picked first (green:
+// the one on the go, or a finished one) against a FINISHED one (periwinkle),
+// which can be another program or an earlier run of the same one
+// (utils/programRuns.ts).
 //
 // Two ways things line up, each where it reads naturally:
 //
@@ -40,7 +41,7 @@ import {
   computeWorkoutTonnage, workoutBelongsToProgram,
 } from "./progressStats";
 import { programRunViews, sameRun, type ProgramRunView, type RunRef } from "./programRuns";
-import { occurrencesOfDay } from "./sessionTrack";
+import { placeSessions, placingOccurrences } from "./sessionTrack";
 import { ordinal } from "./workoutSummary";
 
 // ─── The two sides ───────────────────────────────────────────────────────────
@@ -102,6 +103,26 @@ export function compareStartGreen(
   const picked = greenRunFor(scope, programs, history);
   const fallbacks = [picked, currentRun(programs, history), compareCandidates(programs, history, null)[0] ?? null];
   return fallbacks.find(v => v && compareCandidates(programs, history, v.ref).length > 0) ?? picked;
+}
+
+/** What can go green as a comparison starts, its first pick (user request,
+ *  2026-10-16: the program picked first is green, the one it's compared with
+ *  blue): the run on the go, the one picked at the top, then every finished
+ *  run, the most recently finished first, each only while there's a finished
+ *  run left to set beside it. Empty, there's nothing to compare yet; with one,
+ *  the sheet skips the first pick. `compareStartGreen` is among them, ticked. */
+export function compareFirstPicks(
+  scope: ProgramScope,
+  programs: readonly SavedProgram[],
+  history: readonly CompletedWorkout[],
+): ProgramRunView[] {
+  const pickedAtTop = scope.kind === "program" ? greenRunFor(scope, programs, history) : null;
+  const out: ProgramRunView[] = [];
+  for (const v of [currentRun(programs, history), pickedAtTop, ...compareCandidates(programs, history, null)]) {
+    if (!v || out.some(o => sameRun(o.ref, v.ref))) continue;
+    if (compareCandidates(programs, history, v.ref).length > 0) out.push(v);
+  }
+  return out;
 }
 
 /** What comparing needs, for the compare sheet's checklist while it can't
@@ -426,8 +447,9 @@ export function compareLifts(green: ProgramRunView, blue: ProgramRunView): {
 }
 
 /** A session's planned exercises: its plan when it saved one (0046), else
- *  what it swapped out (an exercise left out without a plan leaves no trace). */
-function plannedIn(w: CompletedWorkout, key: string): boolean {
+ *  what it swapped out (an exercise left out without a plan leaves no trace).
+ *  `key` is the exercise's exerciseIdentity. */
+export function plannedIn(w: CompletedWorkout, key: string): boolean {
   if (w.plan) return w.plan.some(p => !!p.name && exerciseIdentity(p) === key);
   return w.exercises.some(e => !!e.swappedFrom && exerciseIdentity({ name: e.swappedFrom, customId: e.swappedFromId }) === key);
 }
@@ -438,12 +460,14 @@ function plannedIn(w: CompletedWorkout, key: string): boolean {
  * schedule) and it wasn't done: the day missed, trained without it while it
  * was planned (nothing ticked counts), or with something else in its place. A
  * day has it when the run did it there, or the program plans it there now. The
- * day's session is the one logged from its date up to the next time the day
- * comes round, so a session logged a day late still fills it. A day it was
- * done on anyway, in another session (another of its days, a custom workout),
- * isn't missed: that session stands in the row instead. Only days already
- * past count (today's isn't missed yet). An earlier run from before runs were
- * kept has no schedule to read, so it has none.
+ * day's session is the one the workout cards put there (placeSessions), so a
+ * session logged a day late still fills it, and one done ahead of it, its day
+ * picked earlier in the week, does too. A day it was done on anyway, in
+ * another session (another of its days, a custom workout), isn't missed: that
+ * session stands in the row instead. Only days already past count (today's
+ * isn't missed yet). An earlier run from before runs were kept has no
+ * schedule to read, so it has none. The exercise chart reads a miss the same
+ * way, one program day at a time (utils/exerciseDaySlots.ts).
  */
 export function missedDates(
   view: ProgramRunView,
@@ -467,14 +491,20 @@ export function missedDates(
 
   const yesterday = addDaysYMD(todayYMD, -1);
   const through = view.endYMD && view.endYMD < yesterday ? view.endYMD : yesterday;
+  // Placed against what the cards place them against: up to today, or the day
+  // the run stopped, and the next one after.
+  const placedThrough = view.endYMD && view.endYMD < todayYMD ? view.endYMD : todayYMD;
   for (const dayId of dayIds) {
-    const occurrences = occurrencesOfDay(p, dayId, through).filter(o => o >= view.startYMD);
+    const { dates } = placingOccurrences(p, dayId, placedThrough);
     const sessions = view.sessions.filter(w => w.dayId === dayId);
-    occurrences.forEach((o, i) => {
-      const next = occurrences[i + 1] ?? "9999-12-31";
-      const filled = sessions.find(w => w.date >= o && w.date < next);
-      if (filled && doneIds.has(filled.id)) return;
-      if (filled && !plannedIn(filled, key)) return;
+    const placed = placeSessions(p, dayId, dates, sessions);
+    dates.forEach((o, i) => {
+      if (o < view.startYMD || o > through) return;
+      // Done in any session of the day there (a day trained twice in a week
+      // has two), or trained there by sessions none of which planned it.
+      const there = sessions.filter(w => placed[w.id] === i);
+      if (there.some(w => doneIds.has(w.id))) return;
+      if (there.length > 0 && !there.some(w => plannedIn(w, key))) return;
       if (doneOn.has(o)) return;
       missed.push(o);
     });

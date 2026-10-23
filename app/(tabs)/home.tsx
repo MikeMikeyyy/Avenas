@@ -5,6 +5,8 @@ import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../../constants/floatingBars";
+import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { useRouter, useFocusEffect } from "expo-router";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -258,6 +260,8 @@ export default tabScreen(HomeScreen);
 
 function HomeScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -449,7 +453,7 @@ function HomeScreen() {
         showsVerticalScrollIndicator={false}
         automaticallyAdjustContentInsets={false}
         contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: insets.bottom + 120 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 50, paddingBottom: scrollEndPadding(insets.bottom + 120, barsReach) }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
         scrollEventThrottle={16}
       >

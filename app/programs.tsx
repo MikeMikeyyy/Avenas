@@ -4,6 +4,8 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 // Aliased: `Animated` in this file is React Native's, used by the sheets' pan
@@ -15,9 +17,10 @@ import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_HIST
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardProgramAchievement } from "../utils/achievementStore";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE, DANGER_BRIGHT } from "../constants/theme";
-import { pill, pillGlow, PILL_RADIUS } from "../constants/buttons";
+import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import GlassButton from "../components/GlassButton";
 import SheetPill from "../components/SheetPill";
 import SquarePenIcon from "../components/SquarePenIcon";
 import ChevronToggle from "../components/ChevronToggle";
@@ -36,6 +39,7 @@ import { useAccountType } from "../contexts/AccountTypeContext";
 import { appendSentProgram, loadAssignedPT, removeSharedProgramByLocalId, type AssignedPT, type SentProgram } from "../utils/trainerStore";
 import { alertMessage } from "../utils/errors";
 import { archiveProgram } from "../utils/programArchive";
+import { keepDeletedProgramName } from "../utils/programDelete";
 import { askArchiveOrDelete } from "../utils/archiveChoice";
 import { programStatus } from "../utils/programStatus";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
@@ -47,6 +51,9 @@ const WARMUP_ORANGE = "#ffbf0f";
 // One layout transition for the whole collapse: the card's own height and the
 // cards sliding beneath it must run at the same speed or the list tears.
 const CARD_LAYOUT = LinearTransition.duration(220);
+
+/** The New pill beside All Programs: its words' line and 5 above and below. */
+const NEW_BTN_H = 26;
 
 // ─── Set Workout Picker ────────────────────────────────────────────────────────
 
@@ -520,6 +527,8 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
 
 export default function ProgramsScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -702,6 +711,8 @@ export default function ProgramsScreen() {
         scheduleCloudPush();
       },
       onDelete: async () => {
+        // Its sessions keep its name, to say whose they were (utils/programDelete.ts).
+        await keepDeletedProgramName(program);
         const updated = programs.filter(p => p.id !== program.id);
         setPrograms(updated);
         await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
@@ -934,7 +945,7 @@ export default function ProgramsScreen() {
       <ScrollView
         ref={scrollRef}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -987,12 +998,17 @@ export default function ProgramsScreen() {
             <Text style={[styles.sectionLabel, { color: t.tp, marginBottom: 0 }]}>All Programs</Text>
             <ChevronToggle expanded={!collapsedAll} color={t.ts} />
           </Pressable>
-          <BounceButton onPress={() => router.navigate("/new-program")} accessibilityLabel="Create new program" accessibilityRole="button">
-            <View style={[styles.newProgramBtn, { backgroundColor: t.ctrl }]}>
-              <Ionicons name="add" size={14} color={t.tp} />
-              <Text style={[styles.newProgramBtnText, { color: t.tp }]}>New</Text>
-            </View>
-          </BounceButton>
+          <GlassButton
+            pill
+            size={NEW_BTN_H}
+            onPress={() => router.navigate("/new-program")}
+            contentStyle={styles.newProgramBtn}
+            solidStyle={PILL_SHADOW}
+            accessibilityLabel="Create new program"
+          >
+            <Ionicons name="add" size={14} color={t.tp} />
+            <Text style={[styles.newProgramBtnText, { color: t.tp }]}>New</Text>
+          </GlassButton>
         </View>
         {otherPrograms.length === 0 ? (
           <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 12 }}>
@@ -1096,9 +1112,10 @@ const styles = StyleSheet.create({
   dateChip:           { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: PILL_RADIUS },
   dateChipText:       { fontFamily: FontFamily.semibold, fontSize: 12 },
   metaDot:            { width: 3, height: 3, borderRadius: 1.5, backgroundColor: "#8896A7" },
-  // Neutral chrome (background comes from t.ctrl inline) — a soft drop shadow
-  // rather than the ACCT glow reserved for primary green actions.
-  newProgramBtn:      { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  // The New pill's words (components/GlassButton.tsx: glass on iOS 26, the
+  // neutral control below that, with a soft drop shadow rather than the ACCT
+  // glow reserved for primary green actions).
+  newProgramBtn:      { gap: 4, paddingHorizontal: 10 },
   // flex:1 so the tap target spans the row up to the New pill, not just the words.
   allProgramsTap:     { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
   // The collapsible half of the card. `gap: 10` matches programCardInner's, so

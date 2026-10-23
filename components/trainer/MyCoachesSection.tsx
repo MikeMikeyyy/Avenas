@@ -8,8 +8,11 @@
 // trainer account (utils/roster.ts), merged with any local/mock entries — the
 // connect handshake writes no local roster, so reading a local key here is what
 // used to leave this page permanently empty.
+//
+// The search field over the list (SearchField, the faded one) finds a trainer
+// by name. It narrows the trainers only; the programs below stay as they are.
 
-import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -20,6 +23,7 @@ import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import Avatar from "../Avatar";
 import TrashIcon from "../TrashIcon";
+import SearchField from "../SearchField";
 import PeopleIcon from "../icons/PeopleIcon";
 import SendIcon from "../icons/SendIcon";
 import UserRoundMinusIcon from "../icons/UserRoundMinusIcon";
@@ -48,7 +52,6 @@ import { setConnectionRole } from "../../lib/connectionRoles";
 import { unaddContact } from "../../utils/moderation";
 import { getJSON } from "../../utils/storage";
 import { isActiveNow, presenceLabel } from "../../utils/presence";
-import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import { alertMessage } from "../../utils/errors";
 
@@ -65,13 +68,13 @@ interface Props {
    *  and to distinguish outgoing shares (clientId is a client) from incoming
    *  shares from a coach (clientId is not a client). */
   clients: Client[];
+  /** Live "last active" for connected trainers (the page's useConnectionPresence).
+   *  Trainers without a real connection (legacy/mock) aren't in it and show no
+   *  presence row. */
+  presenceById: Map<string, string | null>;
 }
 
-export interface MyCoachesSectionRef {
-  openMenu: () => void;
-}
-
-const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoachesSection({ clients }, ref) {
+export default function MyCoachesSection({ clients, presenceById }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
@@ -88,15 +91,12 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
   /** Set while picking which program to send to `sendTo`. */
   const [sendTo, setSendTo] = useState<AssignedPT | null>(null);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
-  // Live "last active" comes from the connection presence poll. Trainers
-  // without a real connection (legacy/mock) aren't in the map and show no
-  // presence row.
-  const { presenceById } = useConnectionPresence();
 
   // "None" is only true once we've looked. Both lists drew their empty states
   // ("No trainers yet") during the load, to people who have trainers.
   const [trainersLoaded, setTrainersLoaded] = useState(false);
   const [receivedLoaded, setReceivedLoaded] = useState(false);
+  const [search, setSearch] = useState("");
 
   const reload = useCallback(async () => {
     // The trainer list resolves on its own. It used to wait for the incoming
@@ -257,33 +257,13 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     );
   }, [reload, trainerClientIds]);
 
-  // "Remove a Trainer": a red minus on each card rather than an alert listing
-  // every trainer, which didn't scale past a few (components/trainer/RemoveMode.tsx).
+  // "Remove a trainer", from the quiet button under the list: a red minus on
+  // each card rather than an alert listing every trainer, which didn't scale
+  // past a few (components/trainer/RemoveMode.tsx). The button plays the tap.
   const startRemoving = useCallback(() => {
-    if (trainers.length === 0) {
-      Alert.alert("No trainers", "You haven't connected to any trainers yet.");
-      return;
-    }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setMenuFor(null);
     setRemoving(true);
-  }, [trainers]);
-
-  // Top-right plus button entry — offers both add and remove paths.
-  const openMenu = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert(
-      "Manage Trainers",
-      "Anyone you connect with who has a trainer account shows up here. Everyone else goes to My Clients.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Connect", onPress: handleConnect },
-        { text: "Remove a Trainer", style: "destructive", onPress: startRemoving },
-      ],
-    );
-  }, [handleConnect, startRemoving]);
-
-  useImperativeHandle(ref, () => ({ openMenu }), [openMenu]);
+  }, []);
 
   // Accepts in flight: a second tap while the first is on its way would
   // otherwise say "added" twice (the store adds it once either way).
@@ -392,6 +372,9 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
     return trainer?.name ?? "your trainer";
   };
 
+  const q = search.trim().toLowerCase();
+  const shownTrainers = q ? trainers.filter(c => c.name.toLowerCase().includes(q)) : trainers;
+
   return (
     <View style={styles.wrap}>
       <Text style={[styles.sub, { color: t.ts }]}>
@@ -417,9 +400,13 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
         </NeuCard>
       ) : (
         <>
+        <SearchField value={search} onChangeText={setSearch} placeholder="Search by name" style={styles.search} />
         {removing && <RemoveModeBar isDark={isDark} onDone={() => setRemoving(false)} />}
-        <View style={{ marginTop: 12, gap: 10 }}>
-          {trainers.map(coach => {
+        {shownTrainers.length === 0 ? (
+          <Text style={[styles.noMatch, { color: t.ts }]}>No trainers match “{search.trim()}”.</Text>
+        ) : null}
+        <View style={{ marginTop: shownTrainers.length > 0 ? 12 : 0, gap: 10 }}>
+          {shownTrainers.map(coach => {
             const alsoClient = trainerClientIds.has(coach.id);
             return (
               <TouchableOpacity
@@ -471,6 +458,13 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
             );
           })}
         </View>
+        {/* Quiet, at the foot: removing someone is rare, and the page's one
+            button is for connecting. Each card's own menu has it too. */}
+        {!removing && shownTrainers.length > 0 ? (
+          <BounceButton style={styles.removeRow} onPress={startRemoving} needsConnection accessibilityLabel="Remove a trainer">
+            <Text style={[styles.removeText, { color: t.ts }]}>Remove a trainer</Text>
+          </BounceButton>
+        ) : null}
         </>
       )}
 
@@ -632,13 +626,14 @@ const MyCoachesSection = forwardRef<MyCoachesSectionRef, Props>(function MyCoach
       />
     </View>
   );
-});
-
-export default MyCoachesSection;
+}
 
 const styles = StyleSheet.create({
   wrap:         { marginBottom: 8 },
   sub:          { fontFamily: FontFamily.regular, fontSize: 13 },
+  search:       { marginTop: 12 },
+  // Messages' "No people match", value for value.
+  noMatch:      { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
   sectionHeadingRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 22, marginBottom: 10 },
   sectionHeading: { fontFamily: FontFamily.bold, fontSize: 16 },
 
@@ -650,6 +645,9 @@ const styles = StyleSheet.create({
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
 
   coachCard:    { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
+  // The gym user's My Trainers page's, value for value (MyTrainersSection).
+  removeRow:    { alignSelf: "center", marginTop: 14 },
+  removeText:   { fontFamily: FontFamily.bold, fontSize: 14, paddingHorizontal: 12, lineHeight: 44 },
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 16 },
   coachLabel:   { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 1 },
   labelRow:     { flexDirection: "row", alignItems: "center", gap: 6 },

@@ -17,6 +17,8 @@ import {
   ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useNavigation, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -25,7 +27,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE } from "../constants/theme";
-import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { haloGlow, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, NEW_PROGRAM_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
 import { activateProgram, type FinishedProgram } from "../utils/programLifecycle";
@@ -37,6 +39,7 @@ import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import DeleteCircleButton, { DELETE_CIRCLE_SIZE } from "../components/DeleteCircleButton";
 import BounceButton from "../components/BounceButton";
+import GlassButton from "../components/GlassButton";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
@@ -1970,6 +1973,8 @@ function Step2({
 
 export default function NewProgramScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const navigation = useNavigation();
   const { isDark } = useTheme();
@@ -3125,11 +3130,17 @@ export default function NewProgramScreen() {
 
       {(isEditMode || isReviewMode || isSharedEditMode) && (
         <Reanimated.View style={[{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }, updateBtnStyle]} pointerEvents={hasChanges ? "box-none" : "none"}>
-          <BounceButton onPress={handleFinish} accessibilityLabel="Save changes" accessibilityRole="button">
-            <View style={[styles.updateBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
-              <Text style={[styles.updateBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Update</Text>
-            </View>
-          </BounceButton>
+          <GlassButton
+            pill
+            size={BACK_SIZE}
+            tint={isDark ? BTN_SLATE_DARK : BTN_SLATE}
+            onPress={handleFinish}
+            contentStyle={styles.updateContent}
+            solidStyle={styles.updateLift}
+            accessibilityLabel="Save changes"
+          >
+            <Text style={[styles.updateBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Update</Text>
+          </GlassButton>
         </Reanimated.View>
       )}
 
@@ -3187,7 +3198,7 @@ export default function NewProgramScreen() {
         // keeps its longer-standing 120 because its content runs much further.
         // Padding on the CONTENT, not a fixed height, so adding cycle days or
         // exercises keeps the same gap rather than eating into it.
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + (step === 2 ? 120 : 90) }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (step === 2 ? 120 : 90), barsReach) }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -3302,25 +3313,19 @@ export default function NewProgramScreen() {
           inert until the program has a name and at least one named training day. */}
       {step === 1 && kbHeight === 0 && (
         <View style={{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
-          <BounceButton
-            onPress={canProceed ? handleNext : undefined}
+          <GlassButton
+            pill
+            size={PILL_H_SM}
+            tint={isDark ? BTN_SLATE_DARK : BTN_SLATE}
+            onPress={handleNext}
+            disabled={!canProceed}
+            contentStyle={styles.createFab}
+            solidStyle={styles.createFabLift}
             accessibilityLabel="Next step"
-            accessibilityRole="button"
-            style={{ opacity: canProceed ? 1 : 0.4 }}
           >
-            {(() => {
-              const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
-              const btnContent = isDark ? APP_DARK.bg : "#fff";
-              return (
-                <View style={[styles.createFabWrap, { backgroundColor: btnBg }]}>
-                  <View style={[styles.createFab, { backgroundColor: btnBg }]}>
-                    <Text style={[styles.createFabText, { color: btnContent }]}>Next</Text>
-                    <Ionicons name="arrow-forward" size={16} color={btnContent} />
-                  </View>
-                </View>
-              );
-            })()}
-          </BounceButton>
+            <Text style={[styles.createFabText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Next</Text>
+            <Ionicons name="arrow-forward" size={16} color={isDark ? APP_DARK.bg : "#fff"} />
+          </GlassButton>
         </View>
       )}
 
@@ -3329,20 +3334,18 @@ export default function NewProgramScreen() {
           through their own header action, not this one. */}
       {step === 2 && kbHeight === 0 && !isEditMode && !isReviewMode && !isSharedEditMode && (
         <View style={{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
-          <BounceButton onPress={handleFinish} accessibilityLabel="Create program" accessibilityRole="button">
-            {(() => {
-              const btnBg = isDark ? BTN_SLATE_DARK : BTN_SLATE;
-              const btnContent = isDark ? APP_DARK.bg : "#fff";
-              return (
-                <View style={[styles.createFabWrap, { backgroundColor: btnBg }]}>
-                  <View style={[styles.createFab, { backgroundColor: btnBg }]}>
-                    <Ionicons name="checkmark" size={16} color={btnContent} />
-                    <Text style={[styles.createFabText, { color: btnContent }]}>Create Program</Text>
-                  </View>
-                </View>
-              );
-            })()}
-          </BounceButton>
+          <GlassButton
+            pill
+            size={PILL_H_SM}
+            tint={isDark ? BTN_SLATE_DARK : BTN_SLATE}
+            onPress={handleFinish}
+            contentStyle={styles.createFab}
+            solidStyle={styles.createFabLift}
+            accessibilityLabel="Create program"
+          >
+            <Ionicons name="checkmark" size={16} color={isDark ? APP_DARK.bg : "#fff"} />
+            <Text style={[styles.createFabText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Create Program</Text>
+          </GlassButton>
         </View>
       )}
 
@@ -3350,18 +3353,18 @@ export default function NewProgramScreen() {
           long. Hidden while the keyboard is up so it never overlaps the toolbar. */}
       {step === 2 && kbHeight === 0 && (
         <View style={{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
-          <BounceButton
+          <GlassButton
+            pill
+            size={PILL_H_SM}
+            tint={ACCT}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSummaryOpen(true); }}
+            contentStyle={styles.createFab}
+            solidStyle={styles.summaryFabGlow}
             accessibilityLabel="Workout summary"
-            accessibilityRole="button"
           >
-            <View style={styles.summaryFabWrap}>
-              <View style={styles.summaryFab}>
-                <Ionicons name="list" size={16} color="#fff" />
-                <Text style={styles.summaryFabText}>Summary</Text>
-              </View>
-            </View>
-          </BounceButton>
+            <Ionicons name="list" size={16} color="#fff" />
+            <Text style={styles.summaryFabText}>Summary</Text>
+          </GlassButton>
         </View>
       )}
 
@@ -3611,7 +3614,9 @@ const styles = StyleSheet.create({
   primaryBtnWrap:   { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
   primaryBtn:       { ...pill(), backgroundColor: ACCT, gap: 8 },
   primaryBtnText:   { fontFamily: FontFamily.bold, fontSize: 16, color: "#FFFFFF", letterSpacing: 0.3 },
-  updateBtn:        { height: 40, borderRadius: 20, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
+  // The Update pill (components/GlassButton.tsx); its lift is the solid one's.
+  updateContent:    { paddingHorizontal: 14 },
+  updateLift:       { shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
   updateBtnText:    { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.3 },
 
   // Step 2 — workout days
@@ -3721,13 +3726,13 @@ const styles = StyleSheet.create({
   sumDayBody:       { flex: 1, justifyContent: "center", gap: 2 },
   sumDayName:       { fontFamily: FontFamily.semibold, fontSize: 15 },
   sumDayMeta:       { fontFamily: FontFamily.regular, fontSize: 12 },
-  summaryFabWrap:   { borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  summaryFab:       { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 12, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 6 },
+  summaryFabGlow:   haloGlow(ACCT, 0.6, 12),
   summaryFabText:   { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
   // Same geometry as the Summary pill so the two read as a pair. Neutral drop
   // shadow rather than Summary's ACCT glow — a coloured glow on a slate button
-  // would look like a mistake.
-  createFabWrap:    { borderRadius: 50, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
-  createFab:        { borderRadius: 50, paddingVertical: 12, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 6 },
+  // would look like a mistake. Both are the solid pills' only: on iOS 26 they
+  // are glass (components/GlassButton.tsx), lit by the glass.
+  createFabLift:    { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
+  createFab:        { paddingHorizontal: 18, gap: 6 },
   createFabText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
 });

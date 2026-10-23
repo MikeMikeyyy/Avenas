@@ -3,7 +3,7 @@
 // What a session changed about its program day (utils/exerciseChanges.ts): the
 // Journal's "Planned 2nd" / "Instead of" / "Added" / "Skipped", the Journal
 // card's summary, and the Workout tab's "Last session:" lines, including the
-// reset after the day changes in the builder.
+// reset after the day changes in the builder, and its session still under way.
 //
 // Run: npx tsx scripts/verify-exercise-changes.ts
 
@@ -50,23 +50,32 @@ eq(sessionChanges(session([ex("Barbell Bench Press"), ex("Cable Fly")], { plan: 
 
 // ─── moved ───────────────────────────────────────────────────────────────────
 const [b1, b2, b3, b4, b5] = PLAN.map(asPlanned);
-eq(cuesOf(session([b2, b1, b3, b4, b5])), [{ kind: "moved", plannedPosition: 2 }, null, null, null, null],
-  "1 and 2 swapped round: only the one brought forward is marked");
-eq(cuesOf(session([b5, b1, b2, b3, b4])), [{ kind: "moved", plannedPosition: 5 }, null, null, null, null],
-  "one done first from 5th: that one alone, not the four that shifted down");
-eq(cuesOf(session([b2, b3, b4, b5, b1])), [null, null, null, null, { kind: "moved", plannedPosition: 1 }],
-  "one left to the end: that one alone");
+eq(cuesOf(session([b1, b2, b3, b5, b4])), [null, null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 4 }],
+  "the 5th moved up to 4th: the 4th it went ahead of says Planned 4th too (user report, 2026-10-22)");
+eq(cuesOf(session([b2, b1, b3, b4, b5])), [{ kind: "moved", plannedPosition: 2 }, { kind: "moved", plannedPosition: 1 }, null, null, null],
+  "1 and 2 swapped round: both say where they were planned");
+eq(cuesOf(session([b5, b1, b2, b3, b4])), [{ kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 1 }, null, null, null],
+  "one done first from 5th: it and the 1st whose place it took, not the three that slid down after");
+eq(cuesOf(session([b2, b3, b4, b5, b1])), [null, null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 1 }],
+  "one left to the end: it and the 5th whose place it took");
+eq(cuesOf(session([b3, b4, b1, b2, b5])), [{ kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 4 }, { kind: "moved", plannedPosition: 1 }, { kind: "moved", plannedPosition: 2 }, null],
+  "two pairs traded: all four say so, the 5th untouched");
+eq(cuesOf(session([b1, b2, b5, b4])), [null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 4 }],
+  "with one skipped, the place taken is counted among what was done");
 eq(changesSummary(sessionChanges(session([b2, b1, b3, b4, b5]))), "Order changed", "summary: order changed");
 
 // ─── swapped, added, skipped ─────────────────────────────────────────────────
 const pecDeck = ex("Pec Deck", "e3", "Cable Fly");
 eq(cuesOf(session([b2, b1, pecDeck, b4, b5])),
-  [{ kind: "moved", plannedPosition: 2 }, null, { kind: "swapped", from: "Cable Fly" }, null, null],
-  "the reported week: Incline done 1st, Pec Deck instead of Cable Fly");
+  [{ kind: "moved", plannedPosition: 2 }, { kind: "moved", plannedPosition: 1 }, { kind: "swapped", from: "Cable Fly" }, null, null],
+  "the reported week: Incline done 1st, Bench after it, Pec Deck instead of Cable Fly");
 eq(changesSummary(sessionChanges(session([b2, b1, pecDeck, b4, b5]))), "Order changed · 1 swap", "summary of it");
 eq(cuesOf(session([b1, b2, ex("Pec Deck", "e3", "Cable Fly"), b5, b4])),
-  [null, null, { kind: "swapped", from: "Cable Fly" }, { kind: "moved", plannedPosition: 5 }, null],
-  "a swap-in that also moved says it was a swap; the move is the other one");
+  [null, null, { kind: "swapped", from: "Cable Fly" }, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 4 }],
+  "a swap-in says it was a swap; the pair moved past each other after it both say so");
+eq(cuesOf(session([b1, ex("Pec Deck", "e3", "Cable Fly"), b2, b4, b5])),
+  [null, { kind: "swapped", from: "Cable Fly" }, { kind: "moved", plannedPosition: 2 }, null, null],
+  "a swap-in brought forward still says it was a swap; the one it went ahead of says Planned 2nd");
 eq(cuesOf(session([b1, b2, b3, b4, b5, ex("Dips")])), [null, null, null, null, null, { kind: "added" }], "an exercise added mid-session");
 const skipped = sessionChanges(session([b1, b2, b4, b5]))!;
 eq(skipped.skipped, [{ id: "e3", name: "Cable Fly", plannedPosition: 3, before: 2 }], "a skipped exercise sits in its planned place");
@@ -81,9 +90,10 @@ eq(cuesOf(session([b1, ex("Cable Crossover", "e2", "Incline Bench Press")], { pl
 const last = session([b2, b1, pecDeck, b4]);
 eq(lastTimeCues(last, PLAN), {
   e2: { kind: "moved", donePosition: 1 },
+  e1: { kind: "moved", donePosition: 2 },
   e3: { kind: "swapped", to: "Pec Deck" },
   e5: { kind: "skipped" },
-}, "next week: Incline done 1st, Pec Deck instead, Lateral Raise skipped");
+}, "next week: Incline done 1st, Bench done 2nd, Pec Deck instead, Lateral Raise skipped");
 eq(lastTimeCues(null, PLAN), {}, "no last session: nothing");
 eq(lastTimeCues(session([b1, b2, b3, b4, b5, ex("Dips")]), PLAN), {}, "an exercise added last time has no card to mark");
 
@@ -113,6 +123,24 @@ const oldLast = session([b2, b1, pecDeck, b4], { plan: undefined });
 eq(lastTimeCues(oldLast, PLAN), { e3: { kind: "swapped", to: "Pec Deck" } }, "pre-plan session: its swap shows, no order or skip");
 eq(lastTimeCues(oldLast, PLAN.map(p => (p.id === "e3" ? { ...p, name: "Cable Crossover" } : p))), {},
   "...unless the builder has since put another exercise in that place");
+
+// ─── the Workout tab: today's session while it's under way ───────────────────
+// Its exercises are session exercises (an id, a name, sets still being typed),
+// carrying programExerciseId and swappedFrom until Finish writes them; the
+// cards read them the Journal's way (user request, 2026-10-22).
+const live = (exercises: { id: string; name: string; programExerciseId?: string; swappedFrom?: string }[]) =>
+  sessionChanges({ dayId: "d0", plan: PLAN, exercises })?.cues ?? null;
+const card = (p: PlannedExercise, i: number) => ({ id: `s${i}`, name: p.name, programExerciseId: p.id });
+const cards = PLAN.map(card);
+eq(live(cards), [null, null, null, null, null], "under way, as planned: no lines");
+eq(live([cards[2], cards[0], cards[1], cards[3], cards[4]]), [{ kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 1 }, null, null, null],
+  "under way: a card dragged to the top says Planned 3rd at once, and the 1st it went ahead of Planned 1st");
+eq(live([cards[0], cards[1], cards[2], cards[4], cards[3]]), [null, null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 4 }],
+  "under way: the 5th moved up to 4th, and the 4th says Planned 4th too");
+eq(live([cards[0], { ...cards[1], name: "Smith Incline Press", swappedFrom: "Incline Bench Press" }, cards[2], cards[3], cards[4]]),
+  [null, { kind: "swapped", from: "Incline Bench Press" }, null, null, null], "under way: a swap says Instead of at once");
+eq(live([...cards, { id: "s9", name: "Dips" }]), [null, null, null, null, null, { kind: "added" }], "under way: an added card says Added");
+eq(sessionChanges({ exercises: cards }), null, "under way on a custom workout (no day): nothing");
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

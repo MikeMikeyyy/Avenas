@@ -21,6 +21,7 @@ import CollapsibleCard from "../../components/CollapsibleCard";
 import FadeScreen from "../../components/FadeScreen";
 import OfflineBanner from "../../components/OfflineBanner";
 import BounceButton from "../../components/BounceButton";
+import GlassButton, { GlassSurface } from "../../components/GlassButton";
 import SheetPill, { SheetToggle } from "../../components/SheetPill";
 import ExercisePicker from "../../components/ExercisePicker";
 import TrashIcon from "../../components/TrashIcon";
@@ -32,7 +33,7 @@ import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { stampSession } from "../../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { haloGlow, pill, pillGlow, PILL_H, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, type PlannedExercise, normaliseSets, getCurrentWeek } from "../../constants/programs";
@@ -58,7 +59,10 @@ import { deleteCustomExercise as deleteCustomEverywhere } from "../../utils/cust
 import { resumeWithPrompt } from "../../utils/programPause";
 import { exerciseSummaryParams } from "../../utils/customExerciseDetails";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
-import { formatWeightForDisplay, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../../utils/units";
+import { formatWeightForDisplay, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder, parseWeightToKg } from "../../utils/units";
+import { bestLiftsBefore, isPrSet, prSetsOfWorkout } from "../../utils/achievements";
+import { exerciseIdentity } from "../../utils/exerciseNames";
+import PrTrophy from "../../components/PrTrophy";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import WorkoutTimerScreen from "../../components/WorkoutTimerScreen";
@@ -743,7 +747,10 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
   onClose: () => void;
   onBack?: () => void;
 }) {
-  const [nameInput, setNameInput] = useState("Custom Workout");
+  // Empty, with "Custom Workout" as its placeholder and the name a blank one
+  // takes. It used to open holding "Custom Workout", and typing could add to
+  // it: sessions were saved as "Custom WorkoutLegs" (user report, 2026-10-22).
+  const [nameInput, setNameInput] = useState("");
   const [addToProgram, setAddToProgram] = useState(false);
   const inputRef = useRef<TextInput>(null);
 
@@ -752,7 +759,7 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
 
   useEffect(() => {
     if (visible) {
-      setNameInput("Custom Workout");
+      setNameInput("");
       setAddToProgram(false);
       slideY.setValue(500);
       backdropOpacity.setValue(0);
@@ -791,7 +798,8 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
     })
   ).current;
 
-  const canStart = nameInput.trim().length > 0;
+  // Left blank, it's a "Custom Workout".
+  const workoutName = nameInput.trim() || "Custom Workout";
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
 
   return (
@@ -821,12 +829,11 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
                 style={[styles.cnNameInput, { color: t.tp }]}
                 value={nameInput}
                 onChangeText={setNameInput}
-                placeholder="e.g. Arms Day"
+                placeholder="Custom Workout"
                 placeholderTextColor={t.ts}
                 autoCapitalize="words"
                 returnKeyType="done"
-                onSubmitEditing={() => { if (canStart) { animateOut(() => onStart(nameInput.trim(), addToProgram)); } }}
-                selectTextOnFocus
+                onSubmitEditing={() => animateOut(() => onStart(workoutName, addToProgram))}
               />
             </View>
           </View>
@@ -854,8 +861,7 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
             <SheetPill
               label="Custom Workout"
               variant="primary"
-              disabled={!canStart}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); animateOut(() => onStart(nameInput.trim(), addToProgram)); }}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); animateOut(() => onStart(workoutName, addToProgram)); }}
             />
           </View>
           <View style={{ height: 12 }} />
@@ -1022,13 +1028,22 @@ interface ExerciseCardProps {
    *  different (utils/exerciseChanges.ts). One object per exercise from a
    *  memoized map, so it keeps its identity across keystrokes. */
   changeCue?: LastTimeCue;
-  /** On today's FINISHED session: what it did with this exercise against its
-   *  plan ("Planned 2nd", "Instead of Cable Fly", "Added"), the Journal's own
-   *  line, since it's the session the Journal shows a minute later. */
+  /** What today's session has done with this exercise against its plan
+   *  ("Planned 2nd", "Instead of Cable Fly", "Added"), the Journal's own line:
+   *  on the finished session, and on the one under way as soon as a card is
+   *  moved, swapped or added. Wins over `changeCue`: what you've just changed
+   *  is the news. */
   sessionCue?: SessionCue | null;
+  /** The heaviest this exercise was lifted before today's workout (kg,
+   *  utils/achievements.ts bestLiftsBefore): a ticked working set heavier than
+   *  it gets the PR trophy. Absent: no best yet, so no trophy. */
+  prBestKg?: number;
+  /** On the finished session: which sets are PRs, by row (warm-ups first),
+   *  worked out from the saved kg rather than the numbers as shown. */
+  prFlags?: readonly boolean[];
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prBestKg, prFlags }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -1110,19 +1125,19 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           )}
         </View>
 
-        {/* ── What last time did with it ── (or, on today's finished
-            session, what it did) One line, lined up with the name (past the
-            number badge in list mode, flush in focus mode), tucked up under
-            it. Only on a card whose exercise changed. */}
-        {changeCue ? (
-          <LastTimeCueLine
-            cue={changeCue}
+        {/* ── What today's session did with it, else what last time did ──
+            One line, lined up with the name (past the number badge in list
+            mode, flush in focus mode), tucked up under it. Only on a card
+            whose exercise changed. */}
+        {sessionCue ? (
+          <SessionCueLine
+            cue={sessionCue}
             isDark={isDark}
             style={[styles.changeCue, numberBadge != null && styles.changeCueBesideBadge]}
           />
-        ) : sessionCue ? (
-          <SessionCueLine
-            cue={sessionCue}
+        ) : changeCue ? (
+          <LastTimeCueLine
+            cue={changeCue}
             isDark={isDark}
             style={[styles.changeCue, numberBadge != null && styles.changeCueBesideBadge]}
           />
@@ -1162,6 +1177,12 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           const rowIsActive = !editing && flatIdx === activeSetFlatIdx;
           const isNew = !!drawn.added?.has(set.rowKey) && rowHeight > 0;
           const isClosing = set.rowKey === collapsingKey;
+          // A new PR: the weight as Finish will save it (kg), against the best
+          // from before today. The finished session's own flags come from
+          // what it saved.
+          const isPr = prFlags
+            ? !!prFlags[flatIdx]
+            : isPrSet({ type: set.type, done: set.done, reps: set.reps, weightKg: parseFloat(parseWeightToKg(set.weight, isKg)) || 0 }, prBestKg);
 
           return (
             <CollapsibleCard
@@ -1201,13 +1222,16 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   </TouchableOpacity>
                 </View>
               ) : (
-                <Text style={[
-                  styles.setText,
-                  styles.setCol,
-                  { color: set.isWarmup ? WARMUP_ORANGE : t.tp },
-                ]}>
-                  {setLabel}
-                </Text>
+                <View style={styles.setCell}>
+                  {/* The trophy hangs off the number's own left edge, so it
+                      sits the same gap away from "3" as from "10". */}
+                  <View>
+                    <Text style={[styles.setText, { color: set.isWarmup ? WARMUP_ORANGE : t.tp }]}>
+                      {setLabel}
+                    </Text>
+                    <PrTrophy show={isPr} />
+                  </View>
+                </View>
               )}
 
               {/* PREV */}
@@ -2725,6 +2749,49 @@ function WorkoutScreen() {
     }
     return out;
   }, [workoutInfo, prevDayScope, prevHistory, allPrograms]);
+  // What THIS session has done to its plan so far, read the way its Journal
+  // page will read it once it's finished (utils/exerciseChanges.ts): "Planned
+  // 2nd" on a card moved out of order, "Instead of Bench Press" on a swap,
+  // "Added" on one added here (user request, 2026-10-22). It takes a card's
+  // line over from "Last session". No Skipped rows while it's under way: a
+  // removed exercise is gone by choice, and the finished session shows where it
+  // was. Rebuilt only when the session's exercises change, never on typing.
+  const sessionCueById = useMemo(() => {
+    const out: Record<string, SessionCue> = {};
+    const changes = workoutInfo ? sessionChanges(workoutInfo) : null;
+    if (!workoutInfo || !changes) return out;
+    workoutInfo.exercises.forEach((ex, i) => {
+      const cue = changes.cues[i];
+      if (cue) out[ex.id] = cue;
+    });
+    return out;
+  }, [workoutInfo]);
+  // The heaviest each exercise has been lifted before this workout
+  // (utils/achievements.ts): a ticked working set heavier than its exercise's
+  // best gets the trophy by its number (user request, 2026-10-22). One number
+  // per card by session exercise id, so typing never rebuilds it.
+  const bestLifts = useMemo(() => bestLiftsBefore(prevHistory), [prevHistory]);
+  const prBestById = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const ex of workoutInfo?.exercises ?? []) {
+      const kg = bestLifts.get(exerciseIdentity(ex));
+      if (kg !== undefined) out[ex.id] = kg;
+    }
+    return out;
+  }, [bestLifts, workoutInfo]);
+  // Today's FINISHED session's PR sets, from the kg it saved, against the
+  // sessions before it (prSetsOfWorkout, as its Journal page reads them): per
+  // card, in the card's row order, warm-ups first.
+  const lockedPrFlags = useMemo(() => {
+    if (!todaysCompletedWorkout) return null;
+    const saved = prSetsOfWorkout(todaysCompletedWorkout, prevHistory);
+    return todaysCompletedWorkout.exercises.map((ex, i) => {
+      const flags = saved[i];
+      const warm = ex.sets.flatMap((s, j) => (s.type === "warmup" ? [flags[j]] : []));
+      const work = ex.sets.flatMap((s, j) => (s.type === "working" ? [flags[j]] : []));
+      return [...warm, ...work];
+    });
+  }, [todaysCompletedWorkout, prevHistory]);
   // Pre-formatted "prev" hint strings per session exercise, by its id: the
   // card's placeholders and checkbox copy, and the Live Activity, all read this
   // one map. Memoized so each card's `prevSets` prop keeps its identity across
@@ -2934,33 +3001,33 @@ function WorkoutScreen() {
   // in list mode (see the two call sites). Identical in both for consistency.
   const renderActionCluster = () => (
     <View style={styles.actionCluster}>
-      <BounceButton onPress={openNotes} accessibilityLabel="Session notes">
-        {/* Same flat white circle as the top bar's timer / +  controls, rather
-            than a raised NeuCard — the green + badge stays pinned to its
-            top-right corner, so the button still reads as "add a note". */}
-        <View style={styles.notesToggleBtn}>
-          <View style={[styles.topIconBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}>
-            <Ionicons name="document-text-outline" size={20} color={t.tp} />
-          </View>
-          <View style={styles.notesTogglePlus}>
+      {/* The top bar's round control (components/GlassButton.tsx), rather than
+          a raised NeuCard — the green + badge stays pinned to its top-right
+          corner, so the button still reads as "add a note". */}
+      <GlassButton
+        onPress={openNotes}
+        accessibilityLabel="Session notes"
+        solidStyle={PILL_SHADOW}
+        badge={
+          <View style={styles.notesTogglePlus} pointerEvents="none">
             <Text style={styles.notesTogglePlusText}>+</Text>
           </View>
-        </View>
-      </BounceButton>
+        }
+      >
+        <Ionicons name="document-text-outline" size={20} color={t.tp} />
+      </GlassButton>
       <View style={styles.addBtnAnchor}>
         {/* Speech-bubble hint: only while the workout has no exercises yet, nudging
             the user toward the + to start adding. Unmounts once the first is added. */}
         {(workoutInfo?.exercises.length ?? 0) === 0 && <AddExerciseHint />}
-        <BounceButton
+        <GlassButton
+          tint={ACCT}
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}
           accessibilityLabel="Add exercise"
+          solidStyle={styles.addGlow}
         >
-          <View style={styles.addRoundWrap}>
-            <View style={styles.addRoundBtn}>
-              <Ionicons name="add" size={22} color="#fff" />
-            </View>
-          </View>
-        </BounceButton>
+          <Ionicons name="add" size={22} color="#fff" />
+        </GlassButton>
       </View>
     </View>
   );
@@ -3182,18 +3249,18 @@ function WorkoutScreen() {
         {activeProgram && (
           <View style={[styles.topBar, { top: insets.top }]}>
             <View style={styles.topBarLeft}>
-              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
-                <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                  <Ionicons name="add" size={22} color={t.tp} />
-                </View>
-              </BounceButton>
+              <GlassButton
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}
+                accessibilityLabel="Workout options"
+                solidStyle={PILL_SHADOW}
+              >
+                <Ionicons name="add" size={22} color={t.tp} />
+              </GlassButton>
             </View>
             {/* Rest days keep the timer/stopwatch available (top-right), same as an active workout. */}
-            <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
-              <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                <StopwatchIcon size={26} color={t.tp} />
-              </View>
-            </TouchableOpacity>
+            <GlassButton onPress={() => setShowTimerModal(true)} accessibilityLabel="Open the timer" solidStyle={PILL_SHADOW}>
+              <StopwatchIcon size={26} color={t.tp} />
+            </GlassButton>
           </View>
         )}
 
@@ -3300,10 +3367,12 @@ function WorkoutScreen() {
         onTouchStart={endUpTo}
         onScrollBeginDrag={endUpTo}
       >
-        {/* Header scrolls with content */}
+        {/* Header scrolls with content. The day's name as it was typed, in
+            the tab title's size and place (Home's greeting; user request,
+            2026-10-21: it was in capitals and read as a different header). */}
         <View style={styles.header}>
           <Text style={[styles.headerName, { color: t.tp }]}>
-            {(todaysCompletedWorkout?.workoutName ?? workoutInfo?.name ?? "").toUpperCase()}
+            {todaysCompletedWorkout?.workoutName ?? workoutInfo?.name ?? ""}
           </Text>
           {headerProgram && (
             <Text style={[styles.headerSub, { color: t.ts }]}>
@@ -3391,6 +3460,7 @@ function WorkoutScreen() {
                   hideIndexLabel
                   numberBadge={i + 1}
                   sessionCue={lockedChanges?.cues[i]}
+                  prFlags={lockedPrFlags?.[i]}
                   onUpdateSet={() => {}} onToggleDone={() => {}} onAutoTick={() => {}}
                   exNotes={lockedData.log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
@@ -3456,6 +3526,8 @@ function WorkoutScreen() {
                   hideIndexLabel
                   numberBadge={focusMode ? undefined : i + 1}
                   changeCue={changeCueById[exercise.id]}
+                  sessionCue={sessionCueById[exercise.id]}
+                  prBestKg={prBestById[exercise.id]}
                   onToggleIsometric={toggleIsometricEx}
                 />
               </CollapsibleCard>
@@ -3573,32 +3645,43 @@ function WorkoutScreen() {
         return (
           <Reanimated.View pointerEvents="box-none" style={[{ position: "absolute", left: 20, right: 20, bottom: focusNavBottom, zIndex: 5 }, focusNavStyle]}>
             <View style={{ flexDirection: "row", gap: 16, alignItems: "center", justifyContent: isLast ? "flex-start" : "center" }}>
-              <BounceButton onPress={isFirst ? undefined : goPrev} accessibilityLabel="Previous exercise">
-                {/* The app's white control button (the pills' surface + soft
-                    shadow), not the grey neumorphic circle it was. Dark stays
-                    solid: it floats over the exercise cards, and the translucent
-                    `ctrl` would let them show through. */}
-                <View style={[styles.focusPrevBtn, { backgroundColor: isDark ? NEU_BG_DARK : t.ctrl, opacity: isFirst ? 0.4 : 1 }]}>
-                  <Ionicons name="chevron-back" size={22} color={t.tp} />
-                </View>
-              </BounceButton>
+              {/* Solid, it's the app's white control button (the pills' surface
+                  + soft shadow), not the grey neumorphic circle it was, and
+                  dark stays opaque: it floats over the exercise cards, and the
+                  translucent `ctrl` would let them show through. */}
+              <GlassButton
+                onPress={goPrev}
+                disabled={isFirst}
+                size={FOCUS_NAV_BTN}
+                solidStyle={[PILL_SHADOW, isDark && { backgroundColor: NEU_BG_DARK }]}
+                accessibilityLabel="Previous exercise"
+              >
+                <Ionicons name="chevron-back" size={22} color={t.tp} />
+              </GlassButton>
               {isLast ? (
-                <BounceButton onPress={handleFinish} style={{ flex: 1 }}>
-                  <View style={[styles.finishWrap, styles.finishWrapActive, { backgroundColor: ACCT, shadowColor: ACCT }]}>
-                    <View style={[styles.finishBtn, styles.finishBtnActive, { backgroundColor: ACCT }]}>
-                      <Ionicons name="checkmark-circle" size={18} color="#fff" />
-                      <Text style={[styles.finishBtnText, { color: "#fff" }]}>Complete Workout</Text>
-                    </View>
-                  </View>
-                </BounceButton>
+                <GlassButton
+                  pill
+                  size={PILL_H}
+                  tint={ACCT}
+                  onPress={handleFinish}
+                  style={{ flex: 1 }}
+                  contentStyle={styles.focusFinishContent}
+                  solidStyle={styles.focusFinishGlow}
+                  accessibilityLabel="Complete workout"
+                >
+                  <Ionicons name="checkmark-circle" size={18} color="#fff" />
+                  <Text style={[styles.finishBtnText, { color: "#fff" }]}>Complete Workout</Text>
+                </GlassButton>
               ) : (
-                <BounceButton onPress={goNext} accessibilityLabel="Next exercise">
-                  <View style={[styles.focusBackWrap, { backgroundColor: ACCT, shadowColor: ACCT, shadowOpacity: 0.5 }]}>
-                    <View style={[styles.focusBackBtn, { backgroundColor: ACCT, borderColor: "rgba(255,255,255,0.3)", shadowColor: "transparent" }]}>
-                      <Ionicons name="chevron-forward" size={22} color="#fff" />
-                    </View>
-                  </View>
-                </BounceButton>
+                <GlassButton
+                  tint={ACCT}
+                  onPress={goNext}
+                  size={FOCUS_NAV_BTN}
+                  solidStyle={styles.focusNextSolid}
+                  accessibilityLabel="Next exercise"
+                >
+                  <Ionicons name="chevron-forward" size={22} color="#fff" />
+                </GlassButton>
               )}
             </View>
           </Reanimated.View>
@@ -3609,55 +3692,59 @@ function WorkoutScreen() {
       <View style={[styles.topBar, { top: insets.top }]}>
         <View style={styles.topBarLeft}>
           {todaysCompletedWorkout ? (
-            <View style={[styles.workoutTimerPill, { backgroundColor: t.ctrl }]}>
+            <GlassSurface style={styles.workoutTimerPill} solidStyle={PILL_SHADOW}>
               <Ionicons name="checkmark-circle" size={14} color={ACCT} />
               <Text style={[styles.workoutTimerText, { color: t.tp }]}>
                 {todaysCompletedWorkout.durationSeconds > 0 ? fmtTime(todaysCompletedWorkout.durationSeconds) : "Done"}
               </Text>
-            </View>
+            </GlassSurface>
           ) : (isRunning || isPaused) ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View style={[styles.workoutTimerPill, { backgroundColor: t.ctrl }]}>
+              <GlassSurface style={styles.workoutTimerPill} solidStyle={PILL_SHADOW}>
                 <View style={[styles.timerActiveDot, isPaused && styles.timerActiveDotPaused]} />
                 <Text style={[styles.workoutTimerText, { color: t.tp }]}>{fmtTime(elapsedSeconds)}</Text>
-              </View>
-              <BounceButton onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                if (isPaused) resumeTimer();
-                else pauseTimer();
-              }}>
-                <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                  <Ionicons name={isPaused ? "play" : "pause"} size={16} color={t.tp} />
-                </View>
-              </BounceButton>
-              <BounceButton onPress={handleDiscard}>
-                <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                  <TrashIcon size={18} color={t.ts} />
-                </View>
-              </BounceButton>
+              </GlassSurface>
+              <GlassButton
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  if (isPaused) resumeTimer();
+                  else pauseTimer();
+                }}
+                accessibilityLabel={isPaused ? "Resume workout" : "Pause workout"}
+                solidStyle={PILL_SHADOW}
+              >
+                <Ionicons name={isPaused ? "play" : "pause"} size={16} color={t.tp} />
+              </GlassButton>
+              <GlassButton onPress={handleDiscard} accessibilityLabel="Discard workout" solidStyle={PILL_SHADOW}>
+                <TrashIcon size={18} color={t.ts} />
+              </GlassButton>
             </View>
           ) : (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}>
-                <View style={[styles.workoutTimerPill, { backgroundColor: t.ctrl }]}>
-                  <Text style={[styles.workoutTimerText, { color: t.tp }]}>Start</Text>
-                </View>
-              </BounceButton>
+              <GlassButton
+                pill
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); startTimer(); }}
+                accessibilityLabel="Start workout"
+                contentStyle={styles.workoutTimerPill}
+                solidStyle={PILL_SHADOW}
+              >
+                <Text style={[styles.workoutTimerText, { color: t.tp }]}>Start</Text>
+              </GlassButton>
               {activeProgram && (
-                <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}>
-                  <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-                    <Ionicons name="add" size={22} color={t.tp} />
-                  </View>
-                </BounceButton>
+                <GlassButton
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutOptionsOpen(true); }}
+                  accessibilityLabel="Workout options"
+                  solidStyle={PILL_SHADOW}
+                >
+                  <Ionicons name="add" size={22} color={t.tp} />
+                </GlassButton>
               )}
             </View>
           )}
         </View>
-        <TouchableOpacity onPress={() => setShowTimerModal(true)} activeOpacity={0.8}>
-          <View style={[styles.topIconBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-            <StopwatchIcon size={26} color={t.tp} />
-          </View>
-        </TouchableOpacity>
+        <GlassButton onPress={() => setShowTimerModal(true)} accessibilityLabel="Open the timer" solidStyle={PILL_SHADOW}>
+          <StopwatchIcon size={26} color={t.tp} />
+        </GlassButton>
       </View>
 
       {/* ── The timer, full screen ── */}
@@ -3861,12 +3948,12 @@ const styles = StyleSheet.create({
 
   // Header
   header:       { paddingBottom: 14, gap: 2, marginBottom: 4 },
-  headerName:   { fontFamily: FontFamily.bold, fontSize: 28, letterSpacing: 0.3, marginTop: 2 },
+  headerName:   { fontFamily: FontFamily.bold, fontSize: 28, marginTop: 2 },
   headerSub:        { fontFamily: FontFamily.regular, fontSize: 14 },
   topBar:           { position: "absolute", left: 20, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   topBarLeft:       { flexDirection: "row", alignItems: "center", gap: 10 },
-  topIconBtn:       { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-  workoutTimerPill: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 100, paddingHorizontal: 14, height: 40, borderRadius: 20, backgroundColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  // Shape only: the surface (glass, or the solid control) is GlassSurface's.
+  workoutTimerPill: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 100, paddingHorizontal: 14, height: 40, borderRadius: 20 },
   workoutTimerText: { fontFamily: FontFamily.bold, fontSize: 15, letterSpacing: 0.5 },
   timerActiveDot:       { width: 8, height: 8, borderRadius: 4, backgroundColor: ACCT },
   timerActiveDotPaused: { backgroundColor: "#F59E0B" },
@@ -3900,6 +3987,7 @@ const styles = StyleSheet.create({
 
   // Column widths — match old app exactly
   setCol:        { width: 36, textAlign: "center" },
+  setCell:       { width: 36, alignItems: "center", justifyContent: "center" },
   prevCol:       { width: 72, alignItems: "center", justifyContent: "center" },
   inputHeaderCol:{ flex: 1, alignItems: "center", justifyContent: "flex-end", marginHorizontal: 4 },
   inputCell:     { flex: 1, marginHorizontal: 4, alignItems: "center" },
@@ -3938,11 +4026,10 @@ const styles = StyleSheet.create({
 
   // Bottom-left action cluster: Session Notes button + round green + Add Exercise
   actionCluster:      { flexDirection: "row", alignItems: "center", gap: 14 },
-  notesToggleBtn:     { width: 40, height: 40 },
   notesTogglePlus:    { position: "absolute", top: -4, right: -6, backgroundColor: ACCT, borderRadius: 7, width: 14, height: 14, alignItems: "center", justifyContent: "center" },
   notesTogglePlusText: { color: "#fff", fontSize: 10, fontFamily: FontFamily.bold, lineHeight: 14 },
-  addRoundWrap:       { borderRadius: 20, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  addRoundBtn:        { width: 40, height: 40, borderRadius: 20, backgroundColor: ACCT, alignItems: "center", justifyContent: "center" },
+  // The solid + only: the glass one is lit by the glass.
+  addGlow:            haloGlow(ACCT, 0.6, 12),
   addBtnAnchor:       { position: "relative" },
   // Equal negative left/right keeps the wrap symmetric (so it stays centered over
   // the 44px button) while giving the bubble ~160px to lay its text out on one
@@ -3966,11 +4053,12 @@ const styles = StyleSheet.create({
   completedActionBtn: { ...pill(PILL_H_SM), gap: 7, paddingHorizontal: 12, ...PILL_SHADOW },
   completedActionText: { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.3, flexShrink: 1 },
 
-  // Focus mode Previous button: icon-only circle at the finish button's height.
-  focusPrevBtn:     { width: FOCUS_NAV_BTN, height: FOCUS_NAV_BTN, borderRadius: PILL_RADIUS, alignItems: "center", justifyContent: "center", ...PILL_SHADOW },
-  // Focus mode Next button (icon-only circle, matches finish button height)
-  focusBackWrap:    { borderRadius: FOCUS_NAV_BTN / 2, shadowOffset: { width: 4, height: 4 }, shadowRadius: 8 },
-  focusBackBtn:     { width: FOCUS_NAV_BTN, height: FOCUS_NAV_BTN, borderRadius: FOCUS_NAV_BTN / 2, alignItems: "center", justifyContent: "center", borderWidth: 1, shadowOffset: { width: -3, height: -3 }, shadowOpacity: 1, shadowRadius: 4 },
+  // Focus mode's pinned ‹ › and Complete Workout (components/GlassButton.tsx).
+  // These are the solid buttons' looks; the glass ones are lit by the glass.
+  // Next: the accent circle with a faint white rim and its glow down-right.
+  focusNextSolid:     { borderWidth: 1, borderColor: "rgba(255,255,255,0.3)", shadowColor: ACCT, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.5, shadowRadius: 8 },
+  focusFinishContent: { gap: 8 },
+  focusFinishGlow:    pillGlow(ACCT, 0.4),
 
   checkCircle:      { width: 24, height: 24, borderRadius: 13, alignItems: "center", justifyContent: "center" },
 

@@ -18,6 +18,8 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
@@ -31,7 +33,7 @@ import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../components/journal/JournalWorkoutCard";
 import JournalProgramsBlock from "../components/journal/JournalProgramsBlock";
-import SessionFilter, { SessionGroupHeading, useSessionFilter } from "../components/journal/SessionFilter";
+import SessionFilter, { RecentActivityHeading, SessionGroupHeading, useSessionFilter } from "../components/journal/SessionFilter";
 import SheetPill from "../components/SheetPill";
 import SquarePenIcon from "../components/SquarePenIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
@@ -213,7 +215,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
   useEffect(() => {
     if (visible) {
       setStep("menu");
-      setCustomName("Custom Workout");
+      setCustomName("");
       setAssocProgramId(null);
     }
   }, [visible, activeProgram]);
@@ -371,11 +373,14 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
             <TextInput
               ref={customInputRef}
               style={[styles.customInput, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)", color: t.tp, borderColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)" }]}
-              placeholder="Workout name"
+              // Empty, a blank one is a "Custom Workout" (the Workout tab's
+              // naming, and why: it opened holding the words, and typing could
+              // add to them).
+              placeholder="Custom Workout"
               placeholderTextColor={t.ts}
               value={customName}
               onChangeText={setCustomName}
-              selectTextOnFocus
+              autoCapitalize="words"
             />
             {activeProgram && (
               <TouchableOpacity
@@ -400,8 +405,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
             <SheetPill
               label="Custom Workout"
               variant="primary"
-              disabled={!customName.trim()}
-              onPress={() => { dismiss(); onSelect(customName.trim(), assocProgramId ?? undefined, undefined); }}
+              onPress={() => { dismiss(); onSelect(customName.trim() || "Custom Workout", assocProgramId ?? undefined, undefined); }}
             />
           </View>
         </>
@@ -434,6 +438,8 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
 
 export default function JournalScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -631,7 +637,7 @@ export default function JournalScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }]}
       >
         {/* Page header */}
         <View style={styles.header}>
@@ -657,14 +663,20 @@ export default function JournalScreen() {
           onOpenAllPrograms={() => router.navigate("/program-history")}
         />
 
-        {/* Recent activity heading, and the session filter whenever there's a
-            program session to filter to (it reaches past the fortnight, so it
-            shows even when the fortnight is empty) */}
+        {/* Recent activity heading, and the session filter's button and chips
+            whenever there's a program session to filter to (it reaches past
+            the fortnight, so it shows even when the fortnight is empty) */}
         {(timeline.length > 0 || sessions.numbers.length > 0) && (
-          <Text style={[styles.sectionHeading, { color: t.tp }]}>Recent Activity</Text>
+          <RecentActivityHeading
+            filterable={sessions.numbers.length > 0}
+            open={sessions.open}
+            onToggleOpen={sessions.toggleOpen}
+            isDark={isDark}
+          />
         )}
         {sessions.numbers.length > 0 && (
           <SessionFilter
+            open={sessions.open}
             numbers={sessions.numbers}
             selected={sessions.selected}
             onToggle={sessions.toggle}
@@ -741,8 +753,6 @@ const styles = StyleSheet.create({
 
   header:      { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1, color: TP },
-
-  sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18, color: TP, marginTop: 24, marginBottom: 12 },
 
   emptyCard:    { borderRadius: 24, marginBottom: 20 },
   emptyInner:   { padding: 32, alignItems: "center", gap: 12 },

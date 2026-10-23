@@ -137,14 +137,19 @@ const ident = (name: string) => {
 
 type Filter = { sql: (next: (v: unknown) => string) => string };
 
+/** Supabase's "max rows": the most a single read returns (the project's
+ *  setting, which the app's reads page around). */
+const MAX_ROWS = 1000;
+
 /** The part of supabase-js's query builder the app uses, turned into SQL. */
 class Query implements PromiseLike<Result> {
   private op: "select" | "insert" | "update" | "delete" = "select";
   private cols = "*";
   private returning = false;
   private filters: Filter[] = [];
-  private orderBy: string | null = null;
+  private orderBy: string[] = [];
   private limitN: number | null = null;
+  private offsetN = 0;
   private single: "maybe" | "one" | null = null;
   private payload: Record<string, unknown>[] | Record<string, unknown> | null = null;
   /** `select(cols, { count: "exact", head: true })`: how many rows, not the rows. */
@@ -185,8 +190,10 @@ class Query implements PromiseLike<Result> {
     this.filters.push({ sql: n => `(${parts.map(p => `${ident(p.col)} = ${n(p.v)}`).join(" or ")})` });
     return this;
   }
-  order(col: string, opts: { ascending?: boolean } = {}) { this.orderBy = `${ident(col)} ${opts.ascending === false ? "desc" : "asc"}`; return this; }
+  order(col: string, opts: { ascending?: boolean } = {}) { this.orderBy.push(`${ident(col)} ${opts.ascending === false ? "desc" : "asc"}`); return this; }
   limit(n: number) { this.limitN = n; return this; }
+  /** Rows `from` to `to`, both counted from 0 and included, as PostgREST's. */
+  range(from: number, to: number) { this.offsetN = from; this.limitN = to - from + 1; return this; }
   maybeSingle() { this.single = "maybe"; return this; }
 
   then<A, B>(ok?: ((r: Result) => A | PromiseLike<A>) | null, fail?: ((e: unknown) => B | PromiseLike<B>) | null) {
@@ -208,7 +215,10 @@ class Query implements PromiseLike<Result> {
         return { data: null, error: { message: (e as Error).message } };
       }
     } else if (this.op === "select") {
-      sql = `select ${cols} from ${table}${where}${this.orderBy ? ` order by ${this.orderBy}` : ""}${this.limitN ? ` limit ${this.limitN}` : ""}`;
+      // Supabase hands back at most MAX_ROWS rows a read, however many match
+      // or are asked for, and says nothing about the rest.
+      const limit = Math.min(this.limitN ?? MAX_ROWS, MAX_ROWS);
+      sql = `select ${cols} from ${table}${where}${this.orderBy.length ? ` order by ${this.orderBy.join(", ")}` : ""} limit ${limit}${this.offsetN ? ` offset ${this.offsetN}` : ""}`;
     } else if (this.op === "insert") {
       const rows = this.payload as Record<string, unknown>[];
       const keys = [...new Set(rows.flatMap(r => Object.keys(r)))];

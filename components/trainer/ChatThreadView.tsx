@@ -12,6 +12,14 @@
 //
 // The header is a slot: each screen owns its own (a person vs a group differ in
 // avatar, subtitle and menu), but everything below it is common.
+//
+// The refreshed thread (user decisions, 2026-10-22, the Chat Redesign canvas):
+// messages from one person in a row sit close as a run (`runOf`: the same
+// sender, the same day, a few minutes apart), so a bubble can say who once at
+// the top and the time once at the bottom; the day is plain words, not a
+// pill; the composer is the app's faded field (SearchField's look), with no
+// line above it; the send button takes the thread's tone, green for a chat
+// with one person and orchid for a group's.
 
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -21,18 +29,32 @@ import {
 import Animated, { useAnimatedStyle, interpolate, Extrapolation, ZoomIn, ZoomOut } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
+import { pillGlow, PILL_RADIUS } from "../../constants/buttons";
+import { sentGradient, type ChatTone } from "../../constants/chat";
 import { useTheme } from "../../contexts/ThemeContext";
+import GlassButton from "../GlassButton";
 import SendIcon from "../icons/SendIcon";
 import { toYMD, relativeDayLabel } from "../../utils/dates";
+
+/** How far apart two messages from one person can be and still sit together
+ *  as a run. */
+const RUN_GAP_MS = 5 * 60 * 1000;
+
+/** Where a message sits in its run: the first (oldest) shows who wrote it,
+ *  the last (newest) its face and time. A message on its own is both. */
+export type RunPlace = { first: boolean; last: boolean };
 
 /** The composer's height, and the send button's. Matches the app's search
  *  fields (42), which is what makes the two read as the same control. */
 const FIELD_H = 42;
+
+/** The jump-to-latest button over the thread. */
+const JUMP_SIZE = 44;
 
 /** The minimum a message needs to render in the thread. Both ChatMessage and
  *  GroupMessage satisfy it; the screen's renderBubble sees the full type. */
@@ -41,19 +63,35 @@ export type ThreadMessage = {
   mine: boolean;
   text: string;
   sentAtISO: string;
+  /** Who sent it, in a group. A 1:1 thread's received messages are all the
+   *  contact's, so they need none. */
+  senderId?: string;
 };
+
+/** Whether two neighbouring messages belong to one run. */
+function sameRun(a: ThreadMessage, b: ThreadMessage): boolean {
+  const who = (m: ThreadMessage) => (m.mine ? "me" : m.senderId ?? "them");
+  if (who(a) !== who(b)) return false;
+  const ta = new Date(a.sentAtISO);
+  const tb = new Date(b.sentAtISO);
+  if (toYMD(ta) !== toYMD(tb)) return false;
+  return Math.abs(ta.getTime() - tb.getTime()) <= RUN_GAP_MS;
+}
 
 // Render rows for the inverted thread: a message, or a day divider. The divider
 // is emitted right after a day's OLDEST message in this newest-first array, which
 // (once inverted) places it visually ABOVE that day's first message.
 type Row<T> =
-  | { type: "msg"; msg: T }
+  | { type: "msg"; msg: T; run: RunPlace }
   | { type: "day"; key: string; label: string };
 
 interface Props<T extends ThreadMessage> {
   /** NEWEST-FIRST, to match the inverted list. */
   messages: T[];
-  renderBubble: (msg: T) => ReactNode;
+  renderBubble: (msg: T, run: RunPlace) => ReactNode;
+  /** The send button's colour: green for a person's chat, orchid for a
+   *  group's (the thread's own bubbles take the same). */
+  tone?: ChatTone;
   /** Send handler. Throws to signal failure: the draft is restored and the
    *  standard "not sent" alert is shown, so neither screen has to reimplement it. */
   onSend: (text: string) => Promise<void>;
@@ -66,6 +104,7 @@ interface Props<T extends ThreadMessage> {
 export default function ChatThreadView<T extends ThreadMessage>({
   messages,
   renderBubble,
+  tone = "green",
   onSend,
   placeholder,
   emptyText = "No messages yet. Say hi 👋",
@@ -102,6 +141,7 @@ export default function ChatThreadView<T extends ThreadMessage>({
   }, [input, onSend]);
 
   const canSend = input.trim().length > 0;
+  const grad = sentGradient(tone);
 
   const onListScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const show = e.nativeEvent.contentOffset.y > 300;
@@ -111,8 +151,8 @@ export default function ChatThreadView<T extends ThreadMessage>({
     }
   }, []);
 
+  // The light haptic is the button's (GlassButton).
   const jumpToLatest = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     listRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, []);
 
@@ -124,9 +164,15 @@ export default function ChatThreadView<T extends ThreadMessage>({
     const out: Row<T>[] = [];
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
-      out.push({ type: "msg", msg: m });
-      const curYMD = toYMD(new Date(m.sentAtISO));
+      // Newest-first: the older neighbour is i + 1, the newer i - 1.
       const older = messages[i + 1];
+      const newer = messages[i - 1];
+      out.push({
+        type: "msg",
+        msg: m,
+        run: { first: !older || !sameRun(older, m), last: !newer || !sameRun(m, newer) },
+      });
+      const curYMD = toYMD(new Date(m.sentAtISO));
       const olderYMD = older ? toYMD(new Date(older.sentAtISO)) : null;
       if (olderYMD !== curYMD) {
         out.push({ type: "day", key: `day_${curYMD}_${m.id}`, label: relativeDayLabel(new Date(m.sentAtISO)) });
@@ -169,16 +215,15 @@ export default function ChatThreadView<T extends ThreadMessage>({
             keyExtractor={it => (it.type === "msg" ? it.msg.id : it.key)}
             renderItem={({ item }) =>
               item.type === "day" ? (
+                // Plain words, quieter than the messages they sit over.
                 <View style={styles.dayWrap}>
-                  <View style={[styles.dayPill, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}>
-                    <Text style={[styles.dayText, { color: t.ts }]}>{item.label}</Text>
-                  </View>
+                  <Text style={[styles.dayText, { color: t.ts }]}>{item.label}</Text>
                 </View>
               ) : (
                 // Taps belong to the bubble (ChatBubble's onPress), not the row:
                 // the row spans the thread, so a row-wide target opened a
                 // message from a tap on the empty space beside it.
-                <>{renderBubble(item.msg)}</>
+                <>{renderBubble(item.msg, item.run)}</>
               )
             }
             keyboardShouldPersistTaps="handled"
@@ -196,18 +241,21 @@ export default function ChatThreadView<T extends ThreadMessage>({
           {/* Jump back to the latest message once scrolled into history. */}
           {showJump && (
             <Animated.View entering={ZoomIn.duration(180)} exiting={ZoomOut.duration(140)} style={styles.jumpWrap}>
-              <TouchableOpacity onPress={jumpToLatest} activeOpacity={0.8} accessibilityLabel="Scroll to latest message" accessibilityRole="button">
-                <View style={[styles.jumpBtn, styles.jumpBtnFallback, { backgroundColor: t.ctrl }]}>
-                  <Ionicons name="chevron-down" size={22} color={t.tp} />
-                </View>
-              </TouchableOpacity>
+              <GlassButton
+                onPress={jumpToLatest}
+                size={JUMP_SIZE}
+                solidStyle={styles.jumpLift}
+                accessibilityLabel="Scroll to latest message"
+              >
+                <Ionicons name="chevron-down" size={22} color={t.tp} />
+              </GlassButton>
             </Animated.View>
           )}
         </View>
 
         {/* Input bar — barStyle collapses the bottom inset as the keyboard rises */}
-        <Animated.View style={[styles.inputBar, { borderTopColor: t.div }, barStyle]}>
-          <View style={[styles.inputBox, { backgroundColor: t.ctrl, borderColor: t.div }]}>
+        <Animated.View style={[styles.inputBar, barStyle]}>
+          <View style={[styles.inputBox, { backgroundColor: t.field, borderColor: t.div }]}>
             <TextInput
               style={[styles.input, { color: t.tp }]}
               value={input}
@@ -218,8 +266,10 @@ export default function ChatThreadView<T extends ThreadMessage>({
             />
           </View>
           <TouchableOpacity onPress={send} disabled={!canSend} activeOpacity={0.8} accessibilityLabel="Send message" accessibilityRole="button">
-            <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }]}>
-              <SendIcon size={18} color="#fff" />
+            <View style={[styles.sendGlow, pillGlow(grad[1], 0.4), { opacity: canSend ? 1 : 0.4 }]}>
+              <LinearGradient colors={grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.sendBtn}>
+                <SendIcon size={18} color="#fff" />
+              </LinearGradient>
             </View>
           </TouchableOpacity>
         </Animated.View>
@@ -232,27 +282,26 @@ const styles = StyleSheet.create({
   empty:      { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center" },
   emptyText:  { fontFamily: FontFamily.regular, fontSize: 14 },
 
-  dayWrap:    { alignItems: "center", marginVertical: 10 },
-  dayPill:    { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+  dayWrap:    { alignItems: "center", marginTop: 14, marginBottom: 8 },
   dayText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   jumpWrap:        { position: "absolute", right: 16, bottom: 12 },
-  jumpBtn:         { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  jumpBtnFallback: { shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4 },
+  // The solid button's lift; the glass one is lit by the glass.
+  jumpLift:        { shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4 },
 
-  inputBar:   { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1 },
-  // The same field as every search in the app (PTHome, Messages, the group
-  // roster, the exercise picker): 42 tall on t.ctrl, fully rounded, a t.div
-  // hairline and the neutral pill shadow. It was a 22-radius box with its own
-  // white fill and heavier padding, which read as a different control from the
-  // search bar one screen back.
+  // No line above it: the field itself says where typing goes.
+  inputBar:   { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingHorizontal: 16, paddingTop: 10 },
+  // The app's faded field (components/SearchField.tsx's look): t.field with a
+  // t.div hairline, no shadow, fully rounded so it pairs with the round send.
   //
   // minHeight rather than height, because this one grows: a wrapped line takes
   // the padding past 42 while a single line still sits at the search bar's
   // height. maxHeight stops it eating the thread.
-  inputBox:   { flex: 1, flexDirection: "row", alignItems: "center", minHeight: FIELD_H, maxHeight: 120, paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 10 : 4, borderRadius: PILL_RADIUS, borderWidth: 1, ...PILL_SHADOW },
+  inputBox:   { flex: 1, flexDirection: "row", alignItems: "center", minHeight: FIELD_H, maxHeight: 120, paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 10 : 4, borderRadius: PILL_RADIUS, borderWidth: 1 },
   input:      { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, padding: 0, maxHeight: 100 },
   // Square to the field's height, so the two read as one control pair rather
-  // than a button that outgrew its input.
-  sendBtn:    { width: FIELD_H, height: FIELD_H, borderRadius: FIELD_H / 2, alignItems: "center", justifyContent: "center", ...pillGlow(ACCT, 0.4) },
+  // than a button that outgrew its input. The glow sits on an outer view: a
+  // gradient that clips its corners can't cast a shadow of its own.
+  sendGlow:   { width: FIELD_H, height: FIELD_H, borderRadius: FIELD_H / 2 },
+  sendBtn:    { width: FIELD_H, height: FIELD_H, borderRadius: FIELD_H / 2, alignItems: "center", justifyContent: "center", overflow: "hidden" },
 });

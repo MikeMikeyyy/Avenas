@@ -11,6 +11,10 @@
 // Reanimated layout-animation wrappers (LinearTransition) off every ancestor:
 // they freeze UI-thread height tweens. `useChevron` gives the matching
 // rotate style for a caller's chevron so the two move together.
+//
+// `fade` is optional. A reveal holding Liquid Glass (the Journal's session
+// chips) leaves it out and opens by its height alone: glass draws wrongly
+// under any fading parent (components/GlassButton.tsx).
 
 import { useMemo } from "react";
 import { StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from "react-native";
@@ -60,7 +64,8 @@ export default function ExpandReveal({
   children,
 }: {
   progress: SharedValue<number>;
-  fade: SharedValue<number>;
+  /** Fades the content in and out with the height. Never with glass inside. */
+  fade?: SharedValue<number>;
   /** Only for accessibility: the animation is driven by `progress`. */
   open: boolean;
   /** Pulls the revealed content this many points closer to the row above it. */
@@ -85,12 +90,14 @@ export default function ExpandReveal({
 }) {
   const height = useSharedValue(0);
 
-  const clipStyle = useAnimatedStyle(() => ({
-    height: height.value * progress.value,
-    marginTop: -pullTop * progress.value,
-    marginBottom: -bleed * progress.value,
-    opacity: fade.value,
-  }));
+  const clipStyle = useAnimatedStyle(() => {
+    const motion = {
+      height: height.value * progress.value,
+      marginTop: -pullTop * progress.value,
+      marginBottom: -bleed * progress.value,
+    };
+    return fade ? { ...motion, opacity: fade.value } : motion;
+  });
 
   const onLayout = (e: LayoutChangeEvent) => { height.value = e.nativeEvent.layout.height; };
 

@@ -7,7 +7,10 @@
 export type ProgramScope =
   | { kind: "current" }
   | { kind: "all" }
-  | { kind: "program"; programId: string };
+  | { kind: "program"; programId: string }
+  /** Sessions in no program: free workouts, ones imported from another app,
+   *  and ones whose program was deleted (user request, 2026-10-23). */
+  | { kind: "custom" };
 
 export type RangeKey = "thisWeek" | "lastWeek" | "thisMonth" | "last3Months" | "year";
 

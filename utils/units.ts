@@ -35,11 +35,11 @@ export function trimNumber(n: number, maxDecimals = 1): string {
   if (!Number.isFinite(n)) return "";
   const factor = 10 ** maxDecimals;
   const rounded = Math.round(n * factor) / factor;
-  // toFixed then strip trailing zeros and a dangling decimal point.
-  return rounded
-    .toFixed(maxDecimals)
-    .replace(/\.?0+$/, "")
-    || "0";
+  // toFixed then strip trailing zeros and a dangling decimal point. Only after
+  // a decimal point: with none (maxDecimals 0) the zeros are the number's own,
+  // and 60 came out as "6".
+  const fixed = rounded.toFixed(maxDecimals);
+  return (fixed.includes(".") ? fixed.replace(/\.?0+$/, "") : fixed) || "0";
 }
 
 /** True when a stored weight is a real numeric load (not "", "BW", etc.). */

@@ -15,6 +15,7 @@ import { countUnreadInThread, previewText } from "./chatStore";
 import { loadBlockedIds, loadHiddenMessageIds } from "./moderation";
 import { getJSON, setJSON } from "./storage";
 import { GROUP_FAVOURITES_KEY, MEMBER_FAVOURITES_KEY, type Group, type GroupMessage } from "../constants/groups";
+import { sortByFavourite } from "./trainerLists";
 
 /** A group as the conversations list renders it. */
 export type GroupChatRow = {
@@ -134,23 +135,6 @@ export async function toggleFavouriteMember(memberId: string): Promise<Set<strin
   return new Set(next);
 }
 
-/**
- * Starred items first, OLDEST favourite at the top; everything else in the
- * order it arrived.
- *
- * The unstarred half is a stable partition on purpose — `fetchMyGroups` returns
- * newest first and `get_group_members` returns owner, then trainers, then name,
- * and those orders should survive underneath the pinned ones. The starred half
- * is ranked by `favourites`' own iteration order rather than by the incoming
- * list, so a group starred months ago stays above one starred today however new
- * either of them is.
- */
-export function sortByFavourite<T extends { id: string }>(items: T[], favourites: Set<string>): T[] {
-  const rank = new Map<string, number>();
-  let i = 0;
-  for (const id of favourites) rank.set(id, i++);
-  const starred = items
-    .filter(x => rank.has(x.id))
-    .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
-  return [...starred, ...items.filter(x => !rank.has(x.id))];
-}
+// Starred first, oldest star on top: pure, so it lives with the Trainer tab's
+// other list rules (utils/trainerLists.ts) and is re-exported here.
+export { sortByFavourite };

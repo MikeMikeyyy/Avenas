@@ -31,11 +31,11 @@ import CompareExerciseCard from "./CompareExerciseCard";
 import { RevealOnScrollContext, type RevealWatcher } from "./revealOnScroll";
 
 import { APP_DARK, APP_LIGHT, FontFamily, accentTextColor } from "../../constants/theme";
+import { PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
-import { useRestTimer } from "../../contexts/RestTimerContext";
-import { useFloatingBars } from "../../hooks/useFloatingBars";
-import { REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H } from "../../constants/floatingBars";
+import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
+import { SCROLL_CLEAR_GAP, scrollEndPadding } from "../../constants/floatingBars";
 import { type CompletedWorkout, type ProgramDayRef, type SavedProgram } from "../../constants/programs";
 import { sameExercise, type ExerciseRef } from "../../utils/exerciseNames";
 import { type CustomExercise, type SelectableMuscle } from "../../constants/exercises";
@@ -56,18 +56,22 @@ import {
   filterByDateWindow,
   filterByProgramScope,
   getRangeOption,
+  isCustomSession,
   previousComparableWindow,
   rangeWindow,
   yearBarCount,
   scopedProgramDays,
   windowLengthDays,
+  workoutBelongsToProgram,
 } from "../../utils/progressStats";
+import { buildSessionTracks } from "../../utils/sessionTrack";
 import { toDisplayWeight } from "../../utils/units";
 import { carriedExercises, knownCustomExercises } from "../../utils/customExerciseDetails";
 import { getEffectiveToday } from "../../utils/workout";
+import { exerciseDaySlots } from "../../utils/exerciseDaySlots";
 import { findRunView, programRunViews, sameRun, type ProgramRunView, type RunRef } from "../../utils/programRuns";
 import {
-  compareCandidates, compareLifts, compareReadiness, compareStartGreen, glanceStats, liftSlots, missedDates, muscleStatsPerWeek, runDates, runName, runStatus,
+  compareCandidates, compareFirstPicks, compareLifts, compareReadiness, compareStartGreen, glanceStats, liftSlots, missedDates, muscleStatsPerWeek, runDates, runName, runStatus,
   sharedStrength, spanCaption, spanDays, weekOfDay, weeklyTotals,
 } from "../../utils/programCompare";
 
@@ -212,30 +216,35 @@ function ProgressBody({
   const [chartScrollRequest, setChartScrollRequest] = useState(0);
 
   // What covers the foot of the page: the tab bar, and above it, while a
-  // workout's on, the workout bar (taller with a rest inside it).
-  const { workoutBarShown, workoutBarBottom, restInBar } = useFloatingBars();
-  const { restBannerActive } = useRestTimer();
-  const coveredBottom = Math.max(
-    insets.bottom + 72,
-    workoutBarShown
-      ? workoutBarBottom + WORKOUT_BAR_H + (restInBar && restBannerActive ? REST_SECTION_H + REST_DIVIDER_H : 0) + 12
-      : 0,
-  );
+  // workout's on, the workout bar (taller with a rest inside it). Read as the
+  // one number the bar reports, so the page doesn't re-render every second
+  // with the workout clock as it did reading the bars themselves.
+  const barsReach = useFloatingBarsReach();
+  const coveredBottom = Math.max(insets.bottom + 72, barsReach > 0 ? barsReach + SCROLL_CLEAR_GAP : 0);
+
+  // Any session in no program: what offers Custom workouts at the top.
+  const hasCustom = useMemo(() => history.some(w => isCustomSession(w, programs)), [history, programs]);
 
   // Reconcile scope when the upstream programs list changes (e.g. switching
   // client). Only once the data is in: a remembered program scope would
   // otherwise meet the empty list a screen starts with and fall back to "All
-  // programs" before that program had a chance to load.
+  // programs" before that program had a chance to load. Custom workouts go
+  // the same way once there are none (an import undone).
   useEffect(() => {
     if (!loaded) return;
     setScope(prev => {
+      if (prev.kind === "custom") {
+        if (hasCustom) return prev;
+        setScopeFallbackNote("No custom workouts left. Showing all programs.");
+        return { kind: "all" };
+      }
       if (prev.kind !== "program") return prev;
       const stillExists = programs.some(pp => pp.id === prev.programId);
       if (stillExists) return prev;
       setScopeFallbackNote("Selected program was removed. Showing all programs.");
       return { kind: "all" };
     });
-  }, [programs, loaded]);
+  }, [programs, loaded, hasCustom]);
 
   useEffect(() => {
     if (!scopeFallbackNote) return;
@@ -387,17 +396,51 @@ function ProgressBody({
   const displayPrs = useMemo(() => (prs ? displayRecords(prs, isKg) : null), [prs, isKg]);
 
   // ── Comparing two programs ───────────────────────────────────────────────
-  // Green is the program picked at the top when the comparison started (or
-  // changed since from its row), blue a finished one (utils/programCompare.ts).
-  // The day things are read up to is the one the Workout tab is on.
+  // A comparison starts in two picks (user request, 2026-10-16): the first is
+  // green (the program on the go, or a finished one), the one it's compared
+  // with blue (a finished one), either changed since from its row
+  // (utils/programCompare.ts). The day things are read up to is the one the
+  // Workout tab is on.
   const todayYMD = useMemo(() => getEffectiveToday(activeProgram, history), [activeProgram, history]);
+
+  // The exercise chart's places: every time the selected day came round, a
+  // session or a miss, numbered off the workout cards' own tracks.
+  const charting = !!selectedExercise && !!selectedDay;
+  const sessionTracks = useMemo(
+    () => (charting ? buildSessionTracks(history, programs, todayYMD) : null),
+    [charting, history, programs, todayYMD],
+  );
+  const exerciseSlots = useMemo(() => {
+    if (!selectedExercise || !selectedDay || !sessionTracks) return [];
+    const exercise = { name: selectedExercise.name, customId: selectedExercise.customId };
+    const program = programs.find(p => p.id === selectedDay.programId);
+    return exerciseDaySlots({
+      exercise,
+      points: displayExerciseHistory,
+      // The program's every session of it: done on the day in another of
+      // them, it wasn't missed.
+      programPoints: program ? collectExerciseHistory(history.filter(w => workoutBelongsToProgram(w, program)), exercise) : [],
+      history,
+      tracks: sessionTracks,
+      todayYMD,
+    });
+  }, [selectedExercise, selectedDay, programs, displayExerciseHistory, history, sessionTracks, todayYMD]);
   const startGreen = useMemo(() => compareStartGreen(scope, programs, history), [scope, programs, history]);
+  const firstPicks = useMemo(() => compareFirstPicks(scope, programs, history), [scope, programs, history]);
   const greenView = useMemo(() => (compare ? findRunView(compare.green, programs, history) : null), [compare, programs, history]);
   const blueView = useMemo(() => (compare ? findRunView(compare.blue, programs, history) : null), [compare, programs, history]);
   const comparing = !!(greenView && blueView);
+  // The sheet: up or not, and its step, which outlasts it closing so its list
+  // holds still as it slides away. The first pick waits here for the second.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetStep, setSheetStep] = useState<CompareSheetSide>("first");
+  const [firstPick, setFirstPick] = useState<RunRef | null>(null);
+  const firstPickView = useMemo(() => (firstPick ? findRunView(firstPick, programs, history) : null), [firstPick, programs, history]);
+  // What blue is set beside: green while comparing, else the first pick.
+  const blueAgainst = comparing ? greenView : firstPickView ?? startGreen;
   const blueCandidates = useMemo(
-    () => compareCandidates(programs, history, (greenView ?? startGreen)?.ref ?? null),
-    [programs, history, greenView, startGreen],
+    () => compareCandidates(programs, history, blueAgainst?.ref ?? null),
+    [programs, history, blueAgainst],
   );
   // Green can be the program on the go, or any finished one but blue.
   const greenCandidates = useMemo(() => {
@@ -412,7 +455,7 @@ function ProgressBody({
   }, [programs, history, blueView]);
   // The button is always there; until there's something to compare, it opens
   // the sheet locked, saying what comparing needs (user request, 2026-10-15).
-  const canCompare = !!startGreen && blueCandidates.length > 0;
+  const canCompare = firstPicks.length > 0;
   const readiness = useMemo(() => compareReadiness(programs, history), [programs, history]);
 
   // A program in the comparison that's since been deleted ends it.
@@ -501,15 +544,33 @@ function ProgressBody({
     };
   }, [cmp, selectedLift, greenView, blueView, isKg]);
 
-  // The sheet, and which side it's open for.
-  const [sheetSide, setSheetSide] = useState<CompareSheetSide | null>(null);
-  const openSheet = (side: CompareSheetSide) => setSheetSide(side);
+  const openSheet = (step: CompareSheetSide) => {
+    setSheetStep(step);
+    setSheetOpen(true);
+  };
+  // The compare button: the first pick, unless only one program can be green,
+  // when the sheet opens on the second with that one green already.
+  const startComparing = () => {
+    if (firstPicks.length === 1) {
+      setFirstPick(firstPicks[0].ref);
+      openSheet("blue");
+    } else {
+      setFirstPick(null);
+      openSheet("first");
+    }
+  };
   const onPickRun = (ref: RunRef) => {
-    if (sheetSide === "green") {
+    if (sheetStep === "first") {
+      setFirstPick(ref);
+      setSheetStep("blue");
+      return;
+    }
+    if (sheetStep === "green") {
       setCompare(prev => (prev ? { ...prev, green: ref } : prev));
       return;
     }
-    setCompare(prev => (prev ? { ...prev, blue: ref } : startGreen ? { green: startGreen.ref, blue: ref } : prev));
+    const green = firstPick ?? startGreen?.ref ?? null;
+    setCompare(prev => (prev ? { ...prev, blue: ref } : green ? { green, blue: ref } : prev));
   };
   const stopComparing = useCallback(() => {
     setCompare(null);
@@ -637,7 +698,8 @@ function ProgressBody({
 
   const showNoActiveProgramHint = scope.kind === "current" && !hasActiveProgram;
   const topPad = withTopInset ? insets.top + 50 : 16;
-  const botPad = bottomPadding ?? (insets.bottom + 140);
+  // Clear of the workout bar too while it shows (constants/floatingBars.ts).
+  const botPad = scrollEndPadding(bottomPadding ?? (insets.bottom + 140), barsReach);
 
   const Wrapper: any = asScreen ? FadeScreen : View;
   const wrapperProps = asScreen ? { style: { backgroundColor: t.bg } } : { style: { flex: 1, backgroundColor: t.bg } };
@@ -682,7 +744,7 @@ function ProgressBody({
         {title !== "" && (
           <View style={[styles.titleRow, styles.titleRowSplit]}>
             <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
-            {!comparing ? <CompareButton onPress={() => openSheet("blue")} /> : null}
+            {!comparing ? <CompareButton onPress={startComparing} /> : null}
           </View>
         )}
 
@@ -707,6 +769,7 @@ function ProgressBody({
                 scope={scope}
                 programs={programs}
                 onChange={s => { setScope(s); setScopeFallbackNote(null); }}
+                hasCustom={hasCustom}
                 style={{ flex: 1 }}
               />
               <DropdownPicker<RangeKey>
@@ -717,8 +780,9 @@ function ProgressBody({
                 size="bar"
                 leadingIcon="calendar-outline"
               />
-              {/* No title on a trainer's client page: the button sits here. */}
-              {title === "" ? <CompareButton onPress={() => openSheet("blue")} size={44} /> : null}
+              {/* No title on a trainer's client page: the button sits here, the
+                  filters' height (PILL_H_XS). */}
+              {title === "" ? <CompareButton onPress={startComparing} size={PILL_H_XS} /> : null}
             </View>
           )}
           {scopeFallbackNote && !comparing ? (
@@ -858,7 +922,9 @@ function ProgressBody({
               dayName={selectedDay.label}
               dayId={selectedDay.dayId}
               programId={selectedDay.programId}
+              customDay={selectedDay.custom?.key}
               history={displayExerciseHistory}
+              slots={exerciseSlots}
               prs={displayPrs}
               unit={unit}
               clientId={clientId}
@@ -871,15 +937,20 @@ function ProgressBody({
       </RevealOnScrollContext.Provider>
 
       <CompareSheet
-        side={sheetSide}
-        options={sheetSide === "green" ? greenCandidates : blueCandidates}
-        selected={sheetSide === "green" ? greenView?.ref ?? null : blueView?.ref ?? null}
-        other={sheetSide === "green" ? blueView : greenView ?? startGreen}
+        side={sheetOpen ? sheetStep : null}
+        options={sheetStep === "first" ? firstPicks : sheetStep === "green" ? greenCandidates : blueCandidates}
+        selected={
+          sheetStep === "first" ? firstPick ?? startGreen?.ref ?? null
+            : sheetStep === "green" ? greenView?.ref ?? null
+              : blueView?.ref ?? null
+        }
+        other={sheetStep === "green" ? blueView : sheetStep === "blue" ? blueAgainst : null}
         todayYMD={todayYMD}
         locked={!comparing && !canCompare ? readiness : null}
         forClient={!!clientId}
         onPick={onPickRun}
-        onClose={() => setSheetSide(null)}
+        onBack={() => setSheetStep("first")}
+        onClose={() => setSheetOpen(false)}
       />
     </Wrapper>
   );
@@ -888,11 +959,13 @@ function ProgressBody({
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll: { paddingTop: 0 },
-  titleRow: { paddingHorizontal: 24, marginBottom: 8 },
+  // The tab title as every tab has it, Home's greeting: 28pt bold, 20pt in,
+  // level with the cards (user decision, 2026-10-21; it was 32pt at 24pt).
+  titleRow: { paddingHorizontal: 20, marginBottom: 8 },
   titleRowSplit: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: 16 },
   filterRow: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20 },
-  title: { fontFamily: FontFamily.bold, fontSize: 32 },
-  sectionHeaderRow: { paddingHorizontal: 24, marginTop: 28 },
+  title: { fontFamily: FontFamily.bold, fontSize: 28, marginTop: 2 },
+  sectionHeaderRow: { paddingHorizontal: 20, marginTop: 28 },
   sectionHeader: { fontFamily: FontFamily.bold, fontSize: 24 },
   note: { fontFamily: FontFamily.semibold, fontSize: 12 },
   hintInner: { padding: 16, alignItems: "center", gap: 8 },

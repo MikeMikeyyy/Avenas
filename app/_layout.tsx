@@ -1,4 +1,4 @@
-import { Stack, useRouter, type Href, DarkTheme, DefaultTheme, ThemeProvider as NavThemeProvider, type Theme } from "expo-router";
+import { Stack, useRouter, DarkTheme, DefaultTheme, ThemeProvider as NavThemeProvider, type Theme } from "expo-router";
 import * as Notifications from "expo-notifications";
 import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold } from "@expo-google-fonts/nunito";
 import * as SplashScreen from "expo-splash-screen";
@@ -11,7 +11,7 @@ import { StreakProvider } from "../contexts/StreakContext";
 import { WorkoutTimerProvider } from "../contexts/WorkoutTimerContext";
 import { RestTimerProvider } from "../contexts/RestTimerContext";
 import { UnitProvider } from "../contexts/UnitContext";
-import { AccountTypeProvider } from "../contexts/AccountTypeContext";
+import { AccountTypeProvider, useAccountType } from "../contexts/AccountTypeContext";
 import { UserProfileProvider, useUserProfile } from "../contexts/UserProfileContext";
 import { NotificationPrefsProvider } from "../contexts/NotificationPrefsContext";
 import { AuthProvider, useAuth } from "../contexts/AuthContext";
@@ -33,6 +33,7 @@ import { linkAcceptedCopies } from "../utils/trainerStore";
 import { fileStaleDraft } from "../utils/unfinishedSessionStore";
 import { autoPauseIfIdle } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
+import { notificationSteps } from "../utils/notificationRoute";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -83,13 +84,24 @@ function AppShell() {
   }, []);
 
   // Tapping a notification (push or local) routes to the screen in its data.url
-  // (e.g. a message push opens that chat). Covers cold starts too — the hook
-  // replays the response that launched the app.
+  // (e.g. a message push opens that chat; utils/notificationRoute.ts has the
+  // one that opens more than its url). Covers cold starts too — the hook
+  // replays the response that launched the app. It waits for the account type,
+  // which decides where a message goes, and handles each response once, since
+  // the effect runs again when that arrives.
   const notifResponse = Notifications.useLastNotificationResponse();
+  const { accountType, loaded: accountTypeLoaded } = useAccountType();
+  const handledNotif = useRef<string | null>(null);
   useEffect(() => {
     const url = notifResponse?.notification.request.content.data?.url;
-    if (typeof url === "string" && url.startsWith("/")) router.navigate(url as Href);
-  }, [notifResponse, router]);
+    if (typeof url !== "string" || !url.startsWith("/") || !accountTypeLoaded || !authLoaded) return;
+    const id = notifResponse?.notification.request.identifier ?? url;
+    if (handledNotif.current === id) return;
+    handledNotif.current = id;
+    void notificationSteps(url, accountType, userId ?? "").then(steps => {
+      steps.forEach((step, i) => (i === 0 ? router.navigate(step) : router.push(step)));
+    });
+  }, [notifResponse, router, accountType, accountTypeLoaded, authLoaded, userId]);
 
   // Hold the native splash until the profile flag and the auth session are
   // read, so app/index.tsx can redirect to the right first screen (login vs

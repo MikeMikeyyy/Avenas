@@ -8,7 +8,6 @@ import Reanimated, {
   withTiming,
   measure,
   runOnUI,
-  runOnJS,
   Easing as ReEasing,
 } from "react-native-reanimated";
 import NeuCard from "./NeuCard";
@@ -28,6 +27,7 @@ import type { ExerciseSelection, LoggedExerciseRow } from "../constants/progress
 import type { CustomExercise } from "../constants/exercises";
 import { exerciseIdentity, type ExerciseRef } from "../utils/exerciseNames";
 import { isDeletedExercise } from "../utils/customExercises";
+import { displayWorkoutName } from "../utils/programDays";
 
 interface Props {
   /** Every non-Rest day of the in-scope program(s), as identified refs. Two
@@ -53,8 +53,10 @@ interface Props {
   onExpandedDayChange: (key: string | null) => void;
   /**
    * "All programs": one card per program, opened to show its days, instead of
-   * every day of every program in one run. The programs give each card its
-   * status. Off for a single program, whose days are listed directly.
+   * every day of every program in one run, and a Custom workouts card after
+   * them for the sessions in no program. The programs give each card its
+   * status. Off for a single program and for Custom workouts, whose days are
+   * listed directly.
    */
   groupByProgram: boolean;
   programs: SavedProgram[];
@@ -77,6 +79,12 @@ const STATUS_LABEL: Record<SavedProgram["status"], string> = {
  *  program is already named, so only the day number is needed (and
  *  groupDaysByProgram only flags names repeated within that program). */
 function dayQualifier(day: ProgramDayRef, underProgram: boolean): string | null {
+  // A day of Custom workouts that was a program's says whose (user request,
+  // 2026-10-23), by name when it was kept as the program was deleted.
+  if (day.custom) {
+    if (day.custom.programName) return `From ${day.custom.programName}`;
+    return day.custom.deletedProgram ? "From a deleted program" : null;
+  }
   // Always shown for a historical day: it's the answer to "why are there two
   // Upper rows?", and it has to read even when the label happens to be unique.
   if (day.isHistorical) return underProgram ? "No longer in this program" : "No longer in your program";
@@ -155,65 +163,92 @@ const PROGRAM_PANEL_MS = 280;
 // UI-thread height tween, which never re-fires an ancestor's onLayout, so a
 // panel sized from its last measure would stay put and clip the day.
 //
-// So whenever it's open and still, it's a PLAIN auto-height view that reflows
-// live as its days open and close. It takes an animated height only for its
-// own tween and while closed, and that switch is made at the React level (the
-// CollapsibleSection rule: on Fabric a Reanimated.View that has animated its
-// height keeps that height even after the worklet stops returning one). Both
-// ends of the tween are measured on the UI thread, which reads the list as
-// drawn, open days included. The days stay mounted throughout, so closing
-// slides them away rather than blanking them first.
+// So whenever it's open and still, its height is "auto" with the list in the
+// flow, and it reflows live as its days open and close. Shut, and while it
+// tweens, its height is a number and the list is pinned (absolute, as
+// ExpandablePanel's always is). The pin is what lets it open: in the flow, a
+// list inside a view exactly 0 high is laid out 0 high itself (Yoga doesn't
+// measure a view it gives no room), so a shut card read its own list as empty.
+// Both bugs came from that (user reports, 2026-10-23, under All programs): one
+// build tweened open to that 0 and never reopened after a close; the next
+// found no height and jumped open without its tween.
+//
+// One shared value, `auto`, drives both views, so the height and the pin
+// change in the same frame (an "auto" height around a pinned list is 0). Each
+// view keeps ONE animated style for its whole life and changes what it says:
+// a style taken off and put back at the React level once left a card shut on
+// Fabric, which keeps the last height a worklet gave a view (the
+// CollapsibleSection note). That's also why "auto" is said, not left out.
+//
+// Each tween runs between nothing and the list's height, read on the UI thread
+// (its last layout if that can't be read). The days stay mounted throughout,
+// so closing slides them away rather than blanking them first.
 function ProgramPanel({ expanded, children }: { expanded: boolean; children: React.ReactNode }) {
   const contentRef = useAnimatedRef<Reanimated.View>();
   const height = useSharedValue(0);
-  // True while the panel is the plain auto-height view (open and still).
-  const released = useSharedValue(expanded);
-  const [constrained, setConstrained] = useState(!expanded);
+  // True while open and still: the height is "auto", the list in the flow.
+  const auto = useSharedValue(expanded);
+  // The list's height at its last layout, for when measure() can't say.
+  const laidOut = useSharedValue(0);
   // A card that mounts open (the page coming back to it) just appears open.
   const prevExpanded = useRef(expanded);
 
   useLayoutEffect(() => {
     if (prevExpanded.current === expanded) return;
     prevExpanded.current = expanded;
-    setConstrained(true);
     runOnUI((open: boolean) => {
       "worklet";
-      // The content lays out at its full height even while clipped to less.
-      const natural = measure(contentRef)?.height ?? 0;
-      // Leaving the plain state: hold exactly the height it's drawn at. Mid-
+      // Its full height, pinned or in the flow, however little of it shows.
+      const natural = measure(contentRef)?.height || laidOut.value;
+      // Leaving "auto": hold exactly the height it's drawn at, pinned. Mid-
       // tween, carry on from wherever the last tween got to instead.
-      if (released.value) {
+      if (auto.value) {
         height.value = natural;
-        released.value = false;
+        auto.value = false;
+      }
+      // A program with no days: nothing to tween.
+      if (natural <= 0) {
+        height.value = 0;
+        auto.value = open;
+        return;
       }
       height.value = withTiming(
         open ? natural : 0,
         { duration: PROGRAM_PANEL_MS, easing: ReEasing.out(ReEasing.cubic) },
         finished => {
-          if (finished && open) {
-            released.value = true;
-            runOnJS(setConstrained)(false);
-          }
+          if (finished && open) auto.value = true;
         },
       );
     })(expanded);
-  }, [expanded, contentRef, height, released]);
+  }, [expanded, contentRef, height, auto, laidOut]);
 
-  const clipStyle = useAnimatedStyle(() => ({ height: height.value, overflow: "hidden" as const }));
+  const clipStyle = useAnimatedStyle(() => ({
+    height: auto.value ? ("auto" as const) : height.value,
+    overflow: "hidden" as const,
+  }));
+  const pinStyle = useAnimatedStyle(() => ({
+    position: auto.value ? ("relative" as const) : ("absolute" as const),
+  }));
 
   return (
     <Reanimated.View
-      style={constrained ? clipStyle : null}
+      style={clipStyle}
       // Mounted while closed, clipped to nothing: hidden from VoiceOver and
       // from taps until it opens.
       accessibilityElementsHidden={!expanded}
       importantForAccessibility={expanded ? "auto" : "no-hide-descendants"}
       pointerEvents={expanded ? "auto" : "none"}
-      // Unstyled while open, so Fabric would flatten it away; it has to stay a
-      // real view for the style switch, and the content for measure().
-      collapsable={false}
     >
-      <Reanimated.View ref={contentRef} collapsable={false}>{children}</Reanimated.View>
+      {/* A real view (never flattened away), for measure(). Left and right 0
+          give it the card's width while pinned; in the flow they do nothing. */}
+      <Reanimated.View
+        ref={contentRef}
+        collapsable={false}
+        style={[styles.panelContent, pinStyle]}
+        onLayout={e => laidOut.set(e.nativeEvent.layout.height)}
+      >
+        {children}
+      </Reanimated.View>
     </Reanimated.View>
   );
 }
@@ -388,17 +423,19 @@ function DayRow({
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const qualifier = dayQualifier(day, underProgram);
+  // A custom workout saved as "Custom WorkoutLegs" reads as "Legs".
+  const label = displayWorkoutName(day.label);
   return (
     <>
       <BounceButton
         onPress={onToggle}
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
-        accessibilityLabel={`${day.label}${qualifier ? `, ${qualifier}` : ""}, ${sessions} session${sessions === 1 ? "" : "s"} logged`}
+        accessibilityLabel={`${label}${qualifier ? `, ${qualifier}` : ""}, ${sessions} session${sessions === 1 ? "" : "s"} logged`}
       >
         <View style={styles.dayRow}>
           <View style={styles.dayNameCol}>
-            <Text style={[styles.dayName, { color: t.tp }]} numberOfLines={1}>{day.label}</Text>
+            <Text style={[styles.dayName, { color: t.tp }]} numberOfLines={1}>{label}</Text>
             {qualifier ? (
               <Text style={[styles.dayQualifier, { color: t.ts }]} numberOfLines={1}>{qualifier}</Text>
             ) : null}
@@ -531,6 +568,8 @@ const styles = StyleSheet.create({
   // A day as a row of its program's card, a line above each one (the first
   // one parts it from the program's own row).
   dayInProgram: { borderTopWidth: 1 },
+  // ProgramPanel's list, in points (a percentage inset lands off, CLAUDE.md).
+  panelContent: { top: 0, left: 0, right: 0 },
 
   dayRow: {
     flexDirection: "row",

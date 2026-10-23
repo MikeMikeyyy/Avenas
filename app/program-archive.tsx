@@ -22,6 +22,8 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import MaskedView from "@react-native-masked-view/masked-view";
@@ -47,6 +49,7 @@ import { getJSON, setJSON } from "../utils/storage";
 import { alertMessage } from "../utils/errors";
 import { confirmDeleteArchived } from "../utils/archiveChoice";
 import { archivedPrograms, restoreProgram } from "../utils/programArchive";
+import { keepDeletedProgramName } from "../utils/programDelete";
 import { programStatus } from "../utils/programStatus";
 import { peekPTHub } from "../utils/trainerHub";
 import { peekGroupPage } from "../utils/groupPage";
@@ -151,6 +154,8 @@ export default function ProgramArchiveScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const { userId } = useAuth();
   const owner = userId ?? "";
   const params = useLocalSearchParams<{ scope?: string; groupId?: string; groupName?: string }>();
@@ -259,6 +264,8 @@ export default function ProgramArchiveScreen() {
       name: p.name,
       note: "This can't be undone.",
       onDelete: () => void run("Couldn't delete it", async () => {
+        // Its sessions keep its name, to say whose they were (utils/programDelete.ts).
+        await keepDeletedProgramName(p);
         await writePrograms(programs.filter(x => x.id !== p.id));
         // The same clean-up as My Programs' Delete: a received program's card
         // stops pointing at a copy that's gone.
@@ -359,7 +366,7 @@ export default function ProgramArchiveScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }}
         refreshControl={scope === "programs" ? undefined : (
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCT} colors={[ACCT]} progressViewOffset={insets.top} />
         )}

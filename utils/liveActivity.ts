@@ -57,13 +57,17 @@ export function buildLiveActivityQueue(
     }
   }
 
-  // Each exercise's working sets, done or not, as they'll stand when each
-  // queued set comes up (the card's dots): the lock screen ticks the queue in
-  // order, so every set ahead of one is done by the time it's next.
+  // Each exercise's sets, done or not, as they'll stand when each queued set
+  // comes up (the card's dots, its warmups' orange and its working sets'
+  // green): the lock screen ticks the queue in order, so every set ahead of
+  // one is done by the time it's next.
   const workingDone = new Map<string, boolean[]>();
+  const warmupsDone = new Map<string, boolean[]>();
   for (const ex of exercises) {
     const exLog = log[ex.id];
-    if (exLog) workingDone.set(ex.id, exLog.working.map(s => s.done));
+    if (!exLog) continue;
+    workingDone.set(ex.id, exLog.working.map(s => s.done));
+    warmupsDone.set(ex.id, exLog.warmup.map(s => s.done));
   }
 
   const queue: LiveActivityPendingSet[] = pendingSetsInOrder(exercises.map(e => e.id), log).flatMap(p => {
@@ -73,8 +77,11 @@ export function buildLiveActivityQueue(
     if (!exLog || !set) return [];
     const { weight, reps } = previewValues(set, prevHintsFor(p.exId)[p.flatIdx]);
     const done = workingDone.get(p.exId) ?? [];
+    const warmed = warmupsDone.get(p.exId) ?? [];
     const setDone = [...done];
+    const warmupDone = [...warmed];
     if (p.setType === "working") done[p.setIdx] = true;
+    else warmed[p.setIdx] = true;
     return [{
       exId: p.exId,
       setType: p.setType,
@@ -90,6 +97,7 @@ export function buildLiveActivityQueue(
       isFinal: false, // patched below once the full queue is known
       isHold: !!ex.isHold,
       setDone,
+      warmupDone,
     }];
   });
 

@@ -3,7 +3,7 @@
 // Where the workout bar and the rest timer sit right now (see
 // constants/floatingBars.ts), so the two can't disagree about it.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Keyboard, Platform } from "react-native";
 import { useSegments } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -62,4 +62,38 @@ export function useFloatingBars() {
      *  rises, and starts from there), else where the bar would sit. */
     restBottom: base + (workoutBarShown ? WORKOUT_BAR_H + BAR_STACK_GAP : 0),
   };
+}
+
+// ─── How far up the bars reach, for the pages under them ─────────────────────
+// The workout bar reports it (components/WorkoutActiveBar.tsx) and a page reads
+// one number, which changes only when the bars do. Reading the bars themselves
+// (useFloatingBars) would re-render a page every second with the workout clock.
+
+let barsReach = 0;
+const reachListeners = new Set<() => void>();
+
+/** The workout bar's report of how far up the screen it reaches
+ *  (workoutBarReach), 0 while it's hidden. */
+export function reportBarsReach(next: number): void {
+  if (next === barsReach) return;
+  barsReach = next;
+  reachListeners.forEach((listener) => listener());
+}
+
+function subscribeReach(listener: () => void): () => void {
+  reachListeners.add(listener);
+  return () => {
+    reachListeners.delete(listener);
+  };
+}
+
+function readReach(): number {
+  return barsReach;
+}
+
+/** How far above the screen's bottom edge the floating bars reach right now,
+ *  0 while none shows: a page's end padding takes it through
+ *  scrollEndPadding (constants/floatingBars.ts). */
+export function useFloatingBarsReach(): number {
+  return useSyncExternalStore(subscribeReach, readReach);
 }

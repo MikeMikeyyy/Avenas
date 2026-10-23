@@ -23,12 +23,14 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import GlassButton, { GlassSurface } from "../components/GlassButton";
 import SheetPill from "../components/SheetPill";
 import CollapsibleCard from "../components/CollapsibleCard";
 import ExercisePicker from "../components/ExercisePicker";
@@ -39,8 +41,8 @@ import TimeEditSheet from "../components/TimeEditSheet";
 import WorkoutAchievements from "../components/WorkoutAchievements";
 import { stampSession } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT } from "../constants/theme";
-import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
-import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import { haloGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import { SessionCueLine, SkippedRow } from "../components/ChangeCue";
 import { sessionChanges } from "../utils/exerciseChanges";
 import { useFieldAboveKeyboard } from "../hooks/useFieldAboveKeyboard";
@@ -61,10 +63,14 @@ import { swapOrigin } from "../utils/workout";
 import { customIdForName } from "../utils/customExercises";
 import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { fromYMD } from "../utils/dates";
-import { achievementsForWorkout } from "../utils/achievements";
+import { displayWorkoutName } from "../utils/programDays";
+import { achievementsForWorkout, prSetsOfWorkout } from "../utils/achievements";
+import PrTrophy from "../components/PrTrophy";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const WARMUP_ORANGE = "#ffbf0f";
+/** The floating + while editing, a size up from the buttons at the top. */
+const ADD_SIZE = 44;
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 // Abbreviated on purpose: with the full name, "Wednesday" was the one day whose
 // chip row didn't fit on a single line and pushed the duration chip down.
@@ -457,6 +463,8 @@ export default function WorkoutDetailScreen() {
   const isKg = clientIsKg ?? ownIsKg;
 
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
   // Stored weights are canonical kg. The edit buffer + on-screen rows work in the
@@ -540,6 +548,13 @@ export default function WorkoutDetailScreen() {
   // saved copy, not the edit buffer, so it follows a save and not a keystroke.
   const earned = useMemo(
     () => (workout ? achievementsForWorkout(workout, history) : []),
+    [workout, history],
+  );
+  // Which sets wear the PR trophy by their number, read the same way from the
+  // saved copy (utils/achievements.ts). Index-aligned with the saved sets, so
+  // drawn only while not editing, where the rows are the saved ones in order.
+  const prSets = useMemo(
+    () => (workout ? prSetsOfWorkout(workout, history) : null),
     [workout, history],
   );
 
@@ -658,7 +673,7 @@ export default function WorkoutDetailScreen() {
     if (!workout || readOnly) return;
     Alert.alert(
       "Delete Workout?",
-      `"${workout.workoutName}" will be permanently removed.`,
+      `"${displayWorkoutName(workout.workoutName)}" will be permanently removed.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -840,29 +855,21 @@ export default function WorkoutDetailScreen() {
       <View style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10, flexDirection: "row", alignItems: "center", gap: 10 }}>
         {readOnly ? null : isEditing ? (
           <>
-            <TouchableOpacity onPress={handleCancel} activeOpacity={0.8}>
-              <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-                <Ionicons name="close" size={22} color={t.tp} />
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleSave} activeOpacity={0.8} style={{ shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }}>
-              <View style={[styles.navBtn, { backgroundColor: ACCT }]}>
-                <Ionicons name="checkmark" size={22} color="#fff" />
-              </View>
-            </TouchableOpacity>
+            <GlassButton onPress={handleCancel} size={BACK_SIZE} accessibilityLabel="Cancel editing">
+              <Ionicons name="close" size={22} color={t.tp} />
+            </GlassButton>
+            <GlassButton tint={ACCT} onPress={handleSave} size={BACK_SIZE} accessibilityLabel="Save changes" solidStyle={styles.saveGlow}>
+              <Ionicons name="checkmark" size={22} color="#fff" />
+            </GlassButton>
           </>
         ) : (
           <>
-            <TouchableOpacity onPress={() => setIsEditing(true)} activeOpacity={0.8}>
-              <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-                <Ionicons name="create-outline" size={20} color={t.tp} />
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleDelete} activeOpacity={0.8}>
-              <View style={[styles.navBtn, { backgroundColor: t.ctrl }]}>
-                <TrashIcon size={18} color={DANGER_BRIGHT} />
-              </View>
-            </TouchableOpacity>
+            <GlassButton onPress={() => setIsEditing(true)} size={BACK_SIZE} accessibilityLabel="Edit workout">
+              <Ionicons name="create-outline" size={20} color={t.tp} />
+            </GlassButton>
+            <GlassButton onPress={handleDelete} size={BACK_SIZE} accessibilityLabel="Delete workout">
+              <TrashIcon size={18} color={DANGER_BRIGHT} />
+            </GlassButton>
           </>
         )}
       </View>
@@ -875,7 +882,7 @@ export default function WorkoutDetailScreen() {
         ref={scrollRef}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + (isEditing ? 100 : 40), paddingHorizontal: 20 }}
+        contentContainerStyle={{ paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (isEditing ? 100 : 40), barsReach), paddingHorizontal: 20 }}
       >
         {/* Nav title — scrolls with content */}
         <View style={styles.scrollTitleRow}>
@@ -888,7 +895,7 @@ export default function WorkoutDetailScreen() {
           <>
             {/* Header */}
             <View style={{ marginBottom: 24 }}>
-              <Text style={[styles.title, { color: t.tp }]}>{workout.workoutName}</Text>
+              <Text style={[styles.title, { color: t.tp }]}>{displayWorkoutName(workout.workoutName)}</Text>
               {isEditing ? (
                 <TouchableOpacity
                   onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTimeSheetOpen(true); }}
@@ -957,11 +964,13 @@ export default function WorkoutDetailScreen() {
                 <BounceButton onPress={openSessionNotes} accessibilityLabel="Add session notes">
                   <View style={styles.sessionNotesAddRow}>
                     <View style={styles.notesToggleBtn}>
-                      {/* The Workout tab's button: a flat white circle, not a
-                          raised NeuCard, with the green + pinned to its corner. */}
-                      <View style={[styles.notesIconBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}>
+                      {/* The Workout tab's button (glass on iOS 26), not a
+                          raised NeuCard, with the green + pinned to its corner.
+                          The row bounces as one with its words, so the glass
+                          takes no press of its own. */}
+                      <GlassSurface style={styles.notesIconBtn} solidStyle={PILL_SHADOW}>
                         <Ionicons name="document-text-outline" size={20} color={t.tp} />
-                      </View>
+                      </GlassSurface>
                       <View style={styles.notesTogglePlus}>
                         <Text style={styles.notesTogglePlusText}>+</Text>
                       </View>
@@ -1065,7 +1074,12 @@ export default function WorkoutDetailScreen() {
                                   </View>
                                 </TouchableOpacity>
                               ) : (
-                                <Text style={[styles.setText, { color: isWU ? WARMUP_ORANGE : t.tp }]}>{label}</Text>
+                                // The trophy hangs off the number's own left
+                                // edge (components/PrTrophy.tsx).
+                                <View>
+                                  <Text style={[styles.setText, { color: isWU ? WARMUP_ORANGE : t.tp }]}>{label}</Text>
+                                  <PrTrophy show={!!prSets?.[ei]?.[j]} />
+                                </View>
                               )}
                             </View>
                             <View style={{ width: 32 }} />
@@ -1243,17 +1257,15 @@ export default function WorkoutDetailScreen() {
           CompletedWorkout. */}
       {isEditing && (
         <View style={{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 6 }}>
-          <BounceButton
+          <GlassButton
+            tint={ACCT}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}
+            size={ADD_SIZE}
             accessibilityLabel="Add exercise"
-            accessibilityRole="button"
+            solidStyle={styles.addGlow}
           >
-            <View style={styles.addRoundWrap}>
-              <View style={styles.addRoundBtn}>
-                <Ionicons name="add" size={24} color="#fff" />
-              </View>
-            </View>
-          </BounceButton>
+            <Ionicons name="add" size={24} color="#fff" />
+          </GlassButton>
         </View>
       )}
       <ExercisePicker
@@ -1290,7 +1302,7 @@ export default function WorkoutDetailScreen() {
         <TimeEditSheet
           visible={timeSheetOpen}
           isDark={isDark}
-          title={workout.workoutName}
+          title={displayWorkoutName(workout.workoutName)}
           subtitle="Start & End Time"
           confirmLabel="Save Time"
           startDate={new Date(new Date(editedCompletedAt).getTime() - editedDurationSeconds * 1000)}
@@ -1333,7 +1345,9 @@ export default function WorkoutDetailScreen() {
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  navBtn:      { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  // The solid tick's and +'s glows: the glass ones are lit by the glass.
+  saveGlow:    haloGlow(ACCT),
+  addGlow:     haloGlow(ACCT, 0.6, 12),
 
   title: { fontFamily: FontFamily.bold, fontSize: 26, marginBottom: 4 },
   unitNote: { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 6 },
@@ -1367,8 +1381,6 @@ const styles = StyleSheet.create({
   inputCell:    { flex: 1, alignItems: "center", justifyContent: "center" },
   checkCol:     { width: 32, alignItems: "center", justifyContent: "center" },
   removeSetBtn: { width: 24, height: 24, borderRadius: 13, backgroundColor: DANGER_BRIGHT, alignItems: "center", justifyContent: "center", shadowColor: DANGER_BRIGHT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
-  addRoundWrap: { borderRadius: 24, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  addRoundBtn:  { width: 44, height: 44, borderRadius: 22, backgroundColor: ACCT, alignItems: "center", justifyContent: "center" },
 
   inputBox:  { width: 80, height: 40, borderRadius: 10, justifyContent: "center" },
   inputText: { fontFamily: FontFamily.bold, fontSize: 15, textAlign: "center", flex: 1, paddingVertical: 0 },

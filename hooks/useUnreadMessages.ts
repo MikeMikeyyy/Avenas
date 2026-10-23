@@ -1,14 +1,16 @@
-// Total unread message count across all of this account's conversations, for the
-// badge on the Trainer hub's Messages button. Refreshes on screen focus, so it
-// updates after you read a thread (markThreadRead) and return to the hub.
+// Unread messages across this account's conversations: the total, for the badge
+// on the trainer hub's Messages button, and each person's own count, for a gym
+// user's hub (its Message button shows its trainer's, the My Trainers pill
+// everyone else's, and the My Trainers page each trainer's). Refreshes on screen
+// focus, so it updates after you read a thread (markThreadRead) and return.
 //
 // Mirrors app/trainer/messages.tsx's load (same thread source + blocked/hidden
-// filter), so this total always equals the sum of the per-row badges in the list.
+// filter), so the total always equals the sum of the per-row badges in the list.
 //
-// A hub mounting later in the launch starts on the last total counted for this
-// account rather than on 0, so the badge is there with the page instead of
-// popping in a second after it. hooks/useTrainerHubPrefetch.ts counts it once
-// shortly after startup; every recount keeps it current.
+// A hub mounting later in the launch starts on the last counts for this account
+// rather than on 0, so the badges are there with the page instead of popping in
+// a second after it. hooks/useTrainerHubPrefetch.ts counts once shortly after
+// startup; every recount keeps it current.
 
 import { useCallback, useState } from "react";
 import { useFocusEffect } from "expo-router";
@@ -21,12 +23,19 @@ import { getMyConnections } from "../lib/connections";
 import { loadBlockedIds, loadHiddenMessageIds } from "../utils/moderation";
 import type { ChatContact } from "../constants/chat";
 
-/** The last total, and whose it was: account id + role, since the role decides
- *  how contacts are labelled and a different account's count means nothing. */
-let lastTotal: { key: string; total: number } | null = null;
-const totalKey = (owner: string, accountType: AccountType) => `${owner}|${accountType}`;
+/** The total, groups included, and each person's own count (only people with
+ *  something unread are in it). */
+type UnreadCounts = { total: number; byPerson: Record<string, number> };
 
-async function countUnread(accountType: AccountType): Promise<number> {
+const NONE: UnreadCounts = { total: 0, byPerson: {} };
+
+/** The last counts, and whose they were: account id + role, since the role
+ *  decides how contacts are labelled and a different account's count means
+ *  nothing. */
+let lastCounts: { key: string; counts: UnreadCounts } | null = null;
+const countsKey = (owner: string, accountType: AccountType) => `${owner}|${accountType}`;
+
+async function countUnread(accountType: AccountType): Promise<UnreadCounts> {
   // Mirror app/trainer/messages.tsx:gatherContacts so the badge counts the
   // same set of threads as the list — local roster merged with every real
   // accepted connection. Without this merge, unreads from a real connected
@@ -56,34 +65,42 @@ async function countUnread(accountType: AccountType): Promise<number> {
     loadGroupRows(),
   ]);
   let sum = 0;
+  const byPerson: Record<string, number> = {};
   for (const c of contacts) {
     if (blocked.has(c.id)) continue; // blocked people don't surface in chat
     const msgs = (threads[c.id] ?? []).filter(m => !hidden.has(m.id));
-    sum += countUnreadInThread(msgs, reads[c.id]);
+    const n = countUnreadInThread(msgs, reads[c.id]);
+    if (n > 0) byPerson[c.id] = n;
+    sum += n;
   }
-  return sum + sumGroupUnread(groups);
+  return { total: sum + sumGroupUnread(groups), byPerson };
 }
 
 /** Count now, for a hub that hasn't mounted yet (the startup prefetch). */
 export async function warmUnreadMessages(accountType: AccountType, owner: string): Promise<void> {
-  const total = await countUnread(accountType);
-  lastTotal = { key: totalKey(owner, accountType), total };
+  const counts = await countUnread(accountType);
+  lastCounts = { key: countsKey(owner, accountType), counts };
 }
 
-export function useUnreadMessages(): { unread: number; refresh: () => Promise<void> } {
+export function useUnreadMessages(): {
+  unread: number;
+  /** Person id → their unread messages; absent when there are none. */
+  byPerson: Record<string, number>;
+  refresh: () => Promise<void>;
+} {
   const { accountType } = useAccountType();
   const { userId } = useAuth();
-  const key = totalKey(userId ?? "", accountType);
-  const [total, setTotal] = useState(() => (lastTotal?.key === key ? lastTotal.total : 0));
+  const key = countsKey(userId ?? "", accountType);
+  const [counts, setCounts] = useState<UnreadCounts>(() => (lastCounts?.key === key ? lastCounts.counts : NONE));
 
-  /** The count, recomputed. Exposed so a hub's pull-to-refresh updates the
-   *  Messages badge in the same gesture as everything else on the page —
-   *  focus alone can't, since you never left. */
+  /** The counts, recomputed. Exposed so a hub's pull-to-refresh updates its
+   *  badges in the same gesture as everything else on the page — focus alone
+   *  can't, since you never left. */
   const recount = useCallback(async (isCancelled: () => boolean = () => false) => {
-    const sum = await countUnread(accountType);
-    lastTotal = { key, total: sum };
+    const next = await countUnread(accountType);
+    lastCounts = { key, counts: next };
     if (isCancelled()) return;
-    setTotal(sum);
+    setCounts(next);
   }, [accountType, key]);
 
   useFocusEffect(
@@ -94,5 +111,5 @@ export function useUnreadMessages(): { unread: number; refresh: () => Promise<vo
     }, [recount]),
   );
 
-  return { unread: total, refresh: () => recount() };
+  return { unread: counts.total, byPerson: counts.byPerson, refresh: () => recount() };
 }

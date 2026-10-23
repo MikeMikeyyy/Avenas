@@ -108,3 +108,17 @@ export type ChatContact = {
 // smooth, gradual transition (no hard line), rendered top-left → bottom-right
 // with white text. (Tuple so it satisfies expo-linear-gradient's `colors` type.)
 export const SENT_BUBBLE_GRADIENT = ["#1DECA0", "#19DCC4"] as const;
+
+// A GROUP chat's sent bubbles (and its send button): the aurora orchid of the
+// group page's Group Chat tile, into a deeper orchid that carries white words
+// (user decision, 2026-10-22, the Chat Redesign canvas: orchid for groups,
+// green kept for a chat with one person).
+export const GROUP_SENT_BUBBLE_GRADIENT = ["#F18BFF", "#C944E6"] as const;
+
+/** Which colour a thread's own messages take: a person's chat or a group's. */
+export type ChatTone = "green" | "orchid";
+
+/** The sent gradient for a thread's tone; its glow is the darker end. */
+export function sentGradient(tone: ChatTone): readonly [string, string] {
+  return tone === "orchid" ? GROUP_SENT_BUBBLE_GRADIENT : SENT_BUBBLE_GRADIENT;
+}

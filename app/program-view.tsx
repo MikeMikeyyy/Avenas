@@ -11,11 +11,13 @@
 // is nothing here to edit, remove or accept.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -24,6 +26,7 @@ import { scheduleCloudPush } from "../lib/syncManager";
 import FadeScreen from "../components/FadeScreen";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import GlassButton from "../components/GlassButton";
 import OfflineBanner from "../components/OfflineBanner";
 import ProgramHeaderCard from "../components/ProgramHeaderCard";
 import ProgramSnapshotView from "../components/ProgramSnapshotView";
@@ -77,6 +80,8 @@ export default function ProgramViewScreen() {
   const offline = useOffline();
   const { accountType } = useAccountType();
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const clientIsKg = useClientUnit(clientId);
 
   // The viewer supports two record types:
@@ -412,31 +417,15 @@ export default function ProgramViewScreen() {
       {canDelete && (
         <View style={[styles.topActions, { top: insets.top + BACK_TOP }]}>
           {/* Both need the server (an edit re-sends it), so with no signal
-              they dim and say why, like BounceButton's needsConnection. */}
+              they dim and say why. */}
           {isOutgoing && (
-          <TouchableOpacity
-            onPress={offline ? alertOffline : handleEdit}
-            activeOpacity={0.8}
-            accessibilityLabel="Edit program"
-            accessibilityRole="button"
-            accessibilityState={{ disabled: offline }}
-          >
-            <View style={[styles.backBtn, { backgroundColor: t.ctrl }, offline && styles.offlineDim]}>
+            <GlassButton onPress={handleEdit} needsConnection size={BACK_SIZE} accessibilityLabel="Edit program">
               <SquarePenIcon size={20} color={t.tp} />
-            </View>
-          </TouchableOpacity>
+            </GlassButton>
           )}
-          <TouchableOpacity
-            onPress={offline ? alertOffline : handleDelete}
-            activeOpacity={0.8}
-            accessibilityLabel="Remove program"
-            accessibilityRole="button"
-            accessibilityState={{ disabled: offline }}
-          >
-            <View style={[styles.backBtn, { backgroundColor: t.ctrl }, offline && styles.offlineDim]}>
-              <TrashIcon size={20} color={DANGER_BRIGHT} />
-            </View>
-          </TouchableOpacity>
+          <GlassButton onPress={handleDelete} needsConnection size={BACK_SIZE} accessibilityLabel="Remove program">
+            <TrashIcon size={20} color={DANGER_BRIGHT} />
+          </GlassButton>
         </View>
       )}
 
@@ -447,7 +436,7 @@ export default function ProgramViewScreen() {
           paddingTop: insets.top + BACK_TOP,
           // Clears whichever floats above it: the Builder/Summary pills always,
           // plus the Accept CTA below them when that's showing.
-          paddingBottom: insets.bottom + (showFloatingAccept ? 170 : 100),
+          paddingBottom: scrollEndPadding(insets.bottom + (showFloatingAccept ? 170 : 100), barsReach),
         }}
       >
         {/* A screen title in the review screen's style, with the program's name
@@ -566,17 +555,19 @@ export default function ProgramViewScreen() {
               and two green buttons stacked read as one cluster with no clear
               primary. Slate is the app's other primary colour, the same as
               the builder's Create pill and "Open in Builder". */}
-          <BounceButton
+          <GlassButton
+            pill
+            size={PILL_H_SM}
+            tint={isDark ? BTN_SLATE_DARK : BTN_SLATE}
             onPress={showFloatingAcceptChanges ? handleApplyReturned : handleAccept}
             needsConnection
+            solidStyle={styles.slateLift}
             accessibilityLabel={showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
           >
-            <View style={[styles.primaryBtn, styles.slateBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
-              <Text style={[styles.primaryBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>
-                {showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
-              </Text>
-            </View>
-          </BounceButton>
+            <Text style={[styles.primaryBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>
+              {showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
+            </Text>
+          </GlassButton>
         </View>
       )}
 
@@ -619,12 +610,6 @@ export default function ProgramViewScreen() {
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: "center", justifyContent: "center", overflow: "hidden",
-  },
-  /** BounceButton's offline fade, for the two plain touchables up top. */
-  offlineDim: { opacity: 0.4 },
   topActions: {
     position: "absolute",
     right: 20,
@@ -665,6 +650,7 @@ const styles = StyleSheet.create({
   primaryBtnText: { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
   // The slate pill's own shadow (components/ProgramActionFabs.tsx): a neutral
   // drop rather than a coloured glow, which is reserved for accent buttons.
-  slateBtn: { shadowColor: "#000", shadowOpacity: 0.3 },
+  // The solid one's: the glass Accept is lit by the glass.
+  slateLift: { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
   floatingBtnWrap: { position: "absolute", left: 20, right: 20, zIndex: 20 },
 });

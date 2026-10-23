@@ -33,6 +33,8 @@ export type LiveActivityPendingSet = {
    *  is up (the card's dots). The lock screen ticks the queue in order, so
    *  every set ahead of it is done by then. */
   setDone: boolean[];
+  /** ...and its warmups the same way, the orange dots before them. */
+  warmupDone: boolean[];
 };
 
 export type LiveActivityPayload = {

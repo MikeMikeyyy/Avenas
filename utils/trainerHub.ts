@@ -24,7 +24,7 @@
 // the groups away.
 
 import { GYM_HUB_SNAPSHOT_KEY, hydrateSnapshot, peekSnapshot, PT_HUB_SNAPSHOT_KEY, saveSnapshot } from "./pageSnapshot";
-import { resolveMyTrainers, resolveTrainerRoster } from "./roster";
+import { resolveMyTrainers, resolveTrainerRoster, setPrimaryTrainer } from "./roster";
 import { seedMockClientsIfNeeded } from "./mockClientSeed";
 import { loadFavouriteGroupIds, loadFavouriteMemberIds, loadGroupRows, sortByFavourite, type GroupChatRow } from "./groupStore";
 import {
@@ -244,6 +244,14 @@ export type GroupOwner = { name: string; initials: string; photoUri?: string };
 export type GymHubData = {
   /** The featured trainer, or null when there isn't one. */
   pt: AssignedPT | null;
+  /** Every trainer I'm connected with, the featured one first: who the
+   *  program pages name, and whose messages count on the My Trainers pill.
+   *  Absent on a copy saved before it existed. */
+  trainers?: AssignedPT[];
+  /** Everyone else I'm connected with (a gym user who connected by code,
+   *  utils/roster.ts): listed on My Trainers under their own heading, their
+   *  messages counted on the pill too. Absent on an older copy. */
+  others?: AssignedPT[];
   /** Programs a trainer sent me, one card per send. */
   received: SharedProgram[];
   /** Programs I sent for review, waiting or come back. */
@@ -254,9 +262,13 @@ export type GymHubData = {
   dismissedKeys: string[];
   /** Groups I've joined. */
   groups: GroupChatRow[];
-  /** groupId → who runs it, for the line under each group's name. Absent for a
-   *  group I own. */
+  /** groupId → who runs it, for a group's row while its faces are still to
+   *  come. Absent for a group I own. */
   groupOwners: Record<string, GroupOwner>;
+  /** groupId → the faces on its row, as the trainer's hub has them
+   *  (`PTHubData.groupFaces`). Absent on a copy saved before they existed, and
+   *  for a group just joined until the next load. */
+  groupFaces?: Record<string, MemberFace[]>;
   /** Every share row I can see, BEFORE the per-send dedupe, for the per-group
    *  badge: a group send writes one row per member and only mine counts. */
   shares: SharedProgram[];
@@ -274,11 +286,14 @@ export type GymHubData = {
 
 export const EMPTY_GYM_HUB: GymHubData = {
   pt: null,
+  trainers: [],
+  others: [],
   received: [],
   sent: [],
   dismissedKeys: [],
   groups: [],
   groupOwners: {},
+  groupFaces: {},
   shares: [],
   groupReviewsToDo: [],
   groupInvites: [],
@@ -314,32 +329,44 @@ export function receivedFromTrainers(rows: SharedProgram[], myUid: string | null
 }
 
 /**
- * Who runs each group, for its card: a gym user can be in groups from several
- * trainers, and "Monday Strength" alone doesn't say whose it is.
+ * Each group's faces for its row, and who runs it, from one read of its roster
+ * (`get_group_members`, owner first), as the trainer's hub reads its groups'
+ * faces (`loadGroupFaces`).
  *
- * Almost always one of my connected trainers (being added needed an accepted
- * connection), so their name and photo come from the trainer list the hub
- * already loads. A group whose owner I've since disconnected from falls back to
- * that group's roster, which always includes the owner.
+ * Who runs it is for the row's words while its faces are still to come, and
+ * for VoiceOver: a gym user can be in groups from several trainers, and
+ * "Monday Strength" alone doesn't say whose it is. Almost always one of my
+ * connected trainers (being added needed an accepted connection), whose name
+ * and photo the hub already has; a group whose owner I've since disconnected
+ * from has them on its roster. A group whose read fails keeps the faces it had,
+ * so its row doesn't drop back to words.
  */
-async function resolveGroupOwners(groups: GroupChatRow[], trainers: AssignedPT[]): Promise<Record<string, GroupOwner>> {
-  const out: Record<string, GroupOwner> = {};
+async function loadMemberGroups(
+  groups: GroupChatRow[],
+  trainers: AssignedPT[],
+  prev: GymHubData | null,
+): Promise<{ owners: Record<string, GroupOwner>; faces: Record<string, MemberFace[]> }> {
+  const owners: Record<string, GroupOwner> = {};
+  const faces: Record<string, MemberFace[]> = {};
   await Promise.all(groups.map(async ({ group }) => {
-    if (group.isOwner) return;
-    const known = trainers.find(t => t.id === group.ownerId);
-    if (known) {
-      out[group.id] = { name: known.name, initials: known.initials, photoUri: known.photoUri };
-      return;
-    }
+    const known = group.isOwner ? undefined : trainers.find(t => t.id === group.ownerId);
+    if (known) owners[group.id] = { name: known.name, initials: known.initials, photoUri: known.photoUri };
     try {
-      const owner = (await fetchGroupMembers(group.id)).find(m => m.isOwner);
-      if (owner) out[group.id] = { name: owner.name, initials: owner.initials, photoUri: owner.photoUri };
+      const members = await fetchGroupMembers(group.id);
+      faces[group.id] = memberFaces(members);
+      const owner = members.find(m => m.isOwner);
+      if (!known && !group.isOwner && owner) {
+        owners[group.id] = { name: owner.name, initials: owner.initials, photoUri: owner.photoUri };
+      }
     } catch (err) {
-      // No owner line on that card rather than no card.
-      if (__DEV__) console.warn("[avenas] group owner", group.id, err);
+      warn("group roster", err);
+      const kept = prev?.groupFaces?.[group.id];
+      if (kept) faces[group.id] = kept;
+      const keptOwner = prev?.groupOwners[group.id];
+      if (!owners[group.id] && keptOwner) owners[group.id] = keptOwner;
     }
   }));
-  return out;
+  return { owners, faces };
 }
 
 async function loadGymHub(owner: string): Promise<GymHubData> {
@@ -379,16 +406,28 @@ async function loadGymHub(owner: string): Promise<GymHubData> {
 
   const [trainers, programs, notices] = await Promise.all([trainersP, programsP, loadNotices()]);
   const groups = programs ? programs.groups : prev?.groups ?? [];
+  // Offline the resolver knows only the featured trainer, so the list from the
+  // last load stands (with the featured one first), rather than the From page
+  // changing its name and the pill losing its count when the signal drops.
+  const lastKnown = prev?.trainers ?? (prev?.pt ? [prev.pt] : []);
+  const allTrainers = trainers?.live
+    ? trainers.all
+    : trainers?.primary
+      ? [trainers.primary, ...lastKnown.filter(t => t.id !== trainers.primary?.id)]
+      : lastKnown;
+  const memberGroups = programs ? await loadMemberGroups(groups, allTrainers, prev) : null;
 
   return {
     pt: trainers ? trainers.primary : prev?.pt ?? null,
+    trainers: allTrainers,
+    // Only the server knows them, so offline the last load's stand.
+    others: trainers?.live ? trainers.others : prev?.others ?? [],
     received: programs ? receivedFromTrainers(programs.shares, programs.myUid) : prev?.received ?? [],
     sent: programs ? programs.sent : prev?.sent ?? [],
     dismissedKeys: programs ? [...programs.dismissed] : prev?.dismissedKeys ?? [],
     groups,
-    groupOwners: programs
-      ? await resolveGroupOwners(groups, trainers?.all ?? [])
-      : prev?.groupOwners ?? {},
+    groupOwners: memberGroups ? memberGroups.owners : prev?.groupOwners ?? {},
+    groupFaces: memberGroups ? memberGroups.faces : prev?.groupFaces ?? {},
     shares: programs ? programs.shares : prev?.shares ?? [],
     groupReviewsToDo: programs ? programs.groupReviewsToDo : prev?.groupReviewsToDo ?? [],
     groupInvites: programs ? programs.groupInvites : prev?.groupInvites ?? [],
@@ -444,6 +483,24 @@ export const savePTHub = (owner: string, data: PTHubData) => saveSnapshot(HUB_KE
 export const saveGymHub = (owner: string, data: GymHubData) => saveSnapshot(HUB_KEYS.gym, owner, data, gymForDisk);
 /** Read a hub's saved copy off the device, so its first render can have it. */
 export const hydrateTrainerHub = (kind: HubKind, owner: string) => hydrateSnapshot(HUB_KEYS[kind], owner);
+
+/**
+ * Put `trainer` on a gym user's Trainer tab: they become the primary trainer
+ * (utils/roster.ts setPrimaryTrainer), and the tab's saved copy shows them
+ * straight away, so the tab doesn't open on the last one while its load runs.
+ * From the My Trainers page, and from a message's notification
+ * (utils/notificationRoute.ts).
+ */
+export async function featureTrainer(owner: string, trainer: AssignedPT): Promise<void> {
+  await setPrimaryTrainer(trainer);
+  // A notification can open the app straight onto this, before anything has
+  // read the tab's copy off the device.
+  await hydrateTrainerHub("gym", owner);
+  const held = peekGymHub(owner);
+  if (!held) return;
+  const others = (held.trainers ?? []).filter(t => t.id !== trainer.id);
+  saveGymHub(owner, { ...held, pt: trainer, trainers: [trainer, ...others] });
+}
 
 /** The load currently running for each hub, so a second caller can join it. */
 const inflight: Partial<Record<HubKind, { owner: string; promise: Promise<unknown> }>> = {};

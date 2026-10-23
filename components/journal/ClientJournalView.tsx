@@ -13,12 +13,14 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, type RefreshContr
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../../constants/floatingBars";
+import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 
 import NeuCard from "../NeuCard";
 import JournalCalendar from "../JournalCalendar";
 import AchievementCard from "../AchievementCard";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "./JournalWorkoutCard";
-import SessionFilter, { SessionGroupHeading, useSessionFilter } from "./SessionFilter";
+import SessionFilter, { RecentActivityHeading, SessionGroupHeading, useSessionFilter } from "./SessionFilter";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
@@ -138,6 +140,8 @@ export default function ClientJournalView({
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const activeProgram = useMemo(() => programs.find(p => p.status === "active") ?? null, [programs]);
 
   const workoutDates = useMemo(
@@ -204,7 +208,7 @@ export default function ClientJournalView({
   return (
     <ScrollView
       showsVerticalScrollIndicator={false}
-      contentContainerStyle={[styles.scroll, { paddingBottom: bottomPadding ?? insets.bottom + 40 }]}
+      contentContainerStyle={[styles.scroll, { paddingBottom: scrollEndPadding(bottomPadding ?? insets.bottom + 40, barsReach) }]}
       refreshControl={refreshControl}
     >
       <JournalCalendar
@@ -216,11 +220,17 @@ export default function ClientJournalView({
       />
 
       {hasActivity && (
-        <Text style={[styles.sectionHeading, { color: t.tp }]}>Recent Activity</Text>
+        <RecentActivityHeading
+          filterable={sessions.numbers.length > 0}
+          open={sessions.open}
+          onToggleOpen={sessions.toggleOpen}
+          isDark={isDark}
+        />
       )}
 
       {sessions.numbers.length > 0 && (
         <SessionFilter
+          open={sessions.open}
           numbers={sessions.numbers}
           selected={sessions.selected}
           onToggle={sessions.toggle}
@@ -269,7 +279,6 @@ export default function ClientJournalView({
 
 const styles = StyleSheet.create({
   scroll:         { paddingHorizontal: 20, paddingTop: 34 },
-  sectionHeading: { fontFamily: FontFamily.bold, fontSize: 18, marginTop: 24, marginBottom: 12 },
   // Home's spacing between the achievement cards and the first workout card.
   achievementList:{ marginBottom: 4 },
   emptyCard:      { borderRadius: 20, marginTop: 12 },

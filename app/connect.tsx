@@ -2,6 +2,8 @@
 //   • My Code: a QR + short text code other people scan/enter to connect with you.
 //   • Add: scan someone's QR (expo-camera) or type their code → sends a request.
 //   • Requests: incoming requests to accept/decline + your outgoing pending ones.
+//   • People: a search field (SearchField, the faded one) over the requests,
+//     pending and connected lists, finding anyone in them by name.
 //
 // Connecting is a request → accept handshake (lib/connections.ts → migration 0006
 // RPCs). Once accepted, both sides see each other's real name + photo in the
@@ -12,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, RefreshControl, Share, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -28,7 +31,8 @@ import Scanner from "../components/connect/Scanner";
 import SimpleSheet from "../components/trainer/SimpleSheet";
 import ReportReasonSheet from "../components/trainer/ReportReasonSheet";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
-import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import SearchField from "../components/SearchField";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import SheetPill from "../components/SheetPill";
 import UserRoundMinusIcon from "../components/icons/UserRoundMinusIcon";
 import FlagIcon from "../components/icons/FlagIcon";
@@ -61,6 +65,8 @@ function extractCode(raw: string): string {
 
 export default function ConnectScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -71,6 +77,7 @@ export default function ConnectScreen() {
   const [myCode, setMyCode] = useState<string | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [manual, setManual] = useState("");
+  const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   // The connection whose 3-dot menu / report sheet is open (null = closed).
@@ -346,9 +353,11 @@ export default function ConnectScreen() {
     );
   };
 
-  const incoming = connections.filter(c => c.status === "pending" && c.direction === "incoming");
-  const outgoing = connections.filter(c => c.status === "pending" && c.direction === "outgoing");
-  const accepted = connections.filter(c => c.status === "accepted");
+  const q = search.trim().toLowerCase();
+  const found = q ? connections.filter(c => (c.name || "").toLowerCase().includes(q)) : connections;
+  const incoming = found.filter(c => c.status === "pending" && c.direction === "incoming");
+  const outgoing = found.filter(c => c.status === "pending" && c.direction === "outgoing");
+  const accepted = found.filter(c => c.status === "accepted");
 
   const renderInitials = (name: string) => initialsFromName(name) || "?";
 
@@ -364,7 +373,7 @@ export default function ConnectScreen() {
         bottomOffset={ABOVE_KEYBOARD_TOOLS}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 32, barsReach) }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCT} colors={[ACCT]} />}
       >
         <View style={styles.header}>
@@ -434,6 +443,18 @@ export default function ConnectScreen() {
             </View>
           </BounceButton>
         </View>
+
+        {/* Search the people below, once there's anyone (Messages' field). Under
+            its own label, so it doesn't read as a second code field. */}
+        {connections.length > 0 && (
+          <>
+            <Text style={[styles.label, { color: t.ts }]}>PEOPLE</Text>
+            <SearchField value={search} onChangeText={setSearch} placeholder="Search by name" />
+          </>
+        )}
+        {q && found.length === 0 ? (
+          <Text style={[styles.noMatch, { color: t.ts }]}>No people match “{search.trim()}”.</Text>
+        ) : null}
 
         {/* Incoming requests */}
         {incoming.length > 0 && (
@@ -553,6 +574,8 @@ const styles = StyleSheet.create({
   connectBtn:  { ...pill(PILL_H_SM), paddingHorizontal: 22, minWidth: 110, ...pillGlow(ACCT, 0.35) },
   connectBtnText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   disabled:    { opacity: 0.4 },
+  // Messages' "No people match", value for value.
+  noMatch:     { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
   reqCard:     { borderRadius: 16, marginBottom: 10 },
   // A connection card is tappable as a whole, so its gap sits outside the
   // touchable rather than on the card (where it would be tappable too).

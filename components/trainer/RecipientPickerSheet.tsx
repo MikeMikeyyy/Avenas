@@ -1,6 +1,10 @@
 // Second step of the "Send a Program" flow. Lists clients with checkboxes
 // + a "Send to all" toggle. Confirm sends to the chosen recipients.
 //
+// People look as they do on the Trainer tab (user request, 2026-10-23: the
+// sheet drew initials where the tab shows photos): each client's photo, and
+// under a group's name the faces of the clients a tap on it ticks.
+//
 // Groups are a SHORTCUT, not a separate delivery channel: tapping one ticks
 // every member, and the send still goes out as one shared_programs row per
 // person (migration 0013, unchanged). They land in the recipients' libraries
@@ -16,8 +20,10 @@ import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import SheetPill from "../SheetPill";
+import Avatar from "../Avatar";
 import GroupAvatar from "./GroupAvatar";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, PAUSED_ORANGE } from "../../constants/theme";
+import MemberStack from "./MemberStack";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, NEU_BG, NEU_BG_DARK, PAUSED_ORANGE } from "../../constants/theme";
 import { pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
@@ -25,9 +31,18 @@ import { fetchPeopleUnits } from "../../lib/clientTraining";
 import { isCloudContactId } from "../../lib/chat";
 import { unitLabel, unitOf, type WeightUnit } from "../../utils/units";
 import type { Client } from "../../utils/trainerStore";
+import type { MemberFace } from "../../constants/groups";
 
 /** A group offered as a one-tap way to tick all its members. */
-export type RecipientGroup = { id: string; name: string; memberIds: string[]; photoUri?: string };
+export type RecipientGroup = {
+  id: string;
+  name: string;
+  memberIds: string[];
+  photoUri?: string;
+  /** Its roster's faces, as its Trainer tab card shows them (the hub's
+   *  groupFaces). Absent until they've loaded: the row says how many instead. */
+  faces?: MemberFace[];
+};
 
 interface Props {
   visible: boolean;
@@ -43,6 +58,10 @@ interface Props {
 export default function RecipientPickerSheet({ visible, programName, clients, groups = [], onConfirm, onClose }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  // The Trainer tab's: the tint behind a face, and the card under a group's
+  // faces, which rings each one so the overlapping faces stay apart.
+  const avatarTint = isDark ? `${ACCT}1F` : `${ACCT}2E`;
+  const cardSurface = isDark ? NEU_BG_DARK : NEU_BG;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sendToAll, setSendToAll] = useState(false);
@@ -175,6 +194,13 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
             {groups.map(g => {
               const ids = sendableMembers(g);
               const checked = !sendToAll && ids.length > 0 && ids.every(id => selected.has(id));
+              // Who a tap ticks, as faces: the roster's, less anyone it can't
+              // go to (me, and members who aren't my clients). Only when they
+              // cover everyone it ticks, so the row never shows fewer people
+              // than it sends to; otherwise the count.
+              const sendable = new Set(ids);
+              const faces = g.faces?.filter(f => sendable.has(f.id)) ?? [];
+              const showFaces = faces.length > 0 && faces.length === ids.length;
               return (
                 <TouchableOpacity
                   key={g.id}
@@ -191,9 +217,15 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                       <GroupAvatar uri={g.photoUri} size={34} isDark={isDark} />
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
-                        <Text style={[styles.rowMeta, { color: t.ts }]}>
-                          {ids.length} {ids.length === 1 ? "client" : "clients"}
-                        </Text>
+                        {showFaces ? (
+                          <View style={styles.faces}>
+                            <MemberStack members={faces} size={20} overlap={8} isDark={isDark} ringColor={cardSurface} countColor={t.ts} />
+                          </View>
+                        ) : (
+                          <Text style={[styles.rowMeta, { color: t.ts }]}>
+                            {ids.length} {ids.length === 1 ? "client" : "clients"}
+                          </Text>
+                        )}
                       </View>
                       <View style={[styles.check, checked
                         ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
@@ -222,9 +254,14 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
               <TouchableOpacity key={c.id} activeOpacity={0.85} style={{ marginBottom: 10 }} onPress={() => toggleClient(c.id)} disabled={sendToAll}>
                 <NeuCard dark={isDark} radius={14}>
                   <View style={[styles.row, sendToAll && { opacity: 0.45 }]}>
-                    <View style={[styles.avatar, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
-                      <Text style={[styles.avatarText, { color: ACCT }]}>{c.initials}</Text>
-                    </View>
+                    <Avatar
+                      uri={c.photoUri}
+                      initials={c.initials}
+                      size={40}
+                      backgroundColor={avatarTint}
+                      textColor={ACCT}
+                      textStyle={[styles.avatarText, { color: ACCT }]}
+                    />
                     <View style={{ flex: 1 }}>
                       <View style={styles.nameRow}>
                         <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
@@ -280,9 +317,9 @@ const styles = StyleSheet.create({
   nameRow:    { flexDirection: "row", alignItems: "center", gap: 6 },
   rowTitle:   { fontFamily: FontFamily.semibold, fontSize: 15, flexShrink: 1 },
   rowMeta:    { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
+  faces:      { marginTop: 4 },
   trainerTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   trainerTagText: { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
-  avatar:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 14 },
   allIcon:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   check:      { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },

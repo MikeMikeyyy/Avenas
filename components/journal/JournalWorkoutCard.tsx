@@ -17,6 +17,7 @@ import { changesSummary, sessionChanges } from "../../utils/exerciseChanges";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, replacedTextColor } from "../../constants/theme";
 import type { CompletedWorkout, SavedProgram } from "../../constants/programs";
 import { fmtDuration, fromYMD } from "../../utils/dates";
+import { displayWorkoutName } from "../../utils/programDays";
 import { workoutBelongsToProgram } from "../../utils/progressStats";
 import { buildSessionTracks } from "../../utils/sessionTrack";
 import { getEffectiveToday } from "../../utils/workout";
@@ -61,10 +62,9 @@ export type JournalProgramRow = {
   /** How many sessions of this day the program schedules in total (0 for an
    *  extra, which hides the track). */
   totalSessions: number;
-  /** Which session of the day it was: how many were DONE. */
+  /** Which session of the day it was, the scheduled occurrence it filled:
+   *  what the words say and where its dot sits. */
   sessionNum: number;
-  /** Where its dot sits: which scheduled occurrence it was. */
-  position: number;
   /** Occurrences that came round with nothing logged. */
   missed?: number[];
   /** Occurrences trained with something else on their date (orange). */
@@ -84,13 +84,14 @@ export type JournalProgramRow = {
  *
  * The session number counts SCHEDULED occurrences, not completions
  * (utils/sessionTrack.ts): a week you were ill still costs its number, so the
- * days you did train and the days you didn't stay in step. Derived off the
- * same effective day as Home. Numbered within the owning program, its run AND
- * the day, so two programs reusing a name don't share a counter, neither do
- * two same-named days of one program, and a program run again counts again.
- * Every card's track is drawn as it stands today, its own session marked.
- * Anything the schedule can't place keeps the rank among completed sessions
- * and no grey dots.
+ * days you did train and the days you didn't stay in step, and the words are
+ * the number of the dot they sit over. Derived off the same effective day as
+ * Home. Numbered within the owning program, its run AND the day, so two
+ * programs reusing a name don't share a counter, neither do two same-named
+ * days of one program, and a program run again counts again. Every card's
+ * track is drawn as it stands today, its own session marked. Anything the
+ * schedule can't place keeps the rank among completed sessions and no grey
+ * dots.
  *
  * `insteadOf` comes from the same tracks as the orange dots, so a session that
  * says "Instead of Push" is exactly the one Push's orange dot is about.
@@ -123,16 +124,12 @@ export function useJournalWorkoutInfo(
     const changes = changesSummary(sessionChanges(w));
     const prog = owningProgramByWorkoutId[w.id];
     if (!prog) return { program: null, insteadOf, changes };
-    const sessionNum = sessionTracks.numberById[w.id] ?? 1;
     return {
       program: {
         programName: prog.name,
         // Of the run it was in: a program run again may have changed length.
         totalSessions: sessionTracks.totalById[w.id] ?? 0,
-        sessionNum,
-        // The dot is where this sits in the PROGRAM, which is past the session
-        // count whenever a week was missed.
-        position: sessionTracks.positionById[w.id] ?? sessionNum,
+        sessionNum: sessionTracks.numberById[w.id] ?? 1,
         missed: sessionTracks.missedById[w.id],
         replaced: sessionTracks.replacedById[w.id],
         done: sessionTracks.doneById[w.id],
@@ -156,13 +153,14 @@ function JournalWorkoutCard({ workout, info, isDark, onPress }: {
       style={styles.wrap}
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`Open ${workout.workoutName}${info.insteadOf ? `, done instead of ${info.insteadOf}` : ""}`}
+      accessibilityLabel={`Open ${displayWorkoutName(workout.workoutName)}${info.insteadOf ? `, done instead of ${info.insteadOf}` : ""}`}
     >
       <NeuCard dark={isDark} style={styles.card}>
         <View style={styles.inner}>
           <View style={styles.topRow}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.name, { color: t.tp }]}>{workout.workoutName}</Text>
+              {/* A custom workout saved as "Custom WorkoutLegs" reads as "Legs". */}
+              <Text style={[styles.name, { color: t.tp }]}>{displayWorkoutName(workout.workoutName)}</Text>
               <Text style={[styles.date, { color: t.ts }]}>{formatWorkoutDate(workout.date, workout.completedAt, workout.durationSeconds)}</Text>
               {/* In the orange of the dot it explains (its text shade, deeper
                   on a light card): that day's track shows this date orange,
@@ -188,7 +186,7 @@ function JournalWorkoutCard({ workout, info, isDark, onPress }: {
               </View>
               {prog.totalSessions > 0 && (
                 <SessionTrack
-                  current={prog.position}
+                  current={prog.sessionNum}
                   total={prog.totalSessions}
                   missed={prog.missed}
                   replaced={prog.replaced}

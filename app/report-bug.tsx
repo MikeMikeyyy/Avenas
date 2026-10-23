@@ -5,6 +5,7 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -14,13 +15,15 @@ import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
-import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 const TP = APP_LIGHT.tp;
 
 export default function ReportBugScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -62,7 +65,7 @@ export default function ReportBugScreen() {
           bottomOffset={ABOVE_KEYBOARD_TOOLS}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
+          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }]}
         >
           <View style={styles.header}>
             <View style={{ width: 40 }} />

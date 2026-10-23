@@ -54,9 +54,11 @@ export function missedBarValue(slots: readonly LiftSlot[], k: number, metric: Ex
 }
 
 /** The y-axis for slots `first`..`last` on screen, fitted to both programs'
- *  sessions there, and on Sets and Volume the empty bars of the ones missed
- *  there (Strength by its load jumps, Sets and Volume from zero). Null when
- *  nothing there draws on the tab. */
+ *  sessions there, and to the marks of the ones missed there: on Sets and
+ *  Volume their empty bars, on Strength their empty circles, which sit on the
+ *  line toward a session that can be off screen (Strength by the sessions'
+ *  load jumps, Sets and Volume from zero). Null when no session there draws
+ *  on the tab. */
 export function compareWindowAxis(
   green: readonly LiftSlot[],
   blue: readonly LiftSlot[],
@@ -65,6 +67,8 @@ export function compareWindowAxis(
   last: number,
 ): ExerciseChartAxis | null {
   const values: number[] = [];
+  const rings: number[] = [];
+  const on = (k: number) => k >= first && k <= last;
   for (const slots of [green, blue]) {
     for (let i = Math.max(0, first); i <= Math.min(last, slots.length - 1); i++) {
       const p = slots[i].point;
@@ -75,9 +79,13 @@ export function compareWindowAxis(
         if (v !== null) values.push(v);
       }
     }
+    if (metric === "strength") {
+      const drawn = slots.flatMap((s, slot) => (s.point && drawsOn(s.point, "strength") ? [{ slot, v: s.point.topWeight }] : []));
+      for (const r of missedOnLine(slots, drawn).rings) if (on(r.slot)) rings.push(r.v);
+    }
   }
   if (values.length === 0) return null;
-  return metric === "strength" ? exerciseChartAxis(values, true) : barAxis(values);
+  return metric === "strength" ? exerciseChartAxis([...values, ...rings], true, values) : barAxis(values);
 }
 
 /**

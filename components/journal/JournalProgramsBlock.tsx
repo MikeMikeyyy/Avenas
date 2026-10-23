@@ -12,8 +12,10 @@ import { Ionicons } from "@expo/vector-icons";
 
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
+import GlassButton from "../GlassButton";
 import ActiveBadge from "../ActiveBadge";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
+import { PILL_H_CHIP, PILL_SHADOW } from "../../constants/buttons";
 import { getCurrentWeek, type SavedProgram } from "../../constants/programs";
 import { runStartDate } from "../../utils/programHolds";
 
@@ -31,12 +33,17 @@ export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProg
         {activeProgram && (
           <Text style={[styles.sectionHeading, { color: t.tp }]}>Active Program</Text>
         )}
-        <BounceButton onPress={onOpenAllPrograms} accessibilityLabel="View all programs" accessibilityRole="button">
-          <View style={[styles.allProgramsBtn, { backgroundColor: t.ctrl }]}>
-            <Text style={[styles.allProgramsText, { color: t.tp }]}>All Programs</Text>
-            <Ionicons name="chevron-forward" size={14} color={t.tp} />
-          </View>
-        </BounceButton>
+        <GlassButton
+          pill
+          size={PILL_H_CHIP}
+          onPress={onOpenAllPrograms}
+          contentStyle={styles.allProgramsBtn}
+          solidStyle={PILL_SHADOW}
+          accessibilityLabel="View all programs"
+        >
+          <Text style={[styles.allProgramsText, { color: t.tp }]}>All Programs</Text>
+          <Ionicons name="chevron-forward" size={14} color={t.tp} />
+        </GlassButton>
       </View>
       {activeProgram && (
         <BounceButton
@@ -95,8 +102,9 @@ const styles = StyleSheet.create({
   apDate:             { fontFamily: FontFamily.regular, fontSize: 13 },
   apProgressRow:      { flexDirection: "row", gap: 4, marginTop: 4 },
   apProgressSeg:      { flex: 1, height: 6, borderRadius: 3 },
-  // Flat chrome pill (background from t.ctrl inline), matching the "+ New"
-  // button on My Programs rather than the neumorphic card it used to be.
-  allProgramsBtn:     { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 50, paddingVertical: 7, paddingHorizontal: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  // A glass pill on iOS 26 (components/GlassButton.tsx; user request,
+  // 2026-10-23), the flat control pill below that, rather than the neumorphic
+  // card it used to be.
+  allProgramsBtn:     { gap: 5, paddingHorizontal: 14 },
   allProgramsText:    { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.2 },
 });

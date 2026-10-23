@@ -17,6 +17,8 @@ import { appStoreReviewUrl, appStoreReviewWebUrl } from "../lib/appConfig";
 import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
 import { WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY } from "../constants/programs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
@@ -88,6 +90,7 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
         </Svg>
       ) },
       { icon: "cloud-outline", label: "Data & Sync", route: "/data-sync" },
+      { icon: "swap-vertical-outline", label: "Import & Export", route: "/import-export" },
     ],
   },
   {
@@ -117,6 +120,8 @@ const SECTIONS: { title: string; items: SettingsItem[] }[] = [
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark, toggleDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -282,7 +287,7 @@ export default function SettingsScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }]}
       >
         {/* Header */}
         <View style={styles.header}>

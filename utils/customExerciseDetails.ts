@@ -30,8 +30,8 @@
 // Pure: no storage, no network. scripts/verify-custom-details.ts covers it.
 
 import { exerciseByName } from "./exerciseLookup";
-import { exerciseIdentity } from "./exerciseNames";
-import { liveCustoms } from "./customExercises";
+import { exerciseIdentity, type ExerciseRef } from "./exerciseNames";
+import { customFor, liveCustoms } from "./customExercises";
 import type { CarriedExercise, CustomExercise } from "../constants/exercises";
 import type { Exercise, SavedProgram, WorkoutMap } from "../constants/programs";
 
@@ -87,6 +87,34 @@ export function exerciseSummaryParams(ex: Exercise): { exerciseName: string; cus
     ...(ex.customId ? { customId: ex.customId } : {}),
     ...(d ? { details: JSON.stringify(d) } : {}),
   };
+}
+
+/**
+ * Route params for an exercise's two pages opened from logged training (the
+ * Progress page's charts, Exercise History) rather than a program row: the
+ * exercise screen (app/exercise-summary.tsx) and its history
+ * (app/exercise-history.tsx). The name, which custom exercise it is, and on a
+ * trainer's view of a client whose it is, so both pages read that client's
+ * exercises and sessions, never the trainer's own.
+ */
+export function exercisePageParams(ex: ExerciseRef, clientId?: string): { exerciseName: string; customId?: string; clientId?: string } {
+  return {
+    exerciseName: ex.name,
+    ...(ex.customId ? { customId: ex.customId } : {}),
+    ...(clientId ? { clientId } : {}),
+  };
+}
+
+/**
+ * The custom exercise a page about `ex` shows (the exercise screen, Exercise
+ * History): the one in `known` (knownCustomExercises) by identity, a deleted
+ * one included. Shown on a trainer's phone for a client (`forClient`), it keeps
+ * only the photo and video that are online: the client's own are files on
+ * their phone, which this one can't open.
+ */
+export function customToShow(ex: ExerciseRef, known: CustomExercise[], forClient: boolean): CustomExercise | undefined {
+  const c = customFor(ex, known);
+  return c && forClient ? withRemoteMedia(c, {}) : c;
 }
 
 /** Every custom exercise one program's days carry, the first copy of each. */

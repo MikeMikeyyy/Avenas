@@ -8,6 +8,10 @@ import { EMPTY_ACHIEVEMENTS, type Achievement, type AchievementsState } from "..
 import {
   achievementsForWorkout,
   applyAchievements,
+  bestBeforeEach,
+  bestLiftsBefore,
+  isPrSet,
+  prSetsOfWorkout,
   describeAchievement,
   detectProgramAchievement,
   detectStreakAchievement,
@@ -16,6 +20,7 @@ import {
   visibleAchievements,
   withMilestoneCardMoved,
 } from "../utils/achievements";
+import { exerciseIdentity } from "../utils/exerciseNames";
 
 let passed = 0;
 const failures: string[] = [];
@@ -224,6 +229,74 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
   const nine = Array.from({ length: 9 }, (_, i) => at(`m${i}`, `2026-08-0${i + 1}T10:00:00.000Z`, "50"));
   eq(categories(achievementsForWorkout(first, [...nine, first])), ["pr", "workouts"],
     "forWorkout: the tenth workout shows its milestone (and beats the earlier 50s)");
+}
+
+// ─── The trophy beside a set (the Workout tab) ───────────────────────────────
+{
+  const warm = (weight: string, reps: string): CompletedSet => ({ type: "warmup", weight, reps, done: true });
+  const prior = [
+    workout([ex("Bench Press", [set("100", "5"), set("110", "1", false), set("105", "")])]),
+    workout([ex("Push-up", [set("", "20")]), ex("Squat", [warm("150", "3"), set("140", "5")])]),
+  ];
+  const best = bestLiftsBefore(prior);
+  eq(best.get(exerciseIdentity({ name: "Bench Press" })), 100,
+    "best: a ticked working set with reps (not the unticked 110, not the 105 with no reps)");
+  eq(best.get(exerciseIdentity({ name: "Squat" })), 140, "best: a warm-up never counts");
+  eq(best.has(exerciseIdentity({ name: "Push-up" })), false, "best: bodyweight only has none");
+  eq(best.has(exerciseIdentity({ name: "Deadlift" })), false, "best: never done has none");
+
+  const bench = best.get(exerciseIdentity({ name: "Bench Press" }));
+  const pr = (weightKg: number, extra: Partial<{ type: "warmup" | "working"; done: boolean; reps: string }> = {}) =>
+    isPrSet({ type: "working", done: true, reps: "3", weightKg, ...extra }, bench);
+  eq(pr(102.5), true, "trophy: ticked, heavier than the best");
+  eq(pr(100), false, "trophy: a tie isn't a PR");
+  eq(pr(102.5, { done: false }), false, "trophy: only once it's ticked");
+  eq(pr(102.5, { reps: "" }), false, "trophy: not without reps");
+  eq(pr(102.5, { type: "warmup" }), false, "trophy: never a warm-up");
+  eq(isPrSet({ type: "working", done: true, reps: "5", weightKg: 60 }, undefined), false,
+    "trophy: no best before (a first time, or bodyweight only) is no PR");
+  eq([pr(102.5), pr(105)], [true, true], "trophy: two sets over the old best both get one");
+
+  // The trophy and the PR card agree: a session earns the card exactly when one
+  // of its sets would wear the trophy.
+  const sessions = [["102.5", "3"], ["100", "8"], ["95", "10"], ["120", ""]] as const;
+  for (const [w, r] of sessions) {
+    const s = workout([ex("Bench Press", [set(w, r)])]);
+    const card = detectWorkoutAchievements(s, prior, EMPTY_ACHIEVEMENTS, NOW).some(a => a.category === "pr");
+    const trophy = s.exercises[0].sets.some(x => isPrSet({ ...x, weightKg: parseFloat(x.weight) || 0 }, bench));
+    eq(trophy, card, `trophy and PR card agree on ${w} × ${r || "no reps"}`);
+  }
+
+  // A saved workout (the Journal's page, the Workout tab's finished session).
+  const on = (id: string, completedAt: string, sets: CompletedSet[]): CompletedWorkout =>
+    ({ ...workout([ex("Bench Press", sets)], id), completedAt });
+  const before = on("s1", "2026-09-01T10:00:00.000Z", [set("100", "5")]);
+  const saved = on("s2", "2026-09-08T10:00:00.000Z", [warm("60", "10"), set("100", "5"), set("102.5", "3"), set("105", "1", false)]);
+  const later = on("s3", "2026-09-15T10:00:00.000Z", [set("110", "2")]);
+  const history = [later, saved, before];
+  eq(prSetsOfWorkout(saved, history), [[false, false, true, false]],
+    "saved: the 102.5 wears it; the warm-up, the tie and the unticked 105 don't");
+  eq(prSetsOfWorkout(later, history), [[true]], "saved: the later 110 beat both before it");
+  eq(prSetsOfWorkout(before, history), [[false]], "saved: the first-ever session has nothing to beat");
+  eq(prSetsOfWorkout({ ...saved, completedAt: "garbage" }, history), [[false, false, false, false]],
+    "saved: an unreadable time has nothing before it, so no trophies");
+  for (const w of history) {
+    eq(prSetsOfWorkout(w, history).flat().some(Boolean), achievementsForWorkout(w, history).some(a => a.category === "pr"),
+      `saved ${w.id}: a trophy exactly when its Journal page shows the PR card`);
+  }
+
+  // The Exercise History page works every session's best out in one pass
+  // (bestBeforeEach): the same trophies as each session's Journal page.
+  const sameMoment = on("s4", later.completedAt, [set("112.5", "1")]);
+  const unreadable = on("s5", "garbage", [set("120", "1")]);
+  const all = [later, saved, before, sameMoment, unreadable];
+  const each = bestBeforeEach(all, exerciseIdentity({ name: "Bench Press" }));
+  eq([each.get("s1"), each.get("s2"), each.get("s3"), each.get("s4"), each.get("s5")], [undefined, 100, 102.5, 102.5, undefined],
+    "each: nothing before the first; finished together, neither counts the other; an unreadable time has none and counts for none");
+  for (const w of all) {
+    const page = w.exercises[0].sets.map(x => isPrSet({ ...x, weightKg: parseFloat(x.weight) || 0 }, each.get(w.id)));
+    eq(page, prSetsOfWorkout(w, all)[0], `each ${w.id}: the history page's trophies are its Journal page's`);
+  }
 }
 
 if (failures.length > 0) {

@@ -10,7 +10,8 @@
 // (a white card in light mode); SF Rounded standing in for Nunito; the
 // in-app checkbox's white tick on green; the rest bar's time with REST beside
 // it and −15s +15s Skip; the workout bar's dot, green running and amber
-// paused; and the exercise's sets as dots, like the app's session track. Every
+// paused; and the exercise's sets as dots, like the app's session track
+// (warmups orange, working sets green). Every
 // state fits in the 160pt iOS gives a lock-screen card: the old one, resting,
 // was about 186pt and lost its rest buttons off the bottom. A long exercise
 // name takes a second line rather than hide the weight and reps beside it
@@ -197,8 +198,14 @@ struct SetNumbers: View {
   }
 }
 
-/// The exercise's working sets as the app's session dots: done filled, the
-/// one that's up glowing, the rest hollow. A warmup has no dot of its own.
+/// The exercise's sets as the app's session dots, its warmups first in the
+/// warmup orange, a little apart, then its working sets in green: done filled,
+/// the one that's up glowing, the rest hollow (user request, 2026-10-21: on a
+/// warmup nothing filled, as warmups had no dots). A card an older build put
+/// up has no warmups and shows its working sets alone, as before. Past 11 dots
+/// in all (the gap between takes about a twelfth's room) the warmups give way,
+/// so the row is never wider than its old 12; past 12 working sets there are
+/// none.
 struct SetDots: View {
   let state: CardState
   let size: CGFloat
@@ -206,26 +213,35 @@ struct SetDots: View {
   @Environment(\.isLuminanceReduced) var dim
 
   var body: some View {
-    let done = state.setDone ?? []
-    let current = (state.isWarmup ?? false) ? -1 : (state.setIdx ?? -1)
-    if !done.isEmpty && done.count <= 12 {
+    let working = state.setDone ?? []
+    let allWarmups = state.warmupDone ?? []
+    let warmups = allWarmups.count + working.count <= 11 ? allWarmups : []
+    let onWarmup = state.isWarmup ?? false
+    let current = state.setIdx ?? -1
+    if !(warmups.isEmpty && working.isEmpty) && working.count <= 12 {
       HStack(spacing: size * 0.6) {
-        ForEach(0..<done.count, id: \.self) { i in
-          dot(isDone: done[i], isCurrent: i == current)
+        ForEach(0..<warmups.count, id: \.self) { i in
+          dot(isDone: warmups[i], isCurrent: onWarmup && i == current, color: warmupOrange)
+        }
+        if !warmups.isEmpty && !working.isEmpty {
+          Color.clear.frame(width: size * 0.3, height: 1)
+        }
+        ForEach(0..<working.count, id: \.self) { i in
+          dot(isDone: working[i], isCurrent: !onWarmup && i == current, color: avenasAccent)
         }
       }
     }
   }
 
   @ViewBuilder
-  private func dot(isDone: Bool, isCurrent: Bool) -> some View {
+  private func dot(isDone: Bool, isCurrent: Bool, color: Color) -> some View {
     if isDone {
-      Circle().fill(avenasAccent).frame(width: size, height: size)
+      Circle().fill(color).frame(width: size, height: size)
     } else if isCurrent {
       Circle()
-        .strokeBorder(avenasAccent, lineWidth: 1.5)
+        .strokeBorder(color, lineWidth: 1.5)
         .frame(width: size, height: size)
-        .shadow(color: avenasAccent.opacity(dim ? 0 : 0.75), radius: 3)
+        .shadow(color: color.opacity(dim ? 0 : 0.75), radius: 3)
     } else {
       Circle().strokeBorder(p.ring, lineWidth: 1.5).frame(width: size, height: size)
     }

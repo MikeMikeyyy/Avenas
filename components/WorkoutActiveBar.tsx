@@ -7,7 +7,7 @@ import { useRouter } from "expo-router";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useRestTimer } from "../contexts/RestTimerContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { useFloatingBars } from "../hooks/useFloatingBars";
+import { reportBarsReach, useFloatingBars } from "../hooks/useFloatingBars";
 import { useOpenWorkoutTimer } from "../hooks/useOpenWorkoutTimer";
 import { useUpNext } from "../hooks/useWorkoutTimerStore";
 import BounceButton from "./BounceButton";
@@ -16,7 +16,7 @@ import { RestActions, RestDrainLine, RestTime, formatRestTime, useRestProgress }
 import { upNextTail } from "../utils/workoutTimer";
 import { FontFamily, ACCT, APP_LIGHT, APP_DARK, CUE_INK, CUE_INK_DARK } from "../constants/theme";
 import {
-  BAR_INSET_X, BAR_SHADOW, REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H, barButtonFill,
+  BAR_INSET_X, BAR_SHADOW, REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H, barButtonFill, workoutBarReach,
 } from "../constants/floatingBars";
 
 function fmtTime(secs: number): string {
@@ -70,6 +70,12 @@ export default function WorkoutActiveBar() {
   // keyboard while that's up). The section sits on the workout's row, so the
   // bar's top edge sweeps down over it as it closes.
   const resting = restBannerActive && restInBar;
+  // How far up the screen it reaches, for the pages under it to scroll their
+  // last row clear of (scrollEndPadding).
+  const reach = workoutBarReach(active, workoutBarBottom, resting);
+  useEffect(() => {
+    reportBarsReach(reach);
+  }, [reach]);
   const restOpen = useSharedValue(resting ? 1 : 0);
   useEffect(() => {
     restOpen.value = resting ? withSpring(1, RISE) : withTiming(0, { duration: 250 });

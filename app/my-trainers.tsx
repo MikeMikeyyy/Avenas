@@ -1,28 +1,43 @@
-// "My Trainers" — standalone page reached from a small pill button on
-// MyPTHome. Lets a gym user connect to multiple trainers (primary + others)
-// and remove any of them.
+// "My Trainers" — standalone page reached from the My Trainers pill on a gym
+// user's Trainer tab (MyPTHome). Every trainer they're connected with, who's
+// messaged them, and which one is on their Trainer tab; tapping one puts them
+// there. The connect button at the top right (the person with a plus, with a
+// count of the requests waiting) adds a trainer, as Connect does from anywhere;
+// "Remove a trainer" is at the foot of the list.
 
-import { useRef } from "react";
-import { StyleSheet, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, ScrollView, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 
 import FadeScreen from "../components/FadeScreen";
-import MyTrainersSection, { type MyTrainersSectionRef } from "../components/trainer/MyTrainersSection";
+import GlassButton from "../components/GlassButton";
+import UnreadBadge from "../components/UnreadBadge";
+import OfflineBanner from "../components/OfflineBanner";
+import KeyboardDismissButton from "../components/KeyboardDismissButton";
+import UserRoundPlusIcon from "../components/icons/UserRoundPlusIcon";
+import MyTrainersSection from "../components/trainer/MyTrainersSection";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
-import BackButton, { BACK_SIZE, BACK_TOP } from "../components/BackButton";
+import { useConnectionPresence } from "../hooks/useConnectionPresence";
+import { useUnreadMessages } from "../hooks/useUnreadMessages";
+import BackButton, { BACK_LEFT, BACK_SIZE, BACK_TOP } from "../components/BackButton";
 
 export default function MyTrainersScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
-  const sectionRef = useRef<MyTrainersSectionRef>(null);
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
+  // Read here and handed down, so the page polls connections once: the
+  // connect button's count, and each trainer's presence line.
+  const { presenceById, pendingIncoming } = useConnectionPresence();
+  const { byPerson } = useUnreadMessages();
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -43,24 +58,29 @@ export default function MyTrainersScreen() {
 
       <BackButton />
 
-      <TouchableOpacity
-        onPress={() => sectionRef.current?.openMenu()}
-        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Add or remove a trainer"
-        accessibilityRole="button"
+      {/* The connect button the Trainer tab's top bar had, and the trainer's
+          hub has on Clients: Connect, where requests are accepted, with how
+          many are waiting (user decision, 2026-10-21; it was a "+" opening an
+          Add / Remove menu). */}
+      <GlassButton
+        onPress={() => router.navigate("/connect")}
+        size={BACK_SIZE}
+        style={[styles.connect, { top: insets.top + BACK_TOP }]}
+        badge={<UnreadBadge count={pendingIncoming} style={styles.badge} />}
+        accessibilityLabel={pendingIncoming > 0 ? `Connect with a trainer, ${pendingIncoming} waiting` : "Connect with a trainer"}
       >
-        <View style={[styles.plusBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="add" size={24} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+        <UserRoundPlusIcon size={20} color={t.tp} />
+      </GlassButton>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
+        // A tap on a trainer fires on the first touch while the search field
+        // is focused, instead of being swallowed to dismiss the keyboard.
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: insets.top + BACK_TOP,
-          paddingBottom: insets.bottom + 40,
+          paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach),
         }}
       >
         <View style={styles.header}>
@@ -69,18 +89,23 @@ export default function MyTrainersScreen() {
           <View style={{ width: 44 }} />
         </View>
 
-        <MyTrainersSection ref={sectionRef} />
+        <OfflineBanner />
+
+        <MyTrainersSection presenceById={presenceById} unreadByPerson={byPerson} />
       </ScrollView>
+
+      <KeyboardDismissButton />
     </FadeScreen>
   );
 }
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  plusBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: "center", justifyContent: "center", overflow: "hidden",
-  },
+  // Mirrors the back button across the screen, as the floating archive button
+  // does (components/ArchiveButton.tsx): same top, same inset, same circle,
+  // and like it no shadow.
+  connect: { position: "absolute", right: BACK_LEFT, zIndex: 10 },
+  badge: { position: "absolute", top: -5, right: -5 },
   header: {
     flexDirection: "row",
     alignItems: "center",

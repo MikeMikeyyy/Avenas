@@ -7,8 +7,11 @@ showed), the workout timer, and the rest timer with Skip / ±15s buttons. Settin
 Workout** (ON by default).
 
 **Its look (redesigned 2026-10-11, from a review canvas the user approved):**
-the set's weight × reps big, the exercise's working sets as dots (done, the
-one up glowing, to come), the workout bar's dot (green, amber paused); while
+the set's weight × reps big, the exercise's sets as dots (done, the one up
+glowing, to come: its warmups first in the warmup orange, a little apart, then
+its working sets in green, `ContentState.warmupDone` / `setDone`, user request
+2026-10-21; past 11 in all the warmups give way), the workout bar's dot
+(green, amber paused); while
 resting, the countdown with REST beside it and −15s +15s Skip as in the app's
 rest bar, a line draining above, and the next set with its own tick. It's in
 the APP's Dark Mode, never the phone's: a white card in light mode
@@ -95,7 +98,9 @@ eas build --profile development --platform ios
 1. Settings → App → **Lock Screen Workout** exists, ON by default.
 2. Start a workout (tick a set or type a value), lock the phone → the card
    shows workout name, elapsed timer counting, current exercise, set label and
-   the weight × reps preview, with a dot per working set. In the app's light
+   the weight × reps preview, with a dot per set (warmups orange, working sets
+   green). Tick two warmups from the lock screen → their dots fill orange, one
+   then the other, before the first green one glows. In the app's light
    mode it's white, in its dark mode navy, whatever the phone is set to;
    switching the app's Dark Mode mid-workout changes it.
 3. Tap the tick on an **empty** set from the lock screen → card advances to

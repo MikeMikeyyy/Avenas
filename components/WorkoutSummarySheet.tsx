@@ -17,6 +17,7 @@ import { APP_LIGHT, APP_DARK, ACCT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { getJSON } from "../utils/storage";
+import { displayWorkoutName } from "../utils/programDays";
 import { WORKOUT_HISTORY_KEY, type CompletedWorkout } from "../constants/programs";
 import type { SelectableMuscle } from "../constants/exercises";
 import { loadKnownCustomExercises } from "../lib/exerciseMedia";
@@ -176,7 +177,7 @@ export default function WorkoutSummarySheet({
         <Ionicons name="checkmark" size={22} color="#fff" />
       </View>
       <Text style={[styles.workoutName, { color: t.tp }]} numberOfLines={2}>
-        {workout.workoutName}
+        {displayWorkoutName(workout.workoutName)}
       </Text>
       <View style={styles.grid}>
         <View style={styles.gridRow}>

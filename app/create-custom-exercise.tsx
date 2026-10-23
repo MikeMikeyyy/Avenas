@@ -14,6 +14,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Circle } from "react-native-svg";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { pickFromLibrary } from "../lib/photoPicker";
@@ -37,7 +38,7 @@ import { alertMessage } from "../utils/errors";
 import { exerciseByName } from "../utils/exerciseLookup";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
-import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 
 const SELECTABLE = MUSCLE_GROUPS.filter(g => g !== "All") as SelectableMuscle[];
 
@@ -76,6 +77,8 @@ function SlotRing({ used, isDark }: { used: number; isDark: boolean }) {
 
 export default function CreateCustomExerciseScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -296,7 +299,7 @@ export default function CreateCustomExerciseScreen() {
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: insets.top + BACK_TOP,
-          paddingBottom: insets.bottom + 32,
+          paddingBottom: scrollEndPadding(insets.bottom + 32, barsReach),
         }}
       >
         {/* Header */}

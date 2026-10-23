@@ -16,6 +16,9 @@ export const WORKOUT_TIMER_PAUSED_KEY = "@avenas/workout_timer_paused_ms";
 export const UNFINISHED_NOTICE_KEY = "@avenas/unfinished_notice";
 export const WORKOUT_VIEW_MODE_KEY = "@avenas/workout_view_mode"; // "focus" | "list"
 export const LOG_DRAFT_KEY_PREFIX = "@avenas/log_draft:";
+// What each import from another app added, newest first, so it can be undone
+// (utils/importStore.ts). Local-only, never synced.
+export const IMPORT_LOG_KEY = "@avenas/import_log";
 // The program builder's create/edit-in-progress state (app/new-program.tsx).
 export const NEW_PROGRAM_DRAFT_KEY = "@avenas/new_program_draft";
 export const logDraftKey = (date: string, workoutName: string) =>
@@ -133,6 +136,18 @@ export type CompletedWorkout = {
    * session saved before it existed. Synced as `workouts.plan` (migration 0046).
    */
   plan?: PlannedExercise[];
+  /**
+   * The name of the program this session was logged under, put on it when
+   * that program is deleted (utils/programDelete.ts), so a session whose
+   * program is gone still says whose it was: Progress's Custom workouts and
+   * Exercise History show it (user request, 2026-10-23). Absent while its
+   * program is still here, on free workouts, and on sessions of a program
+   * deleted before it existed. Synced as `workouts.program_name` (migration
+   * 0052), which matters: a restore can't point a session at a program it
+   * doesn't have, so it comes back with `programId` "" and this is all that's
+   * left of where it was logged.
+   */
+  programName?: string;
 };
 
 /** One exercise of a session's plan (CompletedWorkout.plan). `customId` as on
@@ -488,4 +503,28 @@ export type ProgramDayRef = {
    *  qualify the row (e.g. with the cycle-day number) instead of showing two
    *  rows that read identically. */
   duplicateLabel: boolean;
+  /** The dates its program ran (utils/progressStats.ts legacyWindowOf): a
+   *  session from before program ids counts on it by name only inside them,
+   *  as it only belongs to the program inside them. Set by
+   *  scopedProgramDays; absent, the name alone decides. */
+  legacyWindow?: { from: string | null; to: string | null };
+  /**
+   * A day of Custom workouts: sessions in no program (free workouts, ones
+   * imported from another app, and ones whose program was deleted), under one
+   * name (utils/progressStats.ts customWorkoutDays). Its sessions are listed
+   * here rather than matched by name, so a day of a program that happens to
+   * share the name never takes them, nor they its. `programId` is "" and
+   * `dayId` is `custom:<key>`. Absent on every program's day.
+   */
+  custom?: {
+    /** Which custom day it is, the same for every scope that shows it
+     *  (utils/programDays.ts customDayKey). */
+    key: string;
+    sessionIds: ReadonlySet<string>;
+    /** The deleted program they were logged under, when it's known
+     *  (CompletedWorkout.programName). */
+    programName?: string;
+    /** They were a program's, one deleted before its name was kept. */
+    deletedProgram: boolean;
+  };
 };

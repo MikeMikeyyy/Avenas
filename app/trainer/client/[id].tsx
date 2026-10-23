@@ -7,10 +7,13 @@ import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, interpolate, 
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../../../constants/floatingBars";
+import { useFloatingBarsReach } from "../../../hooks/useFloatingBars";
 import { Ionicons } from "@expo/vector-icons";
 
 import NeuCard from "../../../components/NeuCard";
 import BounceButton from "../../../components/BounceButton";
+import GlassButton from "../../../components/GlassButton";
 import OfflineBanner from "../../../components/OfflineBanner";
 import { alertOffline, useOffline } from "../../../contexts/ConnectivityContext";
 import ProgressView from "../../../components/progress/ProgressView";
@@ -29,8 +32,8 @@ import FlagIcon from "../../../components/icons/FlagIcon";
 import TrashIcon from "../../../components/TrashIcon";
 import SheetPill from "../../../components/SheetPill";
 import JournalProgramsBlock from "../../../components/journal/JournalProgramsBlock";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../../constants/theme";
-import { PILL_RADIUS } from "../../../constants/buttons";
+import { APP_DARK, APP_LIGHT, BUBBLE_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../../constants/theme";
+import { PILL_RADIUS, PILL_SHADOW } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
 import { UnitLens, useUnit } from "../../../contexts/UnitContext";
@@ -57,13 +60,13 @@ import { getJSON } from "../../../utils/storage";
 import { removeShareConfirm } from "../../../utils/removeShare";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
 import { alertMessage } from "../../../utils/errors";
-import BackButton, { BACK_TOP, BACK_LEFT } from "../../../components/BackButton";
+import BackButton, { BACK_TOP, BACK_LEFT, BACK_SIZE } from "../../../components/BackButton";
 
 type Tab = "progress" | "journal" | "programs";
 
 // Hairline separator between adjacent tabs, matching the iOS-style dividers on
 // the Progress chart toggles. `gap` is the boundary between tab gap and gap+1;
-// it fades out as the green pill (pillX in px) slides onto either side.
+// it fades out as the white pill (pillX in px) slides onto either side.
 function TabDivider({ gap, pillX, segW, color }: {
   gap: number; pillX: SharedValue<number>; segW: number; color: string;
 }) {
@@ -118,6 +121,8 @@ export default function ClientDetailScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const offline = useOffline();
 
   const { accountType, loaded: accountLoaded } = useAccountType();
@@ -502,23 +507,25 @@ export default function ClientDetailScreen() {
           </View>
         </View>
 
-        <TouchableOpacity onPress={() => setMenuOpen(true)} activeOpacity={0.8} accessibilityLabel="Client options" accessibilityRole="button">
-          <View style={[styles.iconBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
-          </View>
-        </TouchableOpacity>
+        <GlassButton onPress={() => setMenuOpen(true)} size={BACK_SIZE} accessibilityLabel="Client options">
+          <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+        </GlassButton>
 
-        <TouchableOpacity onPress={openChat} activeOpacity={0.8} accessibilityLabel="Chat with client" accessibilityRole="button">
-          <View>
-            <View style={[styles.chatBtn, { backgroundColor: t.ctrl, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 }]}>
-              <ChatIcon size={18} color={t.tp} />
-            </View>
-            <UnreadBadge count={unreadFromClient} style={styles.msgBadge} />
-          </View>
-        </TouchableOpacity>
+        <GlassButton
+          onPress={openChat}
+          size={BACK_SIZE}
+          solidStyle={PILL_SHADOW}
+          badge={<UnreadBadge count={unreadFromClient} style={styles.msgBadge} />}
+          accessibilityLabel="Chat with client"
+        >
+          <ChatIcon size={18} color={t.tp} />
+        </GlassButton>
       </View>
 
-      {/* Tab segmented control — animated sliding pill */}
+      {/* Tab segmented control — animated sliding pill, white in both themes
+          with dark words on it, like the Progress charts' switches and the
+          Settings unit toggle (user request, 2026-10-23: the green didn't sit
+          well; not glass). */}
       <View style={styles.tabsWrap}>
         <View
           style={[styles.tabs, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)" }]}
@@ -538,7 +545,7 @@ export default function ClientDetailScreen() {
               pointerEvents="none"
               style={[
                 styles.tabPill,
-                { width: tabsWidth / TABS.length, backgroundColor: ACCT, shadowColor: ACCT },
+                { width: tabsWidth / TABS.length, backgroundColor: BUBBLE_LIGHT, shadowOpacity: isDark ? 0.3 : 0.12 },
                 pillStyle,
               ]}
             />
@@ -552,7 +559,7 @@ export default function ClientDetailScreen() {
                 onPress={() => selectTab(k)}
                 activeOpacity={0.8}
               >
-                <Text style={[styles.tabText, { color: active ? "#fff" : t.tp }]}>
+                <Text style={[styles.tabText, { color: active ? APP_LIGHT.tp : t.tp }]}>
                   {k === "progress" ? "Progress" : k === "journal" ? "Journal" : "Programs"}
                 </Text>
               </TouchableOpacity>
@@ -595,7 +602,7 @@ export default function ClientDetailScreen() {
         {tab === "programs" && (
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 34, paddingBottom: insets.bottom + 140 }}
+            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 34, paddingBottom: scrollEndPadding(insets.bottom + 140, barsReach) }}
             refreshControl={refreshControl}
           >
             <OfflineBanner />
@@ -728,8 +735,6 @@ const styles = StyleSheet.create({
   offlineDim:    { opacity: 0.4 },
   header:        { flexDirection: "row", alignItems: "center", paddingHorizontal: BACK_LEFT, paddingBottom: 10, gap: 12 },
   headerCenter:  { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
-  iconBtn:       { width: 40, height: 40, borderRadius: 20, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  chatBtn:       { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   msgBadge:      { position: "absolute", top: -5, right: -5 },
   avatar:        { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   avatarText:    { fontFamily: FontFamily.bold, fontSize: 13 },
@@ -742,7 +747,9 @@ const styles = StyleSheet.create({
   tabs:          { flexDirection: "row", borderRadius: 999, padding: 4, position: "relative", overflow: "hidden" },
   tab:           { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: "center", justifyContent: "center", zIndex: 1 },
   tabText:       { fontFamily: FontFamily.semibold, fontSize: 13 },
-  tabPill:       { position: "absolute", top: 4, bottom: 4, left: 4, borderRadius: 999, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  // A soft neutral lift under the white pill (the strength is set inline: more
+  // in dark mode, where a drop shadow barely shows).
+  tabPill:       { position: "absolute", top: 4, bottom: 4, left: 4, borderRadius: 999, ...PILL_SHADOW, shadowOffset: { width: 0, height: 2 } },
   // Hairline tab separator, positioned on a boundary via translateX and
   // rendered under the green pill so it covers any it slides over. Its box has
   // the pill's own insets (top/bottom 4) and centres the line in them, so it

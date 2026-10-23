@@ -13,7 +13,8 @@ interface BounceButtonProps {
   /** The action needs the server (send, accept, a trainer's archive / delete).
    *  While the phone is offline the button dims, and a tap says so instead of
    *  starting something that can't finish. Never on a button that only
-   *  touches this phone, and never on glass (it dims by opacity). */
+   *  touches this phone, and never around glass (it dims by opacity):
+   *  GlassButton has its own, which fades only what's on the glass. */
   needsConnection?: boolean;
 }
 

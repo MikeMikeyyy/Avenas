@@ -19,8 +19,10 @@
 
 import * as ImagePicker from "expo-image-picker";
 
-/** Long enough for an alert's dismissal to finish before the picker opens. */
-const ALERT_SETTLE_MS = 350;
+/** Long enough for an alert's dismissal to finish before the picker opens.
+ *  The same wait serves any sheet opened from an Alert button (an import's
+ *  exercise picker, app/import-review.tsx). */
+export const ALERT_SETTLE_MS = 350;
 
 let picking = false;
 

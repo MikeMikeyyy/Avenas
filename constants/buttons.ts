@@ -66,6 +66,20 @@ export function haloGlow(color: string, opacity = 0.5, radius = 6): ViewStyle {
   };
 }
 
+/** The sizes of a glass button's depth (components/GlassButton.tsx; its
+ *  colours are GLASS_DEPTH in constants/theme.ts), in points:
+ *  `rim` the bright border's width; `edge` how far the lit top edge and the
+ *  shaded bottom edge reach in, `edgeBlur` how soft they are; `dropY` how far
+ *  the shadow under the button falls, `dropBlur` how soft and wide it spreads.
+ *  0 takes that part away. */
+export const GLASS_DEPTH_SHAPE = {
+  rim: 1,
+  edge: 1,
+  edgeBlur: 1.5,
+  dropY: 2,
+  dropBlur: 10,
+} as const;
+
 /** A coloured glow under a filled pill — the accent bleeding downward, which
  *  is what makes a primary button read as raised without a hard offset. */
 export function pillGlow(color: string, opacity = 0.35): ViewStyle {

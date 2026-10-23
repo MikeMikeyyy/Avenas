@@ -7,7 +7,8 @@
 // green stands against blue at the same point ("5th session: 5 kg ahead of
 // Upper Lower"), the same Strength / Sets / Volume tabs, and Personal Records
 // side by side, Estimated 1RM included as on the exercise chart (user
-// decision, 2026-10-14). Each record opens its workout.
+// decision, 2026-10-14). Each record opens its workout, and the name the
+// exercise's screen.
 
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,6 +19,7 @@ import NeuCard from "../NeuCard";
 import SegmentedControl from "../SegmentedControl";
 import DumbbellIcon from "../DumbbellIcon";
 import CompareChartPlot from "./CompareChartPlot";
+import RecordsHeading from "./RecordsHeading";
 import {
   ACCT, APP_DARK, APP_LIGHT, CUE_INK, CUE_INK_DARK, FontFamily, compareBlue, compareBlueText,
 } from "../../constants/theme";
@@ -26,6 +28,7 @@ import { EXERCISE_METRIC_OPTIONS, type ExerciseMetricKey, type PRSet, type PRs }
 import { chartChange, drawsOn, fmtChange } from "../../utils/exerciseChartLayout";
 import { aheadAtSamePoint, type CompareLift, type LiftSlot } from "../../utils/programCompare";
 import { missedBarValue } from "../../utils/compareChartLayout";
+import { exercisePageParams } from "../../utils/customExerciseDetails";
 import { MONTH_NAMES } from "../../utils/dates";
 import { trimNumber } from "../../utils/units";
 import { ordinal } from "../../utils/workoutSummary";
@@ -41,7 +44,8 @@ interface Props {
   metric: ExerciseMetricKey;
   onMetricChange: (m: ExerciseMetricKey) => void;
   unit: string;
-  /** A trainer viewing a client: a record opens that client's workout. */
+  /** A trainer viewing a client: a record opens that client's workout, the
+   *  name their exercise. */
   clientId?: string;
   seriesKey: string;
 }
@@ -83,6 +87,12 @@ export default function CompareExerciseCard({ lift, slots, names, prs, metric, o
   const open = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate({ pathname: "/workout-detail", params: { id: workoutId, ...(clientId ? { clientId } : {}) } });
+  };
+
+  // The name opens the exercise's screen, as on the exercise chart.
+  const openExercise = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.navigate({ pathname: "/exercise-summary", params: exercisePageParams({ name: lift.name, customId: lift.customId }, clientId) });
   };
 
   const change = (c: { pct: number } | null, ink: string, side: "green" | "blue") => {
@@ -169,21 +179,29 @@ export default function CompareExerciseCard({ lift, slots, names, prs, metric, o
         <View style={styles.inner}>
           <View style={styles.headerRow}>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={[styles.title, { color: t.tp }]} numberOfLines={1}>{lift.name}</Text>
-              <View style={styles.countRow}>
-                {lift.green.length ? (
-                  <View style={styles.countItem}>
-                    <View style={[styles.dot, { backgroundColor: ACCT }]} />
-                    <Text style={[styles.count, { color: t.ts }]}>{sessions(slots.green)}</Text>
-                  </View>
-                ) : null}
-                {lift.blue.length ? (
-                  <View style={styles.countItem}>
-                    <View style={[styles.ring, { borderColor: compareBlue(isDark) }]} />
-                    <Text style={[styles.count, { color: t.ts }]}>{sessions(slots.blue)}</Text>
-                  </View>
-                ) : null}
-              </View>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={openExercise}
+                style={styles.titleBlock}
+                accessibilityRole="button"
+                accessibilityLabel={`View ${lift.name} summary`}
+              >
+                <Text style={[styles.title, { color: t.tp }]} numberOfLines={1}>{lift.name}</Text>
+                <View style={styles.countRow}>
+                  {lift.green.length ? (
+                    <View style={styles.countItem}>
+                      <View style={[styles.dot, { backgroundColor: ACCT }]} />
+                      <Text style={[styles.count, { color: t.ts }]}>{sessions(slots.green)}</Text>
+                    </View>
+                  ) : null}
+                  {lift.blue.length ? (
+                    <View style={styles.countItem}>
+                      <View style={[styles.ring, { borderColor: compareBlue(isDark) }]} />
+                      <Text style={[styles.count, { color: t.ts }]}>{sessions(slots.blue)}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
             </View>
             {changeG || changeB ? (
               <View style={styles.changeBlock}>
@@ -246,7 +264,7 @@ export default function CompareExerciseCard({ lift, slots, names, prs, metric, o
 
       {recordRows.length ? (
         <>
-          <Text style={[styles.prHeader, { color: t.tp }]}>Personal Records</Text>
+          <RecordsHeading />
           <NeuCard dark={isDark} radius={16} style={{ marginHorizontal: 20 }}>
             <View style={styles.recordsInner}>
               {/* Each program's whole name over its column, as on At a
@@ -284,6 +302,9 @@ const GAP = 10;
 const styles = StyleSheet.create({
   inner: { padding: 16 },
   headerRow: { flexDirection: "row", alignItems: "flex-start" },
+  // The name and the counts under it, as wide as they are, so the blank space
+  // up to the changes on the right isn't a button.
+  titleBlock: { alignSelf: "flex-start", maxWidth: "100%" },
   title: { fontFamily: FontFamily.bold, fontSize: 18 },
   // "4 of 5 sessions" for each program, wrapping onto a line each when both
   // are long.
@@ -303,7 +324,6 @@ const styles = StyleSheet.create({
   key: { flexDirection: "row", alignItems: "center", gap: 4 },
   empty: { alignItems: "center", justifyContent: "center", paddingVertical: 32, gap: 8 },
   emptyText: { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center" },
-  prHeader: { fontFamily: FontFamily.bold, fontSize: 18, marginHorizontal: 20, marginTop: 36, marginBottom: 12 },
   recordsInner: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6 },
   // As on At a glance: each dot centred on its name, and a shorter name
   // centred on a longer one that wraps, so the two dots sit level.

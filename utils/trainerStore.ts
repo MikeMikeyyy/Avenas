@@ -27,6 +27,7 @@ import { ACCOUNT_TYPE_KEY } from "../contexts/AccountTypeContext";
 import { isCloudContactId } from "../lib/chat";
 import { fetchClientTraining, fetchClientsActivePrograms } from "../lib/clientTraining";
 import { detailsForSend } from "../lib/exerciseMedia";
+import { batchKeyOf, isReturnedDismissed, returnedKeyOf, sentKeyOf } from "./trainerLists";
 import {
   deleteShareRow,
   fetchGroupShareRows,
@@ -271,6 +272,11 @@ export type SentProgram = {
    *  because there's only ever one person it can be from. Absent on local
    *  (mock-roster) entries, which have no accounts behind them. */
   senderId?: string;
+  /** Who it was sent to: the trainer, for a 1:1 review (the row's
+   *  `recipient_id`), so the person who asked can see which of their trainers
+   *  has it. A group review is addressed to the group's owner, and reads by its
+   *  group instead. Absent on local entries made before it was recorded. */
+  recipientId?: string;
   /** A group coach marked it dealt with, so it leaves the group's queue. The
    *  sender keeps it on their own page regardless: it's their record of having
    *  asked, not the coaches' to-do item. */
@@ -447,6 +453,7 @@ function rowToSent(row: SharedProgramRow, uid: string): SentProgram {
     unsentEdits: row.draft_snapshot != null,
     groupId: row.group_id ?? undefined,
     senderId: row.sender_id,
+    recipientId: row.recipient_id,
     completedAtISO: row.completed_at ?? undefined,
     archivedAtISO: row.archived_at ?? undefined,
   };
@@ -879,36 +886,10 @@ export async function appendSharedPrograms(entries: SharedProgram[]): Promise<vo
   }
 }
 
-/** Stable grouping key — every entry created in a single send call shares the same sentAtISO. */
-export function batchKeyOf(s: SharedProgram): string {
-  return `${s.programId}|${s.sentAtISO}`;
-}
-
-/** A review I sent, by the same programId|sentAtISO form as batchKeyOf. */
-export function sentKeyOf(s: SentProgram): string {
-  return `${s.programId}|${s.sentAtISO}`;
-}
-
-/**
- * The key that removing a review that's come back to me writes into the
- * dismissed list (DISMISSED_SHARES_KEY), the same list as a program a trainer
- * sent me.
- *
- * It carries the send-back time, so it hides THAT version: when the trainer
- * sends an update, returnedAtISO moves and the card comes back with Accept on
- * it. Keyed on sentKeyOf alone, a removed review stayed hidden through every
- * update, so the update never reached anyone who'd tidied their list.
- */
-export function returnedKeyOf(s: SentProgram): string {
-  return `${sentKeyOf(s)}|${s.returnedAtISO ?? ""}`;
-}
-
-/** Whether I've removed this returned review from my lists. A bare sentKeyOf
- *  still counts: that's how a removal was recorded before returnedKeyOf, and
- *  showing all of those again would undo what the user tidied away. */
-export function isReturnedDismissed(s: SentProgram, dismissed: Set<string>): boolean {
-  return dismissed.has(returnedKeyOf(s)) || dismissed.has(sentKeyOf(s));
-}
+// One send, one review I sent, and the hide on a review sent back to me, as
+// keys: kept with the lists that use them (utils/trainerLists.ts) and
+// re-exported here, where they always were.
+export { batchKeyOf, isReturnedDismissed, returnedKeyOf, sentKeyOf };
 
 /** Expand legacy `clientId: "all"` entries into one entry per current client.
  *  Idempotent — does nothing when no broadcast entries are present. */

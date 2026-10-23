@@ -32,7 +32,7 @@ import {
   type SentProgram,
   type SharedProgram,
 } from "./trainerStore";
-import { fetchGroup, fetchGroupMembers } from "../lib/groups";
+import { fetchGroup, fetchGroupMemberStatus, fetchGroupMembers, type GroupMemberStatus } from "../lib/groups";
 import { getMyUid } from "../lib/chat";
 import type { Group, GroupMember } from "../constants/groups";
 
@@ -68,6 +68,10 @@ export type GroupPageData = {
    *  programs are hidden from me, and this is why. Optional because a copy
    *  saved before it existed has none. */
   blockedMemberIds?: string[];
+  /** What I may see of each fellow member (0051): their program and when they
+   *  were last active, absent when they've hidden it. Optional because a copy
+   *  saved before it existed has none. */
+  memberStatus?: Record<string, GroupMemberStatus>;
   myUid: string | null;
 };
 
@@ -134,7 +138,7 @@ export async function loadGroupPage(owner: string, groupId: string): Promise<Gro
     // one read that waits on another. Everything else runs alongside.
     const membersP = fetchGroupMembers(groupId);
     const activeP = membersP.then(ms => loadClientActivePrograms(ms.map(m => m.id)));
-    const [group, members, roster, unread, favGroups, favMembers, groupShares, groupReviews, activeProgramByClient, blocked] =
+    const [group, members, roster, unread, favGroups, favMembers, groupShares, groupReviews, activeProgramByClient, blocked, memberStatus] =
       await Promise.all([
         fetchGroup(uid, groupId),
         membersP,
@@ -146,6 +150,7 @@ export async function loadGroupPage(owner: string, groupId: string): Promise<Gro
         loadGroupReviewPrograms(groupId),
         activeP,
         loadBlockedIds(),
+        fetchGroupMemberStatus(groupId),
       ]);
 
     if (!group) {
@@ -165,6 +170,7 @@ export async function loadGroupPage(owner: string, groupId: string): Promise<Gro
       groupShares,
       groupReviews,
       blockedMemberIds: members.filter(m => blocked.has(m.id)).map(m => m.id),
+      memberStatus,
       myUid: uid,
     };
     saveGroupPage(owner, groupId, data);

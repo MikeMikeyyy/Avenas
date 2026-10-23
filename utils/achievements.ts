@@ -28,9 +28,107 @@ import {
   type AchievementsState,
 } from "../constants/achievements";
 import { computeSessionRecords } from "./workoutSummary";
+import { exerciseIdentity } from "./exerciseNames";
 import { toDisplayWeight, trimNumber } from "./units";
 
 const DAY_MS = 86400000;
+
+/** A number typed or stored on a set, or 0 for anything not above zero. */
+function positive(s: string): number {
+  const n = parseFloat(s);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * The heaviest each exercise has been lifted in `history`, in kg, by identity
+ * (exerciseIdentity): a working set ticked with its reps in, at a weight. It's
+ * what a set has to beat to be a PR, the same best the PR card measures
+ * (computePRs' heaviest). An exercise done only at bodyweight, or never, has
+ * none: its first weighted set is a first, not a PR.
+ */
+export function bestLiftsBefore(history: readonly CompletedWorkout[]): Map<string, number> {
+  const best = new Map<string, number>();
+  for (const w of history) {
+    for (const ex of w.exercises) {
+      const key = ex.name ? exerciseIdentity(ex) : "";
+      if (!key) continue;
+      for (const s of ex.sets) {
+        if (s.type !== "working" || !s.done || positive(s.reps) === 0) continue;
+        const kg = positive(s.weight);
+        if (kg > (best.get(key) ?? 0)) best.set(key, kg);
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Whether one set is a new PR, for the trophy beside its number on the Workout
+ * tab (user request, 2026-10-22): a working set, ticked, with its reps in,
+ * heavier than `bestKg`, its exercise's best from before this workout
+ * (bestLiftsBefore). No best, none at all. Every set that beats the old best
+ * gets one, so 102.5 then 105 over a best of 100 is two.
+ */
+export function isPrSet(
+  set: { type: "warmup" | "working"; done: boolean; reps: string; weightKg: number },
+  bestKg: number | undefined,
+): boolean {
+  return bestKg !== undefined && set.type === "working" && set.done && positive(set.reps) > 0 && set.weightKg > bestKg;
+}
+
+/**
+ * Which of a SAVED workout's sets wear the PR trophy: per exercise, each set
+ * in saved order, against the sessions completed before it
+ * (achievementsForWorkout's prior), so a heavier session since never takes a
+ * trophy away. `history` may include `workout` itself. An unreadable
+ * completedAt has nothing before it, so no trophies.
+ */
+export function prSetsOfWorkout(workout: CompletedWorkout, history: readonly CompletedWorkout[]): boolean[][] {
+  const at = Date.parse(workout.completedAt);
+  const best = bestLiftsBefore(
+    Number.isFinite(at) ? history.filter(w => w.id !== workout.id && Date.parse(w.completedAt) < at) : [],
+  );
+  return workout.exercises.map(ex => {
+    const bestKg = ex.name ? best.get(exerciseIdentity(ex)) : undefined;
+    return ex.sets.map(s => isPrSet({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) }, bestKg));
+  });
+}
+
+/**
+ * For every workout in `history`, one exercise's best (by identity,
+ * exerciseIdentity) from the sessions completed before it: what
+ * prSetsOfWorkout measures that exercise's sets against, worked out for a whole
+ * history in one pass, for a page listing every session of one exercise (the
+ * Exercise History page's trophies). As there, sessions finished at the same
+ * moment don't count each other, and one with an unreadable completedAt has no
+ * best (no trophies) and counts towards no other's. Undefined: nothing to beat.
+ */
+export function bestBeforeEach(history: readonly CompletedWorkout[], identity: string): Map<string, number | undefined> {
+  const ownBest = (w: CompletedWorkout): number => {
+    let kg = 0;
+    for (const ex of w.exercises) {
+      if (!ex.name || exerciseIdentity(ex) !== identity) continue;
+      for (const s of ex.sets) {
+        if (s.type === "working" && s.done && positive(s.reps) > 0) kg = Math.max(kg, positive(s.weight));
+      }
+    }
+    return kg;
+  };
+  const timed = history
+    .map(w => ({ w, at: Date.parse(w.completedAt) }))
+    .filter(x => Number.isFinite(x.at))
+    .sort((a, b) => a.at - b.at);
+  const out = new Map<string, number | undefined>();
+  let best = 0;
+  for (let i = 0; i < timed.length;) {
+    let j = i;
+    while (j < timed.length && timed[j].at === timed[i].at) j++;
+    for (let k = i; k < j; k++) out.set(timed[k].w.id, best > 0 ? best : undefined);
+    for (let k = i; k < j; k++) best = Math.max(best, ownBest(timed[k].w));
+    i = j;
+  }
+  return out;
+}
 
 /**
  * PR and workout-milestone achievements earned by saving `completed`.

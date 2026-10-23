@@ -29,6 +29,9 @@ import { buildWeekSchedule, weekStartFor } from "../../../utils/weekSchedule";
 import { buildSessionTracks, occurrencesOfDay } from "../../../utils/sessionTrack";
 import { isDateSkipped, marksAfterEdit } from "../../../utils/skippedDates";
 import { dayIdAt, programDays } from "../../../utils/programDays";
+import { planImport, readWorkoutCsv, type ExerciseChoice } from "../../../utils/workoutImport";
+import { matchExerciseName } from "../../../utils/exerciseMatch";
+import { loadImports, saveImport, undoImport, type ImportRecord } from "../../../utils/importStore";
 
 const SAM: Phone = { uid: "sam", name: "Sam", store: new Map(), offline: false };
 const A = "prog_strength";
@@ -94,6 +97,8 @@ export type Snap = {
   history: CompletedWorkout[];
   override: DayOverride | null;
   dates: string[];
+  /** What each import from another app added, newest first (Import & Export's Undo). */
+  imports: ImportRecord[];
 };
 
 export async function snap(): Promise<Snap> {
@@ -109,6 +114,7 @@ export async function snap(): Promise<Snap> {
       history,
       override: await getJSON<DayOverride | null>(WORKOUT_DAY_OVERRIDE_KEY, null),
       dates: await getJSON<string[]>(WORKOUT_DATES_KEY, []),
+      imports: await loadImports(),
     };
   });
 }
@@ -323,7 +329,7 @@ function sessionLandsOnToday(after: Snap, w: CompletedWorkout): string[] {
   const finish = finishOf(active);
   if (active && w.programId === active.id && w.dayId && getWorkoutForDate(active, w.date)?.dayId === w.dayId
       && finish !== null && w.date <= finish) {
-    const position = buildSessionTracks(after.history, after.programs, after.today).positionById[w.id];
+    const position = buildSessionTracks(after.history, after.programs, after.today).numberById[w.id];
     const occurrences = occurrencesOfDay(active, w.dayId, after.today);
     if (position === undefined || occurrences[position - 1] !== w.date) {
       issues.push(`${w.workoutName}, logged on its own day ${w.date}, sits on ${position ? `occurrence ${position} (${occurrences[position - 1]})` : "no occurrence"}; its occurrences are ${occurrences.slice(-4).join(", ")}`);
@@ -349,8 +355,8 @@ function afterDeleting(before: Snap, after: Snap, target: CompletedWorkout): str
   for (const w of after.history) {
     // Placed on its schedule (a count's dot moves with the count, by design).
     if (was.missedById[w.id] === undefined) continue;
-    if (now.positionById[w.id] !== was.positionById[w.id]) {
-      issues.push(`deleting ${target.workoutName} on ${target.date} moved ${w.workoutName} on ${w.date} from dot ${was.positionById[w.id]} to ${now.positionById[w.id]}`);
+    if (now.numberById[w.id] !== was.numberById[w.id]) {
+      issues.push(`deleting ${target.workoutName} on ${target.date} moved ${w.workoutName} on ${w.date} from dot ${was.numberById[w.id]} to ${now.numberById[w.id]}`);
     }
   }
   return issues;
@@ -806,7 +812,106 @@ const journalSteps: Step[] = [
   })),
 ];
 
-export const STEPS: Step[] = [...clockSteps, ...workoutSteps, ...stripSteps, ...programSteps, ...journalSteps];
+// Settings > Import & Export: another app's history in, and taken back out.
+
+const HEVY_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Hevy's export of a morning session on each of `dates` ("YYYY-MM-DD"). */
+function hevyExport(dates: string[]): string {
+  const rows = [`"title","start_time","end_time","description","exercise_title","superset_id","exercise_notes","set_index","set_type","weight_kg","reps","distance_km","duration_seconds","rpe"`];
+  for (const date of dates) {
+    const [y, m, d] = date.split("-").map(Number);
+    const day = `${d} ${HEVY_MONTHS[m - 1]} ${y}`;
+    for (const [i, kg] of [60, 80, 80].entries()) {
+      rows.push(`"Push","${day}, 07:00","${day}, 07:50","","Bench Press (Barbell)",,"",${i},"${i === 0 ? "warmup" : "normal"}",${kg},8,,0,`);
+    }
+  }
+  return rows.join("\n");
+}
+
+/** Import & Export's Choose CSV File, the review's matches as they come, and
+ *  Import (app/import-export.tsx, app/import-review.tsx): what the import added. */
+async function importFromHevy(s: Snap, dates: string[]): Promise<CompletedWorkout[]> {
+  const read = readWorkoutCsv(hevyExport(dates));
+  if (!read.ok) throw new Error(`harness: the Hevy file didn't read: ${read.error}`);
+  const choices: Record<string, ExerciseChoice> = {};
+  for (const w of read.data.workouts) {
+    for (const e of w.exercises) {
+      const m = matchExerciseName(e.name);
+      choices[e.name] = m.kind === "none" ? null : { name: m.name };
+    }
+  }
+  const plan = planImport(read.data, { weightUnit: "kg", choices, history: s.history });
+  await saveImport(plan.workouts, "hevy");
+  return plan.workouts;
+}
+
+/** Days off Hevy for an import: today, yesterday and ten days ago. */
+const importDays = (s: Snap) => [s.today, addDaysYMD(s.today, -1), addDaysYMD(s.today, -10)];
+
+/** An import added a session on each day it had that Avenas hadn't logged,
+ *  left every logged day as it was, and is on record to undo. */
+function afterImporting(before: Snap, after: Snap, added: CompletedWorkout[]): string[] {
+  const issues: string[] = [];
+  const free = importDays(before).filter(d => !before.history.some(w => w.date === d));
+  const addedDays = added.map(w => w.date).sort();
+  if (JSON.stringify(addedDays) !== JSON.stringify([...free].sort())) issues.push(`the import added sessions on ${addedDays.join(", ") || "no day"}, not on the days with nothing logged: ${free.join(", ") || "none"}`);
+  for (const w of before.history) {
+    if (!after.history.some(x => JSON.stringify(x) === JSON.stringify(w))) issues.push(`the import changed or took out ${w.workoutName} on ${w.date}`);
+  }
+  for (const w of added) {
+    if (w.programId !== "" || w.dayId !== undefined) issues.push(`an imported session (${w.date}) was put on a program`);
+    if (w.exercises[0]?.name !== "Barbell Bench Press") issues.push(`an imported session's exercise came in as ${w.exercises[0]?.name}`);
+  }
+  if (after.history.length !== before.history.length + added.length) issues.push(`the history went from ${before.history.length} to ${after.history.length} sessions importing ${added.length}`);
+  if (JSON.stringify(before.programs) !== JSON.stringify(after.programs)) issues.push("an import changed a program");
+  if (added.length > 0 && after.imports[0]?.workouts.length !== added.length) issues.push("the import isn't on record to undo");
+  if (added.length === 0 && after.imports.length !== before.imports.length) issues.push("an import that added nothing was put on record");
+  return issues;
+}
+
+const importSteps: Step[] = [
+  {
+    label: "Import & Export: import a Hevy file (today, yesterday, ten days ago)",
+    enabled: () => true,
+    changes: { history: true },
+    run: s => importFromHevy(s, importDays(s)),
+    check: (b, a, added) => afterImporting(b, a, added as CompletedWorkout[]),
+  },
+  {
+    label: "Import & Export: undo the last import",
+    enabled: s => s.imports.length > 0,
+    changes: { history: true },
+    run: async s => {
+      await undoImport(s.imports[0].at);
+      return s.imports[0];
+    },
+    check: (before, after, record) => {
+      const r = record as ImportRecord;
+      const issues: string[] = [];
+      const key = (w: { date: string; completedAt: string; workoutName: string }) => `${w.date}|${w.completedAt}|${w.workoutName}`;
+      const imported = new Set(r.workouts.map(key));
+      const kept = before.history.filter(w => !imported.has(key(w)));
+      if (JSON.stringify(after.history) !== JSON.stringify(kept)) issues.push("undoing the import didn't take out exactly what it added");
+      if (after.imports.some(x => x.at === r.at)) issues.push("the undone import is still on record");
+      return issues;
+    },
+  },
+  {
+    label: "Import & Export: import a Hevy file, then undo it",
+    enabled: () => true,
+    changes: { history: true },
+    run: async s => {
+      const before = await loadImports();
+      await importFromHevy(s, importDays(s));
+      const after = await loadImports();
+      if (after.length > before.length) await undoImport(after[0].at);
+    },
+    check: backAsItWas,
+  },
+];
+
+export const STEPS: Step[] = [...clockSteps, ...workoutSteps, ...stripSteps, ...programSteps, ...journalSteps, ...importSteps];
 
 /** Sequences always played out, step by step: the everyday ones worth pinning
  *  whatever the explorer happens to reach. */
@@ -856,6 +961,17 @@ export const STORIES: string[][] = [
   ["Workout tab: log today's workout", "My Programs: make the active program inactive", "Journal: delete the newest workout",
     "Journal: delete the oldest workout", "My Programs: make Strength active", "Workout tab: log today's workout",
     "Workout tab: Delete & Redo today's workout", "Workout tab: log today's workout"],
+  // Moving over from Hevy (user request, 2026-10-23): today and yesterday
+  // came in from the file, the next workout (Saturday's Upper, past Friday's
+  // rest) is logged in Avenas, and the import is undone, which leaves that one
+  // alone.
+  ["Import & Export: import a Hevy file (today, yesterday, ten days ago)", "the next day comes (app opened at 10am)",
+    "the next day comes (app opened at 10am)", "Workout tab: log today's workout", "Import & Export: undo the last import",
+    "Workout tab: Delete & Redo today's workout"],
+  // A session logged today first: the import leaves today alone, and the
+  // same file again adds nothing.
+  ["Workout tab: log today's workout", "Import & Export: import a Hevy file (today, yesterday, ten days ago)",
+    "Import & Export: import a Hevy file (today, yesterday, ten days ago)", "Import & Export: undo the last import"],
 ];
 
 // ─── Always true ─────────────────────────────────────────────────────────────

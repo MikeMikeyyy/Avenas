@@ -34,7 +34,8 @@ interface Props {
   sub?: string;
   /** Label + icon colour on a default pill (Mark Complete in accent, etc.). */
   tint?: string;
-  /** The current choice: accent label, accent ring and a tick. */
+  /** The current choice: accent label, accent ring and a tick right after the
+   *  label, on its line (never centred against `sub` as well). */
   selected?: boolean;
   /** Dimmed and inert (a confirm with nothing to confirm yet). */
   disabled?: boolean;
@@ -84,11 +85,17 @@ export default function SheetPill({
       ]}>
         {icon?.(color)}
         <View style={s.label}>
-          <Text style={[s.text, compact ? s.compactText : null, { color }]} numberOfLines={1}>{label}</Text>
+          {/* The badge and tick ride on the label's own line. Beside the whole
+              column, a pill with a `sub` had its tick centred between the two
+              lines, past the end of the longer one (user request, 2026-10-23:
+              the Progress page's program picker). */}
+          <View style={s.line}>
+            <Text style={[s.text, s.lineText, compact ? s.compactText : null, { color }]} numberOfLines={1}>{label}</Text>
+            {badge}
+            {selected ? <Ionicons name="checkmark-circle" size={compact ? 16 : 18} color={ACCT} /> : null}
+          </View>
           {sub ? <Text style={[s.sub, { color: t.ts }]} numberOfLines={1}>{sub}</Text> : null}
         </View>
-        {badge}
-        {selected ? <Ionicons name="checkmark-circle" size={compact ? 16 : 18} color={ACCT} /> : null}
       </View>
     </BounceButton>
   );
@@ -166,7 +173,10 @@ const s = StyleSheet.create({
   selected:     { borderWidth: 1.5, borderColor: ACCT },
   disabled:     { opacity: 0.35 },
   label:        { flexShrink: 1, alignItems: "center" },
-  text:         { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.2 },
+  // The pill's own gap, so a pill without a `sub` looks just as it did.
+  line:         { flexDirection: "row", alignItems: "center", gap: 8 },
+  lineText:     { flexShrink: 1 },
+  text:      { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.2 },
   sub:          { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
   toggle:       { borderWidth: 1.5, gap: 10 },
 });

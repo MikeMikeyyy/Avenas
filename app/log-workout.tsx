@@ -9,6 +9,7 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
@@ -16,6 +17,7 @@ import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard, { NEU_BG, NEU_BG_DARK } from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import GlassButton from "../components/GlassButton";
 import CollapsibleCard from "../components/CollapsibleCard";
 import ExerciseNotesField, { PrevNoteTag, ReuseNoteChip, prevNotePlaceholder } from "../components/ExerciseNotesField";
 import FadeScreen from "../components/FadeScreen";
@@ -24,7 +26,7 @@ import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, stampSession, type WorkoutTime } from "../components/TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
-import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { haloGlow, pillGlow, PILL_H, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
   normaliseSets, type SavedProgram, type CompletedWorkout, type PlannedExercise, type ProgramSet,
@@ -37,15 +39,20 @@ import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDay
 import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
+import { bestLiftsBefore, isPrSet } from "../utils/achievements";
+import { exerciseIdentity } from "../utils/exerciseNames";
+import PrTrophy from "../components/PrTrophy";
 import { useUnit } from "../contexts/UnitContext";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardWorkoutAchievements } from "../utils/achievementStore";
 import { useTheme } from "../contexts/ThemeContext";
-import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
-import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import BackButton, { BACK_LEFT, BACK_TOP, BACK_SIZE } from "../components/BackButton";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import { useFieldAboveKeyboard } from "../hooks/useFieldAboveKeyboard";
 
 const WARMUP_ORANGE = "#ffbf0f";
+/** The floating +, a size up from the round buttons beside it and at the top. */
+const ADD_SIZE = 44;
 
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
@@ -560,13 +567,17 @@ interface ExerciseCardProps {
    *  (utils/workout.ts buildPrevNoteLookup). Shown as the empty box's
    *  placeholder; Reuse and Undo write through onUpdateNotes. */
   prevNote?: string;
+  /** The heaviest this exercise was lifted before the session being logged
+   *  (kg): a ticked working set heavier than it gets the PR trophy. Absent:
+   *  no best yet, so no trophy. */
+  prBestKg?: number;
 }
 
 function ExerciseCard({
   ex, exIndex, totalExercises, isDark,
   onUpdateSet, onToggleDone, onToggleType, onAddSet, onRemoveLastSet,
   onRemoveExercise, onOpenReorder, onChangeExercise, onToggleIsometric, onUpdateNotes,
-  onInputFocus, prevSets, prevNote,
+  onInputFocus, prevSets, prevNote, prBestKg,
 }: ExerciseCardProps) {
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -634,6 +645,9 @@ function ExerciseCard({
             if (!isWU) workingCounter++;
             const setLabel = isWU ? "W" : String(workingCounter);
             const isLast = idx === ex.sets.length - 1;
+            // A new PR: the weight as it will be saved (kg), against the best
+            // from before this session.
+            const isPr = isPrSet({ type: set.type, done: set.done, reps: set.reps, weightKg: parseFloat(parseWeightToKg(set.weight, isKg)) || 0 }, prBestKg);
 
             return (
               <CollapsibleCard
@@ -663,7 +677,14 @@ function ExerciseCard({
                       </View>
                     </TouchableOpacity>
                   ) : (
-                    <Text style={[s.setText, s.setCol, { color: isWU ? WARMUP_ORANGE : t.tp }]}>{setLabel}</Text>
+                    <View style={s.setCell}>
+                      {/* The trophy hangs off the number's own left edge
+                          (components/PrTrophy.tsx). */}
+                      <View>
+                        <Text style={[s.setText, { color: isWU ? WARMUP_ORANGE : t.tp }]}>{setLabel}</Text>
+                        <PrTrophy show={isPr} />
+                      </View>
+                    </View>
                   )}
 
                   {/* PREV */}
@@ -853,6 +874,8 @@ export default function LogWorkoutScreen() {
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   // Latch the bottom inset to its stable max so pinned bottom UI (notes cluster,
   // floating card, Save button) doesn't jump when the exercise-picker modal
   // presents/dismisses and safe-area-context momentarily re-emits a smaller value.
@@ -921,6 +944,20 @@ export default function LogWorkoutScreen() {
   const [prevSetsOf, setPrevSetsOf] = useState<(ex: PrevExerciseKey) => string[] | undefined>(() => () => undefined);
   const [prevNoteOf, setPrevNoteOf] = useState<(ex: PrevExerciseKey) => string | undefined>(() => () => undefined);
   const [prevSessionNote, setPrevSessionNote] = useState<string | undefined>(undefined);
+  // Every saved session, for the PR trophy: a ticked set heavier than its
+  // exercise's best from before this log (utils/achievements.ts). "Before" is
+  // the moment the log will be saved at (doSave's completedAt), so a trophy
+  // here is the one its Journal page shows once it's saved.
+  const [history, setHistory] = useState<CompletedWorkout[]>([]);
+  const logAt = useMemo(() => Date.parse(
+    workoutTime
+      ? stampSession(date ?? "", workoutTime.start, workoutTime.end).completedAt
+      : new Date(`${date}T12:00:00`).toISOString(),
+  ), [date, workoutTime]);
+  const bestLifts = useMemo(
+    () => bestLiftsBefore(Number.isFinite(logAt) ? history.filter(w => Date.parse(w.completedAt) < logAt) : []),
+    [history, logAt],
+  );
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -1077,6 +1114,7 @@ export default function LogWorkoutScreen() {
         pid ? progs.find(p => p.id === pid) ?? null : null,
       );
       const history = JSON.parse(histRaw);
+      if (Array.isArray(history)) setHistory(history);
       // Sets and the "Last time" notes (each exercise's and the session's), all
       // from sessions of this day before the date being logged. A program
       // exercise is found by its place in the program, so two of the same
@@ -1371,22 +1409,21 @@ export default function LogWorkoutScreen() {
       <BackButton />
 
       {/* Time button — top right */}
-      <TouchableOpacity
-        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTimePickerVisible(true); }}
-        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
-        activeOpacity={0.8}
+      <GlassButton
+        onPress={() => setTimePickerVisible(true)}
+        size={BACK_SIZE}
+        style={[s.timeFloat, { top: insets.top + BACK_TOP }]}
+        accessibilityLabel="Workout time"
       >
-        <View style={[s.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="time-outline" size={22} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+        <Ionicons name="time-outline" size={22} color={t.tp} />
+      </GlassButton>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: t.bg }}>
         <ScrollView
           ref={scrollRef}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[s.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: safeBottom + 150 }]}
+          contentContainerStyle={[s.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(safeBottom + 150, barsReach) }]}
         >
           {/* Nav title — scrolls with content like journal page */}
           <View style={s.scrollTitleRow}>
@@ -1430,6 +1467,7 @@ export default function LogWorkoutScreen() {
               onInputFocus={handleListFieldFocus}
               prevSets={(prevSetsOf(ex) ?? []).map(p => formatPrevHint(p, isKg))}
               prevNote={prevNoteOf(ex)}
+              prBestKg={bestLifts.get(exerciseIdentity(ex))}
             />
           ))}
 
@@ -1441,26 +1479,27 @@ export default function LogWorkoutScreen() {
           button + round green + Add Exercise. Pinned just above the Save button. */}
       <View style={{ position: "absolute", left: 20, bottom: safeBottom + 80, zIndex: 6 }}>
         <View style={s.actionCluster}>
-          <BounceButton onPress={openNotes} accessibilityLabel="Session notes">
-            <View style={s.notesToggleBtn}>
-              <NeuCard dark={isDark} radius={20} style={{ width: 40, height: 40 }} innerStyle={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="document-text-outline" size={20} color={t.tp} />
-              </NeuCard>
-              <View style={s.notesTogglePlus}>
+          <GlassButton
+            onPress={openNotes}
+            accessibilityLabel="Session notes"
+            solidStyle={PILL_SHADOW}
+            badge={
+              <View style={s.notesTogglePlus} pointerEvents="none">
                 <Text style={s.notesTogglePlusText}>+</Text>
               </View>
-            </View>
-          </BounceButton>
-          <BounceButton
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddExVisible(true); }}
-            accessibilityLabel="Add exercise"
+            }
           >
-            <View style={s.addRoundWrap}>
-              <View style={s.addRoundBtn}>
-                <Ionicons name="add" size={24} color="#fff" />
-              </View>
-            </View>
-          </BounceButton>
+            <Ionicons name="document-text-outline" size={20} color={t.tp} />
+          </GlassButton>
+          <GlassButton
+            tint={ACCT}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddExVisible(true); }}
+            size={ADD_SIZE}
+            accessibilityLabel="Add exercise"
+            solidStyle={s.addGlow}
+          >
+            <Ionicons name="add" size={24} color="#fff" />
+          </GlassButton>
         </View>
       </View>
 
@@ -1552,12 +1591,19 @@ export default function LogWorkoutScreen() {
 
       {/* Save Workout — floating above safe area */}
       <View style={[s.saveRow, { bottom: safeBottom + 16 }]} pointerEvents="box-none">
-        <BounceButton onPress={saveWorkout}>
-          <View style={[s.saveBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }, saving && { opacity: 0.6 }]}>
-            <Ionicons name="checkmark-circle" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
-            <Text style={[s.saveBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Save Workout</Text>
-          </View>
-        </BounceButton>
+        <GlassButton
+          pill
+          size={PILL_H}
+          tint={isDark ? BTN_SLATE_DARK : BTN_SLATE}
+          onPress={saveWorkout}
+          disabled={saving}
+          contentStyle={s.saveContent}
+          solidStyle={s.saveGlow}
+          accessibilityLabel="Save workout"
+        >
+          <Ionicons name="checkmark-circle" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
+          <Text style={[s.saveBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Save Workout</Text>
+        </GlassButton>
       </View>
 
       {/* Add exercise picker */}
@@ -1617,7 +1663,7 @@ const s = StyleSheet.create({
   topGradient: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 5 },
   scrollTitleRow: { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 16 },
   navTitle:       { flex: 1, textAlign: "center", fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textTransform: "uppercase" },
-  backBtn:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  timeFloat:   { position: "absolute", right: BACK_LEFT, zIndex: 10 },
   scroll:      { paddingHorizontal: 20 },
 
   pageHeader:   { marginBottom: 28 },
@@ -1639,6 +1685,7 @@ const s = StyleSheet.create({
   colHeaderRow: { flexDirection: "row", alignItems: "center", paddingBottom: 4, borderBottomWidth: 1, paddingHorizontal: 4, gap: 6 },
   colText:      { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: "center" },
   setCol:       { width: 36, textAlign: "center" },
+  setCell:      { width: 36, alignItems: "center", justifyContent: "center" },
   inputCol:     { flex: 1 },
   checkCol:     { width: 32, alignItems: "center", justifyContent: "center" },
 
@@ -1667,11 +1714,10 @@ const s = StyleSheet.create({
 
   // Bottom-left action cluster: Session Notes button + round green + Add Exercise
   actionCluster:      { flexDirection: "row", alignItems: "center", gap: 14 },
-  notesToggleBtn:     { width: 40, height: 40 },
   notesTogglePlus:    { position: "absolute", top: -4, right: -6, backgroundColor: ACCT, borderRadius: 7, width: 14, height: 14, alignItems: "center", justifyContent: "center" },
   notesTogglePlusText:{ color: "#fff", fontSize: 10, fontFamily: FontFamily.bold, lineHeight: 14 },
-  addRoundWrap:       { borderRadius: 24, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  addRoundBtn:        { width: 44, height: 44, borderRadius: 22, backgroundColor: ACCT, alignItems: "center", justifyContent: "center" },
+  // The solid + only: the glass one is lit by the glass.
+  addGlow:            haloGlow(ACCT, 0.6, 12),
 
   // Session notes — floating card + tick button
   notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
@@ -1686,8 +1732,10 @@ const s = StyleSheet.create({
 
   // Save button
   saveRow:    { position: "absolute", left: 20, right: 20 },
-  // Slate, not accent — glow matches the workout screen's slate Finish pill.
-  saveBtn:    { ...pill(), gap: 8, ...pillGlow("#4a5568", 0.3) },
+  // Slate, not accent — glow matches the workout screen's slate Finish pill
+  // (the solid button's; the glass one is lit by the glass).
+  saveContent: { gap: 8 },
+  saveGlow:    pillGlow("#4a5568", 0.3),
   saveBtnText:{ fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.3 },
 
   // Reorder sheet

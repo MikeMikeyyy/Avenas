@@ -215,6 +215,9 @@ const fullWorkout: Required<CompletedWorkout> = {
     { id: "e3", name: "Cable Fly" },
     { id: "e4", name: "Plank" },
   ],
+  // The name its program had, kept as that program was deleted (0052): after
+  // a restore it's all that says where the session was logged.
+  programName: "Push Pull Legs",
 };
 const oldBlockWorkout: CompletedWorkout = {
   id: "workout_2", date: "2026-08-01", completedAt: "2026-08-01T09:00:00.000Z", workoutName: "Upper",
@@ -290,6 +293,26 @@ async function main() {
     }
   }
   if (failures.length > 0) return finish(db);
+
+  // ─── Every table grants the app its access ───────────────────────────────
+  // From 30 Oct 2026 Supabase no longer grants new tables to the API roles, so
+  // a table whose migration doesn't grant them is out of the app's reach
+  // (0049 granted every table before it). Row Level Security decides rows.
+  {
+    const { rows } = await db.query<{ table: string }>(
+      `select c.relname as table from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind = 'r'
+          and not (has_table_privilege('authenticated', c.oid, 'select') and has_table_privilege('authenticated', c.oid, 'insert')
+               and has_table_privilege('authenticated', c.oid, 'update') and has_table_privilege('authenticated', c.oid, 'delete'))
+        order by 1`,
+    );
+    eq(rows.map(r => r.table), [], "every public table is granted to authenticated in its own migration (or 0049)");
+    const unsecured = await db.query<{ table: string }>(
+      `select c.relname as table from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity order by 1`,
+    );
+    eq(unsecured.rows.map(r => r.table), [], "every public table has Row Level Security on, so its grant exposes only what policies allow");
+  }
 
   const as = (uid: string | null) => db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [uid ?? ""]);
   for (const [id, type] of [
@@ -1148,6 +1171,63 @@ async function main() {
   eq((await switchTo(R_X, "admin")) !== null, true, "switch: only pt or user");
   await as(null);
   eq(await refusal(() => db.query(`select public.change_account_type('user')`)) !== null, true, "switch: not without signing in");
+
+  // ─── 12. What a group's members see of each other (0051) ──────────────────
+  // Each joined member's program and last active, to the group's other joined
+  // members, trainers and gym users alike. The Activity Status switch hides
+  // both (a connected trainer still sees their client's program); an invitee,
+  // someone who blocked you, and you yourself aren't listed; anyone outside
+  // the group sees nothing.
+  const S_OWNER = "ffffffff-0000-4000-8000-000000000030";    // trainer, coaches S_HIDER
+  const S_VIEWER = "ffffffff-0000-4000-8000-000000000031";   // gym user reading the page
+  const S_SHARER = "ffffffff-0000-4000-8000-000000000032";   // shares, running a program
+  const S_HIDER = "ffffffff-0000-4000-8000-000000000033";    // switched Activity Status off
+  const S_INVITEE = "ffffffff-0000-4000-8000-000000000034";  // invited, not yet in
+  const S_BLOCKER = "ffffffff-0000-4000-8000-000000000035";  // blocked S_VIEWER
+  const S_OUTSIDER = "ffffffff-0000-4000-8000-000000000036"; // in no group
+  for (const [id, type] of [
+    [S_OWNER, "pt"], [S_VIEWER, "user"], [S_SHARER, "user"], [S_HIDER, "user"], [S_INVITEE, "user"], [S_BLOCKER, "user"], [S_OUTSIDER, "user"],
+  ] as const) {
+    await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+    await db.query(`update public.profiles set account_type = $2, last_active_at = now() where id = $1`, [id, type]);
+  }
+  await db.query(`update public.profiles set share_activity = false where id = $1`, [S_HIDER]);
+  await connect(S_OWNER, S_HIDER);
+  const activeProgram = (uid: string, programName: string) => db.query(
+    `insert into public.programs (user_id, name, total_weeks, status, training_days, cycle_days) values ($1, $2, 8, 'active', 4, 7)`,
+    [uid, programName]);
+  await activeProgram(S_SHARER, "Summer Strength");
+  await activeProgram(S_HIDER, "Secret Block");
+  const gStatus = (await db.query<{ id: string }>(
+    `insert into public.groups (owner_id, name) values ($1, 'Status') returning id`, [S_OWNER])).rows[0].id;
+  for (const [uid, accepted] of [[S_OWNER, true], [S_VIEWER, true], [S_SHARER, true], [S_HIDER, true], [S_INVITEE, false], [S_BLOCKER, true]] as const) {
+    await db.query(
+      `insert into public.group_members (group_id, user_id, role, accepted_at) values ($1, $2, 'member', ${accepted ? "now()" : "null"})`,
+      [gStatus, uid]);
+  }
+  await db.query(`insert into public.blocks (blocker_id, blocked_id, name) values ($1, $2, 'Them')`, [S_BLOCKER, S_VIEWER]);
+  const statusSeenBy = async (uid: string) => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      const { rows } = await db.query<{ user_id: string; active_program: string | null; seen: boolean }>(
+        `select user_id, active_program, last_active_at is not null as seen from public.get_group_member_status($1)`, [gStatus]);
+      return Object.fromEntries(rows.map(r => [r.user_id, [r.active_program, r.seen]]));
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  const viewer = await statusSeenBy(S_VIEWER);
+  eq(viewer[S_SHARER], ["Summer Strength", true], "group status: a member sees another's program and when they were last active");
+  eq(viewer[S_HIDER], [null, false], "group status: Activity Status off hides both");
+  eq(viewer[S_OWNER], [null, true], "group status: a member with no program shows when they were active, and no program");
+  eq([S_INVITEE in viewer, S_BLOCKER in viewer, S_VIEWER in viewer], [false, false, false],
+    "group status: an invitee, someone who blocked you, and you aren't listed");
+  eq((await statusSeenBy(S_OWNER))[S_HIDER], ["Secret Block", false],
+    "group status: their connected trainer still sees their program, but not when they were active");
+  eq(Object.keys(await statusSeenBy(S_OUTSIDER)).length, 0, "group status: someone outside the group sees nothing");
+  eq(Object.keys(await statusSeenBy(S_INVITEE)).length, 0, "group status: nor does someone only invited");
+  await as(null);
 
   return finish(db);
 }

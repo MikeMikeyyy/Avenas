@@ -18,6 +18,8 @@ import {
   ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../../constants/floatingBars";
+import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
@@ -51,6 +53,8 @@ export default function GroupEditScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
 
   const groupId = id ?? "";
   const isNew = !groupId;
@@ -319,7 +323,7 @@ export default function GroupEditScreen() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 40 }}
+          contentContainerStyle={{ padding: 20, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }}
         >
           {isOwner ? (
             <>

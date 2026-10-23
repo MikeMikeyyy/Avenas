@@ -25,6 +25,10 @@
 //  - What stands on the tab bar is placed from the bar's top edge
 //    (hooks/useTabBar.ts), never a fixed height: the tabs are Apple's own bar
 //    on iOS 26 and later, which sits lower than the app's.
+//  - A scrolling page under the workout bar scrolls its last row clear of it
+//    while it shows, taller with a rest inside it (scrollEndPadding, with
+//    useFloatingBarsReach): the bar covered the foot of every page, buttons
+//    included, for as long as a workout ran (user report, 2026-10-22).
 
 import type { ViewStyle } from "react-native";
 
@@ -71,6 +75,24 @@ export const BAR_STACK_GAP = 8;
  *  a rest inside it. A shorter drop left it half on screen. */
 export function barHideY(tabBarTop: number): number {
   return tabBarClearance(tabBarTop) + WORKOUT_BAR_H + REST_SECTION_H + REST_DIVIDER_H + 24;
+}
+
+/** How far above the screen's bottom edge the workout bar reaches while it
+ *  shows: its top edge, with a rest inside it or not. 0 while it's hidden. */
+export function workoutBarReach(shown: boolean, bottom: number, resting: boolean): number {
+  if (!shown) return 0;
+  return bottom + WORKOUT_BAR_H + (resting ? REST_SECTION_H + REST_DIVIDER_H : 0);
+}
+
+/** How far a page's last row scrolls clear above the floating bars. */
+export const SCROLL_CLEAR_GAP = 12;
+
+/** A scrolling page's end padding: its own, or, while the floating bars show
+ *  (`barsReach`, from useFloatingBarsReach), enough for its last row to scroll
+ *  SCROLL_CLEAR_GAP clear above them, whichever is more. With no workout on,
+ *  every page keeps its own. */
+export function scrollEndPadding(own: number, barsReach: number): number {
+  return barsReach > 0 ? Math.max(own, barsReach + SCROLL_CLEAR_GAP) : own;
 }
 
 /** The nav bar's shadow, which every bar shares. */

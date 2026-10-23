@@ -8,12 +8,16 @@ import BounceButton from "./BounceButton";
 import SegmentedControl from "./SegmentedControl";
 import DumbbellIcon from "./DumbbellIcon";
 import ExerciseChartPlot, { type ChartRecords } from "./progress/ExerciseChartPlot";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK, accentTextColor } from "../constants/theme";
+import RecordsHeading from "./progress/RecordsHeading";
+import { displayWorkoutName } from "../utils/programDays";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
 import { pill, pillGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { MONTH_NAMES } from "../utils/dates";
 import { trimNumber } from "../utils/units";
 import { chartChange, drawsOn, fmtChange, isExerciseMetric } from "../utils/exerciseChartLayout";
+import { exercisePageParams } from "../utils/customExerciseDetails";
+import type { ChartSlot } from "../utils/exerciseDaySlots";
 import type { ExerciseDataPoint, ExerciseMetricKey, PRs } from "../constants/progress";
 import { EXERCISE_METRIC_OPTIONS } from "../constants/progress";
 
@@ -36,13 +40,21 @@ interface Props {
   /** ...and its program, since every program's days are d0, d1…: without it
    *  the full-history page listed other programs' first days too. */
   programId?: string;
+  /** A day of Custom workouts instead (ProgramDayRef.custom's key): the
+   *  full-history page then lists that day's sessions in no program, and
+   *  never a program's day of the same name. */
+  customDay?: string;
   history: ExerciseDataPoint[];
+  /** Where the chart puts them: a place for every time the day came round,
+   *  with the session number its card reads (utils/exerciseDaySlots.ts). */
+  slots: ChartSlot[];
   prs: PRs;
   /** "kg" | "lbs" */
   unit: string;
-  /** Set when a TRAINER is viewing a client's progress: the full history and
-   *  every workout this chart opens read that client's copy, read-only. Without
-   *  it they read the viewer's own storage, where a client's ids don't exist. */
+  /** Set when a TRAINER is viewing a client's progress: the full history, the
+   *  exercise's screen and every workout this chart opens read that client's
+   *  copy, read-only. Without it they read the viewer's own storage, where a
+   *  client's ids don't exist. */
   clientId?: string;
   /** Which tab the chart shows. Held by the page, which remembers it between
    *  visits (utils/progressSession.ts). */
@@ -105,7 +117,9 @@ export default function ExerciseProgressionChart({
   dayName,
   dayId,
   programId,
+  customDay,
   history,
+  slots,
   prs,
   unit,
   clientId,
@@ -137,7 +151,7 @@ export default function ExerciseProgressionChart({
   // Day context leads the subline (e.g. "Push · Sessions logged · 4") so two
   // day-scoped charts for the same exercise name are visually distinct.
   const headerLabel = (() => {
-    const day = dayName?.trim() ? `${dayName.trim()} · ` : "";
+    const day = dayName?.trim() ? `${displayWorkoutName(dayName.trim())} · ` : "";
     if (history.length === 0) return `${day}No sessions yet`;
     return `${day}Sessions logged · ${history.length}`;
   })();
@@ -145,6 +159,13 @@ export default function ExerciseProgressionChart({
   const goToWorkout = (workoutId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate({ pathname: "/workout-detail", params: { id: workoutId, ...(clientId ? { clientId } : {}) } });
+  };
+
+  // The name opens the exercise's screen, as a name on the Workout tab does
+  // (user request, 2026-10-21).
+  const goToExercise = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.navigate({ pathname: "/exercise-summary", params: exercisePageParams({ name: exerciseName, customId }, clientId) });
   };
 
   // The records: three lifted, each the gold mark on its own tab, and the
@@ -205,14 +226,23 @@ export default function ExerciseProgressionChart({
       <View style={styles.inner}>
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.title, { color: t.tp }]} numberOfLines={1}>{exerciseName}</Text>
-            <Text style={[styles.headerValue, { color: t.ts }]} numberOfLines={1}>
-              {headerLabel}
-            </Text>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={goToExercise}
+              style={styles.titleBlock}
+              accessibilityRole="button"
+              accessibilityLabel={`View ${exerciseName} summary`}
+            >
+              <Text style={[styles.title, { color: t.tp }]} numberOfLines={1}>{exerciseName}</Text>
+              <Text style={[styles.headerValue, { color: t.ts }]} numberOfLines={1}>
+                {headerLabel}
+              </Text>
+            </TouchableOpacity>
           </View>
           {change ? (() => {
-            // Up in the accent's text green, down in grey, as the Strength
-            // radar's arrows: a lighter week isn't a warning.
+            // Up in the accent green, as on the comparison page (user decision,
+            // 2026-10-16), down in grey, as the Strength radar's arrows: a
+            // lighter week isn't a warning.
             const c = fmtChange(change.pct);
             const since = fmtShortDate(change.sinceYMD);
             return (
@@ -221,7 +251,7 @@ export default function ExerciseProgressionChart({
                 accessible
                 accessibilityLabel={c.dir === "flat" ? `No change since ${since}` : `${c.dir === "up" ? "Up" : "Down"} ${c.text} since ${since}`}
               >
-                <Text style={[styles.changeValue, { color: c.dir === "up" ? accentTextColor(isDark) : t.ts }]} numberOfLines={1}>
+                <Text style={[styles.changeValue, { color: c.dir === "up" ? ACCT : t.ts }]} numberOfLines={1}>
                   {`${changeArrow(c.dir)}${c.text}`}
                 </Text>
                 <Text style={[styles.changeSince, { color: t.ts }]} numberOfLines={1}>{`since ${since}`}</Text>
@@ -246,7 +276,7 @@ export default function ExerciseProgressionChart({
           <View style={{ marginTop: 10, alignSelf: "stretch" }}>
             <ExerciseChartPlot
               exerciseName={exerciseName}
-              points={history}
+              slots={slots}
               metric={metric}
               unit={unit}
               seriesKey={`${exerciseName}|${programId ?? ""}|${dayId ?? dayName ?? ""}`}
@@ -269,7 +299,7 @@ export default function ExerciseProgressionChart({
 
     {rows.length > 0 ? (
       <>
-        <Text style={[styles.prHeader, { color: t.tp }]}>Personal Records</Text>
+        <RecordsHeading />
         <NeuCard dark={isDark} radius={16} style={{ marginHorizontal: 20 }}>
           <View style={styles.recordsInner}>
             {rows.map((r, i) => (
@@ -315,7 +345,13 @@ export default function ExerciseProgressionChart({
       onPress={() => {
         router.navigate({
           pathname: "/exercise-history",
-          params: { exerciseName, ...(customId ? { customId } : {}), ...(dayName ? { dayName } : {}), ...(dayId ? { dayId } : {}), ...(programId ? { programId } : {}), ...(clientId ? { clientId } : {}) },
+          params: {
+            ...exercisePageParams({ name: exerciseName, customId }, clientId),
+            ...(dayName ? { dayName } : {}),
+            // A day of Custom workouts goes by its key alone (its dayId and
+            // empty programId would match a program's day of its name).
+            ...(customDay ? { customDay } : { ...(dayId ? { dayId } : {}), ...(programId ? { programId } : {}) }),
+          },
         });
       }}
       accessibilityRole="button"
@@ -335,6 +371,9 @@ export default function ExerciseProgressionChart({
 const styles = StyleSheet.create({
   inner: { padding: 16 },
   headerRow: { flexDirection: "row", alignItems: "flex-start" },
+  // The name and the line under it, as wide as they are, so the blank space
+  // up to the change on the right isn't a button.
+  titleBlock: { alignSelf: "flex-start", maxWidth: "100%" },
   title: { fontFamily: FontFamily.bold, fontSize: 18 },
   headerValue: { fontFamily: FontFamily.semibold, fontSize: 13, marginTop: 2 },
   changeBlock: { alignItems: "flex-end", marginLeft: 12 },
@@ -351,17 +390,6 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.regular,
     fontSize: 13,
     textAlign: "center",
-  },
-
-  // "Personal Records" section header. Same bold-18 family as
-  // DayExerciseList's "Exercise Progress" header so the two section blocks
-  // read as siblings.
-  prHeader: {
-    fontFamily: FontFamily.bold,
-    fontSize: 18,
-    marginHorizontal: 20,
-    marginTop: 36,
-    marginBottom: 12,
   },
 
   // The records: one card of rows, each opening the workout it was set in.

@@ -19,6 +19,7 @@ struct PendingSetRecord: Record {
   @Field var isFinal: Bool = false
   @Field var isHold: Bool = false
   @Field var setDone: [Bool] = []
+  @Field var warmupDone: [Bool] = []
 }
 
 struct ActivityPayloadRecord: Record {
@@ -56,7 +57,7 @@ public class AvenasLiveActivityModule: Module {
           exerciseName: $0.exerciseName, setLabel: $0.setLabel,
           weight: $0.weight, reps: $0.reps,
           restSeconds: $0.restSeconds, isFinal: $0.isFinal,
-          isHold: $0.isHold, setDone: $0.setDone)
+          isHold: $0.isHold, setDone: $0.setDone, warmupDone: $0.warmupDone)
       }
       WorkoutActivityController.saveQueue(queue)
       WorkoutActivityController.defaults?.set(payload.restEndMs, forKey: AvenasSharedKeys.restEnd)
@@ -79,7 +80,8 @@ public class AvenasLiveActivityModule: Module {
         isHold: head?.isHold,
         setIdx: head?.setIdx,
         setDone: head?.setDone,
-        isDark: payload.isDark)
+        isDark: payload.isDark,
+        warmupDone: head?.warmupDone)
 
       // A workout-name change means a different session — replace the card.
       if let activity = WorkoutActivityController.currentActivity(),

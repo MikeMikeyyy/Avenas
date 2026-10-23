@@ -6,7 +6,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import NeuCard from "./NeuCard";
 import DropdownPicker from "./DropdownPicker";
 import DumbbellIcon from "./DumbbellIcon";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily, accentTextColor, compareBlue, compareBlueText } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, compareBlue, compareBlueText } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { RADAR_GROUPS } from "../utils/muscleGroups";
 import { toDisplayWeight } from "../utils/units";
@@ -489,9 +489,9 @@ export default function StrengthRadarChart({
                   ) : p.display}
                   {p.trend ? (
                     // Direction is carried by the glyph itself; color is only a
-                    // secondary cue (the accent's text green highlights gains,
-                    // muted keeps dips calm).
-                    <Text style={[styles.labelTrend, { color: p.trend === "up" ? accentTextColor(isDark) : t.ts }]}>
+                    // secondary cue (the accent green highlights gains, as on
+                    // the comparison page; muted keeps dips calm).
+                    <Text style={[styles.labelTrend, { color: p.trend === "up" ? ACCT : t.ts }]}>
                       {p.trend === "up" ? " ▲" : " ▼"}
                     </Text>
                   ) : null}

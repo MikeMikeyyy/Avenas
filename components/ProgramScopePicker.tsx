@@ -13,18 +13,22 @@ import {
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import BounceButton from "./BounceButton";
+import GlassButton from "./GlassButton";
 import SheetPill from "./SheetPill";
-import { pill, PILL_SHADOW } from "../constants/buttons";
+import { PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import type { SavedProgram } from "../constants/programs";
 import type { ProgramScope } from "../constants/progress";
+import { CUSTOM_WORKOUTS_NAME } from "../utils/progressStats";
 
 interface Props {
   scope: ProgramScope;
   programs: SavedProgram[];
   onChange: (s: ProgramScope) => void;
+  /** Some sessions are in no program (free workouts, imported ones, a deleted
+   *  program's): Custom workouts is offered. */
+  hasCustom?: boolean;
   /** Where the pill sits in its parent (the Progress page's filter row gives
    *  it `flex: 1` beside the time range). */
   style?: StyleProp<ViewStyle>;
@@ -36,7 +40,7 @@ const ChevronDown = ({ color, size = 16 }: { color: string; size?: number }) => 
   </Svg>
 );
 
-export default function ProgramScopePicker({ scope, programs, onChange, style }: Props) {
+export default function ProgramScopePicker({ scope, programs, onChange, hasCustom = false, style }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -96,6 +100,7 @@ export default function ProgramScopePicker({ scope, programs, onChange, style }:
       return activeProgram ? activeProgram.name : "Current program";
     }
     if (scope.kind === "all") return "All programs";
+    if (scope.kind === "custom") return CUSTOM_WORKOUTS_NAME;
     const found = programs.find(p => p.id === scope.programId);
     return found?.name ?? "Program";
   }, [scope, programs, activeProgram]);
@@ -128,23 +133,25 @@ export default function ProgramScopePicker({ scope, programs, onChange, style }:
 
   return (
     <>
-      <BounceButton
-        accessibilityRole="button"
-        accessibilityLabel={`Select program scope, currently ${currentLabel}`}
+      {/* The app's pill (it was a squared-off NeuCard, the one non-pill
+          button on the page), glass on iOS 26 (components/GlassButton.tsx; user
+          request, 2026-10-23). Laid out as a dropdown: the program name reads
+          from the left, the chevron sits at the far end. */}
+      <GlassButton
+        pill
+        size={PILL_H_XS}
         onPress={() => setOpen(true)}
         style={style}
+        contentStyle={styles.trigger}
+        solidStyle={PILL_SHADOW}
+        accessibilityLabel={`Select program scope, currently ${currentLabel}`}
       >
-        {/* The app's pill on the control surface (it was a squared-off NeuCard,
-            the one non-pill button on the page). Laid out as a dropdown: the
-            program name reads from the left, the chevron sits at the far end. */}
-        <View style={[styles.trigger, { backgroundColor: t.ctrl }]}>
-          <View style={[styles.dot, { backgroundColor: scope.kind === "all" ? t.ts : ACCT }]} />
-          <Text style={[styles.pillText, { color: t.tp }]} numberOfLines={1}>
-            {currentLabel}
-          </Text>
-          <ChevronDown color={t.ts} />
-        </View>
-      </BounceButton>
+        <View style={[styles.dot, { backgroundColor: scope.kind === "all" || scope.kind === "custom" ? t.ts : ACCT }]} />
+        <Text style={[styles.pillText, { color: t.tp }]} numberOfLines={1}>
+          {currentLabel}
+        </Text>
+        <ChevronDown color={t.ts} />
+      </GlassButton>
 
       <Modal visible={mounted} transparent animationType="none" onRequestClose={() => setOpen(false)}>
         <View style={{ flex: 1 }}>
@@ -197,6 +204,14 @@ export default function ProgramScopePicker({ scope, programs, onChange, style }:
                   selected={scope.kind === "all"}
                   onPress={() => choose({ kind: "all" })}
                 />
+                {hasCustom ? (
+                  <ScopeCardRow
+                    label={CUSTOM_WORKOUTS_NAME}
+                    sublabel="Workouts that aren't in a program"
+                    selected={scope.kind === "custom"}
+                    onPress={() => choose({ kind: "custom" })}
+                  />
+                ) : null}
 
                 {sortedPrograms.length > 0 ? (
                   <View style={styles.sectionLabelWrap}>
@@ -260,11 +275,12 @@ function ScopeCardRow({
 }
 
 const styles = StyleSheet.create({
+  // What's on the compact pill (PILL_H_XS), a step down from the full-size one
+  // it was (user request, 2026-10-21: the page's two filters stood too tall
+  // under its title). DropdownPicker's "bar" beside it matches.
   trigger: {
-    ...pill(),
     gap: 10,
-    paddingHorizontal: 22,
-    ...PILL_SHADOW,
+    paddingHorizontal: 18,
   },
   dot: {
     width: 8,

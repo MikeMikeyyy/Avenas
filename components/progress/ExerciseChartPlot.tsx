@@ -12,6 +12,15 @@
 // geometry is utils/exerciseChartLayout.ts, which the training simulation
 // checks.
 //
+// Each slot is numbered with the session its workout card says it was, and a
+// time the day came round without the exercise keeps its slot and its number
+// (utils/exerciseDaySlots.ts; user decision, 2026-10-22), drawn as Program
+// Compare draws one (components/progress/CompareChartPlot.tsx): on Strength an
+// empty dotted circle on the line, which goes dotted through it or out to it,
+// with "Missed" ("2 missed") at the foot over a run of them; on Sets and Volume
+// an empty bar, dashed and lined, as tall as the session before. A program run
+// again counts from 1 again, as its cards do, past a dashed line between runs.
+//
 // When a scroll settles on other sessions, the y-axis fits them: every path
 // eases to the new scale on the UI thread (useAnimatedProps over a shared
 // min/max), while the numbers fade from their old places to the new.
@@ -42,23 +51,29 @@ import Reanimated, {
   withSequence,
   withTiming,
 } from "react-native-reanimated";
-import Svg, { Circle, Defs, Line, LinearGradient, Path, Rect, Stop } from "react-native-svg";
+import Svg, { Circle, Defs, Line, LinearGradient, Path, Pattern, Rect, Stop } from "react-native-svg";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect } from "expo-router";
 import {
-  ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK, GOLD_SHINE, NEU_BG, NEU_BG_DARK, accentTextColor,
+  ACCT, APP_DARK, APP_LIGHT, CUE_INK, CUE_INK_DARK, FontFamily, GOLD, GOLD_DARK, GOLD_SHINE, NEU_BG, NEU_BG_DARK,
+  accentTextColor,
 } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import type { ExerciseDataPoint, ExerciseMetricKey } from "../../constants/progress";
+import type { ExerciseMetricKey } from "../../constants/progress";
 import {
   BAR_WIDTH, BLOCK_GAP, CHART_HEIGHT, CHART_TOTAL_H, DOT_R, GLINT_BANDS, LABEL_H, LINE_STROKE, PLOT_TOP, SESSION_SPACING,
   TOOLTIP_W, Y_AXIS_LABEL_WIDTH, areaPathD, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, dotsPathD,
-  drawsOn, exerciseChartAxis, exerciseChartGeometry, fmtChange, linePathD, popupLeft, setStacks, slotX, sparkleD,
-  strengthDots, strengthLabel, valueY, visibleSlots, volumeBars, windowAxis,
+  drawsOn, exerciseChartAxis, exerciseChartGeometry, fmtChange, popupLeft, setStacks, slotX, sparkleD,
+  strengthDots, strengthLabel, valueY, visibleSlots, volumeBars,
   type ExerciseChartGeometry,
 } from "../../utils/exerciseChartLayout";
+import {
+  compareWindowAxis, missedBarValue, missedBars, missedRuns, segmentsPathD, strengthLine,
+} from "../../utils/compareChartLayout";
+import type { ChartSlot } from "../../utils/exerciseDaySlots";
 import { MONTH_NAMES } from "../../utils/dates";
 import { trimNumber } from "../../utils/units";
+import { ordinal } from "../../utils/workoutSummary";
 import { useChartEntrance } from "./chartEntrance";
 
 const AnimatedPath = Reanimated.createAnimatedComponent(Path);
@@ -90,6 +105,12 @@ const SPARKLE_R = 6;
 const SPARKLE_AT = 3.5;
 /** How white the gold dot flashes under its sparkle, at its brightest. */
 const GOLD_FLASH = 0.4;
+/** A missed session's word, as on the comparison: how wide it reads, how far
+ *  over the foot of the plot it sits, and how close above it a dot can sit
+ *  before the word gives way to it. */
+const MISSED_LABEL_W = 50;
+const MISSED_WORD_Y = 19;
+const MISSED_CLEAR = 15;
 
 /** The record each tab marks in gold, by session (and set, on Sets). */
 export type ChartRecords = {
@@ -100,8 +121,9 @@ export type ChartRecords = {
 
 type Props = {
   exerciseName: string;
-  /** Every session, oldest first, in the unit shown. */
-  points: ExerciseDataPoint[];
+  /** Every place on the row, oldest first: a session (in the unit shown) or a
+   *  miss, with the session number its card reads (utils/exerciseDaySlots.ts). */
+  slots: ChartSlot[];
   metric: ExerciseMetricKey;
   /** "kg" | "lbs" */
   unit: string;
@@ -130,7 +152,7 @@ function counted(n: number, noun: string): string {
 
 export default function ExerciseChartPlot(props: Props) {
   const { width: screenWidth } = useWindowDimensions();
-  const n = props.points.length;
+  const n = props.slots.length;
   const g = useMemo(() => exerciseChartGeometry(n, screenWidth), [n, screenWidth]);
   // Where the row last came to rest, kept across the tabs (every session keeps
   // its slot on all three); another exercise, or a new session, opens on the
@@ -146,22 +168,30 @@ export default function ExerciseChartPlot(props: Props) {
 type Focus = { slot: number; set?: number };
 
 function PlotBody({
-  exerciseName, points, metric, unit, records, g, scrollX, onSettle,
+  exerciseName, slots, metric, unit, records, g, scrollX, onSettle,
 }: Props & { g: ExerciseChartGeometry; scrollX: number; onSettle: (x: number) => void }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const gold = isDark ? GOLD_DARK : GOLD;
+  const card = isDark ? NEU_BG_DARK : NEU_BG;
   const reduceMotion = useReducedMotion();
-  const n = points.length;
+  const n = slots.length;
+  // Each slot's session, nothing in a miss's.
+  const row = useMemo(() => slots.map(s => s.point), [slots]);
   const fmtW = (w: number) => trimNumber(w, unit === "kg" ? 2 : 1);
+  const base = PLOT_TOP + CHART_HEIGHT;
 
   // ── The y-axis: fitted to the sessions on screen ────────────────────────
   const win = visibleSlots(g, n, scrollX);
   const axis = useMemo(
-    // A screen of sessions with nothing on this tab (bodyweight ones on
-    // Strength) reads against every session's axis.
-    () => windowAxis(points, metric, win.first, win.last) ?? windowAxis(points, metric, 0, n - 1) ?? exerciseChartAxis([]),
-    [points, metric, win.first, win.last, n],
+    // The comparison's axis for one program: on Sets and Volume it holds the
+    // empty bars of the sessions missed there too. A screen of sessions with
+    // nothing on this tab (bodyweight ones on Strength) reads against every
+    // session's axis.
+    () => compareWindowAxis(slots, [], metric, win.first, win.last)
+      ?? compareWindowAxis(slots, [], metric, 0, n - 1)
+      ?? exerciseChartAxis([]),
+    [slots, metric, win.first, win.last, n],
   );
   const axisKey = `${axis.min}|${axis.max}|${axis.sections}`;
   const aMin = useSharedValue(axis.min);
@@ -246,17 +276,20 @@ function PlotBody({
   // Values, not positions: the paths place them on the axis as it eases.
   const shapes = useMemo(() => {
     const s = {
-      lineXs: [] as number[], lineVs: [] as number[],
+      // Strength's line, solid from session to session and dotted through a
+      // miss, with an empty circle for each (utils/compareChartLayout.ts).
+      line: strengthLine(slots, g),
       dotXs: [] as number[], dotVs: [] as number[],
       goldX: -1, goldV: 0,
       blocks: [] as number[], lighterBlocks: [] as number[], goldBlock: [] as number[],
       barXs: [] as number[], barVs: [] as number[],
+      // A miss's empty bar, on Sets and Volume.
+      missedBars: missedBars(slots, metric === "strength" ? "volume" : metric, 0, g),
     };
-    points.forEach((p, slot) => {
+    row.forEach((p, slot) => {
+      if (!p) return;
       const x = slotX(g, slot);
       if (metric === "strength" && drawsOn(p, "strength")) {
-        s.lineXs.push(x);
-        s.lineVs.push(p.topWeight);
         if (s.goldX < 0 && p.workoutId === records.heaviest) {
           s.goldX = x;
           s.goldV = p.topWeight;
@@ -284,11 +317,15 @@ function PlotBody({
       }
     });
     return s;
-  }, [points, metric, g, records]);
+  }, [slots, row, metric, g, records]);
 
-  const lineProps = useAnimatedProps(() => ({ d: linePathD(shapes.lineXs, shapes.lineVs, aMin.value, aMax.value) }), [shapes]);
-  const areaProps = useAnimatedProps(() => ({ d: areaPathD(shapes.lineXs, shapes.lineVs, aMin.value, aMax.value) }), [shapes]);
+  const solidProps = useAnimatedProps(() => ({ d: segmentsPathD(shapes.line.solid, aMin.value, aMax.value) }), [shapes]);
+  const dottedProps = useAnimatedProps(() => ({ d: segmentsPathD(shapes.line.dotted, aMin.value, aMax.value) }), [shapes]);
+  const areaProps = useAnimatedProps(() => ({ d: areaPathD(shapes.line.xs, shapes.line.vs, aMin.value, aMax.value) }), [shapes]);
   const dotsProps = useAnimatedProps(() => ({ d: dotsPathD(shapes.dotXs, shapes.dotVs, aMin.value, aMax.value, DOT_R) }), [shapes]);
+  const missedRingsProps = useAnimatedProps(() => ({
+    d: dotsPathD(shapes.line.missedXs, shapes.line.missedVs, aMin.value, aMax.value, DOT_R + 1),
+  }), [shapes]);
   const goldHaloProps = useAnimatedProps(() => ({ cy: valueY(shapes.goldV, aMin.value, aMax.value) }), [shapes]);
   const goldDotProps = useAnimatedProps(() => ({ cy: valueY(shapes.goldV, aMin.value, aMax.value) }), [shapes]);
   // ── How the tab comes in: the bars and blocks rise, the line draws out ──
@@ -309,6 +346,9 @@ function PlotBody({
   const barsProps = useAnimatedProps(() => ({ d: barsPathD(shapes.barXs, shapes.barVs, aMin.value, aMax.value, enter.value) }), [shapes]);
   const goldBarProps = useAnimatedProps(() => ({
     d: shapes.goldX < 0 ? "" : barsPathD([shapes.goldX], [shapes.goldV], aMin.value, aMax.value, enter.value),
+  }), [shapes]);
+  const missedBarsProps = useAnimatedProps(() => ({
+    d: barsPathD(shapes.missedBars.xs, shapes.missedBars.vs, aMin.value, aMax.value, enter.value),
   }), [shapes]);
 
   // ── The record's shine ───────────────────────────────────────────────────
@@ -367,34 +407,77 @@ function PlotBody({
   }, [shapes]);
 
   // Where things sit on the settled axis: the labels, the taps, the pop-up.
-  const dots = useMemo(() => (metric === "strength" ? strengthDots(points, g, axis) : []), [points, metric, g, axis]);
-  const stacks = useMemo(() => (metric === "sets" ? setStacks(points, g, axis) : []), [points, metric, g, axis]);
-  const bars = useMemo(() => (metric === "volume" ? volumeBars(points, g, axis) : []), [points, metric, g, axis]);
+  const dots = useMemo(() => (metric === "strength" ? strengthDots(row, g, axis) : []), [row, metric, g, axis]);
+  const stacks = useMemo(() => (metric === "sets" ? setStacks(row, g, axis) : []), [row, metric, g, axis]);
+  const bars = useMemo(() => (metric === "volume" ? volumeBars(row, g, axis) : []), [row, metric, g, axis]);
+  // Each miss's mark: its empty circle on Strength (one for every miss, once
+  // there's a line to put them on), the top of its empty bar on Sets and
+  // Volume (none with no session either side that draws there).
+  const missedMarks = useMemo(() => {
+    const out: { slot: number; y: number }[] = [];
+    let ring = 0;
+    slots.forEach((s, slot) => {
+      if (s.missed === undefined) return;
+      if (metric === "strength") {
+        if (ring < shapes.line.missedVs.length) out.push({ slot, y: valueY(shapes.line.missedVs[ring++], axis.min, axis.max) });
+        return;
+      }
+      const v = missedBarValue(slots, slot, metric);
+      if (v !== null) out.push({ slot, y: valueY(v, axis.min, axis.max) });
+    });
+    return out;
+  }, [slots, metric, shapes, axis.min, axis.max]);
+  // Strength's word over each run of misses at the foot of the plot, left off
+  // where a mark sits low there.
+  const missedWords = useMemo(() => {
+    if (metric !== "strength") return [];
+    const marks = [
+      ...shapes.line.xs.map((x, i) => ({ x, y: valueY(shapes.line.vs[i], axis.min, axis.max) })),
+      ...shapes.line.missedXs.map((x, i) => ({ x, y: valueY(shapes.line.missedVs[i], axis.min, axis.max) })),
+    ];
+    return missedRuns(slots, [], g)
+      .map(r => ({ key: `${r.slots[0]}`, x: r.x, y: base - MISSED_WORD_Y, label: r.label }))
+      .filter(w => !marks.some(d => Math.abs(d.x - w.x) < MISSED_LABEL_W / 2 + SESSION_SPACING && d.y > w.y - MISSED_CLEAR));
+  }, [metric, slots, g, shapes, axis.min, axis.max, base]);
+  // Where a run of the program begins again, counting from 1 again: a line
+  // between the two runs.
+  const runBreaks = useMemo(
+    () => slots.flatMap((s, k) => (k > 0 && s.run !== slots[k - 1].run ? [slotX(g, k) - g.spacing / 2] : [])),
+    [slots, g],
+  );
 
   const blockText = accentTextColor(isDark);
-  const holdUnit = (p: ExerciseDataPoint) => !!p.isHold;
+  const cueInk = isDark ? CUE_INK_DARK : CUE_INK;
+  const holdUnit = (p: { isHold?: boolean }) => !!p.isHold;
 
   // ── The pop-up over a tapped session ─────────────────────────────────────
   const popup = (() => {
     if (!focus) return null;
-    const p = points[focus.slot];
-    if (!p) return null;
+    const s = slots[focus.slot];
+    if (!s) return null;
+    const p = s.point;
     const x = Y_AXIS_LABEL_WIDTH + slotX(g, focus.slot) - scrollX;
     let y: number;
     let title: string;
     const lines: string[] = [];
-    let dateLine = fmtLongDate(p.date);
+    let dateLine = fmtLongDate(p?.date ?? s.missed ?? "");
     let change: number | null = null;
-    if (metric === "strength") {
+    if (!p) {
+      // A miss: the day it came round, at its empty circle or bar.
+      const mark = missedMarks.find(m => m.slot === focus.slot);
+      if (!mark) return null;
+      y = mark.y;
+      title = "Missed";
+    } else if (metric === "strength") {
       const dot = dots.find(d => d.slot === focus.slot);
       if (!dot) return null;
       y = dot.y;
       title = holdUnit(p) ? `${fmtW(p.topWeight)} ${unit} for ${p.topReps}s` : `${fmtW(p.topWeight)} ${unit} × ${p.topReps}`;
       // An estimate, so it says so (user decision, 2026-10-08).
       if (p.e1rm > 0) lines.push(`Est. 1RM ${Math.round(p.e1rm)} ${unit}`);
-      change = changeFromPrevious(points, focus.slot, metric);
+      change = changeFromPrevious(row, focus.slot, metric);
     } else if (metric === "sets") {
-      const block = stacks[focus.slot]?.blocks[focus.set ?? 0];
+      const block = stacks.find(st => st.slot === focus.slot)?.blocks[focus.set ?? 0];
       if (!block) return null;
       y = block.y;
       title = holdUnit(p)
@@ -407,8 +490,10 @@ function PlotBody({
       y = bar.y;
       title = `${fmtTotal(p.sessionVolume)} ${unit}`;
       lines.push(`${counted(p.weightedSets, "set")} · ${counted(p.weightedReps, "rep")}`);
-      change = changeFromPrevious(points, focus.slot, metric);
+      change = changeFromPrevious(row, focus.slot, metric);
     }
+    // Which run, where the chart holds more than one: each counts from 1.
+    if (s.run !== null) lines.push(`${ordinal(s.run)} run`);
     // Over the session, or under it where over would cover the card's title.
     const cardH = 18 + 20 + 17 * (lines.length + 1);
     const below = y - 21 - cardH < -28;
@@ -441,9 +526,9 @@ function PlotBody({
   })();
 
   // ── Drawing ──────────────────────────────────────────────────────────────
-  const base = PLOT_TOP + CHART_HEIGHT;
   const focusedBar = metric === "volume" && focus ? bars.find(b => b.slot === focus.slot) ?? null : null;
-  const focusedBlock = metric === "sets" && focus ? stacks[focus.slot]?.blocks[focus.set ?? 0] ?? null : null;
+  const focusedStack = metric === "sets" && focus ? stacks.find(st => st.slot === focus.slot) ?? null : null;
+  const focusedBlock = focusedStack?.blocks[focus?.set ?? 0] ?? null;
   const focusedDot = metric === "strength" && focus ? dots.find(d => d.slot === focus.slot) ?? null : null;
   const rules = Array.from({ length: axis.sections }, (_, i) => base - ((i + 1) / axis.sections) * CHART_HEIGHT);
   const fade = isDark ? NEU_BG_DARK : NEU_BG;
@@ -503,10 +588,25 @@ function PlotBody({
               request, 2026-10-08). */}
           <Pressable accessible={false} onPress={clearFocus} style={StyleSheet.absoluteFill} />
 
+          {runBreaks.length > 0 ? (
+            <Svg width={g.contentWidth} height={CHART_TOTAL_H} style={styles.revealed} pointerEvents="none">
+              {runBreaks.map(x => (
+                <Line key={x} x1={x} x2={x} y1={PLOT_TOP} y2={base} stroke={t.div} strokeWidth={1} strokeDasharray={[3, 4]} />
+              ))}
+            </Svg>
+          ) : null}
+
           {/* The drawing and the numbers on it, shown as far as Strength's line
               has drawn out (all of it on the other tabs). */}
           <Reanimated.View pointerEvents="none" style={[styles.reveal, revealStyle]}>
           <Svg width={g.contentWidth} height={CHART_TOTAL_H} style={styles.revealed} pointerEvents="none">
+            {/* A miss's empty bar: thin diagonal lines in the accent, no fill,
+                as on the comparison. */}
+            <Defs>
+              <Pattern id="exerciseMissed" patternUnits="userSpaceOnUse" width={6} height={6} patternTransform="rotate(45)">
+                <Line x1={0} y1={0} x2={0} y2={6} stroke={ACCT} strokeWidth={1.6} strokeOpacity={0.5} />
+              </Pattern>
+            </Defs>
             {metric === "strength" ? (
               <>
                 <Defs>
@@ -521,13 +621,17 @@ function PlotBody({
                 </Defs>
                 <AnimatedPath animatedProps={areaProps} fill="url(#exerciseArea)" />
                 <AnimatedPath
-                  animatedProps={lineProps}
+                  animatedProps={solidProps}
                   fill="none"
                   stroke={ACCT}
                   strokeWidth={LINE_STROKE}
                   strokeLinejoin="round"
                   strokeLinecap="round"
                 />
+                {/* Through a miss the line goes dotted, and the miss is an
+                    empty dotted circle on it. */}
+                <AnimatedPath animatedProps={dottedProps} fill="none" stroke={ACCT} strokeWidth={2} strokeDasharray={[3, 4]} strokeLinecap="round" />
+                <AnimatedPath animatedProps={missedRingsProps} fill={card} stroke={ACCT} strokeWidth={1.6} strokeDasharray={[2.4, 1.8]} />
                 <AnimatedPath animatedProps={dotsProps} fill={ACCT} />
                 {shapes.goldX >= 0 ? (
                   <>
@@ -552,10 +656,11 @@ function PlotBody({
                     paler, so the weight over the stack can't pass for it. */}
                 <AnimatedPath animatedProps={lighterProps} fill={ACCT} fillOpacity={isDark ? 0.1 : 0.13} />
                 <AnimatedPath animatedProps={goldBlockProps} fill={gold} />
+                <AnimatedPath animatedProps={missedBarsProps} fill="url(#exerciseMissed)" stroke={ACCT} strokeWidth={1.3} strokeDasharray={[3, 2.5]} />
                 {hasRecord ? glint : null}
-                {focusedBlock && focus && stacks[focus.slot] ? (
+                {focusedBlock && focusedStack ? (
                   <Rect
-                    x={stacks[focus.slot].x - BAR_WIDTH / 2 - 1}
+                    x={focusedStack.x - BAR_WIDTH / 2 - 1}
                     y={focusedBlock.y - 1}
                     width={BAR_WIDTH + 2}
                     height={focusedBlock.h + 2}
@@ -572,9 +677,10 @@ function PlotBody({
                     above. */}
                 <AnimatedPath animatedProps={barsProps} fill={ACCT} fillOpacity={focusedBar ? 0.45 : 1} />
                 <AnimatedPath animatedProps={goldBarProps} fill={gold} />
+                <AnimatedPath animatedProps={missedBarsProps} fill="url(#exerciseMissed)" stroke={ACCT} strokeWidth={1.3} strokeDasharray={[3, 2.5]} />
                 {hasRecord ? glint : null}
-                {focusedBar && points[focusedBar.slot]?.workoutId !== records.mostVolume ? (
-                  <Path d={barsPathD([focusedBar.x], [points[focusedBar.slot].sessionVolume], axis.min, axis.max)} fill={ACCT} />
+                {focusedBar && focusedBar.point.workoutId !== records.mostVolume ? (
+                  <Path d={barsPathD([focusedBar.x], [focusedBar.point.sessionVolume], axis.min, axis.max)} fill={ACCT} />
                 ) : null}
               </>
             )}
@@ -594,11 +700,11 @@ function PlotBody({
           >
             {dots.map(d => (
               <Text key={d.slot} style={[styles.label, { left: d.labelX - SESSION_SPACING / 2, top: d.labelY - LABEL_H / 2, color: t.ts }]}>
-                {strengthLabel(points[d.slot])}
+                {strengthLabel(d.point)}
               </Text>
             ))}
             {stacks.map(st => {
-              const p = points[st.slot];
+              const p = st.point;
               const over = st.heaviest > 0 ? `${fmtW(st.heaviest)} ${unit}` : holdUnit(p) ? "" : "BW";
               return (
                 <View key={st.slot} style={StyleSheet.absoluteFill}>
@@ -628,25 +734,37 @@ function PlotBody({
             })}
             {bars.map(b => (
               <Text key={b.slot} style={[styles.label, { left: b.x - SESSION_SPACING / 2, top: b.labelY - LABEL_H / 2, color: t.ts }]} numberOfLines={1}>
-                {fmtTotal(points[b.slot].sessionVolume)}
+                {fmtTotal(b.point.sessionVolume)}
               </Text>
             ))}
           </Reanimated.View>
+          <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+            {missedWords.map(w => (
+              <Text
+                key={w.key}
+                style={[styles.missed, { left: w.x - SESSION_SPACING, top: w.y - LABEL_H / 2, color: cueInk }]}
+                numberOfLines={1}
+              >
+                {w.label}
+              </Text>
+            ))}
+          </View>
           </Reanimated.View>
           </Reanimated.View>
 
-          {/* Each session's number: the Nth time it was done on this day. A
-              session with nothing on this tab keeps its number, faded. */}
+          {/* Each session's number, the one its card reads ("5th session"): a
+              miss keeps its number, and a session with nothing on this tab
+              keeps its number, faded. */}
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-            {points.map((p, slot) => (
+            {slots.map((s, slot) => (
               <Text
                 key={slot}
                 style={[
                   styles.number,
-                  { left: slotX(g, slot) - SESSION_SPACING / 2, top: base + 3, color: t.ts, opacity: drawsOn(p, metric) ? 1 : 0.45 },
+                  { left: slotX(g, slot) - SESSION_SPACING / 2, top: base + 3, color: t.ts, opacity: s.point && !drawsOn(s.point, metric) ? 0.45 : 1 },
                 ]}
               >
-                {slot + 1}
+                {s.number}
               </Text>
             ))}
           </View>
@@ -662,7 +780,7 @@ function PlotBody({
                   onPress={() => toggle({ slot: d.slot })}
                   style={{ position: "absolute", left: d.x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: Math.min(d.y + HIT_HALF, base + 12) - top }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${exerciseName}, session ${d.slot + 1}`}
+                  accessibilityLabel={`${exerciseName}, session ${slots[d.slot].number}`}
                 />
               );
             })}
@@ -678,7 +796,7 @@ function PlotBody({
                   onPress={() => toggle({ slot: st.slot, set: b.set })}
                   style={{ position: "absolute", left: st.x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: Math.max(8, bottom - top) }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${exerciseName}, session ${st.slot + 1}, set ${b.set + 1}`}
+                  accessibilityLabel={`${exerciseName}, session ${slots[st.slot].number}, set ${b.set + 1}`}
                 />
               );
             }))}
@@ -691,7 +809,23 @@ function PlotBody({
                   onPress={() => toggle({ slot: b.slot })}
                   style={{ position: "absolute", left: b.x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: base + 4 - top }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${exerciseName}, session ${b.slot + 1}`}
+                  accessibilityLabel={`${exerciseName}, session ${slots[b.slot].number}`}
+                />
+              );
+            })}
+            {/* A miss, at its empty circle or over its empty bar. */}
+            {missedMarks.map(m => {
+              const x = slotX(g, m.slot);
+              const top = metric === "strength" ? Math.max(0, m.y - HIT_HALF) : Math.max(0, Math.min(m.y - 20, base - 36));
+              const bottom = metric === "strength" ? Math.min(m.y + HIT_HALF, base + 12) : base + 4;
+              return (
+                <TouchableOpacity
+                  key={`missed-${m.slot}`}
+                  activeOpacity={1}
+                  onPress={() => toggle({ slot: m.slot })}
+                  style={{ position: "absolute", left: x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: bottom - top }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${exerciseName}, session ${slots[m.slot].number}, missed`}
                 />
               );
             })}
@@ -813,6 +947,17 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     textAlign: "center",
     fontFamily: FontFamily.regular,
+    fontSize: 10,
+    includeFontPadding: false,
+  },
+  // A run of misses' word ("Missed", "2 missed"), as on the comparison.
+  missed: {
+    position: "absolute",
+    width: SESSION_SPACING * 2,
+    height: LABEL_H,
+    lineHeight: LABEL_H,
+    textAlign: "center",
+    fontFamily: FontFamily.semibold,
     fontSize: 10,
     includeFontPadding: false,
   },

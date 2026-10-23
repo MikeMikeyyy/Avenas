@@ -227,6 +227,9 @@ export type WorkoutRow = {
   /** The program day as the session was set up from it (migration 0046), or
    *  null. See CompletedWorkout.plan. */
   plan: unknown[] | null;         // PlannedExercise[]
+  /** The name of the deleted program this session was logged under
+   *  (migration 0052), or null. See CompletedWorkout.programName. */
+  program_name: string | null;
   created_at: string;
   updated_at: string;
 };

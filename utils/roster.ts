@@ -15,7 +15,12 @@
 //                                                    "trainer": in neither list,
 //                                                    their note asks)
 //   viewer is a gym user     → connected pt        = one of MY TRAINERS
-//                            → connected gym user  = not surfaced (no peer feature yet)
+//                            → connected gym user  = one of their OTHER
+//                                                    CONNECTIONS (My Trainers,
+//                                                    under its own heading, so
+//                                                    a chat with them has a
+//                                                    way in; no peer feature
+//                                                    beyond that)
 //
 // Connecting is symmetric and role-blind (lib/connections.ts → migration 0006),
 // so the split has to happen here at read time. Before this module existed the
@@ -85,6 +90,14 @@ const toTrainer = (c: Connection): AssignedPT => ({
   id: c.otherId,
   name: c.name || "Trainer",
   initials: makeInitials(c.name || "Trainer"),
+  photoUri: c.photoUri,
+});
+
+/** Someone connected who isn't a trainer, in the same shape. */
+const toPerson = (c: Connection): AssignedPT => ({
+  id: c.otherId,
+  name: c.name || "User",
+  initials: makeInitials(c.name || "User"),
   photoUri: c.photoUri,
 });
 
@@ -171,6 +184,17 @@ export type MyTrainers = {
   all: AssignedPT[];
   /** The one MyPTHome features, or null when there are none. */
   primary: AssignedPT | null;
+  /** Everyone else this account is connected to: another gym user who
+   *  connected by code (connecting is role-blind). Nobody gets here from a
+   *  switch: a trainer moving to a gym account is disconnected from the gym
+   *  users they knew (migration 0041). The My Trainers page lists them under
+   *  their own heading, so a chat with them always has a way in. Only from
+   *  the server: empty when it couldn't be asked. */
+  others: AssignedPT[];
+  /** Whether the server answered. Without it (offline, signed out) `all` is
+   *  only what's on this phone, which for real connections is the primary
+   *  alone: a caller holding a fuller list from before should keep it. */
+  live: boolean;
 };
 
 /** The gym-user-side trainer list. `@avenas/gym/assigned_pt` acts as a POINTER
@@ -195,7 +219,8 @@ export async function resolveMyTrainers(): Promise<MyTrainers> {
   // connected trainer takes the slot so the page is never headless.
   const primary = all.find(t => t.id === saved?.id) ?? all[0] ?? null;
   const ordered = primary ? [primary, ...all.filter(t => t.id !== primary.id)] : all;
-  return { all: ordered, primary };
+  const others = (live?.accepted ?? []).filter(c => c.accountType !== "pt").map(toPerson);
+  return { all: ordered, primary, others, live: live !== null };
 }
 
 /** Make `pt` the primary trainer. The outgoing primary is only written to the

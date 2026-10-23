@@ -11,10 +11,12 @@
 //                  program scope and range, the Exercise Progress day list, the
 //                  exercise chart, its records, and the Exercise History page
 //                  the chart opens
+//   chart-slots/   the exercise chart's places: every session once, each on
+//                  the number its workout card reads, a miss on none of theirs
 //   chart-layout/  the exercise chart on every phone width: every session in
 //                  reach, the newest on screen when it opens, and on every
 //                  screenful a scroll stops on, an axis that reads cleanly with
-//                  every dot, block and bar inside the plot
+//                  every dot, block, bar and missed mark inside the plot
 //   program-page/  the program page the Journal opens: weeks and totals
 //   home/          this week's ring and totals, Recent Activity
 //   hints/         the Workout tab's "Previous" sets and notes, and its "Last
@@ -32,19 +34,22 @@ import {
   bucketMetricByDay, bucketMetricByMonth, bucketMetricByRollingWeeks, collectExerciseHistory,
   collectLoggedExercisesForDay, computePRs, computeWorkoutDurationMinutes, computeWorkoutReps,
   computeWorkoutTonnage, filterByProgramScope, getRangeOption, rangeWindow, scopedProgramDays,
-  sessionCountForDay, yearBarCount,
+  sessionCountForDay, workoutBelongsToProgram, yearBarCount,
 } from "../../../utils/progressStats";
 import { programFinishDate, type CompletedWorkout, type PlannedExercise, type ProgramDayRef, type SavedProgram } from "../../../constants/programs";
 import { lastTimeCues, sessionChanges } from "../../../utils/exerciseChanges";
 import type { ExerciseDataPoint, ExerciseMetricKey, MetricKey, ProgramScope, RangeKey } from "../../../constants/progress";
 import { EXERCISE_METRIC_OPTIONS } from "../../../constants/progress";
 import { EXERCISES } from "../../../constants/exerciseData";
-import { exerciseHistoryRows } from "../../../utils/exerciseHistory";
+import { exerciseHistoryRows, picksFromHistoryParams, SAME_KG, type HistoryPick } from "../../../utils/exerciseHistory";
 import {
   CHART_HEIGHT, LABEL_H, LABEL_INK_DOWN, LABEL_INK_UP, LINE_STROKE, PLOT_TOP,
   axisLoadStep, chartChange, chartValue, dotY, drawsOn, exerciseChartGeometry, setStacks, slotX, strengthDots, strengthLabel,
-  strengthLabelInkWidth, visibleSlots, volumeBars, windowAxis, type ExerciseChartGeometry,
+  strengthLabelInkWidth, visibleSlots, volumeBars, type ExerciseChartGeometry,
 } from "../../../utils/exerciseChartLayout";
+import { compareWindowAxis, missedBars, strengthLine } from "../../../utils/compareChartLayout";
+import { exerciseDaySlots, type ChartSlot } from "../../../utils/exerciseDaySlots";
+import { buildSessionTracks, type SessionTracks } from "../../../utils/sessionTrack";
 import { buildProgramHistory } from "../../../utils/programHistory";
 import { buildWeekSchedule, weekStartFor, weekTotals } from "../../../utils/weekSchedule";
 import { addDaysYMD, toYMD } from "../../../utils/dates";
@@ -127,6 +132,9 @@ const kindOf = (name: string) => Object.entries(LIFTS).find(([n]) => liftKey(n) 
 /** The sessions logged on a program day, by the ledger: its program, and its
  *  slot (or for a custom workout added to it, its name). */
 function ledgerOnDay(sessions: LedgerSession[], day: ProgramDayRef): LedgerSession[] {
+  // A day of Custom workouts: the free workouts of its name (the lifter never
+  // deletes a program, so there are no others).
+  if (day.custom) return sessions.filter(s => s.programId === "" && norm(s.workoutName) === norm(day.label));
   if (day.dayId.startsWith("extra:")) {
     return sessions.filter(s => s.programId === day.programId && !s.dayId && norm(s.workoutName) === norm(day.label));
   }
@@ -225,6 +233,8 @@ function scopesFor(snap: Snapshot): { scope: ProgramScope; label: string; progra
     { scope: { kind: "all" }, label: "All programs", programId: null },
     ...(active ? [{ scope: { kind: "current" } as ProgramScope, label: `Current (${active.name})`, programId: active.id }] : []),
     ...snap.programs.map(p => ({ scope: { kind: "program", programId: p.id } as ProgramScope, label: p.name, programId: p.id })),
+    // The free workouts: in no program (user request, 2026-10-23).
+    { scope: { kind: "custom" }, label: "Custom workouts", programId: "" },
   ];
 }
 
@@ -273,8 +283,9 @@ export function checkProgressBars(l: Lifter, snap: Snapshot): Problem[] {
   return out;
 }
 
-/** One chart as the page draws it: the selected (day, exercise)'s points. */
-type DrawnChart = { day: ProgramDayRef; name: string; points: ExerciseDataPoint[]; scopeLabel: string };
+/** One chart as the page draws it: the selected (day, exercise)'s points, and
+ *  the places it puts them in (utils/exerciseDaySlots.ts). */
+type DrawnChart = { day: ProgramDayRef; name: string; points: ExerciseDataPoint[]; slots: ChartSlot[]; scopeLabel: string };
 
 /** The Exercise Progress list and every chart it opens, for the scopes a
  *  lifter uses most. */
@@ -282,6 +293,10 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
   const out: Problem[] = [];
   const charts: DrawnChart[] = [];
   const counts = new Map<string, Map<string, number>>(); // day key → scope → count
+  // What the workout cards say each session was, which the chart's numbers
+  // must match; and each exercise across every day, as the page reads it.
+  const cards = buildSessionTracks(snap.history, snap.programs, snap.today);
+  const everyDay = new Map<string, ExerciseDataPoint[]>();
   for (const { scope, label, programId } of scopesFor(snap)) {
     const scoped = filterByProgramScope(snap.history, scope, snap.programs);
     const days = scopedProgramDays(scope, snap.programs, scoped);
@@ -317,8 +332,25 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
       if (scope.kind === "program") continue;
       for (const r of rows) {
         const points = collectExerciseHistory(scoped, r.name, day);
-        charts.push({ day, name: r.name, points, scopeLabel: label });
+        // As the page reads them: the program's every session of it.
+        const everyKey = `${day.programId}|${r.name}`;
+        let programPoints = everyDay.get(everyKey);
+        if (!programPoints) {
+          const program = snap.programs.find(p => p.id === day.programId);
+          programPoints = program ? collectExerciseHistory(snap.history.filter(w => workoutBelongsToProgram(w, program)), r.name) : [];
+          everyDay.set(everyKey, programPoints);
+        }
+        const slots = exerciseDaySlots({
+          exercise: r.name,
+          points,
+          programPoints,
+          history: snap.history,
+          tracks: cards,
+          todayYMD: snap.today,
+        });
+        charts.push({ day, name: r.name, points, slots, scopeLabel: label });
         out.push(...checkChart(l, snap, scoped, day, r.name, points, logged, where));
+        out.push(...checkChartSlots(points, slots, cards, `${where} › ${r.name}`));
       }
     }
   }
@@ -492,12 +524,16 @@ function checkChart(
     }
   }
 
-  // "See Exercise History": the same sessions as the chart it's opened from.
-  const page = exerciseHistoryRows(snap.history, snap.programs, {
-    exerciseName: name, dayName: day.label, dayId: day.dayId, programId: day.programId, days: 365, today: snap.now,
-  });
+  // "See Exercise History": opened on the chart's day, the same sessions. The
+  // params the chart sends (ExerciseProgressionChart), read as the page reads
+  // them: a day of Custom workouts by its key alone.
+  const [chartDay] = picksFromHistoryParams(day.custom
+    ? { customDay: day.custom.key, dayName: day.label }
+    : { programId: day.programId, dayId: day.dayId, dayName: day.label });
+  const page = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks: [chartDay], days: 365, today: snap.now });
   const cutoff = addDaysYMD(snap.calendarToday, -365);
-  const shouldList = logged.filter(s => s.date >= cutoff && s.exercises.some(e => liftKey(e.name) === liftKey(name) && e.sets.some(x => x.done)));
+  const didIt = (s: LedgerSession) => s.date >= cutoff && s.exercises.some(e => liftKey(e.name) === liftKey(name) && e.sets.some(x => x.done));
+  const shouldList = logged.filter(didIt);
   if (ids(page.map(r => ({ id: r.workoutId }))) !== ids(shouldList)) {
     const others = page.filter(r => !shouldList.some(s => s.id === r.workoutId));
     const fromOther = others.map(r => l.sessions.find(s => s.id === r.workoutId)).filter(Boolean) as LedgerSession[];
@@ -506,11 +542,107 @@ function checkChart(
       : "";
     out.push({ code: "progress/history-page", what: `${at}: Exercise History lists ${page.length} sessions, the chart's day has ${shouldList.length}${why}` });
   }
+  // Its filter: the chart's whole program (every day of it), and the free
+  // workouts, each the sessions of it logged there; and both picked at once,
+  // the two together.
+  const programPick: HistoryPick[] = snap.programs.some(p => p.id === day.programId) ? [{ kind: "program", programId: day.programId }] : [];
+  const freePick: HistoryPick[] = [{ kind: "free" }];
+  for (const [picks, should, what] of [
+    [programPick, l.sessions.filter(s => s.programId === day.programId && didIt(s)), programName(snap, day.programId)],
+    [freePick, l.sessions.filter(s => s.programId === "" && didIt(s)), "free workouts"],
+    [[...programPick, ...freePick], l.sessions.filter(s => (s.programId === day.programId || s.programId === "") && didIt(s)), `${programName(snap, day.programId)} and free workouts`],
+  ] as const) {
+    if (picks.length === 0) continue;
+    const listed = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks, days: 365, today: snap.now });
+    if (ids(listed.map(r => ({ id: r.workoutId }))) !== ids([...should])) {
+      out.push({ code: "progress/history-filter", what: `${at}: Exercise History filtered to ${what} lists ${listed.length} sessions; ${should.length} were logged there` });
+    }
+  }
+
+  // Each session's top set against the one the page lists before it (in any
+  // range), from what was typed: a change of weight, else of reps; and the
+  // note written on it.
+  const everyListed = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks: [chartDay], days: 100_000, today: snap.now });
+  const typedTop = (id: string | undefined) => {
+    const s = id ? l.sessions.find(x => x.id === id) : undefined;
+    if (!s) return null;
+    let best: { kg: number; reps: number } | null = null;
+    for (const e of s.exercises) {
+      if (liftKey(e.name) !== liftKey(name)) continue;
+      for (const x of workingDone(s, e)) {
+        if (!x.reps || x.reps <= 0) continue;
+        const kg = x.kg && x.kg > 0 ? x.kg : 0;
+        if (!best || kg > best.kg || (kg === best.kg && x.reps > best.reps)) best = { kg, reps: x.reps };
+      }
+    }
+    return best;
+  };
+  for (const row of page) {
+    const s = l.sessions.find(x => x.id === row.workoutId);
+    if (!s) continue;
+    const now = typedTop(row.workoutId);
+    const before = typedTop(everyListed[everyListed.findIndex(r => r.workoutId === row.workoutId) + 1]?.workoutId);
+    // A weight typed in pounds is stored in kilos to a few places, so the
+    // kilos between two sessions are a hundredth either way of the typed ones.
+    const weightKg = now && before ? now.kg - before.kg : 0;
+    const want = !now || !before ? "none"
+      : Math.abs(weightKg) >= SAME_KG ? `weight ${fmt(weightKg)}`
+      : now.reps !== before.reps ? `reps ${now.reps - before.reps}`
+      : "same";
+    const c = row.change;
+    const got = !c ? "none" : c.kind === "weight" ? `weight ${fmt(c.kg)}` : c.kind === "reps" ? `reps ${c.reps}` : "same";
+    const agrees = c?.kind === "weight" ? want.startsWith("weight") && near(c.kg, weightKg, 0.02) : got === want;
+    if (!agrees) {
+      out.push({ code: "progress/history-change", what: `${at} ${s.date}: Exercise History reads its top set as ${got} on the session before; lifted ${want}` });
+      break;
+    }
+    const note = [...new Set(s.exercises.filter(e => liftKey(e.name) === liftKey(name)).map(e => e.note.trim()).filter(Boolean))].join("\n");
+    if (row.notes !== note) {
+      out.push({ code: "progress/history-note", what: `${at} ${s.date}: Exercise History's note reads "${row.notes}"; written was "${note}"` });
+      break;
+    }
+  }
   return out;
 }
 
 function programName(snap: Snapshot, id: string): string {
   return id ? snap.programs.find(p => p.id === id)?.name ?? id : "a free workout's";
+}
+
+/**
+ * The exercise chart's places (utils/exerciseDaySlots.ts): every session drawn
+ * once; each the schedule placed on the number its workout card reads, so the
+ * chart's 5 is the card's "5th session" (user decision, 2026-10-22); numbers
+ * that never go back within a run; and a miss never on a session's number.
+ */
+function checkChartSlots(points: ExerciseDataPoint[], slots: ChartSlot[], cards: SessionTracks, at: string): Problem[] {
+  const out: Problem[] = [];
+  const drawn = slots.flatMap(s => (s.point ? [s.point.workoutId] : []));
+  const wanted = new Set(points.map(p => p.workoutId));
+  if (drawn.length !== points.length || new Set(drawn).size !== drawn.length || drawn.some(id => !wanted.has(id))) {
+    out.push({ code: "chart-slots/sessions", what: `${at}: the chart draws ${drawn.length} sessions (${new Set(drawn).size} different) of its ${points.length}` });
+  }
+  for (const s of slots) {
+    // Placed on its day's schedule (a session the schedule can't place counts).
+    if (!s.point || cards.missedById[s.point.workoutId] === undefined) continue;
+    const card = cards.numberById[s.point.workoutId];
+    if (card !== s.number) {
+      out.push({ code: "chart-slots/number", what: `${at}: the session of ${s.point.date} is ${s.number} on the chart; its card says ${card}` });
+      break;
+    }
+  }
+  for (let k = 1; k < slots.length; k++) {
+    if (slots[k].run === slots[k - 1].run && slots[k].number < slots[k - 1].number) {
+      out.push({ code: "chart-slots/order", what: `${at}: place ${k} reads ${slots[k].number}, after ${slots[k - 1].number}` });
+      break;
+    }
+  }
+  const sessionAt = new Set(slots.flatMap(s => (s.point ? [`${s.run}:${s.number}`] : [])));
+  const onSession = slots.find(s => s.missed !== undefined && sessionAt.has(`${s.run}:${s.number}`));
+  if (onSession) {
+    out.push({ code: "chart-slots/miss-on-session", what: `${at}: ${onSession.missed} reads missed at ${onSession.number}, a session's number` });
+  }
+  return out;
 }
 
 // ─── The exercise chart's layout ─────────────────────────────────────────────
@@ -529,10 +661,10 @@ const WIDTHS = [375, 390, 393, 402, 428, 430, 440];
 export function checkChartLayout(drawn: DrawnChart[]): Problem[] {
   const out: Problem[] = [];
   for (const c of drawn) {
-    const points = c.points;
-    const n = points.length;
+    const slots = c.slots;
+    const n = slots.length;
     if (n === 0) continue;
-    const name = `${c.day.programName} ${c.day.label} › ${c.name} (${n} sessions)`;
+    const name = `${c.day.programName} ${c.day.label} › ${c.name} (${c.points.length} sessions in ${n} places)`;
     for (const width of WIDTHS) {
       const g = exerciseChartGeometry(n, width);
       if (slotX(g, 0) < g.spacing / 2 - 0.01 || slotX(g, n - 1) > g.contentWidth - g.spacing / 2 + 0.01) {
@@ -554,7 +686,7 @@ export function checkChartLayout(drawn: DrawnChart[]): Problem[] {
       if (!seen.has(`${first}-${last}`)) {
         seen.add(`${first}-${last}`);
         for (const metric of EXERCISE_METRIC_OPTIONS.map(o => o.key)) {
-          out.push(...checkScreenful(points, metric, first, last, g, `${name}, sessions ${first + 1}–${last + 1} on ${metric}`));
+          out.push(...checkScreenful(slots, metric, first, last, g, `${name}, places ${first + 1}–${last + 1} on ${metric}`));
         }
       }
       if (x === 0) break;
@@ -564,12 +696,15 @@ export function checkChartLayout(drawn: DrawnChart[]): Problem[] {
 }
 
 function checkScreenful(
-  points: ExerciseDataPoint[], metric: ExerciseMetricKey, first: number, last: number, g: ExerciseChartGeometry, at: string,
+  slots: ChartSlot[], metric: ExerciseMetricKey, first: number, last: number, g: ExerciseChartGeometry, at: string,
 ): Problem[] {
   const out: Problem[] = [];
-  const on = points.slice(first, last + 1).filter(p => drawsOn(p, metric));
+  const points = slots.map(s => s.point);
+  const on = points.slice(first, last + 1).filter((p): p is ExerciseDataPoint => !!p && drawsOn(p, metric));
   if (on.length === 0) return out;
-  const axis = windowAxis(points, metric, first, last)!;
+  // The plot's axis: on Sets and Volume it stands the empty bars of the
+  // misses on screen too.
+  const axis = compareWindowAxis(slots, [], metric, first, last)!;
   const values = on.map(p => chartValue(p, metric));
   if (new Set(axis.labels).size !== axis.labels.length) {
     out.push({ code: "chart-layout/axis-repeat", what: `${at}: the y-axis reads ${axis.labels.join(", ")}` });
@@ -591,13 +726,18 @@ function checkScreenful(
     if (off.length) {
       out.push({ code: "chart-layout/axis-off-load", what: `${at}: weights loaded ${jump} at a time read against ${axis.labels.join(", ")}` });
     }
-    // Zoomed to the dots: a change worth seeing fills the plot, and a wobble
-    // stays a wobble.
-    const hi = Math.max(...values);
-    const lo = Math.min(...values);
+    // Zoomed to what's drawn: a change worth seeing fills the plot, and a
+    // wobble stays a wobble. What's drawn is the dots and a miss's empty
+    // circle, which sits on the line between them and can sit past them on a
+    // line to a session off screen: the plot holds it, so it's measured too.
+    const line = strengthLine(slots, g);
+    const missedAt = slots.flatMap((s, k) => (s.missed !== undefined ? [k] : []));
+    const marks = [...values, ...line.missedVs.filter((_, i) => shown(missedAt[i]))];
+    const hi = Math.max(...marks);
+    const lo = Math.min(...marks);
     const share = (dotY(lo, axis) - dotY(hi, axis)) / CHART_HEIGHT;
     if (hi - lo >= 0.2 * hi && share < 0.3) {
-      out.push({ code: "chart-layout/axis-squash", what: `${at}: sessions from ${fmt(lo)} to ${fmt(hi)} fill ${Math.round(share * 100)}% of the plot (axis ${axis.labels.join(" ")})` });
+      out.push({ code: "chart-layout/axis-squash", what: `${at}: marks from ${fmt(lo)} to ${fmt(hi)} fill ${Math.round(share * 100)}% of the plot (axis ${axis.labels.join(" ")})` });
     }
     if (hi - lo <= 0.05 * hi && share > 0.25) {
       out.push({ code: "chart-layout/axis-stretch", what: `${at}: a ${fmt(hi - lo)} wobble on ${fmt(hi)} spans ${Math.round(share * 100)}% of the plot (axis ${axis.labels.join(" ")})` });
@@ -606,17 +746,17 @@ function checkScreenful(
     for (const [i, d] of dots.entries()) {
       if (!shown(d.slot)) continue;
       if (!inPlot(d.y)) {
-        out.push({ code: "chart-layout/dot-outside", what: `${at}: session ${d.slot + 1}'s ${fmt(chartValue(points[d.slot], metric))} dot sits outside the ${axis.labels[0]}–${axis.labels[axis.labels.length - 1]} axis` });
+        out.push({ code: "chart-layout/dot-outside", what: `${at}: place ${d.slot + 1}'s ${fmt(chartValue(d.point, metric))} dot sits outside the ${axis.labels[0]}–${axis.labels[axis.labels.length - 1]} axis` });
         break;
       }
       if (d.labelY - LABEL_H / 2 < 0 || d.labelY + LABEL_H / 2 > PLOT_TOP + CHART_HEIGHT) {
-        out.push({ code: "chart-layout/label-outside", what: `${at}: session ${d.slot + 1}'s reps don't fit over or under its dot` });
+        out.push({ code: "chart-layout/label-outside", what: `${at}: place ${d.slot + 1}'s reps don't fit over or under its dot` });
         break;
       }
       // Its reps clear of the line either side, by a point at least, walked a
       // quarter of a point at a time (user report, 2026-10-13: a steep climb
       // ran the line through them).
-      const half = strengthLabelInkWidth(strengthLabel(points[d.slot])) / 2;
+      const half = strengthLabelInkWidth(strengthLabel(d.point)) / 2;
       const ink = { l: d.labelX - half, r: d.labelX + half, t: d.labelY - LABEL_INK_UP, b: d.labelY + LABEL_INK_DOWN };
       let gap = Infinity;
       for (const n of [dots[i - 1], dots[i + 1]]) {
@@ -632,6 +772,12 @@ function checkScreenful(
         out.push({ code: "chart-layout/label-on-line", what: `${at}: session ${d.slot + 1}'s reps sit ${gap.toFixed(1)}pt from the line` });
         break;
       }
+    }
+    // A miss's empty circle on the line, inside the plot: one per miss once
+    // there's a line, in their order.
+    const outside = line.missedVs.findIndex((v, i) => shown(missedAt[i]) && !inPlot(dotY(v, axis)));
+    if (outside >= 0) {
+      out.push({ code: "chart-layout/ring-outside", what: `${at}: the miss at place ${missedAt[outside] + 1} sits at ${fmt(line.missedVs[outside])}, outside the ${axis.labels[0]}–${axis.labels[axis.labels.length - 1]} axis` });
     }
   } else if (metric === "sets") {
     for (const st of setStacks(points, g, axis).filter(s => shown(s.slot))) {
@@ -656,6 +802,14 @@ function checkScreenful(
         out.push({ code: "chart-layout/label-outside", what: `${at}: the kilos over session ${b.slot + 1} have no room over its bar` });
         break;
       }
+    }
+  }
+  // Sets and Volume: a miss's empty bar on screen, inside the plot.
+  if (metric !== "strength") {
+    const empty = missedBars(slots, metric, 0, g);
+    const outside = empty.vs.findIndex((v, i) => shown(Math.round((empty.xs[i] - g.offset) / g.spacing - 0.5)) && !inPlot(dotY(v, axis)));
+    if (outside >= 0) {
+      out.push({ code: "chart-layout/empty-bar-outside", what: `${at}: a miss's empty bar stands to ${fmt(empty.vs[outside])}, outside the ${axis.labels[0]}–${axis.labels[axis.labels.length - 1]} axis` });
     }
   }
   return out;
@@ -915,12 +1069,13 @@ function ledgerChanges(plan: PlannedExercise[], exercises: LedgerExercise[]) {
 }
 
 /** The exercises left unmarked (`marked` by place, a swap-in counting as
- *  marked) are in plan order, and no more were marked than had to move. */
+ *  marked) are in plan order, and no more were marked than had to move and,
+ *  with each, the one whose place it took (user request, 2026-10-22). */
 function movesAccountFor(want: ReturnType<typeof ledgerChanges>, exercises: LedgerExercise[], marked: Set<string>): boolean {
   const left = want.placed.filter(p => !marked.has(exercises[p.i].place!) && !exercises[p.i].swappedFrom);
   const inOrder = left.every((p, k) => k === 0 || left[k - 1].at < p.at);
   const markedPlain = want.placed.filter(p => marked.has(exercises[p.i].place!) && !exercises[p.i].swappedFrom).length;
-  return inOrder && markedPlain <= want.moves;
+  return inOrder && markedPlain <= want.moves * 2;
 }
 
 // ─── A save ──────────────────────────────────────────────────────────────────

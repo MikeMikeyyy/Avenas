@@ -106,6 +106,21 @@ export type ProgramRunView = {
 
 const byCompleted = (a: CompletedWorkout, b: CompletedWorkout) => a.completedAt.localeCompare(b.completedAt);
 
+/** The first and the last day `sessions` were trained on. Not the dates of the
+ *  first and last logged: a session logged later can be dated earlier (the
+ *  Journal logs a past one), and a run read as ending on its date stopped a
+ *  week short of the cards and the program page. */
+function trainedSpan(sessions: readonly CompletedWorkout[]): { first: string; last: string } | null {
+  if (sessions.length === 0) return null;
+  let first = sessions[0].date;
+  let last = first;
+  for (const w of sessions) {
+    if (w.date < first) first = w.date;
+    if (w.date > last) last = w.date;
+  }
+  return { first, last };
+}
+
 /** `history`'s sessions of `program` dated `startYMD` to `endYMD` (open-ended
  *  when null), oldest first. */
 export function sessionsBetween(
@@ -133,9 +148,10 @@ export function earlierRun(program: SavedProgram, history: readonly CompletedWor
   const sessions = history
     .filter(w => w.programId === program.id && w.date < firstKept)
     .sort(byCompleted);
-  if (sessions.length === 0) return null;
-  const startYMD = sessions[0].date;
-  const endYMD = sessions[sessions.length - 1].date;
+  const span = trainedSpan(sessions);
+  if (!span) return null;
+  const startYMD = span.first;
+  const endYMD = span.last;
   return {
     ref: { programId: program.id, run: "earlier" },
     program: {
@@ -180,7 +196,7 @@ export function programRunViews(program: SavedProgram, history: readonly Complet
       // A shelved run kept no record of the day it was shelved (its endDate
       // is the day before it started again): its last session stands in, as
       // on the program page.
-      endYMD: run.status === "completed" ? run.endDate : sessions.at(-1)?.date ?? startYMD,
+      endYMD: run.status === "completed" ? run.endDate : trainedSpan(sessions)?.last ?? startYMD,
       finished: run.status === "completed",
       sessions,
       number: null,
@@ -193,7 +209,7 @@ export function programRunViews(program: SavedProgram, history: readonly Complet
     // Made inactive, it stopped where it stopped: its last session stands in
     // for the day, as for a shelved run above. Open-ended, it went on counting
     // the weeks since (user request, 2026-10-16).
-    const end = program.status === "active" ? null : finishedOn ?? sessions.at(-1)?.date ?? latestStart;
+    const end = program.status === "active" ? null : finishedOn ?? trainedSpan(sessions)?.last ?? latestStart;
     // One never made active has nothing to read, unless the Journal logged a
     // session onto it.
     if (program.status !== "created" || sessions.length > 0) {

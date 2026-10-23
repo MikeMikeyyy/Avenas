@@ -9,7 +9,9 @@ import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import NeuCard from "../NeuCard";
+import GlassButton from "../GlassButton";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, compareBlue } from "../../constants/theme";
+import { PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 
 interface Props {
@@ -48,17 +50,10 @@ export default function CompareHeader({ green, blue, onChangeGreen, onChangeBlue
     <View style={styles.wrap}>
       <View style={styles.labelRow}>
         <Text style={[styles.label, { color: t.ts }]}>Comparing</Text>
-        <TouchableOpacity
-          onPress={tap(onStop)}
-          style={styles.stop}
-          accessibilityRole="button"
-          accessibilityLabel="Stop comparing"
-          hitSlop={4}
-        >
-          <View style={[styles.stopCircle, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="close" size={16} color={t.tp} />
-          </View>
-        </TouchableOpacity>
+        {/* Glass like the Compare button it replaces (components/GlassButton.tsx). */}
+        <GlassButton onPress={onStop} style={styles.stop} solidStyle={PILL_SHADOW} accessibilityLabel="Stop comparing">
+          <Ionicons name="close" size={20} color={t.tp} />
+        </GlassButton>
       </View>
       <NeuCard dark={isDark} radius={20}>
         <View style={styles.inner}>
@@ -75,11 +70,11 @@ const styles = StyleSheet.create({
   wrap: { marginHorizontal: 20 },
   labelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 6, marginBottom: 4 },
   label: { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.6, textTransform: "uppercase" },
-  stop: { width: 44, height: 44, marginRight: -6, alignItems: "center", justifyContent: "center" },
-  stopCircle: {
-    width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4,
-  },
+  // The circle's right edge on the card's, the touch area a little past it.
+  // The circle is the Compare button's size (40, GlassButton's), which this ✕
+  // undoes: it was 32, smaller than every other round button on the page
+  // (user feedback, 2026-10-22).
+  stop: { width: 44, height: 44, marginRight: -2, alignItems: "center", justifyContent: "center" },
   inner: { paddingHorizontal: 16 },
   // A long name wraps (the whole name, never cut short), and the row grows.
   row: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 56, paddingVertical: 10 },

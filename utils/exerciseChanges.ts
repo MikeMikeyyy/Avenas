@@ -18,10 +18,19 @@
 //   are programming, not a different day), last session followed another plan,
 //   so there's nothing to say: next time starts fresh (user decision).
 //
-// Only the exercises that MOVED are marked, not every one whose number
-// changed: the ones outside the longest run still in the plan's order, so one
-// exercise done early marks that one alone, however many it jumped. Of a
-// swapped pair it's the one done earlier than planned.
+//   It also reads TODAY's session against its plan as it goes, the Journal's
+//   way (user request, 2026-10-22): a card moved, swapped or added in the
+//   session says so at once ("Planned 2nd", "Instead of Bench Press",
+//   "Added"), in place of its "Last session" line.
+//
+// The exercises that MOVED are marked, not every one whose number changed:
+// the ones outside the longest run still in the plan's order (of a swapped
+// pair, the one done earlier than planned), and with each, the one whose
+// place it took, the exercise the plan had where it was done (user request,
+// 2026-10-22: move the 5th up to 4th and the 4th says "Planned 4th" too, so
+// you can see what it traded places with). The others a long move shifted
+// along by one keep quiet: bring the 5th to the top and only it and the 1st
+// say so, not the four that slid down.
 //
 // A session saved before plans existed has no "Planned" or "Skipped" (there's
 // nothing to read them against); its swaps and adds still show, a swap on the
@@ -30,7 +39,7 @@
 //
 // Pure: no RN imports, so scripts/verify-exercise-changes.ts can run it.
 
-import type { CompletedWorkout, PlannedExercise, SavedProgram } from "../constants/programs";
+import type { CompletedExercise, CompletedWorkout, PlannedExercise, SavedProgram } from "../constants/programs";
 import { indexOfDayId, workoutKey } from "./programDays";
 import { sameExercise } from "./exerciseNames";
 
@@ -93,6 +102,21 @@ function movedOf(placed: readonly { idx: number; plannedIdx: number }[]): Set<nu
   return new Set(placed.filter((_, i) => !inRun.has(i)).map(p => p.idx));
 }
 
+/**
+ * The exercises whose place a `moved` one took: for each, the one the plan
+ * had at the spot it was done (its k-th among `placed`, in the order done, is
+ * the plan's k-th of them). Never one that moved itself.
+ */
+function displacedBy(placed: readonly { idx: number; plannedIdx: number }[], moved: ReadonlySet<number>): Set<number> {
+  const byPlan = [...placed].sort((a, b) => a.plannedIdx - b.plannedIdx);
+  const out = new Set<number>();
+  placed.forEach((p, k) => {
+    const there = byPlan[k];
+    if (moved.has(p.idx) && there && !moved.has(there.idx)) out.add(there.idx);
+  });
+  return out;
+}
+
 /** What one exercise of a session was, against the session's plan. */
 export type SessionCue =
   | { kind: "moved"; /** Its place in the plan, from 1. */ plannedPosition: number }
@@ -109,8 +133,14 @@ export type SessionChanges = {
 };
 
 /** What `w` changed about its program day, or null when there's nothing to
- *  read it against (a free or custom workout, a session from before places). */
-export function sessionChanges(w: Pick<CompletedWorkout, "dayId" | "plan" | "exercises">): SessionChanges | null {
+ *  read it against (a free or custom workout, a session from before places).
+ *  A saved session, or the Workout tab's session still under way, whose
+ *  exercises carry the same two fields until Finish writes them. */
+export function sessionChanges(w: {
+  dayId?: string;
+  plan?: readonly PlannedExercise[];
+  exercises: readonly Pick<CompletedExercise, "programExerciseId" | "swappedFrom">[];
+}): SessionChanges | null {
   const plan = w.plan;
   if (!w.dayId || (!plan && !w.exercises.some(e => e.programExerciseId))) return null;
   const planIdx = new Map((plan ?? []).map((p, i) => [p.id, i]));
@@ -125,9 +155,11 @@ export function sessionChanges(w: Pick<CompletedWorkout, "dayId" | "plan" | "exe
   });
 
   const moved = movedOf(placed);
+  const displaced = displacedBy(placed, moved);
   for (const p of placed) {
     // A swap-in that also moved says it was a swap: one line each.
-    if (moved.has(p.idx) && cues[p.idx] === null) cues[p.idx] = { kind: "moved", plannedPosition: p.plannedIdx + 1 };
+    const outOfPlace = moved.has(p.idx) || displaced.has(p.idx);
+    if (outOfPlace && cues[p.idx] === null) cues[p.idx] = { kind: "moved", plannedPosition: p.plannedIdx + 1 };
   }
 
   const skipped = (plan ?? []).flatMap((p, i) => {
@@ -140,7 +172,7 @@ export function sessionChanges(w: Pick<CompletedWorkout, "dayId" | "plan" | "exe
     cues,
     skipped,
     counts: {
-      moved: moved.size,
+      moved: moved.size + displaced.size,
       swapped: cues.filter(c => c?.kind === "swapped").length,
       skipped: skipped.length,
       added: cues.filter(c => c?.kind === "added").length,

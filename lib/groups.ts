@@ -82,6 +82,31 @@ export async function fetchGroupMembers(groupId: string): Promise<GroupMember[]>
   }));
 }
 
+/** What I may see of a fellow member on the group's page (0051): the program
+ *  they're running and when they were last on the app. Either is absent when
+ *  they've turned Activity Status off (a connected trainer still sees their
+ *  client's program), or have none. */
+export type GroupMemberStatus = { program?: string; lastActiveAt?: string };
+
+/** Each joined member's status but mine, by id (get_group_member_status).
+ *  Fails soft to nothing: the page reads fine without it, and a database
+ *  without 0051 yet answers with an error rather than rows. */
+export async function fetchGroupMemberStatus(groupId: string): Promise<Record<string, GroupMemberStatus>> {
+  const { data, error } = await supabase.rpc("get_group_member_status", { p_group: groupId });
+  if (error) {
+    if (__DEV__) console.warn("[avenas] load group member status", error.message);
+    return {};
+  }
+  const out: Record<string, GroupMemberStatus> = {};
+  for (const r of (data as { user_id: string; active_program: string | null; last_active_at: string | null }[] | null) ?? []) {
+    out[r.user_id] = {
+      ...(r.active_program ? { program: r.active_program } : {}),
+      ...(r.last_active_at ? { lastActiveAt: r.last_active_at } : {}),
+    };
+  }
+  return out;
+}
+
 /** Groups I've been added to but haven't answered yet.
  *
  *  Fails soft: an invite that can't be loaded shouldn't take the hub down with

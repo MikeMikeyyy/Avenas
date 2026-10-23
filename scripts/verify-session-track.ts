@@ -1,15 +1,17 @@
 // scripts/verify-session-track.ts
 //
-// A workout card says how many sessions of that day you have DONE, and its dot
-// track shows where that sits in the PROGRAM.
+// A workout card says which session of that day it was, the scheduled occurrence
+// it filled, and its dot track shows that place in the PROGRAM: the words and
+// the dot are one number (user decision, 2026-10-22).
 //
 // The case that prompted this: sick for a week, missed two of four sessions, then
-// trained the whole of the next week. The card can honestly say "2nd session" —
-// it was — as long as the track puts it on the 3rd dot with the 2nd greyed out,
-// so a missed week is visible instead of silently closing up.
+// trained the whole of the next week. Every day that week is on its 3rd session,
+// the two missed included, with the 2nd greyed out on their tracks, so a missed
+// week is visible instead of silently closing up, and the days stay in step.
 //
 // A week where something ELSE was trained on that day (a custom workout, a
-// Change Workout Day swap) is "replaced", drawn orange, rather than missed.
+// Change Workout Day swap) is "replaced", drawn orange, rather than missed. A
+// day done earlier in its week than planned is that week's, done early.
 //
 // Run:  npx tsx scripts/verify-session-track.ts
 // Exits non-zero if any assertion fails.
@@ -103,6 +105,59 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
   const t = track([session("w1", MON_W1), session("late", "2026-09-16")], MON_W3);
   eq(t.numberById["late"], 2, "a session logged late fills its own occurrence");
   eq(t.missed, [], "and that occurrence is not missed");
+
+  // Made up on the Friday: next Monday is nearer, but it's still this week's.
+  const fri = track([session("w1", MON_W1), session("fri", "2026-09-18")], MON_W3);
+  eq([fri.numberById["fri"], fri.missed], [2, []], "Monday's done on Friday is still this week's, nearer next Monday or not");
+}
+
+// ─── done early ──────────────────────────────────────────────────────────────
+// Change Workout Day picking a later day of the week: Lower (Tuesday's) done on
+// Monday. It's this week's Lower, done ahead of its day, not a second of last
+// week's with this week's left orange (placed by its date alone, it was both).
+{
+  const TUE_W1 = "2026-09-08", TUE_W2 = "2026-09-15", WED_W2 = "2026-09-16";
+  const lower = (id: string, date: string): CompletedWorkout => ({ ...session(id, date, "d1"), workoutName: "Lower" });
+  const lowerTrack = (history: CompletedWorkout[], todayYMD: string, trained?: string[], p: SavedProgram = program) =>
+    buildSessionTrack({ program: p, dayId: "d1", history, todayYMD, trainedDates: trained ? new Set(trained) : undefined });
+
+  const early = lowerTrack([lower("l1", TUE_W1), lower("l2", MON_W2)], WED_W2, [MON_W1, TUE_W1, MON_W2, TUE_W2]);
+  eq(early.numberById["l2"], 2, "Lower done on Monday is this week's, the 2nd, not a second 1st");
+  eq([early.missed, early.replaced, early.done], [[], [], [1, 2]], "and this week's Lower is done, not orange because Upper was trained on its Tuesday");
+
+  const today = lowerTrack([lower("l1", TUE_W1), lower("l2", MON_W2)], MON_W2);
+  eq([today.numberById["l2"], today.occurrences, today.done], [2, 1, [1, 2]],
+    "done today ahead of tomorrow's: already the 2nd, tomorrow's dot filled before it comes round");
+
+  const afterMiss = lowerTrack([lower("l2", MON_W2)], WED_W2);
+  eq([afterMiss.numberById["l2"], afterMiss.missed], [2, [1]], "last week's missed, this week's done early: the 2nd, with the 1st greyed");
+
+  // Placed by its own date: what else is logged around it never moves it.
+  const crowded = lowerTrack([lower("l1", TUE_W1), lower("l2", MON_W2), lower("l3", "2026-09-22")], "2026-09-23");
+  eq(crowded.numberById["l2"], afterMiss.numberById["l2"], "the sessions either side of it don't move it");
+
+  // Moved to tomorrow, then done anyway on the day it was moved off: that's the
+  // moved session, not a second of last week's.
+  const pushed = pushDate(program, MON_W2);
+  const anyway = track([session("w1", MON_W1), session("anyway", MON_W2)], MON_W3, pushed);
+  eq([anyway.numberById["anyway"], anyway.missed], [2, []], "moved to tomorrow but done anyway: it's this week's session");
+
+  // The price of reading the week: Friday's Legs made up the Monday after is
+  // the new week's, done early, and last week's stays missed.
+  const legs: CompletedWorkout = { ...session("legs", MON_W2, "d4"), workoutName: "Legs" };
+  const madeUp = buildSessionTrack({ program, dayId: "d4", history: [legs], todayYMD: WED_W2 });
+  eq([madeUp.numberById["legs"], madeUp.missed], [2, [1]], "a day made up after the week rolled over counts as the new week's");
+
+  // Both ways in one week: Lower on Monday, Upper on Tuesday. Each is its own
+  // week's, and neither stood in for the other.
+  const swapWeek = buildSessionTracks(
+    [session("u1", MON_W1), lower("l1", TUE_W1), lower("l2", MON_W2), session("u2", TUE_W2)],
+    [program],
+    WED_W2,
+  );
+  eq([swapWeek.numberById["l2"], swapWeek.numberById["u2"]], [2, 2], "swapped in one week: both the 2nd");
+  eq([swapWeek.insteadOfById["l2"], swapWeek.insteadOfById["u2"]], [undefined, undefined], "and neither reads as instead of the other");
+  eq([swapWeek.replacedById["l2"], swapWeek.missedById["l2"], swapWeek.replacedById["u2"]], [[], [], []], "nothing orange or grey on either track");
 }
 
 // ─── today ───────────────────────────────────────────────────────────────────
@@ -237,31 +292,29 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
 // ─── what the screens actually call ──────────────────────────────────────────
 // buildSessionTracks does the grouping and the fallback that Home and the
 // Journal used to each do for themselves.
-// The card says how many you've DONE; the dot says where you are in the program.
-// Week 1 missed, weeks 2 and 3 trained: week 3 is your 2nd session, on the 3rd
-// dot, with the 1st greyed out.
+// The card says where you are in the program, on the dot that says it too.
+// Week 1 missed, weeks 2 and 3 trained: week 3 is the 3rd session, on the 3rd
+// dot, with the 1st greyed out. It read "2nd session" on that 3rd dot until
+// 2026-10-22, while the days never missed read "3rd".
 {
   const tracks = buildSessionTracks(
     [session("w2", MON_W2), session("w3", MON_W3)],
     [program],
     MON_W3,
   );
-  eq(tracks.numberById["w3"], 2, "the card counts sessions done: this is the 2nd");
-  eq(tracks.positionById["w3"], 3, "but it sits on the 3rd dot, where the program is");
-  eq(tracks.numberById["w2"], 1, "and the week before it was the 1st done");
-  eq(tracks.positionById["w2"], 2, "on the 2nd dot");
+  eq(tracks.numberById["w3"], 3, "week 3's is the 3rd session, the week missed counted");
+  eq(tracks.numberById["w2"], 2, "and the week before it was the 2nd");
   eq(tracks.missedById["w3"], [1], "with the missed week greyed");
 }
 
-// Nothing missed: the two numbers agree, as they always did.
+// Nothing missed: 1st, 2nd, 3rd, as they always were.
 {
   const tracks = buildSessionTracks(
     [session("w1", MON_W1), session("w2", MON_W2), session("w3", MON_W3)],
     [program],
     MON_W3,
   );
-  eq(["w1", "w2", "w3"].map(id => tracks.numberById[id]), [1, 2, 3], "count with nothing missed");
-  eq(["w1", "w2", "w3"].map(id => tracks.positionById[id]), [1, 2, 3], "and the dots match it");
+  eq(["w1", "w2", "w3"].map(id => tracks.numberById[id]), [1, 2, 3], "1st, 2nd, 3rd with nothing missed");
 }
 
 // A free workout: no program owns it, so it keeps a plain count and no dots.
@@ -271,8 +324,7 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
     durationSeconds: 1800, exercises: [], programId: "",
   };
   const tracks = buildSessionTracks([free], [program], MON_W3);
-  eq(tracks.numberById["free"], 1, "a free workout still gets a number");
-  eq(tracks.positionById["free"], 1, "its dot sits where the count says");
+  eq(tracks.numberById["free"], 1, "a free workout still gets a number, its count");
   eq(tracks.missedById["free"], undefined, "but never a missed dot");
 }
 
@@ -288,7 +340,7 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
   const tracks = buildSessionTracks([session("w1", MON_W1), custom, session("w3", MON_W3)], [program], MON_W3);
   eq(tracks.replacedById["w3"], [2], "the swapped week is orange on next week's card");
   eq(tracks.missedById["w3"], [], "not grey");
-  eq([tracks.numberById["w3"], tracks.positionById["w3"]], [2, 3], "2nd Upper done, on the 3rd dot");
+  eq(tracks.numberById["w3"], 3, "the 3rd Upper, the swapped week counted");
   eq(tracks.numberById["custom"], 1, "the custom workout is its own 1st session");
   eq(tracks.replacedById["custom"], undefined, "and marks nothing on a track of its own");
   eq(tracks.insteadOfById["custom"], "Upper", "its card says it was done instead of Upper");
@@ -330,8 +382,8 @@ eq(occurrencesOfDay(program, "nope", MON_W3), [], "a day id that isn't in the cy
   const mine = session("mine", MON_W3);
   const theirs: CompletedWorkout = { ...session("theirs", "2026-06-01"), programId: "P2" };
   const tracks = buildSessionTracks([theirs, mine], [program, other], MON_W3);
-  eq(tracks.numberById["mine"], 1, "the other program's d0 sessions don't shift this one's count");
-  eq(tracks.positionById["mine"], 3, "and this one still sits on its own program's 3rd dot");
+  eq([tracks.numberById["mine"], tracks.missedById["mine"]], [3, [1, 2]],
+    "the other program's d0 sessions fill nothing on this one: its own program's 3rd, two missed");
 }
 
 // ─── every card draws the whole track ────────────────────────────────────────
@@ -343,7 +395,7 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
 {
   // Week 1 missed, weeks 2 and 3 trained, week 4 missed, today week 5.
   const tracks = buildSessionTracks([session("w2", MON_W2), session("w3", MON_W3)], [program], MON_W5);
-  eq([tracks.positionById["w2"], tracks.doneById["w2"], tracks.missedById["w2"]], [2, [2, 3], [1, 4]],
+  eq([tracks.numberById["w2"], tracks.doneById["w2"], tracks.missedById["w2"]], [2, [2, 3], [1, 4]],
     "week 2's card knows week 3 was trained, as well as weeks 1 and 4 missed");
   eq(trackDots({ current: 2, total: 8, missed: tracks.missedById["w2"], done: tracks.doneById["w2"] }),
     ["missed", "current", "done", "missed", "future", "future", "future", "future"],
@@ -366,7 +418,7 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
   const inactive = buildSessionTracks(history, deactivateProgram([program], "P"), MON_W6);
   eq([inactive.missedById["w3"], inactive.doneById["w3"]], [[2], [1, 3]],
     "made inactive: the weeks since its last session aren't missed, the one before still is");
-  eq(inactive.numberById["w3"], 2, "and its sessions keep their numbers");
+  eq(inactive.numberById["w3"], 3, "and its sessions keep their numbers");
 
   const finishedEarly: SavedProgram = { ...program, status: "completed", completedDate: "25 Sep 2026", currentWeek: 3 };
   const finished = buildSessionTracks(history, [finishedEarly], MON_W6);
@@ -384,9 +436,9 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
   const { programs: [again] } = activateProgram([finishedEarly], "P", "5 Oct 2026");
   const history = [session("w1", MON_W1), session("w3", MON_W3), session("n1", MON_W5), session("n2", MON_W6)];
   const tracks = buildSessionTracks(history, [again], MON_W6);
-  eq([tracks.numberById["w3"], tracks.positionById["w3"], tracks.missedById["w3"], tracks.doneById["w3"]], [2, 3, [2], [1, 3]],
+  eq([tracks.numberById["w3"], tracks.missedById["w3"], tracks.doneById["w3"]], [3, [2], [1, 3]],
     "the earlier run's cards stay where they were");
-  eq([tracks.numberById["n1"], tracks.positionById["n1"], tracks.missedById["n1"]], [1, 1, []],
+  eq([tracks.numberById["n1"], tracks.missedById["n1"]], [1, []],
     "the new run starts again at its 1st session, on its 1st dot");
   eq([tracks.numberById["n2"], tracks.doneById["n2"]], [2, [1, 2]], "and counts from there");
   eq(tracks.totalById["n2"], 8, "on a track as long as the program");
@@ -403,8 +455,8 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
   const logged = all([session("w4", MON_W4)]);
   eq(all([]), before, "deleted: every card is back as it was before it was logged");
   const redone = all([session("redo", MON_W4)]);
-  eq([redone.numberById["redo"], redone.positionById["redo"], redone.doneById["redo"]],
-    [logged.numberById["w4"], logged.positionById["w4"], logged.doneById["w4"]], "done again: the same session, on the same dot");
+  eq([redone.numberById["redo"], redone.doneById["redo"]],
+    [logged.numberById["w4"], logged.doneById["w4"]], "done again: the same session, on the same dot");
   eq([redone.missedById["w1"], redone.doneById["w1"]], [logged.missedById["w1"], logged.doneById["w1"]], "and the other cards read as they did");
   eq(all([]), before, "deleted again: back as it was again");
 
@@ -412,12 +464,12 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
   const today = all([session("t", MON_W5)]);
   const between = all([]);
   eq([today.doneById["w1"], between.missedById["w1"]], [[1, 3, 5], [2, 4]], "today's deleted: today's dot is still to come, not missed");
-  eq(all([session("t2", MON_W5)]).positionById["t2"], today.positionById["t"], "and today's redo is on today's dot");
+  eq(all([session("t2", MON_W5)]).numberById["t2"], today.numberById["t"], "and today's redo is on today's dot");
 
   // Two sessions in one week: deleting one leaves the other where it was.
   const two = all([session("a", MON_W4), session("b", "2026-09-30")]);
   const oneLeft = all([session("b", "2026-09-30")]);
-  eq([two.positionById["b"], oneLeft.positionById["b"], oneLeft.missedById["b"]], [4, 4, [2]],
+  eq([two.numberById["b"], oneLeft.numberById["b"], oneLeft.missedById["b"]], [4, 4, [2]],
     "two in one week, one deleted: the other keeps the week");
 
   // A program made inactive: its last session deleted, the weeks after it
@@ -434,19 +486,20 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
   const newRun = [session("n1", MON_W5), session("n2", MON_W6)];
   const both = buildSessionTracks([session("w1", MON_W1), session("w3", MON_W3), ...newRun], runAgain, MON_W6);
   const oldDeleted = buildSessionTracks([session("w1", MON_W1), ...newRun], runAgain, MON_W6);
-  eq([oldDeleted.numberById["n2"], oldDeleted.positionById["n2"], oldDeleted.missedById["n2"]],
-    [both.numberById["n2"], both.positionById["n2"], both.missedById["n2"]], "a session deleted from the run before changes nothing in the new run");
+  eq([oldDeleted.numberById["n2"], oldDeleted.missedById["n2"]],
+    [both.numberById["n2"], both.missedById["n2"]], "a session deleted from the run before changes nothing in the new run");
   eq(oldDeleted.missedById["w1"], [2, 3], "and the run before reads its own week as missed");
 }
 
 // ─── sessions from before the start ──────────────────────────────────────────
 // A start moved by a hold resumed before holds were kept: the sessions before
-// it can't be placed, and keep counting with the rest, as before.
+// it can't be placed, so they're numbered by their count, beside the moved
+// timeline's own first (both read "1st session", as their dots always sat).
 {
   const moved: SavedProgram = { ...program, startDate: "14 Sep 2026" };
   const tracks = buildSessionTracks([session("w1", MON_W1), session("w2", MON_W2), session("w3", MON_W3)], [moved], MON_W3);
-  eq(["w1", "w2", "w3"].map(id => tracks.numberById[id]), [1, 2, 3], "sessions before a moved start still count");
-  eq([tracks.positionById["w1"], tracks.missedById["w1"], tracks.doneById["w1"]], [1, undefined, [1]],
+  eq(["w1", "w2", "w3"].map(id => tracks.numberById[id]), [1, 1, 2], "the one before a moved start is counted, the rest placed");
+  eq([tracks.missedById["w1"], tracks.doneById["w1"]], [undefined, [1]],
     "the one before it sits where its count says, with nothing greyed");
 }
 
@@ -457,4 +510,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(`${passed} passed, 0 failed`);
-console.log("✓ session counts and their place on the program's track hold");
+console.log("✓ session numbers and their place on the program's track hold");

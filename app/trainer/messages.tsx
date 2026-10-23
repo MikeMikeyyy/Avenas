@@ -8,7 +8,7 @@
 
 import { useCallback, useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert,
+  View, Text, StyleSheet, ScrollView, Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -21,13 +21,15 @@ import * as Haptics from "expo-haptics";
 import FadeScreen from "../../components/FadeScreen";
 import NeuCard from "../../components/NeuCard";
 import BounceButton from "../../components/BounceButton";
+import GlassButton from "../../components/GlassButton";
 import ChatIcon from "../../components/icons/ChatIcon";
 import GroupAvatar from "../../components/trainer/GroupAvatar";
 import MessageComposeSheet from "../../components/trainer/MessageComposeSheet";
 import Avatar from "../../components/Avatar";
 import KeyboardDismissButton from "../../components/KeyboardDismissButton";
+import SearchField from "../../components/SearchField";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
 import { loadChatContacts, loadAllThreads, broadcastMessage, loadReads, countUnreadInThread, previewText } from "../../utils/chatStore";
@@ -222,19 +224,18 @@ export default function MessagesScreen() {
       {/* New message (broadcast to many) is a trainer feature — gym users only
           message their trainers 1:1, so they don't get the plus button. */}
       {accountType === "pt" && (
-        <BounceButton
+        // The back button's size and top, mirrored on the right. The Trainer
+        // tab's white + (Connect), not an accent circle: the same control
+        // surface and dark plus as the round buttons beside it there.
+        <GlassButton
           onPress={() => setComposeOpen(true)}
+          size={BACK_SIZE}
+          style={[styles.newFloat, { top: insets.top + BACK_TOP }]}
+          solidStyle={PILL_SHADOW}
           accessibilityLabel="New message"
-          // The back button's size and top, mirrored on the right.
-          style={{ position: "absolute", top: insets.top + BACK_TOP, right: BACK_LEFT, zIndex: 10 }}
         >
-          {/* The Trainer tab's white + (Connect), not an accent circle: the
-              same control surface and dark plus as the round buttons beside
-              it there. */}
-          <View style={[styles.newBtn, { backgroundColor: t.ctrl }]}>
-            <Ionicons name="add" size={24} color={t.tp} />
-          </View>
-        </BounceButton>
+          <Ionicons name="add" size={24} color={t.tp} />
+        </GlassButton>
       )}
 
       <ScrollView
@@ -250,27 +251,10 @@ export default function MessagesScreen() {
           <View style={{ width: 44 }} />
         </View>
 
-        {/* Same field as the exercise picker's — a filled, fully rounded pill on
-            t.ctrl, not a faint tinted box. This screen is shared by the trainer
-            and gym views, so it matches PTHome's client search too. */}
+        {/* The Journal's Programs search, faded (components/SearchField.tsx).
+            This screen is shared by the trainer and gym views. */}
         {rows.length > 0 && (
-          <View style={[styles.searchBox, { backgroundColor: t.ctrl, borderColor: t.div }]}>
-            <Ionicons name="search" size={17} color={t.ts} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search by name"
-              placeholderTextColor={t.ts}
-              style={[styles.searchInput, { color: t.tp }]}
-              returnKeyType="search"
-              autoCorrect={false}
-            />
-            {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch("")} hitSlop={8} accessibilityLabel="Clear search" accessibilityRole="button">
-                <Ionicons name="close-circle" size={18} color={t.ts} />
-              </TouchableOpacity>
-            )}
-          </View>
+          <SearchField value={search} onChangeText={setSearch} placeholder="Search by name" style={styles.searchBox} />
         )}
 
         {rows.length === 0 ? (
@@ -345,10 +329,9 @@ const styles = StyleSheet.create({
   // buttons' centre line; marginBottom is the gap to the list.
   titleRow:    { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 30 },
   title:       { flex: 1, fontFamily: FontFamily.bold, fontSize: 22, textAlign: "center" },
-  newBtn:      { width: BACK_SIZE, height: BACK_SIZE, borderRadius: BACK_SIZE / 2, alignItems: "center", justifyContent: "center", ...PILL_SHADOW },
+  newFloat:    { position: "absolute", right: BACK_LEFT, zIndex: 10 },
 
-  searchBox:   { flexDirection: "row", alignItems: "center", gap: 9, height: 42, borderWidth: 1, borderRadius: PILL_RADIUS, paddingHorizontal: 14, marginBottom: 16, ...PILL_SHADOW },
-  searchInput: { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, paddingVertical: 0 },
+  searchBox:   { marginBottom: 16 },
   noMatch:     { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
 
   row:         { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },

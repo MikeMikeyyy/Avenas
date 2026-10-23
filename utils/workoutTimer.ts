@@ -446,8 +446,10 @@ export type UpNext = {
   isWarmup: boolean;
   /** Its exercise's working sets, done or not as they'll stand when it's up. */
   setDone: boolean[];
-  /** Its dot among them; -1 for a warmup, which has none. */
+  /** Its dot among them; -1 for a warmup, whose dot is among its warmups'. */
   dot: number;
+  /** ...and its warmups the same way, the orange dots before the green. */
+  warmupDone: boolean[];
 };
 
 /** The set's numbers in a line, as the lock screen card writes them. */
@@ -481,6 +483,7 @@ export function upNextFrom(
     isWarmup,
     setDone: head.setDone,
     dot: isWarmup ? -1 : head.setIdx,
+    warmupDone: head.warmupDone,
   };
 }
 

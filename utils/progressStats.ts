@@ -16,7 +16,7 @@
 import { CompletedWorkout, ProgramDayRef, SavedProgram } from "../constants/programs";
 import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
 import { MONTH_NAMES, toYMD, parseStoredDate } from "./dates";
-import { historicalDays, markDayRefLabels, programDaysWithExtras } from "./programDays";
+import { customDayKey, historicalDays, markDayRefLabels, programDaysWithExtras } from "./programDays";
 import { runStartYMD } from "./programHolds";
 import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
 import { currentExerciseName, exerciseIdentity, type ExerciseRef } from "./exerciseNames";
@@ -760,6 +760,11 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
 
 // ─── public: program scope filter ────────────────────────────────────────────
 
+/** What the page calls the sessions in no program, and the program card
+ *  they're under in "All programs" (whose id is CUSTOM_GROUP_ID). */
+export const CUSTOM_WORKOUTS_NAME = "Custom workouts";
+export const CUSTOM_GROUP_ID = "custom";
+
 export function programIncludes(p: SavedProgram, workoutName: string): boolean {
   const k = key(workoutName);
   if (p.cyclePattern.some(n => n && key(n) === k && key(n) !== "rest")) return true;
@@ -783,13 +788,28 @@ export function programIncludes(p: SavedProgram, workoutName: string): boolean {
 export function workoutBelongsToProgram(w: CompletedWorkout, p: SavedProgram): boolean {
   if (w.programId !== undefined) return w.programId === p.id;
   if (!programIncludes(p, w.workoutName)) return false;
-  const start = runStartYMD(p);
-  if (start && w.date < start) return false;
-  if (p.completedDate) {
-    const end = parseStoredDate(p.completedDate);
-    if (end && w.date > toYMD(end)) return false;
-  }
-  return true;
+  return inLegacyWindow(w.date, legacyWindowOf(p));
+}
+
+/** The dates a session from before program ids is `p`'s inside: from the day
+ *  its run began to the day it was completed, either end open when unknown. */
+export function legacyWindowOf(p: SavedProgram): { from: string | null; to: string | null } {
+  const end = p.completedDate ? parseStoredDate(p.completedDate) : null;
+  return { from: runStartYMD(p), to: end ? toYMD(end) : null };
+}
+
+function inLegacyWindow(date: string, window: { from: string | null; to: string | null }): boolean {
+  return !(window.from && date < window.from) && !(window.to && date > window.to);
+}
+
+/**
+ * A session in no program: a free workout, one imported from another app, or
+ * one whose program has been deleted. By the rule the workout cards number by
+ * (utils/sessionTrack.ts: no program it belongs to), so Custom workouts and
+ * the cards always agree on which sessions they are.
+ */
+export function isCustomSession(w: CompletedWorkout, programs: readonly SavedProgram[]): boolean {
+  return !programs.some(p => workoutBelongsToProgram(w, p));
 }
 
 /**
@@ -797,6 +817,7 @@ export function workoutBelongsToProgram(w: CompletedWorkout, p: SavedProgram): b
  *   - current: workouts belonging to the lone active program; [] if none.
  *   - all: identity.
  *   - program: workouts belonging to the named program; [] if it's gone.
+ *   - custom: workouts in no program (isCustomSession).
  */
 export function filterByProgramScope(
   history: CompletedWorkout[],
@@ -804,6 +825,7 @@ export function filterByProgramScope(
   programs: SavedProgram[],
 ): CompletedWorkout[] {
   if (scope.kind === "all") return history;
+  if (scope.kind === "custom") return history.filter(w => isCustomSession(w, programs));
   let target: SavedProgram | null = null;
   if (scope.kind === "current") {
     target = programs.find(p => p.status === "active") ?? null;
@@ -819,6 +841,7 @@ export function filterByProgramScope(
 
 export function programsInScope(scope: ProgramScope, programs: SavedProgram[]): SavedProgram[] {
   if (scope.kind === "all") return programs;
+  if (scope.kind === "custom") return [];
   if (scope.kind === "current") {
     const p = programs.find(p => p.status === "active");
     return p ? [p] : [];
@@ -845,7 +868,12 @@ export function scopedProgramDays(
 ): ProgramDayRef[] {
   const inScope = programsInScope(scope, programs);
   const refs: ProgramDayRef[] = [];
-  for (const p of inScope) refs.push(...programDaysWithExtras(p));
+  // Each with its program's dates, which a session from before program ids is
+  // only its inside (workoutMatchesDay), as it's only the program's inside.
+  for (const p of inScope) {
+    const legacyWindow = legacyWindowOf(p);
+    refs.push(...programDaysWithExtras(p).map(d => ({ ...d, legacyWindow })));
+  }
   // Days the program no longer has but that were trained under it — appended
   // after the live cycle so the page reads "here's your program, and here's
   // what came before it". Without this, editing a day out of a program (or
@@ -854,7 +882,66 @@ export function scopedProgramDays(
   // Re-mark across the FULL scope: a label unique inside one program can be
   // duplicated once a second program joins, and only one day in the whole scope
   // may absorb the sessions that carry no dayId.
-  return markDayRefLabels(refs);
+  const marked = markDayRefLabels(refs);
+  // The sessions in no program, under Custom workouts and under All programs
+  // (user decision, 2026-10-23: "All programs" is everything). After the
+  // marking: they're matched by their own list, so they absorb nothing.
+  return scope.kind === "custom" || scope.kind === "all"
+    ? [...marked, ...customWorkoutDays(scopedWorkouts, programs)]
+    : marked;
+}
+
+/**
+ * The days of Custom workouts: the sessions in no program (isCustomSession)
+ * gathered by customDayKey, so each name, and each deleted program's day, is
+ * one day; each named as its newest session is, the most recently done first.
+ * Each lists its own sessions (ProgramDayRef.custom), which is how they're
+ * matched (workoutMatchesDay), never by name, so a program's day that shares
+ * the name never takes them. Nothing is "swapped out" on one: there's no
+ * prescription to compare against.
+ */
+export function customWorkoutDays(workouts: readonly CompletedWorkout[], programs: readonly SavedProgram[]): ProgramDayRef[] {
+  const groups = new Map<string, CompletedWorkout[]>();
+  for (const w of workouts) {
+    if (!isCustomSession(w, programs)) continue;
+    const k = customDayKey(w);
+    const list = groups.get(k);
+    if (list) list.push(w);
+    else groups.set(k, [w]);
+  }
+  const days = [...groups].map(([k, sessions]) => {
+    const newest = sessions.reduce((a, b) => (b.completedAt > a.completedAt ? b : a));
+    const programName = sessions.find(s => s.programName)?.programName;
+    return {
+      newest: newest.completedAt,
+      ref: {
+        key: `custom::${k}`,
+        dayId: `custom:${k}`,
+        index: -1,
+        label: newest.workoutName,
+        programId: "",
+        programName: CUSTOM_WORKOUTS_NAME,
+        programExercises: [],
+        isHistorical: false,
+        absorbsUnidentified: false,
+        firstInProgram: false,
+        duplicateLabel: false,
+        custom: {
+          key: k,
+          sessionIds: new Set(sessions.map(s => s.id)),
+          ...(programName ? { programName } : {}),
+          deletedProgram: sessions.some(s => !!s.programName || !!s.programId),
+        },
+      } satisfies ProgramDayRef,
+    };
+  });
+  days.sort((a, b) => b.newest.localeCompare(a.newest));
+  const refs = days.map(d => d.ref);
+  // Two of them can read alike (a free "Push" and a deleted program's): each
+  // then says where it came from (DayExerciseList's qualifier).
+  const counts = new Map<string, number>();
+  for (const d of refs) counts.set(key(d.label), (counts.get(key(d.label)) ?? 0) + 1);
+  return refs.map(d => ({ ...d, duplicateLabel: (counts.get(key(d.label)) ?? 0) > 1 }));
 }
 
 /** One program's days, for the "All programs" Exercise Progress list. */
@@ -887,11 +974,14 @@ export function groupDaysByProgram(days: ProgramDayRef[], programs: SavedProgram
   const programById = new Map(programs.map(p => [p.id, p]));
   const groups = new Map<string, ProgramDayGroup>();
   for (const d of days) {
-    let g = groups.get(d.programId);
+    // Custom workouts are one card of their own, after every program's (no
+    // status sorts last).
+    const id = d.custom ? CUSTOM_GROUP_ID : d.programId;
+    let g = groups.get(id);
     if (!g) {
-      const p = programById.get(d.programId);
-      g = { programId: d.programId, programName: p?.name ?? d.programName, status: p?.status ?? null, days: [] };
-      groups.set(d.programId, g);
+      const p = d.custom ? undefined : programById.get(d.programId);
+      g = { programId: id, programName: p?.name ?? d.programName, status: p?.status ?? null, days: [] };
+      groups.set(id, g);
     }
     g.days.push(d);
   }
@@ -935,6 +1025,8 @@ export function groupDaysByProgram(days: ProgramDayRef[], programs: SavedProgram
  * question of which program owns the session.
  */
 export function workoutMatchesDay(w: CompletedWorkout, day: ProgramDayRef): boolean {
+  // A day of Custom workouts is the sessions it lists (customWorkoutDays).
+  if (day.custom) return day.custom.sessionIds.has(w.id);
   if (w.dayId) {
     if (w.dayId !== day.dayId) return false;
     return !w.programId || !day.programId || w.programId === day.programId;
@@ -942,6 +1034,11 @@ export function workoutMatchesDay(w: CompletedWorkout, day: ProgramDayRef): bool
   if (key(w.workoutName) !== key(day.label)) return false;
   if (w.programId) return w.programId === day.programId && (day.firstInProgram ?? day.absorbsUnidentified);
   if (w.programId === "") return false;
+  // From before program ids: on its program's first day of the name, its
+  // program being one it was logged while running (workoutBelongsToProgram).
+  // Under "All programs" one from before every program's dates used to land on
+  // the first day of its name, and on Custom workouts as well.
+  if (day.legacyWindow) return inLegacyWindow(w.date, day.legacyWindow) && (day.firstInProgram ?? day.absorbsUnidentified);
   return day.absorbsUnidentified;
 }
 

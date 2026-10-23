@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -29,6 +31,8 @@ function titleCase(s: string) {
 
 export default function PrivacySecurityScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -48,7 +52,9 @@ export default function PrivacySecurityScreen() {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Activity-status privacy (profiles.share_activity, migration 0009). The
+  // Activity-status privacy (profiles.share_activity, migration 0009; since
+  // 0051 it also hides your program from your groups' members, though not from
+  // a trainer you're connected with, user decision 2026-10-22). The
   // switch stays disabled until the server value loads so a blind flip can't
   // fight the fetch; writes are optimistic with revert + alert on failure —
   // a silently-failed "hide me" would leave the user wrongly believing
@@ -103,7 +109,7 @@ export default function PrivacySecurityScreen() {
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: scrollEndPadding(insets.bottom + 32, barsReach) }]}
       >
         <Text style={[styles.title, { color: t.tp }]}>Privacy & Security</Text>
 
@@ -113,7 +119,7 @@ export default function PrivacySecurityScreen() {
             <View style={{ flex: 1 }}>
               <Text style={[styles.toggleTitle, { color: t.tp }]}>Show Activity Status</Text>
               <Text style={[styles.toggleBody, { color: t.ts }]}>
-                People you&apos;re connected with can see when you were last active on Avenas. When this is off, they see nothing at all.
+                People you&apos;re connected with and people in your groups can see when you were last active on Avenas, and your groups can see the program you&apos;re running. When this is off, they see neither, though a trainer you&apos;re connected with can still see your program.
               </Text>
             </View>
             <AppSwitch

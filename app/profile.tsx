@@ -7,6 +7,7 @@ import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity } from "reac
 import { Image } from "expo-image";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -19,7 +20,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import SegmentedControl from "../components/SegmentedControl";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
-import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, DANGER, FontFamily } from "../constants/theme";
 import { clearCoachingData, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
 import { changeAccountType } from "../lib/connectionRoles";
@@ -32,6 +33,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -229,7 +232,7 @@ export default function ProfileScreen() {
         bottomOffset={ABOVE_KEYBOARD_TOOLS}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12, paddingBottom: scrollEndPadding(insets.bottom + 32, barsReach) }]}
       >
         <Text style={[styles.title, { color: t.tp }]}>Profile</Text>
 

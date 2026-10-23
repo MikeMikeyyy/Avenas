@@ -17,7 +17,7 @@ import * as Haptics from "expo-haptics";
 import NeuCard from "../NeuCard";
 import {
   ACCT, APP_DARK, APP_LIGHT, CUE_INK, CUE_INK_DARK, FontFamily, NEU_BG, NEU_BG_DARK,
-  compareBlue, compareBlueText,
+  compareBlue, compareBlueText, washOver,
 } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { ExerciseDataPoint } from "../../constants/progress";
@@ -42,6 +42,8 @@ const LANE_TOP = { green: PAD, blue: PAD + LANE_H + LANE_GAP } as const;
 /** A lift only one program did: its band in the middle (user request,
  *  2026-10-14: high in green's band, it read as half of a pair). */
 const ALONE_TOP = (H - LANE_H) / 2;
+/** How strongly the green washes the row being charted. */
+const SELECTED_WASH = 0.12;
 
 /** What a lift's little chart plots at each place in its row: its top set, or
  *  at bodyweight the best set's reps; nothing where it was missed. */
@@ -60,10 +62,13 @@ function valuesOf(row: readonly LiftSlot[], weighted: boolean): (number | null)[
  *  through it to the next session, or out to it before the first session or
  *  after the last (missedOnLine): a line only ever runs between two marks,
  *  never out to nothing (user requests, the same day). */
-function MiniChart({ lift, missed, isDark, shown, onSeen }: {
+function MiniChart({ lift, missed, isDark, card, shown, onSeen }: {
   lift: CompareLift;
   missed: { green: string[]; blue: string[] };
   isDark: boolean;
+  /** What it's drawn on, which its hollow marks are filled with: the card, or
+   *  the wash of the row being charted. */
+  card: string;
   /** How far the whole list's lines have drawn out, 0 to 1. */
   shown: SharedValue<number>;
   /** It's been scrolled into sight. */
@@ -83,7 +88,6 @@ function MiniChart({ lift, missed, isDark, shown, onSeen }: {
   const all = [...g, ...b].filter((v): v is number => v !== null);
   // Only one program's line to draw: it sits in the middle, not in its band.
   const alone = g.every(v => v === null) || b.every(v => v === null);
-  const card = isDark ? NEU_BG_DARK : NEU_BG;
   if (all.length === 0) return <View style={{ width: W, height: H }} />;
   let lo = Math.min(...all);
   let hi = Math.max(...all);
@@ -180,6 +184,8 @@ export default function CompareLiftList({ lifts, missed, names, selected, onSele
   const gInk = ACCT;
   const bInk = compareBlueText(isDark);
   const cue = isDark ? CUE_INK_DARK : CUE_INK;
+  const card = isDark ? NEU_BG_DARK : NEU_BG;
+  const wash = washOver(card, ACCT, SELECTED_WASH);
 
   // Every little chart draws out together, a moment after the first of them
   // is scrolled into sight, so the whole list can be watched coming in (user
@@ -210,7 +216,12 @@ export default function CompareLiftList({ lifts, missed, names, selected, onSele
     );
   };
 
-  const row = (lift: CompareLift, last: boolean) => {
+  // The one charted below is marked as the Exercise Progress list marks its
+  // pick (SheetPill `selected`): a soft green wash with a green ring round the
+  // row and a tick for its chevron (user request, 2026-10-21: the name alone
+  // going green was easy to miss). The lines either side of it go clear, kept
+  // in place so nothing moves.
+  const row = (lift: CompareLift, last: boolean, nextSelected: boolean) => {
     const sel = lift.key === selected;
     const m = missed[lift.key] ?? { green: [], blue: [] };
     const deleted = isDeletedExercise(lift, customExercises);
@@ -227,8 +238,9 @@ export default function CompareLiftList({ lifts, missed, names, selected, onSele
           accessibilityState={{ selected: sel }}
           accessibilityLabel={`${lift.name}${deleted ? ", a deleted exercise" : ""}. ${lift.green.length ? `${names.green}: ${lift.green.length} sessions.` : ""} ${lift.blue.length ? `${names.blue}: ${lift.blue.length} sessions.` : ""} Shows its chart`}
         >
+          {sel ? <View pointerEvents="none" style={[styles.selectedWash, { backgroundColor: wash }]} /> : null}
           <View style={styles.text}>
-            <Text style={[styles.name, { color: sel ? gInk : t.tp }]} numberOfLines={1}>
+            <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>
               {lift.name}
               {deleted ? <Text style={[styles.deletedNote, { color: cue }]}>{" · Deleted"}</Text> : null}
             </Text>
@@ -245,10 +257,14 @@ export default function CompareLiftList({ lifts, missed, names, selected, onSele
               </View>
             ) : null}
           </View>
-          <MiniChart lift={lift} missed={m} isDark={isDark} shown={shown} onSeen={onSeen} />
-          <Ionicons name="chevron-forward" size={14} color={t.ts} />
+          <MiniChart lift={lift} missed={m} isDark={isDark} card={sel ? wash : card} shown={shown} onSeen={onSeen} />
+          <View style={styles.trail}>
+            {sel
+              ? <Ionicons name="checkmark-circle" size={18} color={ACCT} />
+              : <Ionicons name="chevron-forward" size={14} color={t.ts} />}
+          </View>
         </TouchableOpacity>
-        {!last ? <View style={[styles.divider, { backgroundColor: t.div }]} /> : null}
+        {!last ? <View style={[styles.divider, { backgroundColor: sel || nextSelected ? "transparent" : t.div }]} /> : null}
       </View>
     );
   };
@@ -262,7 +278,7 @@ export default function CompareLiftList({ lifts, missed, names, selected, onSele
           <Text style={[styles.section, { color: cue }]}>{title}</Text>
         </View>
         <NeuCard dark={isDark} radius={20}>
-          <View style={styles.cardInner}>{list.map((l, i) => row(l, i === list.length - 1))}</View>
+          <View style={styles.cardInner}>{list.map((l, i) => row(l, i === list.length - 1, list[i + 1]?.key === selected))}</View>
         </NeuCard>
       </View>
     ) : null
@@ -294,6 +310,14 @@ const styles = StyleSheet.create({
   section: { flexShrink: 1, fontFamily: FontFamily.semibold, fontSize: 12, lineHeight: 16, letterSpacing: 0.6, textTransform: "uppercase" },
   cardInner: { paddingHorizontal: 16 },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 },
+  // The pick's wash and ring, reaching most of the way to the card's sides
+  // (cardInner's 16) and kept off the lines above and below.
+  selectedWash: {
+    position: "absolute", top: 3, bottom: 3, left: -10, right: -10,
+    borderRadius: 14, borderWidth: 1.5, borderColor: ACCT,
+  },
+  // Holds the chevron or the tick at one width, so the mini chart stays put.
+  trail: { width: 18, alignItems: "center" },
   text: { flex: 1, minWidth: 0, gap: 2 },
   name: { fontFamily: FontFamily.semibold, fontSize: 15, lineHeight: 20 },
   deletedNote: { fontFamily: FontFamily.regular, fontSize: 13 },

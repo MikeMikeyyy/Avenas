@@ -53,11 +53,13 @@ struct WorkoutActivityAttributes: ActivityAttributes {
     var allDone: Bool
     // Added with the card's redesign (2026-10-11). Optional, so a card an
     // older build put up still decodes after an update.
-    var isWarmup: Bool? = nil  // the current set is a warmup: none of the dots is its own
+    var isWarmup: Bool? = nil  // the current set is a warmup: its dot is among the warmups'
     var isHold: Bool? = nil    // a timed hold: `reps` are seconds
     var setIdx: Int? = nil     // the current set's place among its kind (its dot)
     var setDone: [Bool]? = nil // its exercise's working sets, done or not (the dots)
     var isDark: Bool? = nil    // the app's own Dark Mode, which the card follows
+    // Added 2026-10-21, optional for the same reason.
+    var warmupDone: [Bool]? = nil // its exercise's warmups, done or not (the orange dots)
   }
 
   var workoutName: String
@@ -83,6 +85,7 @@ struct PendingSet: Codable {
   var isFinal: Bool    // ticking this completes the workout → no rest
   var isHold: Bool? = nil     // a timed hold: `reps` are seconds
   var setDone: [Bool]? = nil  // its exercise's working sets as they'll stand when it's up
+  var warmupDone: [Bool]? = nil // ...and its warmups
 }
 
 /// A lock-screen action awaiting replay into the JS workout draft. The replay
@@ -181,6 +184,7 @@ enum WorkoutActivityController {
       state.isHold = next.isHold
       state.setIdx = next.setIdx
       state.setDone = next.setDone
+      state.warmupDone = next.warmupDone
       state.allDone = false
     } else {
       state.allDone = true

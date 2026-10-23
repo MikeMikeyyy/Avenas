@@ -161,6 +161,18 @@ eq(
     "lock screen dots: each set shows its exercise's working sets as they'll stand when it's up");
   eq(queue.map(q => q.isHold), [false, false, true, false], "lock screen: a timed hold says so, so its reps read as seconds");
   eq(log.A.working.map(s => s.done), [true, false, false], "lock screen dots: the log itself is left alone");
+  eq(queue.map(q => q.warmupDone), [[false], [false], [], [false]], "lock screen dots: ...and its warmups, the skipped one still open");
+}
+{
+  // Two warmups (user report, 2026-10-21: no dot filled on a warmup, as
+  // warmups had none): each fills, orange on the card, as the queue passes it.
+  const log = { A: ex([o(), o()], [o(), o()]) };
+  const { queue } = buildLiveActivityQueue([{ id: "A", name: "Squat" }], log, () => []);
+  eq(queue.map(q => q.warmupDone), [[false, false], [true, false], [true, true], [true, true]],
+    "lock screen dots: a warmup shows filled once it's done");
+  eq(queue.map(q => q.setDone), [[false, false], [false, false], [false, false], [true, false]],
+    "lock screen dots: ...and the working sets stay open through the warmups");
+  eq(log.A.warmup.map(s => s.done), [false, false], "lock screen dots: the warmups in the log are left alone");
 }
 
 if (failures.length > 0) {

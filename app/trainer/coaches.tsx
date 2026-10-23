@@ -1,32 +1,47 @@
-// "My Trainers" (trainer side) — standalone page reached from a small button on
-// PTHome. Lets a trainer connect to senior trainers/mentors, accept programs
-// they share, and pass those programs down to their own clients in one tap.
+// "My Trainers" (trainer side) — standalone page reached from the My Trainers
+// pill on PTHome. Lets a trainer connect to senior trainers/mentors, accept
+// programs they share, and pass those programs down to their own clients in one
+// tap. The connect button at the top right (the person with a plus, with a count
+// of the requests waiting) connects someone, as Connect does from anywhere;
+// "Remove a trainer" is at the foot of the list (user decision, 2026-10-21, as
+// the gym user's page has it; it was a "+" opening an Add / Remove alert).
 
-import { useCallback, useRef, useState } from "react";
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useCallback, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../../constants/floatingBars";
+import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { useRouter, useFocusEffect } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 
 import FadeScreen from "../../components/FadeScreen";
-import MyCoachesSection, { type MyCoachesSectionRef } from "../../components/trainer/MyCoachesSection";
+import GlassButton from "../../components/GlassButton";
+import UnreadBadge from "../../components/UnreadBadge";
+import OfflineBanner from "../../components/OfflineBanner";
+import KeyboardDismissButton from "../../components/KeyboardDismissButton";
+import UserRoundPlusIcon from "../../components/icons/UserRoundPlusIcon";
+import MyCoachesSection from "../../components/trainer/MyCoachesSection";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useConnectionPresence } from "../../hooks/useConnectionPresence";
 import { resolveTrainerRoster } from "../../utils/roster";
 import type { Client } from "../../utils/trainerStore";
-import BackButton, { BACK_SIZE, BACK_TOP } from "../../components/BackButton";
+import BackButton, { BACK_LEFT, BACK_SIZE, BACK_TOP } from "../../components/BackButton";
 
 export default function CoachesScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
+  // Read here and handed down, so the page polls connections once: the
+  // connect button's count, and each trainer's presence line.
+  const { presenceById, pendingIncoming } = useConnectionPresence();
 
   const [clients, setClients] = useState<Client[]>([]);
-  const sectionRef = useRef<MyCoachesSectionRef>(null);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -58,24 +73,28 @@ export default function CoachesScreen() {
 
       <BackButton />
 
-      <TouchableOpacity
-        onPress={() => sectionRef.current?.openMenu()}
-        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel="Add or remove a trainer"
-        accessibilityRole="button"
+      {/* Connect, where requests are accepted, with how many are waiting.
+          Connecting is role-blind: someone with a trainer account lands here,
+          anyone else in My Clients (utils/roster.ts). */}
+      <GlassButton
+        onPress={() => router.navigate("/connect")}
+        size={BACK_SIZE}
+        style={[styles.connect, { top: insets.top + BACK_TOP }]}
+        badge={<UnreadBadge count={pendingIncoming} style={styles.badge} />}
+        accessibilityLabel={pendingIncoming > 0 ? `Connect with someone, ${pendingIncoming} waiting` : "Connect with someone"}
       >
-        <View style={[styles.plusBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="add" size={24} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+        <UserRoundPlusIcon size={20} color={t.tp} />
+      </GlassButton>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
+        // A tap on a trainer fires on the first touch while the search field
+        // is focused, instead of being swallowed to dismiss the keyboard.
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: insets.top + BACK_TOP,
-          paddingBottom: insets.bottom + 40,
+          paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach),
         }}
       >
         <View style={styles.header}>
@@ -84,18 +103,23 @@ export default function CoachesScreen() {
           <View style={{ width: 44 }} />
         </View>
 
-        <MyCoachesSection ref={sectionRef} clients={clients} />
+        <OfflineBanner />
+
+        <MyCoachesSection clients={clients} presenceById={presenceById} />
       </ScrollView>
+
+      <KeyboardDismissButton />
     </FadeScreen>
   );
 }
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  plusBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: "center", justifyContent: "center", overflow: "hidden",
-  },
+  // Mirrors the back button across the screen, as the floating archive button
+  // does (components/ArchiveButton.tsx): same top, same inset, same circle,
+  // and like it no shadow.
+  connect: { position: "absolute", right: BACK_LEFT, zIndex: 10 },
+  badge: { position: "absolute", top: -5, right: -5 },
   header: {
     flexDirection: "row",
     alignItems: "center",

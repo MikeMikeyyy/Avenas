@@ -135,6 +135,7 @@ export function workoutToRow(w: CompletedWorkout, userId: string, programUuid: s
     exercises: w.exercises as unknown[],
     session_notes: w.sessionNotes ?? null,
     plan: w.plan ?? null,
+    program_name: w.programName ?? null,
   };
 }
 
@@ -155,6 +156,8 @@ export function workoutFromRow(r: WorkoutRow): CompletedWorkout {
     dayId: r.day_id ?? undefined,
     // Absent on a row from before 0046 (and from a server without it).
     ...(Array.isArray(r.plan) ? { plan: r.plan as PlannedExercise[] } : {}),
+    // Absent unless its program was deleted (0052).
+    ...(r.program_name ? { programName: r.program_name } : {}),
   };
 }
 

@@ -476,7 +476,7 @@ eq(upNextFrom(undefined, ["a"], "kg"), null, "up next: no set left, none");
   const off = subscribeUpNext(() => { bar += 1; });
   const a = upNextFrom({
     exId: "x", setType: "working", setIdx: 1, exerciseName: "Squat", setLabel: "Set 2 of 4",
-    weight: "100", reps: "5", restSeconds: 120, isFinal: false, isHold: false, setDone: [true, false, false, false],
+    weight: "100", reps: "5", restSeconds: 120, isFinal: false, isHold: false, setDone: [true, false, false, false], warmupDone: [true],
   }, ["x"], "kg");
   publishUpNext(a);
   publishUpNext(a && { ...a });

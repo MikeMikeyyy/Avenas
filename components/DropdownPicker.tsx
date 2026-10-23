@@ -10,10 +10,10 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import BounceButton from "./BounceButton";
+import GlassButton from "./GlassButton";
 import SheetPill from "./SheetPill";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
-import { pill, PILL_H_CHIP, PILL_SHADOW } from "../constants/buttons";
+import { PILL_H_CHIP, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 
 interface Option<T extends string> {
@@ -38,9 +38,9 @@ interface Props<T extends string> {
   triggerIcon?: keyof typeof Ionicons.glyphMap;
   /**
    * "chip" (default) is the compact pill tucked into a card's header beside
-   * its title. "bar" is the full-height pill, for a page-level control that
-   * sits beside another full-size pill (the Progress page's time range, next
-   * to its program picker).
+   * its title. "bar" is the page-level pill (PILL_H_XS), for a control that
+   * sits beside ProgramScopePicker (the Progress page's time range, next to
+   * its program picker).
    */
   size?: "chip" | "bar";
   /** Ionicons name drawn before the current value on a text trigger. */
@@ -119,34 +119,31 @@ export default function DropdownPicker<T extends string>({
 
   return (
     <>
-      <BounceButton
+      {/* The app's pill button (constants/buttons.ts), glass on iOS 26
+          (components/GlassButton.tsx; user request, 2026-10-23), the white
+          control pill below that, as the buttons in its sheet (SheetPill) are.
+          The icon-only trigger is that pill at equal width and height: a round
+          button. */}
+      <GlassButton
+        pill={!triggerIcon}
+        size={bar && !triggerIcon ? PILL_H_XS : PILL_H_CHIP}
         onPress={() => setOpen(true)}
-        accessibilityRole="button"
+        contentStyle={triggerIcon ? undefined : bar ? styles.btnBar : styles.btn}
+        solidStyle={PILL_SHADOW}
         accessibilityLabel={`${sheetTitle}: ${current.label}. Tap to change.`}
       >
-        {/* The app's pill button (constants/buttons.ts), the same white pill on
-            the control surface as the buttons in its sheet (SheetPill), so the
-            button and the popup it opens read as one family. The icon-only
-            trigger is that pill at equal width and height: a round button. */}
-        <View
-          style={[
-            triggerIcon ? styles.iconBtn : bar ? styles.btnBar : styles.btn,
-            { backgroundColor: t.ctrl },
-          ]}
-        >
-          {triggerIcon ? (
-            <Ionicons name={triggerIcon} size={16} color={t.tp} />
-          ) : (
-            <>
-              {leadingIcon ? <Ionicons name={leadingIcon} size={bar ? 17 : 14} color={t.ts} /> : null}
-              <Text style={[bar ? styles.btnTextBar : styles.btnText, { color: t.tp }]} numberOfLines={1}>
-                {current.shortLabel ?? current.label}
-              </Text>
-              <Ionicons name="chevron-down" size={bar ? 15 : 13} color={t.ts} />
-            </>
-          )}
-        </View>
-      </BounceButton>
+        {triggerIcon ? (
+          <Ionicons name={triggerIcon} size={16} color={t.tp} />
+        ) : (
+          <>
+            {leadingIcon ? <Ionicons name={leadingIcon} size={bar ? 17 : 14} color={t.ts} /> : null}
+            <Text style={[bar ? styles.btnTextBar : styles.btnText, { color: t.tp }]} numberOfLines={1}>
+              {current.shortLabel ?? current.label}
+            </Text>
+            <Ionicons name="chevron-down" size={bar ? 15 : 13} color={t.ts} />
+          </>
+        )}
+      </GlassButton>
 
       <Modal visible={mounted} transparent animationType="none" onRequestClose={() => setOpen(false)}>
         <View style={{ flex: 1 }}>
@@ -204,35 +201,26 @@ export default function DropdownPicker<T extends string>({
 }
 
 const styles = StyleSheet.create({
+  // What's on the trigger: "chip" is PILL_H_CHIP tall, "bar" PILL_H_XS.
   btn: {
-    ...pill(PILL_H_CHIP),
     gap: 5,
     paddingHorizontal: 13,
-    ...PILL_SHADOW,
   },
   btnText: {
     fontFamily: FontFamily.bold,
     fontSize: 13,
     letterSpacing: 0.2,
   },
-  // ProgramScopePicker's pill (constants/buttons.ts's PILL_H), so the two sit
-  // level in one row. The text is a size down from the program name's 17: the
-  // range is the secondary control and has to leave the name its width.
+  // ProgramScopePicker's pill (constants/buttons.ts's PILL_H_XS), so the two
+  // sit level in one row. The text is a size down from the program name's 17:
+  // the range is the secondary control and has to leave the name its width.
   btnBar: {
-    ...pill(),
     gap: 7,
-    paddingHorizontal: 18,
-    ...PILL_SHADOW,
+    paddingHorizontal: 16,
   },
   btnTextBar: {
     fontFamily: FontFamily.bold,
     fontSize: 15,
-  },
-  iconBtn: {
-    ...pill(PILL_H_CHIP),
-    width: PILL_H_CHIP,
-    paddingHorizontal: 0,
-    ...PILL_SHADOW,
   },
 
   sheetWrap: {

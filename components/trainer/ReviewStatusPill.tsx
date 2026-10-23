@@ -19,13 +19,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { ACCT, AWAITING_ORANGE } from "../../constants/theme";
 import { CARD_PILL, CARD_PILL_TEXT } from "../../constants/cards";
 import type { SentProgram } from "../../utils/trainerStore";
+import { reviewStage, type ReviewStage } from "../../utils/trainerLists";
 
-export type ReviewStage = "awaiting" | "returned" | "accepted";
-
-export function reviewStage(r: SentProgram): ReviewStage {
-  if (r.status !== "returned") return "awaiting";
-  return r.appliedAtISO ? "accepted" : "returned";
-}
+// Where a review stands is a list rule too (the Programs card counts the ones
+// awaiting), so it lives in utils/trainerLists.ts; re-exported for the pill's
+// callers.
+export { reviewStage, type ReviewStage };
 
 export const REVIEW_STAGE_LABEL: Record<ReviewStage, string> = {
   awaiting: "Awaiting review",

@@ -5,10 +5,12 @@
 // tabs, one kind of chart each (user decision, 2026-10-12): Strength, a line of
 // each session's top set; Sets, each session's working sets stacked by their
 // reps; Volume, a bar per session. Every session has a slot of the same width,
-// numbered from 1 (the Nth time the exercise was done on that day: a shared
-// axis for comparing one run of a program with another, user decision,
-// 2026-10-13). Past what fits, the row scrolls sideways and opens on the
-// newest, and the y-axis fits the sessions on screen. Pure, so the training
+// numbered with the session its workout card says it was (a shared axis for
+// comparing one run of a program with another, user decision, 2026-10-13), and
+// a time the day came round without it keeps its slot as a miss (utils/
+// exerciseDaySlots.ts; user decision, 2026-10-22), so a row of the chart can
+// have no session in it. Past what fits, the row scrolls sideways and opens on
+// the newest, and the y-axis fits the sessions on screen. Pure, so the training
 // simulation checks every dot, block and bar lands inside the chart for every
 // number of sessions and every phone width (scripts/harness/training/
 // checks.ts). The path builders are worklets too: the plot eases them to a new
@@ -50,6 +52,10 @@ export function drawsOn(p: ExerciseDataPoint, metric: ExerciseMetricKey): boolea
   return chartValue(p, metric) > 0;
 }
 
+/** The chart's sessions slot by slot: nothing in a slot the day came round
+ *  for without the exercise (a miss, utils/exerciseDaySlots.ts). */
+export type ChartRow = readonly (ExerciseDataPoint | undefined)[];
+
 // ─── How a line moved ────────────────────────────────────────────────────────
 //
 // The % change the chart shows (user request, 2026-10-08), two ways: across
@@ -90,12 +96,14 @@ export function chartChange(points: ExerciseDataPoint[], metric: ExerciseMetricK
 }
 
 /** Session `slot` against the session before it that the tab draws (a
- *  bodyweight session between them is skipped). Null for the first, and on
- *  Sets. */
-export function changeFromPrevious(points: ExerciseDataPoint[], slot: number, metric: ExerciseMetricKey): number | null {
-  if (metric === "sets" || !points[slot] || !drawsOn(points[slot], metric)) return null;
+ *  bodyweight session or a miss between them is skipped). Null for the first,
+ *  and on Sets. */
+export function changeFromPrevious(points: ChartRow, slot: number, metric: ExerciseMetricKey): number | null {
+  const p = points[slot];
+  if (metric === "sets" || !p || !drawsOn(p, metric)) return null;
   for (let j = slot - 1; j >= 0; j--) {
-    if (drawsOn(points[j], metric)) return percentChange(chartValue(points[j], metric), chartValue(points[slot], metric));
+    const q = points[j];
+    if (q && drawsOn(q, metric)) return percentChange(chartValue(q, metric), chartValue(p, metric));
   }
   return null;
 }
@@ -313,19 +321,20 @@ function placeDotLabel(
   return best;
 }
 
-export type StrengthDot = { slot: number; x: number; y: number; labelX: number; labelY: number };
+export type StrengthDot = { slot: number; point: ExerciseDataPoint; x: number; y: number; labelX: number; labelY: number };
 
 /** Strength: a dot per session with weight on the bar, its reps written by
- *  it, clear of the line. */
-export function strengthDots(points: ExerciseDataPoint[], g: ExerciseChartGeometry, axis: ExerciseChartAxis): StrengthDot[] {
-  const at: { slot: number; x: number; y: number }[] = [];
+ *  it, clear of the line (straight from one dot to the next, a miss between
+ *  them or not). */
+export function strengthDots(points: ChartRow, g: ExerciseChartGeometry, axis: ExerciseChartAxis): StrengthDot[] {
+  const at: { slot: number; point: ExerciseDataPoint; x: number; y: number }[] = [];
   points.forEach((p, slot) => {
-    if (drawsOn(p, "strength")) at.push({ slot, x: slotX(g, slot), y: dotY(p.topWeight, axis) });
+    if (p && drawsOn(p, "strength")) at.push({ slot, point: p, x: slotX(g, slot), y: dotY(p.topWeight, axis) });
   });
   let before: Box | null = null;
   return at.map((d, i) => {
     const toward = [at[i - 1], at[i + 1]].filter((n): n is (typeof at)[number] => !!n);
-    const spot = placeDotLabel(d.x, d.y, strengthLabel(points[d.slot]), toward, before, g.contentWidth);
+    const spot = placeDotLabel(d.x, d.y, strengthLabel(d.point), toward, before, g.contentWidth);
     before = spot?.ink ?? null;
     return { ...d, labelX: spot?.x ?? d.x, labelY: spot?.y ?? labelOver(d.y, DOT_LABEL_GAP) };
   });
@@ -345,6 +354,7 @@ export type SetBlock = {
 
 export type SetStack = {
   slot: number;
+  point: ExerciseDataPoint;
   x: number;
   blocks: SetBlock[];
   /** The top of the stack, and the centre of the weight written over it. */
@@ -356,8 +366,10 @@ export type SetStack = {
 
 /** Sets: each session's working sets stacked from the baseline, a block per
  *  set as tall as its reps (a hold's seconds). */
-export function setStacks(points: ExerciseDataPoint[], g: ExerciseChartGeometry, axis: ExerciseChartAxis): SetStack[] {
-  return points.map((p, slot) => {
+export function setStacks(points: ChartRow, g: ExerciseChartGeometry, axis: ExerciseChartAxis): SetStack[] {
+  const out: SetStack[] = [];
+  points.forEach((p, slot) => {
+    if (!p) return;
     const heaviest = p.sets.reduce((m, s) => (s.weight > m ? s.weight : m), 0);
     let cum = 0;
     const blocks = p.sets.map((s, set): SetBlock => {
@@ -367,20 +379,21 @@ export function setStacks(points: ExerciseDataPoint[], g: ExerciseChartGeometry,
       return { set, weight: s.weight, reps: s.reps, y, h: Math.max(1, bottom - y), lighter: s.weight < heaviest - 1e-9 };
     });
     const top = dotY(cum, axis);
-    return { slot, x: slotX(g, slot), blocks, top, labelY: labelOver(top, STACK_LABEL_GAP), heaviest };
+    out.push({ slot, point: p, x: slotX(g, slot), blocks, top, labelY: labelOver(top, STACK_LABEL_GAP), heaviest });
   });
+  return out;
 }
 
-export type VolumeBar = { slot: number; x: number; y: number; labelY: number };
+export type VolumeBar = { slot: number; point: ExerciseDataPoint; x: number; y: number; labelY: number };
 
 /** Volume: a bar per session that moved any weight, the kilos written over
  *  it. */
-export function volumeBars(points: ExerciseDataPoint[], g: ExerciseChartGeometry, axis: ExerciseChartAxis): VolumeBar[] {
+export function volumeBars(points: ChartRow, g: ExerciseChartGeometry, axis: ExerciseChartAxis): VolumeBar[] {
   const out: VolumeBar[] = [];
   points.forEach((p, slot) => {
-    if (!drawsOn(p, "volume")) return;
+    if (!p || !drawsOn(p, "volume")) return;
     const y = dotY(p.sessionVolume, axis);
-    out.push({ slot, x: slotX(g, slot), y, labelY: labelOver(y, STACK_LABEL_GAP) });
+    out.push({ slot, point: p, x: slotX(g, slot), y, labelY: labelOver(y, STACK_LABEL_GAP) });
   });
   return out;
 }
@@ -741,8 +754,13 @@ function axisFrom(min: number, step: number, sections: number): ExerciseChartAxi
  * drew every metric as its ratio to the first session: a 10% gain moved a dot
  * 5% of the plot (user report, 2026-10-08).
  * Empty (or all zero): a clean 0–100 grid.
+ *
+ * `stepsFrom` are the values its steps are read off (whole or not, the load
+ * jump), the sessions themselves, when `values` also hold marks that only sit
+ * between them: a miss's empty circle on Strength's line, wherever the line
+ * passes, has to be inside the plot without its 103.75 deciding the steps.
  */
-export function exerciseChartAxis(values: number[], loads = false): ExerciseChartAxis {
+export function exerciseChartAxis(values: number[], loads = false, stepsFrom: number[] = values): ExerciseChartAxis {
   const hi = values.reduce((m, v) => (v > m ? v : m), 0);
   if (hi <= 0) return { ...niceAxis(hi, 4), min: 0, sections: 4 };
   const lo = values.reduce((m, v) => (v < m ? v : m), hi);
@@ -750,8 +768,8 @@ export function exerciseChartAxis(values: number[], loads = false): ExerciseChar
   const mid = (hi + lo) / 2;
   const top = mid + span * (0.5 + EDGE_ROOM);
   const bottom = Math.max(0, mid - span * (0.5 + EDGE_ROOM));
-  const whole = values.every(Number.isInteger);
-  const load = loads ? axisLoadStep(values) : null;
+  const whole = stepsFrom.every(Number.isInteger);
+  const load = loads ? axisLoadStep(stepsFrom) : null;
 
   type Fit = { min: number; step: number; sections: number; cover: number; rank: number; off: number };
   let best: Fit | null = null;

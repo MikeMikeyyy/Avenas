@@ -17,6 +17,8 @@ import type { CarriedExercise, CustomExercise } from "../constants/exercises";
 import type { CompletedWorkout, Exercise, SavedProgram, WorkoutMap } from "../constants/programs";
 import {
   carriedExercises,
+  customToShow,
+  exercisePageParams,
   exerciseSummaryParams,
   knownCustomExercises,
   sharedExercises,
@@ -159,6 +161,26 @@ eq(knownCustomExercises([{ name: "Landmine Twist", muscles: ["Legs"] }], [sentTw
 // The active program's copy wins over an older program's.
 const older = program("older", "completed", { "0:Push": [ex("o1", "Landmine Twist", { customDetails: newer })] });
 eq(carriedExercises([older, accepted])[0].steps, twist.steps, "lookup: the active program's version wins");
+
+// ─── An exercise's pages, opened from logged training ───────────────────────
+// The Progress charts and Exercise History open the exercise screen (and it
+// its history) by identity, and on a trainer's view of a client say whose.
+eq(exercisePageParams({ name: "Towel Row", customId: "cxRow" }), { exerciseName: "Towel Row", customId: "cxRow" },
+  "pages: a custom exercise opens as itself, by its id (the history button used to drop it and list nothing)");
+eq(exercisePageParams({ name: "Barbell Bench Press" }, CLIENT), { exerciseName: "Barbell Bench Press", clientId: CLIENT },
+  "pages: a client's opens their copy");
+// What they show of it. On the trainer's phone a client's own photo is a file
+// on the client's phone, so only what's online shows; their steps always do.
+const clientRow: CustomExercise = { id: "cxRow", name: "Towel Row", muscles: ["Back"], imageUri: "file:///client/exercise_icon_2.jpg", steps: ["Pull to the ribs"] };
+const clientSide = knownCustomExercises([clientRow], carriedExercises([accepted]));
+eq(customToShow({ name: "Towel Row", customId: "cxRow" }, clientSide, false)?.imageUri, clientRow.imageUri,
+  "show: your own photo, on your own phone");
+eq(customToShow({ name: "Towel Row", customId: "cxRow" }, clientSide, true), { id: "cxRow", name: "Towel Row", muscles: ["Back"], steps: ["Pull to the ribs"] },
+  "show: a client's own photo isn't shown on the trainer's phone, their muscles and steps are");
+eq(customToShow({ name: "Landmine Twist" }, clientSide, true)?.imageUri, URL("exercise_icon_1.jpg"),
+  "show: a trainer's photo the client's program carries is online, so it shows");
+eq(customToShow({ name: "Towel Row", customId: "cxOther" }, clientSide, false), undefined,
+  "show: by id, never another exercise of its name");
 
 console.log(`${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;

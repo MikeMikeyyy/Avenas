@@ -13,12 +13,15 @@
 // Floating (the default) pins it over the page. `inline` makes it a plain item
 // for a header bar, whose row supplies the position instead:
 // `paddingTop: insets.top + BACK_TOP`, `paddingHorizontal: BACK_LEFT`.
+//
+// Drawn as components/GlassButton.tsx: Liquid Glass on iOS 26, the solid
+// control circle below that.
 
-import { TouchableOpacity, View, StyleSheet } from "react-native";
+import { StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
+import GlassButton from "./GlassButton";
 import { APP_DARK, APP_LIGHT } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 
@@ -41,35 +44,21 @@ export default function BackButton({
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
-  const press = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (onPress) onPress();
-    else router.back();
-  };
-
   return (
-    <TouchableOpacity
-      onPress={press}
+    <GlassButton
+      onPress={() => {
+        if (onPress) onPress();
+        else router.back();
+      }}
+      size={BACK_SIZE}
       style={inline ? undefined : [styles.floating, { top: insets.top + BACK_TOP }]}
-      activeOpacity={0.8}
       accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
     >
-      <View style={[styles.circle, { backgroundColor: t.ctrl }]}>
-        <Ionicons name="chevron-back" size={22} color={t.tp} />
-      </View>
-    </TouchableOpacity>
+      <Ionicons name="chevron-back" size={22} color={t.tp} />
+    </GlassButton>
   );
 }
 
 const styles = StyleSheet.create({
   floating: { position: "absolute", left: BACK_LEFT, zIndex: 10 },
-  circle: {
-    width: BACK_SIZE,
-    height: BACK_SIZE,
-    borderRadius: BACK_SIZE / 2,
-    overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "center",
-  },
 });

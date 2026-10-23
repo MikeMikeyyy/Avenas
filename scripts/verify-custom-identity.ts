@@ -236,7 +236,7 @@ const radar = computeMuscleGroupStats(all, customs2);
 eq([radar.Core.sets, radar.Shoulders.sets], [6, 2], "again: the radar counts each under its own");
 const today = new Date(2026, 8, 10);
 const historyRows = (customId: string) =>
-  exerciseHistoryRows(all, [program2], { exerciseName: "Landmine Twist", customId, dayName: "Upper", dayId: "d0", programId: "p1", days: 365, today });
+  exerciseHistoryRows(all, [program2], { exerciseName: "Landmine Twist", customId, picks: [{ kind: "day", dayName: "Upper", dayId: "d0", programId: "p1" }], days: 365, today });
 eq([historyRows("cxB").length, historyRows("cxA").length], [1, 3], "again: Exercise History lists each one's sessions alone");
 eq(knownCustomExercises(customs2).map(c => c.id), ["cxA", "cxB"], "again: both are known, never merged");
 eq(customFor(asB, customs2), B, "again: its exercise screen opens the new one");

@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
   useWindowDimensions,
 } from "react-native";
 import { Image } from "expo-image";
@@ -12,26 +11,26 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
 
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import ExerciseImage from "../components/ExerciseImage";
 import VideoDemo from "../components/VideoDemo";
-import FavouriteStar from "../components/FavouriteStar";
+import FavouriteExerciseButton from "../components/FavouriteExerciseButton";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
 import { pill, pillGlow } from "../constants/buttons";
-import { CUSTOM_KEY, FAVOURITE_EXERCISES_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
+import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
-import { getJSON, setJSON } from "../utils/storage";
-import { isFavourite as isFav, toggleFavourite } from "../utils/exerciseFavourites";
+import { getJSON } from "../utils/storage";
 import { exerciseByName, exerciseIdByName } from "../utils/exerciseLookup";
-import { carriedExercises, knownCustomExercises } from "../utils/customExerciseDetails";
-import { customFor } from "../utils/customExercises";
+import { carriedExercises, customToShow, exercisePageParams, knownCustomExercises } from "../utils/customExerciseDetails";
+import { loadCachedClientData } from "../utils/trainerStore";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 // "middle back" → "Middle Back". Catalogue secondary muscles are free-text
@@ -55,11 +54,18 @@ function parseDetails(raw: string | undefined): CarriedExercise | null {
 
 export default function ExerciseSummaryScreen() {
   const router = useRouter();
-  const { exerciseName, customId, details } = useLocalSearchParams<{ exerciseName: string; customId?: string; details?: string }>();
+  // `clientId` makes it a TRAINER reading a client's exercise, opened from that
+  // client's Progress tab or Exercise History: it's looked up in the client's
+  // own exercises and programs, from the copy the client page loaded, and its
+  // history is theirs. `fromHistory`: opened from the exercise's history page,
+  // which the history button then goes back to.
+  const { exerciseName, customId, details, clientId, fromHistory } = useLocalSearchParams<{ exerciseName: string; customId?: string; details?: string; clientId?: string; fromHistory?: string }>();
   const name = exerciseName ?? "";
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const { width } = useWindowDimensions();
   const imgSize = Math.min(width - 40, 340);
 
@@ -71,45 +77,21 @@ export default function ExerciseSummaryScreen() {
   const bundled = exerciseByName(name);
   const [custom, setCustom] = useState<CustomExercise | null>(null);
 
-  // Favourite state. Re-read on focus rather than on mount: the picker writes
-  // the same key, so coming back here after starring something there must not
-  // show a stale star.
-  const [favourites, setFavourites] = useState<string[]>([]);
-  const starred = isFav(favourites, name);
-
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      getJSON<string[]>(FAVOURITE_EXERCISES_KEY, []).then(v => {
-        if (!cancelled && Array.isArray(v)) {
-          setFavourites(v.filter((n): n is string => typeof n === "string"));
-        }
-      }).catch(() => {});
-      return () => { cancelled = true; };
-    }, []),
-  );
-
-  const toggleStar = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setFavourites(prev => {
-      const next = toggleFavourite(prev, name);
-      setJSON(FAVOURITE_EXERCISES_KEY, next).catch(() => {});
-      return next;
-    });
-  }, [name]);
-
   useFocusEffect(
     useCallback(() => {
       if (bundled) return;            // catalogue entry already has everything
       let cancelled = false;
       (async () => {
-        const [own, programs] = await Promise.all([
-          getJSON<CustomExercise[]>(CUSTOM_KEY, []),
-          getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-        ]);
+        const [own, programs] = clientId
+          ? await loadCachedClientData(clientId).then(d => [d.customExercises ?? [], d.programs] as const)
+          : await Promise.all([
+              getJSON<CustomExercise[]>(CUSTOM_KEY, []),
+              getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
+            ]);
         if (cancelled) return;
-        // Yours first, then the row's own copy (a program you're reviewing
-        // isn't in your list), then whatever your programs carry.
+        // Yours (a client's, on their page) first, then the row's own copy (a
+        // program you're reviewing isn't in your list), then whatever those
+        // programs carry.
         const fromRow = parseDetails(details);
         const known = knownCustomExercises(
           Array.isArray(own) ? own : [],
@@ -117,11 +99,12 @@ export default function ExerciseSummaryScreen() {
           carriedExercises(Array.isArray(programs) ? programs : []),
         );
         // By its id, so a deleted exercise and a new one given its name each
-        // open as themselves (utils/customExercises.ts).
-        setCustom(customFor({ name, customId }, known) ?? null);
+        // open as themselves (utils/customExercises.ts). A client's keeps only
+        // the photo and video that are online.
+        setCustom(customToShow({ name, customId }, known, !!clientId) ?? null);
       })();
       return () => { cancelled = true; };
-    }, [bundled, name, customId, details]),
+    }, [bundled, name, customId, details, clientId]),
   );
 
   const primaryMuscle = bundled?.primaryMuscle ?? custom?.muscles?.[0];
@@ -155,21 +138,7 @@ export default function ExerciseSummaryScreen() {
       {/* Back button */}
       <BackButton />
 
-      {/* Favourite toggle — mirrors the back button on the other side, so the
-          star reads as a control rather than decoration. Same gold and the same
-          storage key as the picker's star, so the two always agree. */}
-      <TouchableOpacity
-        onPress={toggleStar}
-        style={{ position: "absolute", top: insets.top + BACK_TOP, right: 20, zIndex: 10 }}
-        activeOpacity={0.8}
-        accessibilityLabel={starred ? `Remove ${name} from favourites` : `Add ${name} to favourites`}
-        accessibilityRole="button"
-        accessibilityState={{ selected: starred }}
-      >
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <FavouriteStar size={20} filled={starred} inactiveColor={t.ts} />
-        </View>
-      </TouchableOpacity>
+      <FavouriteExerciseButton name={name} />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -178,7 +147,7 @@ export default function ExerciseSummaryScreen() {
           // Start the hero image a little below the back button so the button
           // never sits on the photo.
           paddingTop: insets.top + BACK_TOP + BACK_SIZE + 12,
-          paddingBottom: insets.bottom + 40,
+          paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach),
           alignItems: "center",
         }}
       >
@@ -225,12 +194,21 @@ export default function ExerciseSummaryScreen() {
           </View>
         )}
 
-        {/* History CTA — same primary ACCT button as the Progress page chart. */}
+        {/* History CTA — same primary ACCT button as the Progress page chart.
+            Its id goes with it: without it a custom exercise's history read
+            by name and listed nothing. Opened from that history, it goes back
+            to it rather than stacking the two pages again on top. */}
         <BounceButton
           style={styles.historyBtnWrap}
           onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.navigate({ pathname: "/exercise-history", params: { exerciseName: name } });
+            if (fromHistory) {
+              router.back();
+              return;
+            }
+            router.navigate({
+              pathname: "/exercise-history",
+              params: { ...exercisePageParams({ name, customId }, clientId), fromSummary: "1" },
+            });
           }}
           accessibilityRole="button"
           accessibilityLabel={`See full history for ${name}`}
@@ -312,10 +290,6 @@ export default function ExerciseSummaryScreen() {
 
 const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: "center", justifyContent: "center", overflow: "hidden",
-  },
 
   title: {
     fontFamily: FontFamily.bold,

@@ -1,6 +1,15 @@
 // A single chat bubble.
-//   - mine: right-aligned, teal→blue LinearGradient fill, white text.
-//   - theirs: left-aligned neutral surface, primary text.
+//   - mine: right-aligned, the thread's gradient (green in a chat with one
+//     person, orchid in a group's: user decision, 2026-10-22, the Chat Redesign
+//     canvas), white text, a soft glow in its own colour.
+//   - theirs: left-aligned neutral surface, primary text, a faint shadow on a
+//     light page.
+//
+// Messages from one person in a row are a RUN (ChatThreadView's RunPlace):
+// they sit close, with the corners on the sender's side tucked in after the
+// first; a group's sender name shows on the first only, and the face and the
+// time on the last only. A message on its own is a run of one, and reads as
+// every bubble did before.
 // The gradient is the bubble background (not masked text), so it reads as a
 // solid Instagram-style blend behind the message.
 //
@@ -23,8 +32,14 @@ import { Ionicons } from "@expo/vector-icons";
 
 import Avatar from "../Avatar";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
-import { SENT_BUBBLE_GRADIENT, type ChatMessage } from "../../constants/chat";
+import { sentGradient, type ChatMessage, type ChatTone } from "../../constants/chat";
 import { useTheme } from "../../contexts/ThemeContext";
+import type { RunPlace } from "./ChatThreadView";
+
+/** A bubble's corners: round, but tucked in on the sender's side, below the
+ *  first of a run and at the tail. */
+const BIG = 20;
+const SMALL = 6;
 
 function fmtTime(iso: string): string {
   const d = new Date(iso);
@@ -47,11 +62,35 @@ interface Props {
   authorName?: string;
   /** Tap (or press and hold) the bubble. Ignored for a deleted message. */
   onPress?: () => void;
+  /** The thread's colour for my own messages. */
+  tone?: ChatTone;
+  /** Its place in a run of one person's messages; alone by default. */
+  run?: RunPlace;
 }
 
-export default function ChatBubble({ msg, senderName, senderPhotoUri, senderInitials, authorName, onPress }: Props) {
+export default function ChatBubble({ msg, senderName, senderPhotoUri, senderInitials, authorName, onPress, tone = "green", run }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const first = run?.first ?? true;
+  const last = run?.last ?? true;
+  const grad = sentGradient(tone);
+  // Close inside a run, apart between runs.
+  const rowGap = { marginTop: first ? 6 : 1, marginBottom: last ? 6 : 1 };
+  const corners = msg.mine
+    ? { borderTopLeftRadius: BIG, borderTopRightRadius: first ? BIG : SMALL, borderBottomRightRadius: SMALL, borderBottomLeftRadius: BIG }
+    : { borderTopLeftRadius: first ? BIG : SMALL, borderTopRightRadius: BIG, borderBottomRightRadius: BIG, borderBottomLeftRadius: SMALL };
+  // A group's received bubble keeps the face's column on every message of a
+  // run, so they line up, with the face itself on the last.
+  const face = senderName ? (last ? (
+    <Avatar
+      uri={senderPhotoUri}
+      initials={senderInitials || senderName.slice(0, 2).toUpperCase()}
+      size={28}
+      backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
+      textColor={ACCT}
+      textStyle={[styles.senderInitials, { color: ACCT }]}
+    />
+  ) : <View style={styles.faceSpace} />) : null;
 
   const press = msg.deleted ? undefined : onPress;
   // The bubble alone is the target; delayLongPress matches the old
@@ -73,26 +112,22 @@ export default function ChatBubble({ msg, senderName, senderPhotoUri, senderInit
     const who = senderName ?? authorName;
     const label = msg.mine ? "You deleted this message" : who ? `Message deleted by ${who}` : "This message was deleted";
     return (
-      <View style={[styles.row, { justifyContent: msg.mine ? "flex-end" : "flex-start" }]}>
-        {!msg.mine && senderName ? (
-          <Avatar
-            uri={senderPhotoUri}
-            initials={senderInitials || senderName.slice(0, 2).toUpperCase()}
-            size={28}
-            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-            textColor={ACCT}
-            textStyle={[styles.senderInitials, { color: ACCT }]}
-          />
-        ) : null}
+      <View style={[styles.row, rowGap, { justifyContent: msg.mine ? "flex-end" : "flex-start" }]}>
+        {!msg.mine ? face : null}
         <View style={[styles.wrap, !msg.mine && senderName ? styles.wrapWithAvatar : null]}>
+          {!msg.mine && senderName && first ? (
+            <Text style={[styles.senderName, { color: t.ts }]} numberOfLines={1}>{senderName}</Text>
+          ) : null}
           <View
-            style={[styles.bubble, msg.mine ? styles.mine : styles.theirs, styles.deleted, { borderColor: t.div }]}
+            style={[styles.bubble, corners, styles.deleted, { borderColor: t.div }]}
             accessibilityLabel={label}
           >
             <Ionicons name="ban-outline" size={14} color={t.ts} />
             <Text style={[styles.deletedText, { color: t.ts }]}>{label}</Text>
           </View>
-          <Text style={[styles.time, { color: t.ts, textAlign: msg.mine ? "right" : "left" }]}>{fmtTime(msg.sentAtISO)}</Text>
+          {last ? (
+            <Text style={[styles.time, { color: t.ts, textAlign: msg.mine ? "right" : "left" }]}>{fmtTime(msg.sentAtISO)}</Text>
+          ) : null}
         </View>
       </View>
     );
@@ -100,62 +135,69 @@ export default function ChatBubble({ msg, senderName, senderPhotoUri, senderInit
 
   if (msg.mine) {
     return (
-      <View style={[styles.row, { justifyContent: "flex-end" }]}>
+      <View style={[styles.row, rowGap, { justifyContent: "flex-end" }]}>
         <View style={styles.wrap}>
           {tappable(
-            <LinearGradient
-              colors={SENT_BUBBLE_GRADIENT}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.bubble, styles.mine]}
-            >
-              <Text style={styles.mineText}>{msg.text}</Text>
-            </LinearGradient>,
+            // The glow on an outer view: the gradient clips its corners, and a
+            // view that clips casts no shadow.
+            <View style={[corners, styles.glow, { shadowColor: grad[1] }]}>
+              <LinearGradient
+                colors={grad}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[styles.bubble, corners, styles.clip]}
+              >
+                <Text style={styles.mineText}>{msg.text}</Text>
+              </LinearGradient>
+            </View>,
           )}
-          <Text style={[styles.time, { color: t.ts, textAlign: "right" }]}>{fmtTime(msg.sentAtISO)}</Text>
+          {last ? (
+            <Text style={[styles.time, { color: t.ts, textAlign: "right" }]}>{fmtTime(msg.sentAtISO)}</Text>
+          ) : null}
         </View>
       </View>
     );
   }
 
   return (
-    <View style={[styles.row, { justifyContent: "flex-start" }]}>
-      {senderName ? (
-        <Avatar
-          uri={senderPhotoUri}
-          initials={senderInitials || senderName.slice(0, 2).toUpperCase()}
-          size={28}
-          backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-          textColor={ACCT}
-          textStyle={[styles.senderInitials, { color: ACCT }]}
-        />
-      ) : null}
+    <View style={[styles.row, rowGap, { justifyContent: "flex-start" }]}>
+      {face}
       <View style={[styles.wrap, senderName ? styles.wrapWithAvatar : null]}>
-        {senderName ? (
+        {senderName && first ? (
           <Text style={[styles.senderName, { color: t.ts }]} numberOfLines={1}>{senderName}</Text>
         ) : null}
         {tappable(
-          <View style={[styles.bubble, styles.theirs, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "#ffffff" }]}>
+          <View style={[
+            styles.bubble,
+            corners,
+            { backgroundColor: isDark ? t.ctrl : APP_LIGHT.ctrl },
+            !isDark && styles.theirsShadow,
+          ]}>
             <Text style={[styles.theirsText, { color: t.tp }]}>{msg.text}</Text>
           </View>,
         )}
-        <Text style={[styles.time, { color: t.ts }]}>{fmtTime(msg.sentAtISO)}</Text>
+        {last ? <Text style={[styles.time, { color: t.ts }]}>{fmtTime(msg.sentAtISO)}</Text> : null}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row:        { width: "100%", marginVertical: 4, flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  row:        { width: "100%", flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  // The face's column, kept on a run's earlier messages so they line up.
+  faceSpace:  { width: 28 },
   wrap:       { maxWidth: "78%" },
   // The avatar eats horizontal room, so a group bubble gets a slightly
   // narrower ceiling to keep the right-hand gutter consistent with 1:1.
   wrapWithAvatar: { maxWidth: "72%" },
   senderName:     { fontFamily: FontFamily.semibold, fontSize: 11, marginBottom: 3, marginHorizontal: 4 },
   senderInitials: { fontFamily: FontFamily.bold, fontSize: 10 },
-  bubble:     { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20 },
-  mine:       { borderBottomRightRadius: 6 },
-  theirs:     { borderBottomLeftRadius: 6 },
+  bubble:     { paddingHorizontal: 14, paddingVertical: 10 },
+  clip:       { overflow: "hidden" },
+  // My bubble's soft glow, in its own colour (shadowColor, per tone).
+  glow:       { shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.35, shadowRadius: 8 },
+  // Theirs on a light page: just enough to lift white off the background.
+  theirsShadow: { shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3 },
   mineText:   { color: "#fff", fontFamily: FontFamily.semibold, fontSize: 15, lineHeight: 21 },
   theirsText: { fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21 },
   time:       { fontFamily: FontFamily.regular, fontSize: 10, marginTop: 3, marginHorizontal: 4 },

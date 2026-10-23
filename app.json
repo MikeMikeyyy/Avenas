@@ -2,7 +2,7 @@
   "expo": {
     "name": "avenas",
     "slug": "avenas",
-    "version": "2.11.1",
+    "version": "2.12.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon-transparent.png",
     "scheme": "avenas",
@@ -26,12 +26,12 @@
       },
       "bundleIdentifier": "com.avenas.app",
       "appleTeamId": "8X55YH783A",
-      "buildNumber": "51",
+      "buildNumber": "52",
       "usesAppleSignIn": true
     },
     "android": {
       "package": "com.avenas.app",
-      "versionCode": 3,
+      "versionCode": 5,
       "icon": "./assets/images/icon-light.png",
       "adaptiveIcon": {
         "backgroundColor": "#E6F9F2",
@@ -75,7 +75,8 @@
         }
       ],
       "@bacons/apple-targets",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

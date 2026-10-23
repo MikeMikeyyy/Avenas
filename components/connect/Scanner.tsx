@@ -6,9 +6,16 @@
 
 import { useRef } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
-import { ACCT, FontFamily } from "../../constants/theme";
+import GlassButton, { GLASS } from "../GlassButton";
+import { BACK_LEFT, BACK_TOP } from "../BackButton";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
+import { useTheme } from "../../contexts/ThemeContext";
+
+/** The close button: a size up from the page's round buttons, over a camera. */
+const CLOSE_SIZE = 44;
 
 export default function Scanner({
   onScanned,
@@ -19,6 +26,9 @@ export default function Scanner({
 }) {
   const [permission, requestPermission] = useCameraPermissions();
   const handled = useRef(false);
+  const insets = useSafeAreaInsets();
+  const { isDark } = useTheme();
+  const t = isDark ? APP_DARK : APP_LIGHT;
 
   return (
     <View style={styles.root}>
@@ -56,9 +66,17 @@ export default function Scanner({
         </View>
       )}
 
-      <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.85} accessibilityRole="button" accessibilityLabel="Close scanner">
-        <Ionicons name="close" size={26} color="#fff" />
-      </TouchableOpacity>
+      {/* Glass in the app's light or dark on iOS 26, so its ✕ is the page's
+          ink; the solid one is a dark disc over the camera, its ✕ white. */}
+      <GlassButton
+        onPress={onClose}
+        size={CLOSE_SIZE}
+        style={[styles.closeFloat, { top: insets.top + BACK_TOP }]}
+        solidStyle={styles.closeSolid}
+        accessibilityLabel="Close scanner"
+      >
+        <Ionicons name="close" size={26} color={GLASS ? t.tp : "#fff"} />
+      </GlassButton>
     </View>
   );
 }
@@ -72,5 +90,6 @@ const styles = StyleSheet.create({
   overlay:     { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: 20 },
   frame:       { width: 230, height: 230, borderRadius: 28, borderWidth: 3, borderColor: "rgba(255,255,255,0.9)" },
   hint:        { fontFamily: FontFamily.semibold, fontSize: 15, color: "#fff" },
-  closeBtn:    { position: "absolute", top: 56, right: 22, width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center" },
+  closeFloat:  { position: "absolute", right: BACK_LEFT },
+  closeSolid:  { backgroundColor: "rgba(0,0,0,0.5)" },
 });

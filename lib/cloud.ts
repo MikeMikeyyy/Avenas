@@ -10,7 +10,7 @@ import { getJSON, removeKey, setJSON } from "../utils/storage";
 import { ACHIEVEMENTS_KEY } from "../constants/achievements";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DRAFT_KEY, WORKOUT_DAY_OVERRIDE_KEY,
-  UNFINISHED_NOTICE_KEY,
+  UNFINISHED_NOTICE_KEY, IMPORT_LOG_KEY,
   type CompletedWorkout, type SavedProgram,
 } from "../constants/programs";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
@@ -119,6 +119,36 @@ export async function cloudCounts(userId: string): Promise<SyncCounts> {
   return { programs, workouts, journal, customExercises };
 }
 
+/** The most rows the API hands back for one read (Supabase's "max rows"). */
+const PAGE_ROWS = 1000;
+
+/**
+ * Every one of `userId`'s rows in `table`, a page at a time, in `column`'s
+ * order and then by id, so a tie never straddles two pages (and comes back
+ * twice, or not at all). A read without pages stopped at 1000 rows: a restore
+ * of an account with more workouts kept only the newest 1000, and the next
+ * backup then deleted the rest from the account (found 2026-10-23, as
+ * importing another app's history made that many likely).
+ */
+async function selectEvery(
+  table: "workouts" | "journal_entries",
+  userId: string,
+  column: "completed_at" | "created_at",
+  ascending: boolean,
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let from = 0; ; from += PAGE_ROWS) {
+    const { data, error } = await supabase
+      .from(table).select("*").eq("user_id", userId)
+      .order(column, { ascending })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_ROWS - 1);
+    if (error) throw new Error(`pull ${table}: ${error.message}`);
+    rows.push(...(data ?? []));
+    if (!data || data.length < PAGE_ROWS) return rows;
+  }
+}
+
 /** Everything the cloud holds for one account, fetched but not yet written. */
 type CloudSnapshot = {
   programs: SavedProgram[];
@@ -142,15 +172,9 @@ async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
     .order("created_at", { ascending: true });
   if (pe) throw new Error(`pull programs: ${pe.message}`);
 
-  const { data: woRows, error: we } = await supabase
-    .from("workouts").select("*").eq("user_id", userId)
-    .order("completed_at", { ascending: false });  // history is newest-first
-  if (we) throw new Error(`pull workouts: ${we.message}`);
-
-  const { data: jRows, error: je } = await supabase
-    .from("journal_entries").select("*").eq("user_id", userId)
-    .order("created_at", { ascending: false });
-  if (je) throw new Error(`pull journal: ${je.message}`);
+  // History is newest-first.
+  const woRows = await selectEvery("workouts", userId, "completed_at", false);
+  const jRows = await selectEvery("journal_entries", userId, "created_at", false);
 
   const { data: cRows, error: ce } = await supabase.from("custom_exercises").select("*").eq("user_id", userId);
   if (ce) throw new Error(`pull custom exercises: ${ce.message}`);
@@ -158,11 +182,11 @@ async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
   // Each program under its own id, and each workout pointing at it by that id:
   // the row ids are minted afresh by every backup, and taken as the ids, a
   // restore renamed every program (mappers.snapshotFromRows, migration 0044).
-  const { programs, workouts } = snapshotFromRows((progRows ?? []) as ProgramRow[], (woRows ?? []) as WorkoutRow[]);
+  const { programs, workouts } = snapshotFromRows((progRows ?? []) as ProgramRow[], woRows as WorkoutRow[]);
   return {
     programs,
     workouts,
-    journal: ((jRows ?? []) as JournalRow[]).map(journalFromRow),
+    journal: (jRows as JournalRow[]).map(journalFromRow),
     custom: ((cRows ?? []) as CustomExerciseRow[]).map(customFromRow),
   };
 }
@@ -312,6 +336,9 @@ export async function clearLocalUserData(): Promise<void> {
     // Local-only, but it describes THIS account's training: the next account on
     // the device mustn't inherit its PR cards or its already-earned milestones.
     removeKey(ACHIEVEMENTS_KEY),
+    // What this account's imports added, to undo them: the next account's
+    // history has none of it.
+    removeKey(IMPORT_LOG_KEY),
     clearTrainerData(),
     clearChatData(),
     clearModerationData(),

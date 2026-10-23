@@ -8,6 +8,9 @@
 // done (the ring), and what it added up to; then its sessions as rows, each
 // with its numbers and anything it earned.
 //
+// The funnel button facing the back button filters the page to the weeks
+// picked (components/journal/WeekFilter.tsx).
+//
 // One card per week, sessions as rows inside it: the weeks used to be headings
 // on the page with a card per session, a chip row and a card per achievement,
 // and with nothing drawing a line round a week it was hard to see where one
@@ -26,6 +29,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
 import Svg, { Circle } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -60,6 +65,7 @@ import {
   type SavedProgram,
 } from "../constants/programs";
 import { fmtDuration, fromYMD, MONTH_NAMES, parseStoredDate } from "../utils/dates";
+import { displayWorkoutName } from "../utils/programDays";
 import { getJSON } from "../utils/storage";
 import { toDisplayWeight } from "../utils/units";
 import { getEffectiveToday } from "../utils/workout";
@@ -77,6 +83,7 @@ import { useUnit } from "../contexts/UnitContext";
 import { useClientUnit } from "../hooks/useClientUnit";
 import { loadCachedClientData } from "../utils/trainerStore";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
+import WeekFilterSheet, { WeekFilterButton } from "../components/journal/WeekFilter";
 
 const WEEKDAY_LETTER = ["S", "M", "T", "W", "T", "F", "S"];
 const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -341,7 +348,7 @@ function SessionRow({ workout, info, earned, isDark, isKg, onPress }: {
       onPress={onPress}
       activeOpacity={0.6}
       accessibilityRole="button"
-      accessibilityLabel={`Open ${workout.workoutName}${date ? `, ${WEEKDAY_SHORT[date.getDay()]} ${shortDate(date)}` : ""}`}
+      accessibilityLabel={`Open ${displayWorkoutName(workout.workoutName)}${date ? `, ${WEEKDAY_SHORT[date.getDay()]} ${shortDate(date)}` : ""}`}
       style={[styles.sessionRow, { borderTopColor: t.div }]}
     >
       {/* The day it was done, as a calendar tile: says "when" before anything
@@ -353,7 +360,7 @@ function SessionRow({ workout, info, earned, isDark, isKg, onPress }: {
 
       <View style={styles.sessionBody}>
         <View style={styles.sessionNameRow}>
-          <Text style={[styles.sessionName, { color: t.tp }]} numberOfLines={1}>{workout.workoutName}</Text>
+          <Text style={[styles.sessionName, { color: t.tp }]} numberOfLines={1}>{displayWorkoutName(workout.workoutName)}</Text>
           {sessionNum ? (
             <View style={[styles.sessionTag, { backgroundColor: `${ACCT}1f` }]}>
               <Text style={[styles.sessionTagText, { color: ink }]}>{ordinal(sessionNum)}</Text>
@@ -492,6 +499,8 @@ export default function ProgramHistoryDetailScreen() {
   const isKg = clientIsKg ?? ownIsKg;
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
 
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [history, setHistory] = useState<CompletedWorkout[]>([]);
@@ -530,6 +539,30 @@ export default function ProgramHistoryDetailScreen() {
   );
   const infoOf = useJournalWorkoutInfo(history, programs);
 
+  // The week filter (components/journal/WeekFilter.tsx): the picked weeks'
+  // cards, or all of them while none is picked. Screen state only. A pick
+  // that's no longer among the weeks stops counting rather than leaving the
+  // page empty.
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [weekKeys, setWeekKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const pickedKeys = useMemo(
+    () => new Set((model?.weeks ?? []).filter(w => weekKeys.has(w.startYMD)).map(w => w.startYMD)),
+    [model, weekKeys],
+  );
+  const shownWeeks = useMemo(
+    () => (model?.weeks ?? []).filter(w => pickedKeys.size === 0 || pickedKeys.has(w.startYMD)),
+    [model, pickedKeys],
+  );
+  const toggleWeek = useCallback((key: string) => {
+    setWeekKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const clearWeeks = useCallback(() => setWeekKeys(new Set()), []);
+
   const openWorkout = useCallback((id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate({ pathname: "/workout-detail", params: { id, ...(clientId ? { clientId } : {}) } });
@@ -557,10 +590,14 @@ export default function ProgramHistoryDetailScreen() {
 
       {/* Back button */}
       <BackButton />
+      {/* Facing it: the week filter, once there's more than one week. */}
+      {model && model.weeks.length > 1 && (
+        <WeekFilterButton picked={pickedKeys.size} onPress={() => setFilterOpen(true)} />
+      )}
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }]}
       >
         {/* Page header */}
         <View style={styles.header}>
@@ -595,7 +632,7 @@ export default function ProgramHistoryDetailScreen() {
 
         {model && model.weeks.length > 0 && <DotLegend isDark={isDark} />}
 
-        {program && model?.weeks.map(w => (
+        {program && shownWeeks.map(w => (
           <WeekCard
             key={w.startYMD}
             week={w}
@@ -608,6 +645,15 @@ export default function ProgramHistoryDetailScreen() {
           />
         ))}
       </ScrollView>
+
+      <WeekFilterSheet
+        visible={filterOpen}
+        weeks={model?.weeks ?? []}
+        selected={pickedKeys}
+        onToggle={toggleWeek}
+        onClear={clearWeeks}
+        onClose={() => setFilterOpen(false)}
+      />
     </FadeScreen>
   );
 }

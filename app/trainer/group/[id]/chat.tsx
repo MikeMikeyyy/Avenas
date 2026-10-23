@@ -27,6 +27,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../../../components/FadeScreen";
+import GlassButton from "../../../../components/GlassButton";
 import Avatar from "../../../../components/Avatar";
 import ChatBubble from "../../../../components/trainer/ChatBubble";
 import ChatThreadView from "../../../../components/trainer/ChatThreadView";
@@ -53,7 +54,7 @@ import { getMyUid } from "../../../../lib/chat";
 import { loadHiddenMessageIds, loadBlockedIds, blockContact, reportPerson, reportMessage } from "../../../../utils/moderation";
 import type { Group, GroupMember, GroupMessage } from "../../../../constants/groups";
 import type { ReportReason } from "../../../../constants/chat";
-import BackButton, { BACK_TOP, BACK_LEFT } from "../../../../components/BackButton";
+import BackButton, { BACK_TOP, BACK_LEFT, BACK_SIZE } from "../../../../components/BackButton";
 
 export default function GroupThreadScreen() {
   const router = useRouter();
@@ -297,7 +298,7 @@ export default function GroupThreadScreen() {
   }, [group, members]);
 
   const header = (
-    <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
+    <View style={[styles.header, { paddingTop: insets.top + BACK_TOP }]}>
       <BackButton inline />
       {/* The photo and name open the group, the way tapping a thread's title
           does everywhere else. The menu used to be the only route there, and
@@ -311,16 +312,14 @@ export default function GroupThreadScreen() {
         accessibilityLabel={`Open ${displayName} group page`}
       >
         <GroupAvatar uri={group?.photoUri} size={38} isDark={isDark} />
-        <View style={{ flex: 1 }}>
+        <View style={styles.headerText}>
           <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
           <Text style={[styles.headerSub, { color: t.ts }]} numberOfLines={1}>{memberLabel}</Text>
         </View>
       </TouchableOpacity>
-      <TouchableOpacity onPress={() => setSheet({ step: "menu" })} activeOpacity={0.8} accessibilityLabel="Group options" accessibilityRole="button">
-        <View style={[styles.backBtn, { backgroundColor: t.ctrl }]}>
-          <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
-        </View>
-      </TouchableOpacity>
+      <GlassButton onPress={() => setSheet({ step: "menu" })} size={BACK_SIZE} accessibilityLabel="Group options">
+        <Ionicons name="ellipsis-horizontal" size={20} color={t.tp} />
+      </GlassButton>
     </View>
   );
 
@@ -328,14 +327,19 @@ export default function GroupThreadScreen() {
     <FadeScreen style={{ backgroundColor: t.bg }}>
       <ChatThreadView
         messages={messages}
-        renderBubble={msg => (
+        renderBubble={(msg, run) => (
           <ChatBubble
             msg={msg}
+            run={run}
+            // A group's own colour: the Group Chat tile's orchid (user
+            // decision, 2026-10-22, the Chat Redesign canvas).
+            tone="orchid"
             senderName={msg.mine ? undefined : msg.senderName}
             senderPhotoUri={msg.senderPhotoUri}
             onPress={() => openMessage(msg)}
           />
         )}
+        tone="orchid"
         onSend={send}
         placeholder={`Message ${displayName}…`}
         emptyText="No messages yet. Start the conversation 👋"
@@ -427,12 +431,14 @@ export default function GroupThreadScreen() {
 }
 
 const styles = StyleSheet.create({
-  header:      { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12, borderBottomWidth: 1 },
-  backBtn:     { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  headerTitle: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
+  // No line under it (user decision, 2026-10-22, the Chat Redesign canvas).
+  header:      { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12 },
+  // Centred between the two round buttons, which are the same width.
+  headerTitle: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
+  headerText:  { flexShrink: 1, minWidth: 0 },
   // The group's circle is GroupAvatar's own, at the 38pt this header used.
-  headerName:  { fontFamily: FontFamily.bold, fontSize: 18 },
-  headerSub:   { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },
+  headerName:  { fontFamily: FontFamily.bold, fontSize: 17, lineHeight: 22 },
+  headerSub:   { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 16 },
 
   menuName:    { fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center", paddingHorizontal: 24, paddingBottom: 6 },
   // Room for the pills' shadows inside the person list's ScrollView too.

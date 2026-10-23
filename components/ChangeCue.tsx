@@ -10,7 +10,9 @@
 // One line on a card that changed, nothing on one that didn't (user decision,
 // 2026-10-13: subtle, so a busy card doesn't get busier). Plain text, never a
 // button (user decision, 2026-10-14: no more hidden buttons). The Workout
-// tab's FINISHED session reads like the Journal (user decision, 2026-10-14).
+// tab's FINISHED session reads like the Journal (user decision, 2026-10-14),
+// and so does a card moved, swapped or added in the session still under way,
+// in place of its "Last session" line (user request, 2026-10-22).
 
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";

@@ -32,6 +32,36 @@ export function normalizeDayName(name: string): string {
 }
 
 /**
+ * A workout's name as a screen shows it. A custom workout's name field used to
+ * open already holding "Custom Workout", and typing could add to it, so
+ * sessions were saved as "Custom WorkoutLegs" (user report, 2026-10-22; the
+ * field opens empty now). Shown, that reads as the name that was typed,
+ * "Legs". Display only: the stored name stays as it is, since it's what
+ * matches a session to its day. A capital must follow the words, so "Custom
+ * Workouts" and "Custom Workout 2" are left alone.
+ */
+export function displayWorkoutName(name: string): string {
+  const glued = /^Custom Workout(?=[A-Z])(.+)$/.exec(name.trim());
+  return glued ? glued[1].trim() : name;
+}
+
+/**
+ * Which day of Custom workouts a session in no program is on (Progress's
+ * Custom workouts, utils/progressStats.ts customWorkoutDays), and what the
+ * workout cards count it under (utils/sessionTrack.ts), so the chart's "3rd
+ * session" is the card's. Where it came from first: the deleted program it was
+ * logged under (by the name kept on it, else by its id until a restore clears
+ * that), or nothing for a free workout; then its slot when it recorded one,
+ * else its name. So two deleted programs' "Push" days, or a deleted program's
+ * "Push" and a free one, are each their own.
+ */
+export function customDayKey(w: Pick<CompletedWorkout, "programId" | "programName" | "dayId" | "workoutName">): string {
+  const from = w.programName ? `name:${normalizeDayName(w.programName)}` : w.programId ? `id:${w.programId}` : "";
+  const day = w.dayId ? `id:${w.dayId}` : `name:${normalizeDayName(w.workoutName)}`;
+  return `${from}|${day}`;
+}
+
+/**
  * Deterministic id for the slot at `index` of a program that predates `dayIds`.
  *
  * Deliberately derived from the position alone: two devices that run the

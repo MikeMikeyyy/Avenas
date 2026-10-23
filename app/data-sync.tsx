@@ -12,8 +12,8 @@
 // restoring it would delete the newest workouts. Signing in on a new phone
 // already restores.
 //
-// Export is shown in development builds only until it works: Apple rejects apps
-// for visible placeholder features (Guideline 2.1).
+// Exporting workouts (and importing another app's) is its own page, Settings >
+// Import & Export (app/import-export.tsx), which works signed out too.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
@@ -21,6 +21,8 @@ import { BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scrollEndPadding } from "../constants/floatingBars";
+import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -59,6 +61,8 @@ const COUNT_ROWS: { key: keyof SyncCounts; label: string }[] = [
 
 export default function DataSyncScreen() {
   const insets = useSafeAreaInsets();
+  // How far up the workout bar reaches, so the page scrolls clear of it.
+  const barsReach = useFloatingBarsReach();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -156,7 +160,7 @@ export default function DataSyncScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }]}
       >
         <View style={styles.header}>
           <View style={{ width: 40 }} />
@@ -229,24 +233,6 @@ export default function DataSyncScreen() {
             <Text style={[styles.note, { color: t.ts }]}>
               Avenas backs up automatically a few seconds after every change, and again when you leave the app. Favourite exercises, notification settings and unfinished workouts stay on this phone.
             </Text>
-
-            {__DEV__ && (
-              <>
-                <Text style={[styles.sectionLabel, { color: t.ts, marginTop: 24 }]}>Export</Text>
-                <NeuCard dark={isDark} style={styles.card}>
-                  <View style={styles.exportRow} accessibilityState={{ disabled: true }}>
-                    <Ionicons name="document-text-outline" size={20} color={t.icon} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.exportTitle, { color: t.tp }]}>Export Workouts</Text>
-                      <Text style={[styles.exportBody, { color: t.ts }]}>Save your training history as a spreadsheet or PDF.</Text>
-                    </View>
-                    <View style={[styles.soonPill, { backgroundColor: neutralTint }]}>
-                      <Text style={[styles.soonText, { color: t.ts }]}>SOON</Text>
-                    </View>
-                  </View>
-                </NeuCard>
-              </>
-            )}
           </>
         )}
       </ScrollView>
@@ -276,11 +262,6 @@ const styles = StyleSheet.create({
   countLabel:   { fontFamily: FontFamily.semibold, fontSize: 15 },
   countValue:   { fontFamily: FontFamily.bold, fontSize: 15 },
   note:         { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, paddingHorizontal: 6 },
-  exportRow:    { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 18, paddingVertical: 16 },
-  exportTitle:  { fontFamily: FontFamily.semibold, fontSize: 15 },
-  exportBody:   { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18, marginTop: 2 },
-  soonPill:     { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
-  soonText:     { fontFamily: FontFamily.bold, fontSize: 11, letterSpacing: 0.8 },
   emptyInner:   { padding: 24, alignItems: "center", gap: 8 },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 17 },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },

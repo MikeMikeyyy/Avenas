@@ -94,7 +94,9 @@ async function observe(kind: Kind): Promise<View> {
   await on(CARA, async () => {
     const [sent, dismissed] = await Promise.all([CARA.app.loadSentPrograms(), CARA.app.loadDismissedShareKeys()]);
     const mine = sent.find(isIt);
-    // MyPTHome: waiting under Sent to Trainer, or come back under From Your Trainer.
+    // A gym user's program pages: waiting on Sent for Review; come back on the
+    // From page until its changes are taken, then on Sent for Review as
+    // Accepted (utils/trainerLists.ts fromTrainerLists / sentForReviewList).
     v.caraWaiting = !!mine && mine.status !== "returned";
     v.caraReturned = mine && mine.status === "returned" && !CARA.app.isReturnedDismissed(mine, dismissed)
       ? { applied: !!mine.appliedAtISO } : null;
