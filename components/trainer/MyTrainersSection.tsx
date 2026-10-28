@@ -218,9 +218,8 @@ export default function MyTrainersSection({ presenceById, unreadByPerson }: {
                         uri={trainer.photoUri}
                         initials={trainer.initials}
                         size={48}
-                        backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
-                        textColor={ACCT}
-                        textStyle={[styles.avatarText, { color: ACCT }]}
+                        colorKey={trainer.id}
+                        textStyle={styles.avatarText}
                       />
                       <View style={{ flex: 1 }}>
                         <View style={styles.nameRow}>
@@ -295,9 +294,8 @@ export default function MyTrainersSection({ presenceById, unreadByPerson }: {
                         uri={person.photoUri}
                         initials={person.initials}
                         size={48}
-                        backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
-                        textColor={ACCT}
-                        textStyle={[styles.avatarText, { color: ACCT }]}
+                        colorKey={person.id}
+                        textStyle={styles.avatarText}
                       />
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.trainerName, { color: t.tp }]} numberOfLines={1}>{person.name}</Text>

@@ -126,8 +126,8 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
                       uri={c.photoUri}
                       initials={c.initials}
                       size={40}
-                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                      textStyle={[styles.avatarText, { color: ACCT }]}
+                      colorKey={c.id}
+                      textStyle={styles.avatarText}
                     />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>

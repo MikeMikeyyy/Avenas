@@ -279,14 +279,14 @@ export default function MessagesScreen() {
               <NeuCard dark={isDark} radius={16}>
                 <View style={styles.row}>
                   {r.kind === "group" ? (
-                    <GroupAvatar uri={r.photoUri} size={48} isDark={isDark} />
+                    <GroupAvatar uri={r.photoUri} size={48} isDark={isDark} colorKey={groupIdFromKey(r.id)} />
                   ) : (
                     <Avatar
                       uri={r.photoUri}
                       initials={r.initials}
                       size={48}
-                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                      textStyle={[styles.avatarText, { color: ACCT }]}
+                      colorKey={r.id}
+                      textStyle={styles.avatarText}
                     />
                   )}
                   <View style={{ flex: 1 }}>

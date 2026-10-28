@@ -9,7 +9,7 @@
 import { StyleSheet, Text, View } from "react-native";
 
 import Avatar from "../Avatar";
-import { ACCT, FontFamily } from "../../constants/theme";
+import { FontFamily } from "../../constants/theme";
 import type { MemberFace } from "../../constants/groups";
 
 /** Faces shown before the rest collapse into "+N", wherever a group shows its
@@ -44,13 +44,13 @@ export default function MemberStack({ members, size, overlap, isDark, ringColor,
     <View style={styles.stack}>
       {shown.map((m, i) => (
         <View key={m.id} style={[ring, { marginLeft: i === 0 ? 0 : -overlap }]}>
+          {/* Each face in its own colour (Avatar), as on every other page. */}
           <Avatar
             uri={m.photoUri}
             initials={m.initials}
             size={size}
-            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-            textColor={ACCT}
-            textStyle={[styles.initials, { fontSize: initialsSize, color: ACCT }]}
+            colorKey={m.id}
+            textStyle={[styles.initials, { fontSize: initialsSize }]}
           />
         </View>
       ))}

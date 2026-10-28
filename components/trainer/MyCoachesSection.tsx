@@ -424,9 +424,8 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
                       uri={coach.photoUri}
                       initials={coach.initials}
                       size={48}
-                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                      textColor={ACCT}
-                      textStyle={[styles.avatarText, { color: ACCT }]}
+                      colorKey={coach.id}
+                      textStyle={styles.avatarText}
                     />
                     <View style={{ flex: 1 }}>
                       <View style={styles.labelRow}>

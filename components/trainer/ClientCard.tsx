@@ -56,9 +56,8 @@ export default function ClientCard({ client, activeProgramName, badge, badgeColo
           uri={client.photoUri}
           initials={client.initials}
           size={48}
-          backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-          textColor={ACCT}
-          textStyle={[styles.avatarText, { color: ACCT }]}
+          colorKey={client.id}
+          textStyle={styles.avatarText}
         />
         <View style={{ flex: 1 }}>
           <View style={styles.nameRow}>

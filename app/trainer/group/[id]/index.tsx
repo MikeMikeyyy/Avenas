@@ -632,7 +632,7 @@ export default function GroupPageScreen() {
             accessibilityRole={group?.isOwner ? "button" : "header"}
             accessibilityLabel={group?.isOwner ? `Manage ${displayName}` : displayName}
           >
-            <GroupAvatar uri={group?.photoUri} size={56} isDark={isDark} />
+            <GroupAvatar uri={group?.photoUri} size={56} isDark={isDark} colorKey={groupId} />
             <View style={styles.titleText}>
               <View style={styles.nameRow}>
                 <Text style={[styles.title, { color: t.tp }]} numberOfLines={2}>{displayName}</Text>
@@ -746,9 +746,8 @@ export default function GroupPageScreen() {
                     uri={r.member.photoUri}
                     initials={r.member.initials}
                     size={36}
-                    backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
-                    textColor={ACCT}
-                    textStyle={[styles.avatarText, { color: ACCT }]}
+                    colorKey={r.member.id}
+                    textStyle={styles.avatarText}
                   />
                   <View style={styles.rowText}>
                     <View style={styles.rowNameLine}>

@@ -255,8 +255,8 @@ export default function ChatThreadScreen() {
           uri={avatarUri || undefined}
           initials={displayInitials}
           size={38}
-          backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
-          textStyle={[styles.avatarText, { color: ACCT }]}
+          colorKey={id}
+          textStyle={styles.avatarText}
         />
         <View style={styles.headerText}>
           <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>

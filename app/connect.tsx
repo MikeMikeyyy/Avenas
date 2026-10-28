@@ -71,7 +71,6 @@ export default function ConnectScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { accountType } = useAccountType();
-  const tint = isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)";
   const params = useLocalSearchParams<{ code?: string }>();
 
   const [myCode, setMyCode] = useState<string | null>(null);
@@ -463,7 +462,7 @@ export default function ConnectScreen() {
             {incoming.map((c) => (
               <NeuCard key={c.connectionId} dark={isDark} radius={16} style={styles.reqCard}>
                 <View style={styles.reqInner}>
-                  <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} backgroundColor={tint} textColor={ACCT} textStyle={[styles.avatarText, { color: ACCT }]} />
+                  <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} colorKey={c.otherId} textStyle={styles.avatarText} />
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.reqName, { color: t.tp }]} numberOfLines={1}>{c.name || "New user"}</Text>
                     <Text style={[styles.reqSub, { color: t.ts }]}>{c.accountType === "pt" ? "Trainer" : "Member"} wants to connect</Text>
@@ -487,7 +486,7 @@ export default function ConnectScreen() {
             {outgoing.map((c) => (
               <NeuCard key={c.connectionId} dark={isDark} radius={16} style={styles.reqCard}>
                 <View style={styles.reqInner}>
-                  <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} backgroundColor={tint} textColor={ACCT} textStyle={[styles.avatarText, { color: ACCT }]} />
+                  <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} colorKey={c.otherId} textStyle={styles.avatarText} />
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.reqName, { color: t.tp }]} numberOfLines={1}>{c.name || "New user"}</Text>
                     <Text style={[styles.reqSub, { color: t.ts }]}>Request sent</Text>
@@ -516,7 +515,7 @@ export default function ConnectScreen() {
               >
                 <NeuCard dark={isDark} radius={16}>
                   <View style={styles.reqInner}>
-                    <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} backgroundColor={tint} textColor={ACCT} textStyle={[styles.avatarText, { color: ACCT }]} />
+                    <Avatar uri={c.photoUri} initials={renderInitials(c.name)} size={44} colorKey={c.otherId} textStyle={styles.avatarText} />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.reqName, { color: t.tp }]} numberOfLines={1}>{c.name || "User"}</Text>
                       <Text style={[styles.reqSub, { color: t.ts }]}>{c.accountType === "pt" ? "Trainer" : "Member"}</Text>

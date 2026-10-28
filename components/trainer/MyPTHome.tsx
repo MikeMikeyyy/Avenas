@@ -376,9 +376,8 @@ export default function MyPTHome() {
                 uri={pt.photoUri}
                 initials={pt.initials}
                 size={64}
-                backgroundColor={avatarTint}
-                textColor={ACCT}
-                textStyle={[styles.heroInitials, { color: ACCT }]}
+                colorKey={pt.id}
+                textStyle={styles.heroInitials}
               />
               <Text style={[styles.heroLabel, { color: t.ts }]}>YOUR TRAINER</Text>
               <Text style={[styles.heroName, { color: t.tp }]} numberOfLines={1}>{pt.name}</Text>
@@ -485,7 +484,7 @@ export default function MyPTHome() {
                       accessibilityLabel={`Open group ${g.name}, ${words}`}
                       style={[styles.row, i > 0 && { borderTopWidth: 1, borderTopColor: t.div }]}
                     >
-                      <GroupAvatar uri={g.photoUri} size={36} isDark={isDark} />
+                      <GroupAvatar uri={g.photoUri} size={36} isDark={isDark} colorKey={g.id} />
                       <View style={styles.rowText}>
                         <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
                         {faces && faces.length > 0 ? (

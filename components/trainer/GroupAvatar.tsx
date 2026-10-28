@@ -3,19 +3,23 @@
 // One component because a group appears in five places — the hub list, the gym
 // user's list, the invite card, the group page's banner and its chat header —
 // and a photo that showed up in some of them would read as a different group in
-// the others. The fallback is the accent-tinted people circle those surfaces
-// already drew, so a group without a photo looks exactly as it did before.
+// the others. Without a photo it's the people icon on a pale circle in the
+// group's own colour, picked from its id (constants/theme.ts avatarColors), so
+// it's the same group colour in all five and a list of groups isn't all green
+// (user request, 2026-10-28; it was the accent's tint for every group).
 
 import { StyleSheet, View } from "react-native";
 import { Image } from "expo-image";
 
 import PeopleIcon from "../icons/PeopleIcon";
-import { ACCT } from "../../constants/theme";
+import { avatarColors } from "../../constants/theme";
 
-export default function GroupAvatar({ uri, size, isDark }: {
+export default function GroupAvatar({ uri, size, isDark, colorKey }: {
   uri?: string;
   size: number;
   isDark: boolean;
+  /** The group's id: it picks the group's colour. */
+  colorKey?: string;
 }) {
   const radius = size / 2;
 
@@ -30,21 +34,12 @@ export default function GroupAvatar({ uri, size, isDark }: {
     );
   }
 
+  const { bg, ink } = avatarColors(colorKey, isDark);
   return (
-    <View
-      style={[
-        styles.fallback,
-        {
-          width: size,
-          height: size,
-          borderRadius: radius,
-          backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)",
-        },
-      ]}
-    >
+    <View style={[styles.fallback, { width: size, height: size, borderRadius: radius, backgroundColor: bg }]}>
       {/* Roughly half the circle, which is where the icon sat at every size
           these surfaces used before this component existed. */}
-      <PeopleIcon size={Math.round(size * 0.53)} color={ACCT} />
+      <PeopleIcon size={Math.round(size * 0.53)} color={ink} />
     </View>
   );
 }

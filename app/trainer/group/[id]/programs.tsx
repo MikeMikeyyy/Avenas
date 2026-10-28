@@ -79,15 +79,13 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** A member's face, for a review row: who asked. */
 function MemberFace({ member }: { member: GroupMember | undefined }) {
-  const { isDark } = useTheme();
   return (
     <Avatar
       uri={member?.photoUri}
       initials={member?.initials || "?"}
       size={36}
-      backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
-      textColor={ACCT}
-      textStyle={[styles.avatarText, { color: ACCT }]}
+      colorKey={member?.id}
+      textStyle={styles.avatarText}
     />
   );
 }

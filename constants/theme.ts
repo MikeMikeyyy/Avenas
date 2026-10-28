@@ -192,6 +192,36 @@ export function chatOrchidText(isDark: boolean): string {
   return isDark ? CHAT_ORCHID_INK_DARK : CHAT_ORCHID_INK;
 }
 
+// ─── A person's or group's own colour ─────────────────────────────────────────
+// What stands in for a photo (components/Avatar.tsx, trainer/GroupAvatar.tsx):
+// a pale circle in one of these, with the initials or the group's people icon
+// in the same colour, deeper. Each person and group gets one colour, picked
+// from their id, and keeps it everywhere they're drawn, so a list of people
+// without photos isn't all green (user request, 2026-10-28: the soft tint, over
+// orb-like gradients). `tint` is laid on at 18% on light and 16% on dark; `ink`
+// reads at 4.8:1 or more on it over a light card or page, `inkDark` at 6.4:1
+// or more over a dark one.
+export const AVATAR_HUES = [
+  { tint: "#1DECA0", ink: "#05704C", inkDark: "#1DECA0" }, // mint
+  { tint: "#38C8F2", ink: "#0A6A8A", inkDark: "#6FDCFF" }, // sky
+  { tint: "#2F86FF", ink: "#1A5BC4", inkDark: "#82B8FF" }, // ocean blue
+  { tint: "#7D87FF", ink: "#3F49C2", inkDark: "#A7AEFF" }, // periwinkle
+  { tint: "#A27BF5", ink: "#6236C9", inkDark: "#C3ABFF" }, // violet
+  { tint: "#E35DF0", ink: "#9A1FA3", inkDark: "#F29BFA" }, // orchid
+  { tint: "#FF6F9E", ink: "#B21F57", inkDark: "#FF9FC1" }, // rose
+  { tint: "#FF9461", ink: "#A2461A", inkDark: "#FFB48E" }, // peach
+] as const;
+
+/** The colour a person or group is drawn in without a photo: the circle and
+ *  what's on it. Keyed by their id (a person's user id, a group's id), so the
+ *  same one comes out on every page; no key is the mint. */
+export function avatarColors(key: string | undefined, isDark: boolean): { bg: string; ink: string } {
+  let h = 5381;
+  for (let i = 0; i < (key ?? "").length; i++) h = ((h << 5) + h + key!.charCodeAt(i)) | 0;
+  const hue = AVATAR_HUES[key ? Math.abs(h) % AVATAR_HUES.length : 0];
+  return { bg: `${hue.tint}${isDark ? "29" : "2E"}`, ink: isDark ? hue.inkDark : hue.ink };
+}
+
 // ─── Warmups ──────────────────────────────────────────────────────────────────
 // A warmup set: its row's accent on the Workout tab, and its dots beside the
 // working sets' green (the timer's up-next card; the lock screen card draws

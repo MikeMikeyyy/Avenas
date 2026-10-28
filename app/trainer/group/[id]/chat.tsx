@@ -37,7 +37,7 @@ import MessageActions from "../../../../components/trainer/MessageActions";
 import GroupAvatar from "../../../../components/trainer/GroupAvatar";
 import SheetPill from "../../../../components/SheetPill";
 import FlagIcon from "../../../../components/icons/FlagIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER } from "../../../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, DANGER } from "../../../../constants/theme";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
 import {
@@ -311,7 +311,7 @@ export default function GroupThreadScreen() {
         accessibilityRole="button"
         accessibilityLabel={`Open ${displayName} group page`}
       >
-        <GroupAvatar uri={group?.photoUri} size={38} isDark={isDark} />
+        <GroupAvatar uri={group?.photoUri} size={38} isDark={isDark} colorKey={groupId} />
         <View style={styles.headerText}>
           <Text style={[styles.headerName, { color: t.tp }]} numberOfLines={1}>{displayName}</Text>
           <Text style={[styles.headerSub, { color: t.ts }]} numberOfLines={1}>{memberLabel}</Text>
@@ -335,6 +335,7 @@ export default function GroupThreadScreen() {
             // decision, 2026-10-22, the Chat Redesign canvas).
             tone="orchid"
             senderName={msg.mine ? undefined : msg.senderName}
+            senderId={msg.senderId}
             senderPhotoUri={msg.senderPhotoUri}
             onPress={() => openMessage(msg)}
           />
@@ -412,9 +413,8 @@ export default function GroupThreadScreen() {
                           uri={m.photoUri}
                           initials={m.initials}
                           size={30}
-                          backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                          textColor={ACCT}
-                          textStyle={[styles.pickInitials, { color: ACCT }]}
+                          colorKey={m.id}
+                          textStyle={styles.pickInitials}
                         />
                       )}
                       onPress={() => (sheet.step === "report" ? onPickReport(m) : onPickBlock(m))}

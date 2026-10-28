@@ -372,7 +372,7 @@ export default function PTHome() {
                   accessibilityLabel={`Open group ${g.name}, ${count} member${count === 1 ? "" : "s"}`}
                   style={[styles.row, i > 0 && { borderTopWidth: 1, borderTopColor: t.div }]}
                 >
-                  <GroupAvatar uri={g.photoUri} size={36} isDark={isDark} />
+                  <GroupAvatar uri={g.photoUri} size={36} isDark={isDark} colorKey={g.id} />
                   <View style={styles.rowText}>
                     <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
                     {faces && faces.length > 0 ? (
@@ -448,9 +448,8 @@ export default function PTHome() {
                     uri={c.photoUri}
                     initials={c.initials}
                     size={36}
-                    backgroundColor={avatarTint}
-                    textColor={ACCT}
-                    textStyle={[styles.avatarText, { color: ACCT }]}
+                    colorKey={c.id}
+                    textStyle={styles.avatarText}
                   />
                   <View style={styles.rowText}>
                     <View style={styles.nameRow}>

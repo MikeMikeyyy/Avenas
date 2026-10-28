@@ -103,12 +103,11 @@ function ReviewRow({ review, sender, groupPhotoUri, from, first, open, onToggle,
           uri={sender.photoUri}
           initials={sender.initials}
           size={36}
-          backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
-          textColor={ACCT}
-          textStyle={[styles.avatarText, { color: ACCT }]}
+          colorKey={sender.id}
+          textStyle={styles.avatarText}
         />
       ) : (
-        <GroupAvatar uri={groupPhotoUri} size={36} isDark={isDark} />
+        <GroupAvatar uri={groupPhotoUri} size={36} isDark={isDark} colorKey={review.groupId} />
       )}
       title={review.programName}
       meta={`${from} · ${fmtAgo(review.sentAtISO)}`}

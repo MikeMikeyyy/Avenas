@@ -503,9 +503,8 @@ export default function ClientDetailScreen() {
             uri={client.photoUri}
             initials={client.initials}
             size={36}
-            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-            textColor={ACCT}
-            textStyle={[styles.avatarText, { color: ACCT }]}
+            colorKey={client.id}
+            textStyle={styles.avatarText}
           />
           <View style={styles.nameCol}>
             {/* Photo, star, name: the group page header's order. The star

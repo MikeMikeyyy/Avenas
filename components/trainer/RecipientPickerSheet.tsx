@@ -58,9 +58,8 @@ interface Props {
 export default function RecipientPickerSheet({ visible, programName, clients, groups = [], onConfirm, onClose }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  // The Trainer tab's: the tint behind a face, and the card under a group's
-  // faces, which rings each one so the overlapping faces stay apart.
-  const avatarTint = isDark ? `${ACCT}1F` : `${ACCT}2E`;
+  // The Trainer tab's card under a group's faces, which rings each one so the
+  // overlapping faces stay apart.
   const cardSurface = isDark ? NEU_BG_DARK : NEU_BG;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -214,7 +213,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                 >
                   <NeuCard dark={isDark} radius={14}>
                     <View style={[styles.row, (sendToAll || ids.length === 0) && { opacity: 0.45 }]}>
-                      <GroupAvatar uri={g.photoUri} size={34} isDark={isDark} />
+                      <GroupAvatar uri={g.photoUri} size={34} isDark={isDark} colorKey={g.id} />
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
                         {showFaces ? (
@@ -258,9 +257,8 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                       uri={c.photoUri}
                       initials={c.initials}
                       size={40}
-                      backgroundColor={avatarTint}
-                      textColor={ACCT}
-                      textStyle={[styles.avatarText, { color: ACCT }]}
+                      colorKey={c.id}
+                      textStyle={styles.avatarText}
                     />
                     <View style={{ flex: 1 }}>
                       <View style={styles.nameRow}>

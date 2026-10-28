@@ -38,7 +38,7 @@ export default function GroupInviteCard({ invite, onAccept, onDecline }: {
     <NeuCard dark={isDark} radius={16} style={{ marginBottom: 10 }}>
       <View style={styles.inner}>
         <View style={styles.top}>
-          <GroupAvatar uri={invite.photoUri} size={34} isDark={isDark} />
+          <GroupAvatar uri={invite.photoUri} size={34} isDark={isDark} colorKey={invite.groupId} />
           <View style={{ flex: 1 }}>
             <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{invite.name}</Text>
             <Text style={[styles.meta, { color: t.ts }]} numberOfLines={1}>
@@ -52,9 +52,8 @@ export default function GroupInviteCard({ invite, onAccept, onDecline }: {
             uri={invite.ownerPhotoUri}
             initials={invite.ownerInitials}
             size={24}
-            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-            textColor={ACCT}
-            textStyle={[styles.fromInitials, { color: ACCT }]}
+            colorKey={invite.ownerId}
+            textStyle={styles.fromInitials}
           />
           <Text style={[styles.fromText, { color: t.ts }]} numberOfLines={1}>
             {invite.ownerName} added you

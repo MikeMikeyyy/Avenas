@@ -31,7 +31,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 
 import Avatar from "../Avatar";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { sentGradient, type ChatMessage, type ChatTone } from "../../constants/chat";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { RunPlace } from "./ChatThreadView";
@@ -55,6 +55,8 @@ interface Props {
   msg: ChatMessage;
   /** Group threads only: the author of a RECEIVED message. Omitted in 1:1. */
   senderName?: string;
+  /** Their user id: their face takes their own colour, as everywhere else. */
+  senderId?: string;
   senderPhotoUri?: string;
   senderInitials?: string;
   /** Who wrote a received message, for "Message deleted by …" in a 1:1 thread,
@@ -68,7 +70,7 @@ interface Props {
   run?: RunPlace;
 }
 
-export default function ChatBubble({ msg, senderName, senderPhotoUri, senderInitials, authorName, onPress, tone = "green", run }: Props) {
+export default function ChatBubble({ msg, senderName, senderId, senderPhotoUri, senderInitials, authorName, onPress, tone = "green", run }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const first = run?.first ?? true;
@@ -86,9 +88,8 @@ export default function ChatBubble({ msg, senderName, senderPhotoUri, senderInit
       uri={senderPhotoUri}
       initials={senderInitials || senderName.slice(0, 2).toUpperCase()}
       size={28}
-      backgroundColor={isDark ? `${ACCT}1F` : `${ACCT}2E`}
-      textColor={ACCT}
-      textStyle={[styles.senderInitials, { color: ACCT }]}
+      colorKey={senderId}
+      textStyle={styles.senderInitials}
     />
   ) : <View style={styles.faceSpace} />) : null;
 

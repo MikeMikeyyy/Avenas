@@ -406,9 +406,8 @@ export default function GroupEditScreen() {
                             uri={c.photoUri}
                             initials={c.initials}
                             size={40}
-                            backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                            textColor={ACCT}
-                            textStyle={[styles.avatarText, { color: ACCT }]}
+                            colorKey={c.id}
+                            textStyle={styles.avatarText}
                           />
                           <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
                           {c.isTrainer && (
@@ -453,9 +452,8 @@ export default function GroupEditScreen() {
                       uri={m.photoUri}
                       initials={m.initials}
                       size={40}
-                      backgroundColor={isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)"}
-                      textColor={ACCT}
-                      textStyle={[styles.avatarText, { color: ACCT }]}
+                      colorKey={m.id}
+                      textStyle={styles.avatarText}
                     />
                     <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{m.name}</Text>
                     {m.isOwner && (
