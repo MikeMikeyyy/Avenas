@@ -13,7 +13,7 @@
 import { useCallback, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Alert } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -28,7 +28,7 @@ import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT, BTN_SLATE, BTN_SLATE_DARK, ON_FILL } from "../constants/theme";
-import { haloGlow, pill, pillGlow, PILL_SHADOW } from "../constants/buttons";
+import { darkGlow, haloGlow, pill, pillGlow, PILL_SHADOW } from "../constants/buttons";
 import { scrollEndPadding } from "../constants/floatingBars";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { PROGRAMS_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
@@ -88,7 +88,8 @@ export default function ImportExportScreen() {
       ]);
       const file = new File(Paths.cache, exportFileName());
       file.create({ overwrite: true });
-      file.write(workoutsToCsv(history, programs, isKg));
+      // Written in full before it's shared (SDK 58's write is async).
+      await file.write(workoutsToCsv(history, programs, isKg));
       await Sharing.shareAsync(file.uri, { mimeType: "text/csv", UTI: "public.comma-separated-values-text", dialogTitle: "Export Workouts" });
     } catch (e) {
       if (__DEV__) console.warn("[avenas]", "export", e);
@@ -211,7 +212,7 @@ export default function ImportExportScreen() {
               </Text>
             </View>
             <BounceButton onPress={onChooseFile} accessibilityLabel="Choose a CSV file to import" accessibilityRole="button">
-              <View style={[styles.btn, styles.accentBtn, choosing && styles.disabled]}>
+              <View style={[styles.btn, styles.accentBtn, darkGlow(styles.accentBtn, isDark), choosing && styles.disabled]}>
                 {choosing
                   ? <ActivityIndicator color={ON_FILL} />
                   : <>
@@ -235,7 +236,7 @@ export default function ImportExportScreen() {
                   <Text style={[styles.body, { color: t.ts, marginTop: 2 }]}>Imported {fmtImportedAt(last.at)}</Text>
                 </View>
                 <BounceButton onPress={onUndo} accessibilityLabel="Undo import" accessibilityRole="button">
-                  <View style={[styles.btn, styles.dangerBtn, undoing && styles.disabled]}>
+                  <View style={[styles.btn, styles.dangerBtn, darkGlow(styles.dangerBtn, isDark), undoing && styles.disabled]}>
                     {undoing
                       ? <ActivityIndicator color={ON_FILL} />
                       : <>

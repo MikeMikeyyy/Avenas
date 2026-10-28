@@ -75,10 +75,10 @@ import {
   type WheelPlace,
 } from "../utils/workoutTimer";
 import {
-  ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, CUE_INK, CUE_INK_DARK, FontFamily, NEU_BG, NEU_BG_DARK,
+  ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, CARD_SHADE, CUE_INK, CUE_INK_DARK, FontFamily, NEU_BG, NEU_BG_DARK,
   TIMER_GRADIENT, WARMUP_ORANGE, accentTextColor, replacedTextColor, timerDialInk,
 } from "../constants/theme";
-import { PILL_RADIUS } from "../constants/buttons";
+import { darkGlow, PILL_RADIUS } from "../constants/buttons";
 
 const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
 
@@ -404,7 +404,7 @@ function ModeSwitch({ mode, onChange, isDark }: { mode: TimerMode; onChange: (m:
   const pill = useAnimatedStyle(() => ({ transform: [{ translateX: at.value * SWITCH_HALF }] }));
   return (
     <GlassSurface style={styles.switchTrack} solidStyle={{ backgroundColor: t.div }}>
-      <Reanimated.View style={[styles.switchPill, pill]} />
+      <Reanimated.View style={[styles.switchPill, darkGlow(styles.switchPill, isDark), pill]} />
       {(["timer", "stopwatch"] as const).map(m => (
         <Pressable
           key={m}
@@ -572,7 +572,7 @@ function Dial({
               />
             </View>
             <BounceButton onPress={onDone} accessibilityRole="button" accessibilityLabel="Done setting the time">
-              <View style={styles.doneChip}>
+              <View style={[styles.doneChip, darkGlow(styles.doneChip, isDark)]}>
                 <Text style={styles.doneText}>Done</Text>
               </View>
             </BounceButton>
@@ -715,7 +715,7 @@ function ExerciseCard({
       {!upNext ? (
         allDone ? (
           <View style={styles.doneRow}>
-            <View style={styles.tickDisc}>
+            <View style={[styles.tickDisc, darkGlow(styles.tickDisc, isDark)]}>
               <Ionicons name="checkmark" size={26} color="#FFFFFF" />
             </View>
             <View style={{ flex: 1 }}>
@@ -775,7 +775,7 @@ function ExerciseCard({
               </View>
             </View>
             <BounceButton onPress={onTick} accessibilityRole="button" accessibilityLabel={`Complete ${upNext.exerciseName}, ${upNext.setLabel}`}>
-              <View style={styles.tickDisc}>
+              <View style={[styles.tickDisc, darkGlow(styles.tickDisc, isDark)]}>
                 <Ionicons name="checkmark" size={26} color="#FFFFFF" />
               </View>
             </BounceButton>
@@ -835,7 +835,7 @@ const styles = StyleSheet.create({
   mainText: { fontFamily: FontFamily.bold, fontSize: 17 },
 
   card: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 22, paddingHorizontal: 24, gap: 12 },
-  cardShadowLight: { shadowColor: "#a3afc0", shadowOffset: { width: 0, height: -8 }, shadowOpacity: 0.3, shadowRadius: 16 },
+  cardShadowLight: { shadowColor: CARD_SHADE, shadowOffset: { width: 0, height: -8 }, shadowOpacity: 0.3, shadowRadius: 16 },
   cardShadowDark: { shadowColor: "#000", shadowOffset: { width: 0, height: -8 }, shadowOpacity: 0.35, shadowRadius: 16 },
   cardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   chip: { flexDirection: "row", alignItems: "baseline", gap: 5, paddingHorizontal: 13, paddingVertical: 5, borderRadius: PILL_RADIUS, borderWidth: 1.5 },

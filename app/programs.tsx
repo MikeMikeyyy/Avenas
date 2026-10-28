@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions, type ScrollViewInstance } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -17,7 +17,7 @@ import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_HIST
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardProgramAchievement } from "../utils/achievementStore";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE, DANGER_BRIGHT } from "../constants/theme";
-import { pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { darkGlow, glowOpacity, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GlassButton from "../components/GlassButton";
@@ -186,7 +186,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
               return (
                 <TouchableOpacity key={index} onPress={() => setSelected(index)} activeOpacity={0.7}>
                   <View style={[styles.swDayRow, { borderBottomColor: t.div }, isSelected && { backgroundColor: ACCT + "18" }]}>
-                    <View style={[styles.swDayBadge, { backgroundColor: isSelected ? ACCT : t.div }, isSelected && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 }]}>
+                    <View style={[styles.swDayBadge, { backgroundColor: isSelected ? ACCT : t.div }, isSelected && { shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.8, isDark), shadowRadius: 10 }]}>
                       <Text style={[styles.swDayBadgeText, { color: isSelected ? "#fff" : t.ts }]}>{index + 1}</Text>
                     </View>
                     <View style={{ flex: 1 }}>
@@ -195,7 +195,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
                     </View>
                     {isSelected && (
                       <View style={{ width: 36, alignItems: "center" }}>
-                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 }}>
+                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.8, isDark), shadowRadius: 10 }}>
                           <Ionicons name="checkmark" size={14} color="#fff" />
                         </View>
                       </View>
@@ -208,7 +208,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
           {/* Confirm button */}
           <View style={[styles.swFooter, { paddingBottom: insets.bottom + 12, borderTopColor: t.div }]}>
             <BounceButton onPress={selected !== null ? handleConfirm : undefined}>
-              <View style={[styles.swConfirmWrap, { opacity: selected === null ? 0.45 : 1 }]}>
+              <View style={[styles.swConfirmWrap, darkGlow(styles.swConfirmWrap, isDark), { opacity: selected === null ? 0.45 : 1 }]}>
                 <View style={styles.swConfirmBtn}>
                   <Ionicons name="calendar-outline" size={16} color="#fff" />
                   <Text style={styles.swConfirmText}>
@@ -547,7 +547,7 @@ export default function ProgramsScreen() {
     setCollapsedAll(v => !v);
   }, []);
   const { focus } = useLocalSearchParams<{ focus?: string }>();
-  const scrollRef = useRef<ScrollView | null>(null);
+  const scrollRef = useRef<ScrollViewInstance | null>(null);
   const cardOffsets = useRef<Record<string, number>>({});
   const focusHandled = useRef<string | null>(null);
 

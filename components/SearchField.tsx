@@ -10,7 +10,9 @@
 // decision, 2026-10-22). One component so the three can't drift apart again.
 
 import type { Ref } from "react";
-import { StyleSheet, TextInput, TouchableOpacity, View, type StyleProp, type ViewStyle } from "react-native";
+import {
+  StyleSheet, TextInput, TouchableOpacity, View, type StyleProp, type TextInputInstance, type ViewInstance, type ViewStyle,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
@@ -22,10 +24,10 @@ export default function SearchField({ value, onChangeText, placeholder, autoFocu
   placeholder: string;
   /** For a field that opens from a search button. */
   autoFocus?: boolean;
-  inputRef?: Ref<TextInput>;
+  inputRef?: Ref<TextInputInstance>;
   /** The box itself, for a page that measures it (the group page keeps it
    *  clear of the keyboard). */
-  boxRef?: Ref<View>;
+  boxRef?: Ref<ViewInstance>;
   /** Its margins on the page. */
   style?: StyleProp<ViewStyle>;
 }) {

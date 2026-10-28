@@ -21,8 +21,16 @@
 // With nothing ticked it's just the page's order. A set ticked without a time
 // (a draft saved by an older build) counts as older than any timed one, and
 // between two of those the lower on the page is the later.
+//
+// A set unticked since that tick is next (user request, 2026-10-28): you
+// untick a set you haven't done yet, so the session goes back to it, the
+// highest on the page if you untick several, and the order runs on from there
+// as it would from just above it. The next tick, wherever it is, is followed
+// again. Only the set ticked last used to go back: any other set unticked
+// waited at the end as skipped, so a double tap on the lock screen undone from
+// the top left every card on the set after the second tick.
 
-export type TickableSet = { done: boolean; doneAt?: number };
+export type TickableSet = { done: boolean; doneAt?: number; untickedAt?: number };
 
 type TickableLog = Record<string, { warmup: TickableSet[]; working: TickableSet[] } | undefined>;
 
@@ -63,18 +71,23 @@ export function pendingSetsInOrder(exerciseIds: readonly string[], log: Tickable
     if (at >= latest) { latest = at; anchor = i; }
   });
 
+  // A set unticked since then, the highest on the page: the session's back on it.
+  const undone = rows.findIndex(r => !r.set.done && r.set.untickedAt !== undefined && r.set.untickedAt > latest);
+
   const pending = (r: Row, skipped: boolean): PendingSetRef => ({
     exId: r.exId, exIndex: r.exIndex, setType: r.setType, setIdx: r.setIdx, flatIdx: r.flatIdx, skipped,
   });
-  if (anchor === -1) return rows.filter(r => !r.set.done).map(r => pending(r, false));
+  if (anchor === -1 && undone === -1) return rows.filter(r => !r.set.done).map(r => pending(r, false));
 
+  // Where "below" starts: the set gone back to, else just under the set ticked last.
+  const from = undone !== -1 ? undone : anchor + 1;
   const started = new Set(rows.filter(r => r.set.done).map(r => r.exIndex));
   const below: PendingSetRef[] = [];
   const unstarted: PendingSetRef[] = [];
   const skipped: PendingSetRef[] = [];
   rows.forEach((r, i) => {
     if (r.set.done) return;
-    if (i > anchor) below.push(pending(r, false));
+    if (i >= from) below.push(pending(r, false));
     else if (!started.has(r.exIndex)) unstarted.push(pending(r, false));
     else skipped.push(pending(r, true));
   });

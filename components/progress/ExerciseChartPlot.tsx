@@ -21,6 +21,11 @@
 // an empty bar, dashed and lined, as tall as the session before. A program run
 // again counts from 1 again, as its cards do, past a dashed line between runs.
 //
+// Under All programs (`byDate`; user decision, 2026-10-26) the slots are every
+// session of the exercise from any program, each labelled with its date rather
+// than a number, still a slot apart however long between them, a dashed line
+// and the year where a new year starts; the pop-up says which workout it was.
+//
 // When a scroll settles on other sessions, the y-axis fits them: every path
 // eases to the new scale on the UI thread (useAnimatedProps over a shared
 // min/max), while the numbers fade from their old places to the new.
@@ -62,8 +67,8 @@ import { useTheme } from "../../contexts/ThemeContext";
 import type { ExerciseMetricKey } from "../../constants/progress";
 import {
   BAR_WIDTH, BLOCK_GAP, CHART_HEIGHT, CHART_TOTAL_H, DOT_R, GLINT_BANDS, LABEL_H, LINE_STROKE, PLOT_TOP, SESSION_SPACING,
-  TOOLTIP_W, Y_AXIS_LABEL_WIDTH, areaPathD, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, dotsPathD,
-  drawsOn, exerciseChartAxis, exerciseChartGeometry, fmtChange, popupLeft, setStacks, slotX, sparkleD,
+  TOOLTIP_W, Y_AXIS_LABEL_WIDTH, areaPathD, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, dateAxisLabels,
+  dotsPathD, drawsOn, exerciseChartAxis, exerciseChartGeometry, fmtChange, popupLeft, setStacks, slotX, sparkleD,
   strengthDots, strengthLabel, valueY, visibleSlots, volumeBars,
   type ExerciseChartGeometry,
 } from "../../utils/exerciseChartLayout";
@@ -130,6 +135,9 @@ type Props = {
   /** Which exercise on which day: another one opens on its newest session. */
   seriesKey: string;
   records: ChartRecords;
+  /** Under All programs: each slot labelled with its session's date, not a
+   *  number (utils/exerciseChartLayout.ts dateAxisLabels). */
+  byDate?: boolean;
 };
 
 /** "2026-09-09" → "9 Sep 2026", the pop-up's date: day first, as the rest of
@@ -168,7 +176,7 @@ export default function ExerciseChartPlot(props: Props) {
 type Focus = { slot: number; set?: number };
 
 function PlotBody({
-  exerciseName, slots, metric, unit, records, g, scrollX, onSettle,
+  exerciseName, slots, metric, unit, records, byDate = false, g, scrollX, onSettle,
 }: Props & { g: ExerciseChartGeometry; scrollX: number; onSettle: (x: number) => void }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -439,12 +447,24 @@ function PlotBody({
       .map(r => ({ key: `${r.slots[0]}`, x: r.x, y: base - MISSED_WORD_Y, label: r.label }))
       .filter(w => !marks.some(d => Math.abs(d.x - w.x) < MISSED_LABEL_W / 2 + SESSION_SPACING && d.y > w.y - MISSED_CLEAR));
   }, [metric, slots, g, shapes, axis.min, axis.max, base]);
-  // Where a run of the program begins again, counting from 1 again: a line
-  // between the two runs.
-  const runBreaks = useMemo(
-    () => slots.flatMap((s, k) => (k > 0 && s.run !== slots[k - 1].run ? [slotX(g, k) - g.spacing / 2] : [])),
-    [slots, g],
+  // Going by date: each slot's date, or the year at a new year's first.
+  const dateAxis = useMemo(
+    () => (byDate ? dateAxisLabels(slots.map(s => s.point?.date ?? s.missed ?? "")) : null),
+    [byDate, slots],
   );
+  // Where a run of the program begins again, counting from 1 again: a line
+  // between the two runs. Going by date, where a new year begins.
+  const breaks = useMemo(
+    () => (dateAxis
+      ? dateAxis.yearBreaks.map(k => slotX(g, k) - g.spacing / 2)
+      : slots.flatMap((s, k) => (k > 0 && s.run !== slots[k - 1].run ? [slotX(g, k) - g.spacing / 2] : []))),
+    [dateAxis, slots, g],
+  );
+  // What VoiceOver calls a place: its session number, or going by date, its date.
+  const placeName = (slot: number) => {
+    const s = slots[slot];
+    return dateAxis ? fmtLongDate(s.point?.date ?? s.missed ?? "") : `session ${s.number}`;
+  };
 
   const blockText = accentTextColor(isDark);
   const cueInk = isDark ? CUE_INK_DARK : CUE_INK;
@@ -494,6 +514,8 @@ function PlotBody({
     }
     // Which run, where the chart holds more than one: each counts from 1.
     if (s.run !== null) lines.push(`${ordinal(s.run)} run`);
+    // Going by date, which workout it was, from whichever program.
+    if (s.from) lines.push(s.from);
     // Over the session, or under it where over would cover the card's title.
     const cardH = 18 + 20 + 17 * (lines.length + 1);
     const below = y - 21 - cardH < -28;
@@ -588,9 +610,9 @@ function PlotBody({
               request, 2026-10-08). */}
           <Pressable accessible={false} onPress={clearFocus} style={StyleSheet.absoluteFill} />
 
-          {runBreaks.length > 0 ? (
+          {breaks.length > 0 ? (
             <Svg width={g.contentWidth} height={CHART_TOTAL_H} style={styles.revealed} pointerEvents="none">
-              {runBreaks.map(x => (
+              {breaks.map(x => (
                 <Line key={x} x1={x} x2={x} y1={PLOT_TOP} y2={base} stroke={t.div} strokeWidth={1} strokeDasharray={[3, 4]} />
               ))}
             </Svg>
@@ -754,19 +776,29 @@ function PlotBody({
 
           {/* Each session's number, the one its card reads ("5th session"): a
               miss keeps its number, and a session with nothing on this tab
-              keeps its number, faded. */}
+              keeps its number, faded. Going by date, its date instead, and at
+              a new year's first session the year, in the ink of the title. */}
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-            {slots.map((s, slot) => (
-              <Text
-                key={slot}
-                style={[
-                  styles.number,
-                  { left: slotX(g, slot) - SESSION_SPACING / 2, top: base + 3, color: t.ts, opacity: s.point && !drawsOn(s.point, metric) ? 0.45 : 1 },
-                ]}
-              >
-                {s.number}
-              </Text>
-            ))}
+            {slots.map((s, slot) => {
+              const date = dateAxis?.labels[slot];
+              return (
+                <Text
+                  key={slot}
+                  style={[
+                    styles.number,
+                    date?.year ? styles.year : null,
+                    {
+                      left: slotX(g, slot) - SESSION_SPACING / 2,
+                      top: base + 3,
+                      color: date?.year ? t.tp : t.ts,
+                      opacity: s.point && !drawsOn(s.point, metric) ? 0.45 : 1,
+                    },
+                  ]}
+                >
+                  {date ? date.text : s.number}
+                </Text>
+              );
+            })}
           </View>
 
           {/* Each session's touch target, on the settled axis. */}
@@ -780,7 +812,7 @@ function PlotBody({
                   onPress={() => toggle({ slot: d.slot })}
                   style={{ position: "absolute", left: d.x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: Math.min(d.y + HIT_HALF, base + 12) - top }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${exerciseName}, session ${slots[d.slot].number}`}
+                  accessibilityLabel={`${exerciseName}, ${placeName(d.slot)}`}
                 />
               );
             })}
@@ -796,7 +828,7 @@ function PlotBody({
                   onPress={() => toggle({ slot: st.slot, set: b.set })}
                   style={{ position: "absolute", left: st.x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: Math.max(8, bottom - top) }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${exerciseName}, session ${slots[st.slot].number}, set ${b.set + 1}`}
+                  accessibilityLabel={`${exerciseName}, ${placeName(st.slot)}, set ${b.set + 1}`}
                 />
               );
             }))}
@@ -809,7 +841,7 @@ function PlotBody({
                   onPress={() => toggle({ slot: b.slot })}
                   style={{ position: "absolute", left: b.x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: base + 4 - top }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${exerciseName}, session ${slots[b.slot].number}`}
+                  accessibilityLabel={`${exerciseName}, ${placeName(b.slot)}`}
                 />
               );
             })}
@@ -825,7 +857,7 @@ function PlotBody({
                   onPress={() => toggle({ slot: m.slot })}
                   style={{ position: "absolute", left: x - SESSION_SPACING / 2, width: SESSION_SPACING, top, height: bottom - top }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${exerciseName}, session ${slots[m.slot].number}, missed`}
+                  accessibilityLabel={`${exerciseName}, ${placeName(m.slot)}, missed`}
                 />
               );
             })}
@@ -950,6 +982,8 @@ const styles = StyleSheet.create({
     fontSize: 10,
     includeFontPadding: false,
   },
+  // Going by date, a new year's first session: its year.
+  year: { fontFamily: FontFamily.bold },
   // A run of misses' word ("Missed", "2 missed"), as on the comparison.
   missed: {
     position: "absolute",

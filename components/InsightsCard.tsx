@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { darkGlow } from "../constants/buttons";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
 
@@ -29,7 +30,7 @@ export default function InsightsCard({ isDark }: Props) {
     >
       <NeuCard dark={isDark} radius={22} style={styles.card}>
         <View style={styles.inner}>
-          <View style={styles.iconBadge}>
+          <View style={[styles.iconBadge, darkGlow(styles.iconBadge, isDark)]}>
             <Ionicons name="sparkles" size={20} color="#FFFFFF" />
           </View>
           <View style={styles.textCol}>

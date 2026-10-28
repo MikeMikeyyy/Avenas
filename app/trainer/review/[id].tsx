@@ -12,7 +12,7 @@ import { useFloatingBarsReach } from "../../../hooks/useFloatingBars";
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../../components/MaskedView";
 import Svg, { Path } from "react-native-svg";
 
 import BounceButton from "../../../components/BounceButton";
@@ -23,7 +23,7 @@ import ProgramSnapshotView from "../../../components/ProgramSnapshotView";
 import ProgramActionFabs from "../../../components/ProgramActionFabs";
 import ProgramSummarySheet from "../../../components/ProgramSummarySheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
-import { PILL_RADIUS } from "../../../constants/buttons";
+import { darkGlow, PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { loadGroupReviewPrograms, loadSentPrograms, returnReview, type SentProgram } from "../../../utils/trainerStore";
 import { alertMessage } from "../../../utils/errors";
@@ -185,7 +185,7 @@ export default function ReviewScreen() {
               thing you're deciding about. */}
           {!isReturned ? (
             <BounceButton style={{ marginTop: 14 }} onPress={handleSendBack} needsConnection accessibilityLabel={`Send back to the ${who}`}>
-              <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+              <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                 <Ionicons name="paper-plane-outline" size={16} color="#fff" />
                 <Text style={styles.sendBtnText}>{`Send Back to ${Who}`}</Text>
               </View>
@@ -197,7 +197,7 @@ export default function ReviewScreen() {
                 <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
               </View>
               <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} needsConnection accessibilityLabel={`Send your latest edits to the ${who}`}>
-                <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                   <Ionicons name="paper-plane-outline" size={16} color="#fff" />
                   <Text style={styles.sendBtnText}>{`Send Update to ${Who}`}</Text>
                 </View>

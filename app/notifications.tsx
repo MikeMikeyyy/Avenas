@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Alert, Linking } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";

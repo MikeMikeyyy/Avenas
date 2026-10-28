@@ -32,7 +32,7 @@ import SearchField from "../SearchField";
 import PeopleIcon from "../icons/PeopleIcon";
 import { RemoveCircleButton, RemoveModeBar } from "./RemoveMode";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
+import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { resolveMyTrainers } from "../../utils/roster";
@@ -184,7 +184,7 @@ export default function MyTrainersSection({ presenceById, unreadByPerson }: {
               Connect with a trainer to share programs and get feedback on your progress.
             </Text>
             <BounceButton style={{ marginTop: 8 }} onPress={handleConnect}>
-              <View style={[styles.cta, { backgroundColor: ACCT }]}>
+              <View style={[styles.cta, { backgroundColor: ACCT }, darkGlow(styles.cta, isDark)]}>
                 <Text style={styles.ctaText}>Connect a Trainer</Text>
               </View>
             </BounceButton>

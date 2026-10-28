@@ -11,7 +11,7 @@
 // (e.g. a custom exercise, or one retired from the list).
 
 import { useEffect, useState } from "react";
-import { View, StyleSheet, type ImageSourcePropType, type StyleProp, type ViewStyle } from "react-native";
+import { View, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useReducedMotion } from "react-native-reanimated";
@@ -91,7 +91,8 @@ export default function ExerciseImage({
 /** An illustration's positions, one after another. Kept apart from the list
  *  thumbnail so a scrolling list carries no timers. */
 function IllustrationFrames({ frames, size, radius, style }: {
-  frames: ImageSourcePropType[];
+  /** Bundled assets (assets/exerciseImages.ts). */
+  frames: number[];
   size: number;
   radius: number;
   style?: StyleProp<ViewStyle>;

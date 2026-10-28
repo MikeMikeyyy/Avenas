@@ -5,7 +5,7 @@
 //      program's (by the rule the workout cards go by), never a program's.
 //   2. Their days: one per name, a deleted program's days each their own, the
 //      newest first, saying which deleted program they came from; under
-//      "All programs" a card of their own after every program's.
+//      "All programs" their exercises among every program's.
 //   3. A program's day that shares a name ("Push") never takes them, nor they
 //      it; and a pre-program-id session outside every program's dates is one.
 //   4. The chart of one of their exercises: its sessions, numbered as the
@@ -22,8 +22,8 @@
 import { on, type Phone } from "./harness/app";
 import { WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import {
-  CUSTOM_GROUP_ID, CUSTOM_WORKOUTS_NAME, collectExerciseHistory, collectLoggedExercisesForDay, filterByProgramScope,
-  groupDaysByProgram, isCustomSession, scopedProgramDays, sessionCountForDay, workoutMatchesDay,
+  collectExerciseHistory, collectLoggedExercises, collectLoggedExercisesForDay, filterByProgramScope,
+  isCustomSession, scopedProgramDays, sessionCountForDay, workoutMatchesDay,
 } from "../utils/progressStats";
 import { exerciseHistoryRows, pickLabel, picksFromHistoryParams, exerciseHistoryOptions } from "../utils/exerciseHistory";
 import { buildSessionTracks } from "../utils/sessionTrack";
@@ -122,14 +122,18 @@ eq(days.map(d => d.custom?.sessionIds.size), [1, 2, 1, 2, 1], "days: each with i
 eq(days.map(d => d.duplicateLabel), [false, true, true, false, false], "days: the two Legs read alike, so each says whose");
 ok(days.every(d => d.programId === "" && d.dayId.startsWith("custom:") && d.key.startsWith("custom::")), "days: in no program");
 
-const all = scopedProgramDays({ kind: "all" }, programs, history);
-const groups = groupDaysByProgram(all, programs);
-eq(groups.map(g => [g.programId, g.programName, g.days.map(d => d.label)]),
-  [["prog_a", "Strength", ["Push", "Pull"]], [CUSTOM_GROUP_ID, CUSTOM_WORKOUTS_NAME, ["Arms", "Legs", "Legs", "Push", "Pull"]]],
-  "All programs: a Custom workouts card after every program's");
-eq(all.filter(d => d.custom).map(d => d.key), days.map(d => d.key), "All programs: the same days, the same keys (a chart picked under one stays under the other)");
+// All programs lists every exercise, the custom workouts' with the programs'
+// (user request, 2026-10-26), each once with all its sessions.
+eq(collectLoggedExercises(filterByProgramScope(history, { kind: "all" }, programs)).map(r => [r.name, r.sessionCount]),
+  [["Barbell Curl", 1], ["Bent-Over Row", 3], ["Barbell Bench Press", 3], ["Barbell Back Squat", 3]],
+  "All programs: every exercise once, Custom workouts' among them, each with all its sessions");
 eq(scopedProgramDays({ kind: "current" }, programs, filterByProgramScope(history, { kind: "current" }, programs)).some(d => d.custom), false,
   "Current program: none of them");
+
+// Every program's days at once (the "all" scope), which is where a session
+// from before program ids could land twice.
+const all = scopedProgramDays({ kind: "all" }, programs, history);
+eq(all.filter(d => d.custom).map(d => d.key), days.map(d => d.key), "the whole scope: the custom days, with the same keys as on their own");
 
 // A session from before program ids goes by its name only inside its
 // program's dates, under All programs as under the program itself: the one

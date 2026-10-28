@@ -760,10 +760,9 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
 
 // ─── public: program scope filter ────────────────────────────────────────────
 
-/** What the page calls the sessions in no program, and the program card
- *  they're under in "All programs" (whose id is CUSTOM_GROUP_ID). */
+/** What the page calls the sessions in no program: the scope at the top, and
+ *  the program its days are under. */
 export const CUSTOM_WORKOUTS_NAME = "Custom workouts";
-export const CUSTOM_GROUP_ID = "custom";
 
 export function programIncludes(p: SavedProgram, workoutName: string): boolean {
   const k = key(workoutName);
@@ -944,58 +943,6 @@ export function customWorkoutDays(workouts: readonly CompletedWorkout[], program
   return refs.map(d => ({ ...d, duplicateLabel: (counts.get(key(d.label)) ?? 0) > 1 }));
 }
 
-/** One program's days, for the "All programs" Exercise Progress list. */
-export type ProgramDayGroup = {
-  programId: string;
-  programName: string;
-  /** Null when no program in the list has this id (a day whose program has
-   *  since gone can't appear, see historicalDays, but the type allows it). */
-  status: SavedProgram["status"] | null;
-  days: ProgramDayRef[];
-};
-
-// Same order as the program picker (ProgramScopePicker): what you're running,
-// then what's waiting, what's on hold, and what's done.
-const GROUP_STATUS_ORDER: Record<SavedProgram["status"], number> = { active: 0, created: 1, paused: 2, completed: 3 };
-
-/**
- * The scope's days (scopedProgramDays) gathered under their programs, so "All
- * programs" reads as a short list of programs to open rather than every day of
- * every program in one run. Programs are ordered active → not started → paused
- * → completed, then by name; each keeps its days in the order given (cycle,
- * extras, then days that have left it).
- *
- * `duplicateLabel` is re-marked WITHIN each group: under a program heading,
- * "Push" in two programs needs no qualifier, but two "Upper"s in one program
- * still do. `absorbsUnidentified` is left as the whole scope decided it, since
- * that's which row actually counts a session with no dayId.
- */
-export function groupDaysByProgram(days: ProgramDayRef[], programs: SavedProgram[]): ProgramDayGroup[] {
-  const programById = new Map(programs.map(p => [p.id, p]));
-  const groups = new Map<string, ProgramDayGroup>();
-  for (const d of days) {
-    // Custom workouts are one card of their own, after every program's (no
-    // status sorts last).
-    const id = d.custom ? CUSTOM_GROUP_ID : d.programId;
-    let g = groups.get(id);
-    if (!g) {
-      const p = d.custom ? undefined : programById.get(d.programId);
-      g = { programId: id, programName: p?.name ?? d.programName, status: p?.status ?? null, days: [] };
-      groups.set(id, g);
-    }
-    g.days.push(d);
-  }
-  const out = Array.from(groups.values()).map(g => {
-    const counts = new Map<string, number>();
-    for (const d of g.days) counts.set(key(d.label), (counts.get(key(d.label)) ?? 0) + 1);
-    return { ...g, days: g.days.map(d => ({ ...d, duplicateLabel: (counts.get(key(d.label)) ?? 0) > 1 })) };
-  });
-  return out.sort((a, b) => {
-    const sd = (a.status ? GROUP_STATUS_ORDER[a.status] : 4) - (b.status ? GROUP_STATUS_ORDER[b.status] : 4);
-    return sd !== 0 ? sd : a.programName.localeCompare(b.programName);
-  });
-}
-
 /**
  * Does completed session `w` belong to workout day `day`?
  *
@@ -1060,6 +1007,22 @@ export function collectLoggedExercisesForDay(
   workouts: CompletedWorkout[],
   day: ProgramDayRef,
 ): LoggedExerciseRow[] {
+  return loggedExerciseRows(workouts.filter(w => workoutMatchesDay(w, day)), day.programExercises);
+}
+
+/**
+ * Every exercise logged in `workouts`, from any program, day or custom
+ * workout, one row each by identity, most recently logged first: the Exercise
+ * Progress list under "All programs" (user request, 2026-10-26). None reads
+ * "swapped out": across programs there's no one prescription to compare with.
+ */
+export function collectLoggedExercises(workouts: CompletedWorkout[]): LoggedExerciseRow[] {
+  return loggedExerciseRows(workouts, []);
+}
+
+/** The exercises logged in `workouts`, one row each, against the identities a
+ *  day programs (none: nothing to compare with, so nothing is swapped out). */
+function loggedExerciseRows(workouts: CompletedWorkout[], programExercises: readonly string[]): LoggedExerciseRow[] {
   // identity → { name (preserve case), latestSet, lastDate, lastCompletedAt, sessionCount }
   const acc = new Map<
     string,
@@ -1074,7 +1037,6 @@ export function collectLoggedExercisesForDay(
     }
   >();
   for (const w of workouts) {
-    if (!workoutMatchesDay(w, day)) continue;
     // For each exercise in this workout, find the latest "working+done" set
     // to use as the "lastWeight × lastReps" preview.
     for (const ex of w.exercises) {
@@ -1112,7 +1074,7 @@ export function collectLoggedExercisesForDay(
   // stays (it happened) but is flagged, so the reader knows the trend stops
   // because the programming changed. Days with no prescription to compare
   // against (free workouts, historical days) report everything as in-program.
-  const programmed = new Set(day.programExercises);
+  const programmed = new Set(programExercises);
   const comparable = programmed.size > 0;
   return Array.from(acc.values())
     .sort((a, b) => b.lastCompletedAt.localeCompare(a.lastCompletedAt))

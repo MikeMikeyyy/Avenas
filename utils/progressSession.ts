@@ -20,6 +20,7 @@ import type {
 } from "../constants/progress";
 import type { RunRef } from "./programRuns";
 import type { CompareSpan } from "./programCompare";
+import type { ExerciseRef } from "./exerciseNames";
 
 export type ProgressSelections = {
   scope: ProgramScope;
@@ -30,9 +31,13 @@ export type ProgressSelections = {
   strengthMetric: StrengthMetricKey;
   /** The (day, exercise) charted under Exercise Progress. */
   selectedExercise: ExerciseSelection | null;
-  /** The program open in the Exercise Progress list under "All programs"
-   *  (its id; the list groups days by program there). */
-  expandedProgram: string | null;
+  /** The exercise charted under "All programs": every session of it, from any
+   *  program or day (utils/allExercises.ts). Kept apart from
+   *  `selectedExercise`, so switching between the two keeps each one's pick. */
+  allExercise: ExerciseRef | null;
+  /** The muscle group open in the Exercise Progress list under "All programs"
+   *  (its label). */
+  expandedMuscle: string | null;
   /** The day row open in the Exercise Progress list (ProgramDayRef.key). */
   expandedDay: string | null;
   /** The exercise chart's tab (Strength / Sets / Volume), comparing or not. */
@@ -46,6 +51,9 @@ export type ProgressSelections = {
   compareSpan: CompareSpan;
   /** The exercise charted while comparing (its exerciseKey). */
   compareLift: string | null;
+  /** The last "See All Progress" the page took (its `at`): each is taken
+   *  once, the page remounting included. */
+  allProgressAt: string | null;
 };
 
 export const DEFAULT_PROGRESS_SELECTIONS: ProgressSelections = {
@@ -54,13 +62,41 @@ export const DEFAULT_PROGRESS_SELECTIONS: ProgressSelections = {
   metric: "volume",
   strengthMetric: "load",
   selectedExercise: null,
-  expandedProgram: null,
+  allExercise: null,
+  expandedMuscle: null,
   expandedDay: null,
   exerciseMetric: "strength",
   compare: null,
   compareSpan: "same",
   compareLift: null,
+  allProgressAt: null,
 };
+
+/**
+ * "See All Progress" on Exercise History (user request, 2026-10-26): the
+ * Progress page opens on All programs with this exercise charted across every
+ * program. It rides on the navigation as route params, with an `at` that's new
+ * on every tap (as the workout bar's `upTo` does), and the page takes each one
+ * once (`allProgressAt`).
+ */
+export type AllProgressRequest = ExerciseRef & { at: string };
+
+type AllProgressParams = { allProgress?: string; allProgressId?: string; allProgressAt?: string };
+
+/** The route params asking for `ex` across every program. */
+export function allProgressParams(ex: ExerciseRef): AllProgressParams {
+  return {
+    allProgress: ex.name,
+    ...(ex.customId ? { allProgressId: ex.customId } : {}),
+    allProgressAt: String(Date.now()),
+  };
+}
+
+/** The request a page's route params carry, or null when they carry none. */
+export function allProgressRequest(p: AllProgressParams): AllProgressRequest | null {
+  if (!p.allProgress || !p.allProgressAt) return null;
+  return { name: p.allProgress, ...(p.allProgressId ? { customId: p.allProgressId } : {}), at: p.allProgressAt };
+}
 
 const sessions = new Map<string, ProgressSelections>();
 

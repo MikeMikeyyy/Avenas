@@ -33,6 +33,7 @@ import * as Haptics from "expo-haptics";
 import ChatBubble from "../components/trainer/ChatBubble";
 import SendIcon from "../components/icons/SendIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
+import { darkGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import type { ChatMessage } from "../constants/chat";
 
@@ -156,7 +157,7 @@ export default function InsightsScreen() {
             />
           </View>
           <TouchableOpacity onPress={() => send(input)} disabled={!canSend} activeOpacity={0.8} accessibilityLabel="Send message" accessibilityRole="button">
-            <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }]}>
+            <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }, darkGlow(styles.sendBtn, isDark)]}>
               <SendIcon size={18} color="#fff" />
             </View>
           </TouchableOpacity>

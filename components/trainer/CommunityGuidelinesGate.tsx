@@ -14,7 +14,7 @@ import * as Haptics from "expo-haptics";
 
 import BounceButton from "../BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { pill, PILL_H_SM } from "../../constants/buttons";
+import { darkGlow, pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { COMMUNITY_GUIDELINES } from "../../constants/community";
 import CommunityPledge from "./CommunityPledge";
@@ -49,7 +49,7 @@ export default function CommunityGuidelinesGate({ onAccept }: { onAccept: () => 
           </Text>
         </View>
         <BounceButton onPress={() => setDeclined(false)} accessibilityLabel="Review the community guidelines">
-          <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+          <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.primaryBtn, isDark)]}>
             <Text style={styles.primaryText}>Review guidelines</Text>
           </View>
         </BounceButton>
@@ -92,7 +92,7 @@ export default function CommunityGuidelinesGate({ onAccept }: { onAccept: () => 
 
       <View style={styles.actions}>
         <BounceButton onPress={accept} accessibilityLabel="Agree to the community guidelines">
-          <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+          <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.primaryBtn, isDark)]}>
             <Text style={styles.primaryText}>I agree</Text>
           </View>
         </BounceButton>

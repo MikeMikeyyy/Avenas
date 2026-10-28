@@ -8,7 +8,7 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -23,7 +23,7 @@ import ExerciseImage from "../components/ExerciseImage";
 import VideoDemo from "../components/VideoDemo";
 import FavouriteExerciseButton from "../components/FavouriteExerciseButton";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
-import { pill, pillGlow } from "../constants/buttons";
+import { darkGlow, pill, pillGlow } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
@@ -213,7 +213,7 @@ export default function ExerciseSummaryScreen() {
           accessibilityRole="button"
           accessibilityLabel={`See full history for ${name}`}
         >
-          <View style={styles.historyBtn}>
+          <View style={[styles.historyBtn, darkGlow(styles.historyBtn, isDark)]}>
             <Ionicons name="time-outline" size={18} color="#fff" />
             <Text style={styles.historyBtnLabel} numberOfLines={1}>See Exercise History</Text>
             <Ionicons name="chevron-forward" size={16} color="#fff" />

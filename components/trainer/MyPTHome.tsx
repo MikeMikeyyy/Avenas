@@ -20,7 +20,7 @@ import { scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../MaskedView";
 
 import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
@@ -58,7 +58,7 @@ import {
   compareBlueText,
   replacedTextColor,
 } from "../../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../constants/buttons";
+import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_META, CARD_TITLE, SUMMARY_ROW } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
@@ -363,7 +363,7 @@ export default function MyPTHome() {
                 Connect with a personal trainer to share programs and get feedback on your progress.
               </Text>
               <BounceButton style={{ marginTop: 8 }} onPress={() => router.navigate("/connect")}>
-                <View style={[styles.cta, { backgroundColor: ACCT }]}>
+                <View style={[styles.cta, { backgroundColor: ACCT }, darkGlow(styles.cta, isDark)]}>
                   <Text style={styles.ctaText}>Connect a Trainer</Text>
                 </View>
               </BounceButton>
@@ -412,7 +412,7 @@ export default function MyPTHome() {
                   needsConnection
                   accessibilityLabel={`Send a program to ${pt.name} for review`}
                 >
-                  <View style={[styles.heroBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+                  <View style={[styles.heroBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
                     <SendIcon size={16} color="#fff" />
                     <Text style={[styles.heroBtnText, { color: "#fff" }]}>Send for Review</Text>
                   </View>

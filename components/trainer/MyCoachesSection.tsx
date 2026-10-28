@@ -34,7 +34,7 @@ import SimpleSheet from "./SimpleSheet";
 import SheetPill from "../SheetPill";
 import { RemoveCircleButton, RemoveModeBar } from "./RemoveMode";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
-import { pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
+import { darkGlow, pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
   acceptSharedProgram,
@@ -392,7 +392,7 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
               Anyone you connect with who has a trainer account shows up here, so you can receive programs to adapt and pass on to your own clients.
             </Text>
             <BounceButton style={{ marginTop: 8 }} onPress={handleConnect}>
-              <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+              <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.cta, isDark)]}>
                 <Text style={styles.ctaText}>Connect</Text>
               </View>
             </BounceButton>
@@ -534,7 +534,7 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
                         {accepted ? (
                           <View style={styles.actionRow}>
                             <BounceButton style={{ flex: 1 }} onPress={() => handleOpenPassDown(r)} needsConnection accessibilityLabel={`Send ${r.programName} to your clients`}>
-                              <View style={[styles.passBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                              <View style={[styles.passBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.passBtn, isDark)]}>
                                 <SendIcon size={16} color="#fff" />
                                 <Text style={styles.passBtnText}>Send to my clients</Text>
                               </View>
@@ -548,7 +548,7 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
                         ) : (
                           <View style={styles.actionRow}>
                             <BounceButton style={{ flex: 1 }} onPress={() => handleAccept(r)} needsConnection accessibilityLabel={`Accept ${r.programName}`}>
-                              <View style={[styles.acceptBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                              <View style={[styles.acceptBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.acceptBtn, isDark)]}>
                                 <Ionicons name="checkmark" size={16} color="#fff" />
                                 <Text style={styles.acceptBtnText}>Accept</Text>
                               </View>

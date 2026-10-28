@@ -18,10 +18,13 @@
 // Opening the app on a rest day still counts as showing up and still increments
 // the streak — rest days simply can't take it away.
 //
+// An open is the app launched OR brought back from the background
+// (contexts/StreakContext.tsx records both through streakOnOpen).
+//
 // RN-free and pure so it can be unit-tested under plain node/tsx
 // (see scripts/verify-streak.ts).
 
-import { fromYMD, parseStoredDate, toYMD } from "./dates";
+import { daysBetweenYMD, fromYMD, parseStoredDate, toYMD } from "./dates";
 import { getWorkoutForDate } from "./workout";
 import type { SavedProgram } from "../constants/programs";
 
@@ -97,6 +100,99 @@ export function streakSurvives(
   today: string,
 ): boolean {
   return missedStreakDays(program, lastOpened, today) <= STREAK_GRACE_DAYS;
+}
+
+/** The app-open streak as it's stored (avenas_streak_data). */
+export type StreakRecord = {
+  count: number;
+  startDate: string;       // local date string (YYYY-MM-DD)
+  highestStreak: number;
+  lastOpenedDate: string;  // local date string (YYYY-MM-DD)
+  openedDates: string[];   // every distinct day the user opened the app (YYYY-MM-DD)
+  /** "local" once dates use local-midnight day boundaries (toYMD), like every
+   *  other date in the app. Absent on legacy records, whose dates were UTC-based
+   *  (toISOString); see streakOnOpen. */
+  dayBasis?: "local";
+};
+
+/** Whether a stored value is a streak record. `openedDates` may be missing on
+ *  an older one (streakOnOpen fills it in). */
+export function isStreakRecord(value: unknown): value is StreakRecord {
+  if (!value || typeof value !== "object") return false;
+  const d = value as Record<string, unknown>;
+  return (
+    typeof d.count === "number" &&
+    typeof d.startDate === "string" &&
+    typeof d.highestStreak === "number" &&
+    typeof d.lastOpenedDate === "string"
+  );
+}
+
+/**
+ * The streak once the app is opened on `today`: launched, or brought back from
+ * the background. It was only worked out at launch, and iOS keeps the app in
+ * memory for days, so a return after a week away was never asked whether the
+ * streak had survived it (it kept its old number), and a day the app was only
+ * brought back on was never counted, so the next launch could end a streak kept
+ * every day (user report, 2026-10-28).
+ *
+ * `saved` is null for a first open, or a record that couldn't be read as one.
+ * Returns the record, whether it needs writing (a second open the same day
+ * changes nothing), and whether it grew (a milestone may be due).
+ */
+export function streakOnOpen(
+  saved: StreakRecord | null,
+  today: string,
+  program: SavedProgram | null,
+): { record: StreakRecord; write: boolean; grew: boolean } {
+  if (!saved) {
+    return {
+      record: { count: 1, startDate: today, highestStreak: 1, lastOpenedDate: today, openedDates: [today], dayBasis: "local" },
+      write: true,
+      grew: false,
+    };
+  }
+  const opened = Array.isArray(saved.openedDates) ? saved.openedDates : [saved.lastOpenedDate];
+  const openedDates = opened.includes(today) ? opened : [...opened, today];
+  // Day boundaries are LOCAL calendar days (toYMD), the same basis as every
+  // other date in the app. Records written before `dayBasis` existed used UTC
+  // days (toISOString), which lag local by one in positive-UTC timezones (an
+  // 8am AEST open recorded yesterday's UTC date). The grace day absorbs that:
+  // a legacy gap of 2 leaves a single day in between, and one missed day is
+  // free. Legacy openedDates entries may sit a day off, display-only.
+  const isLegacy = saved.dayBasis !== "local";
+  if ((daysBetweenYMD(saved.lastOpenedDate, today) ?? 0) <= 0) {
+    // Same local day, or a legacy UTC date from a negative-UTC timezone that
+    // ran a day AHEAD of local: already opened today.
+    return {
+      record: { ...saved, lastOpenedDate: today, openedDates, dayBasis: "local" },
+      write: isLegacy || saved.lastOpenedDate !== today || !opened.includes(today),
+      grew: false,
+    };
+  }
+  if (streakSurvives(program, saved.lastOpenedDate, today)) {
+    // Within the allowance: showing up today continues the run.
+    const count = saved.count + 1;
+    return {
+      record: {
+        count,
+        startDate: saved.startDate,
+        highestStreak: Math.max(saved.highestStreak, count),
+        lastOpenedDate: today,
+        openedDates,
+        dayBasis: "local",
+      },
+      write: true,
+      grew: true,
+    };
+  }
+  // Two or more scheduled workout days passed unopened: a new run, the
+  // personal best kept.
+  return {
+    record: { count: 1, startDate: today, highestStreak: saved.highestStreak, lastOpenedDate: today, openedDates, dayBasis: "local" },
+    write: true,
+    grew: false,
+  };
 }
 
 /**

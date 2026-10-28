@@ -8,11 +8,14 @@
 // itself.
 //
 //   progress/      the Progress page: volume / reps / time bars for every
-//                  program scope and range, the Exercise Progress day list, the
-//                  exercise chart, its records, and the Exercise History page
-//                  the chart opens
+//                  program scope and range, the Exercise Progress day list (and
+//                  under All programs every exercise, in its muscle group, and
+//                  the search over them), the exercise chart, its records, and
+//                  the Exercise History page the chart opens
 //   chart-slots/   the exercise chart's places: every session once, each on
-//                  the number its workout card reads, a miss on none of theirs
+//                  the number its workout card reads, a miss on none of theirs;
+//                  under All programs every session of it from any program,
+//                  each under its own date, saying which workout it was
 //   chart-layout/  the exercise chart on every phone width: every session in
 //                  reach, the newest on screen when it opens, and on every
 //                  screenful a scroll stops on, an axis that reads cleanly with
@@ -31,11 +34,13 @@
 //                  one's sessions lined up and the gap at the same point
 
 import {
-  bucketMetricByDay, bucketMetricByMonth, bucketMetricByRollingWeeks, collectExerciseHistory,
+  bucketMetricByDay, bucketMetricByMonth, bucketMetricByRollingWeeks, collectExerciseHistory, collectLoggedExercises,
   collectLoggedExercisesForDay, computePRs, computeWorkoutDurationMinutes, computeWorkoutReps,
   computeWorkoutTonnage, filterByProgramScope, getRangeOption, rangeWindow, scopedProgramDays,
   sessionCountForDay, workoutBelongsToProgram, yearBarCount,
 } from "../../../utils/progressStats";
+import { groupByMuscle, searchLoggedExercises } from "../../../utils/allExercises";
+import { MUSCLE_GROUPS } from "../../../constants/exercises";
 import { programFinishDate, type CompletedWorkout, type PlannedExercise, type ProgramDayRef, type SavedProgram } from "../../../constants/programs";
 import { lastTimeCues, sessionChanges } from "../../../utils/exerciseChanges";
 import type { ExerciseDataPoint, ExerciseMetricKey, MetricKey, ProgramScope, RangeKey } from "../../../constants/progress";
@@ -44,17 +49,17 @@ import { EXERCISES } from "../../../constants/exerciseData";
 import { exerciseHistoryRows, picksFromHistoryParams, SAME_KG, type HistoryPick } from "../../../utils/exerciseHistory";
 import {
   CHART_HEIGHT, LABEL_H, LABEL_INK_DOWN, LABEL_INK_UP, LINE_STROKE, PLOT_TOP,
-  axisLoadStep, chartChange, chartValue, dotY, drawsOn, exerciseChartGeometry, setStacks, slotX, strengthDots, strengthLabel,
-  strengthLabelInkWidth, visibleSlots, volumeBars, type ExerciseChartGeometry,
+  axisLoadStep, chartChange, chartValue, dateAxisLabels, dotY, drawsOn, exerciseChartGeometry, setStacks, slotX, strengthDots,
+  strengthLabel, strengthLabelInkWidth, visibleSlots, volumeBars, type ExerciseChartGeometry,
 } from "../../../utils/exerciseChartLayout";
 import { compareWindowAxis, missedBars, strengthLine } from "../../../utils/compareChartLayout";
-import { exerciseDaySlots, type ChartSlot } from "../../../utils/exerciseDaySlots";
+import { exerciseDateSlots, exerciseDaySlots, type ChartSlot } from "../../../utils/exerciseDaySlots";
 import { buildSessionTracks, type SessionTracks } from "../../../utils/sessionTrack";
 import { buildProgramHistory } from "../../../utils/programHistory";
 import { buildWeekSchedule, weekStartFor, weekTotals } from "../../../utils/weekSchedule";
 import { addDaysYMD, toYMD } from "../../../utils/dates";
 import {
-  buildPrevNoteLookup, buildPrevSetsLookup, getEffectiveToday, lastSessionOfDay, prevDayScopeFor, resolveWorkoutForDate, type DayOverride,
+  buildPrevNoteLookup, buildPrevSetsLookup, getEffectiveToday, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, resolveWorkoutForDate, type DayOverride,
 } from "../../../utils/workout";
 import { formatPrevHint, formatWeightForDisplay, trimNumber } from "../../../utils/units";
 import { detectWorkoutAchievements } from "../../../utils/achievements";
@@ -63,7 +68,7 @@ import {
   aheadAtSamePoint, compareCandidates, compareLifts, glanceStats, greenRunFor, liftSlots, missedDates, runDays, weeklyTotals,
 } from "../../../utils/programCompare";
 import type { ProgramRunView } from "../../../utils/programRuns";
-import type { AfterSave, BeforeLog, LedgerExercise, LedgerSession, Lifter, ProgramRun } from "./lifter";
+import type { AfterSave, BeforeLog, LedgerExercise, LedgerSession, LedgerSet, Lifter, ProgramRun } from "./lifter";
 import { LIFTS } from "./programs";
 
 export type Problem = { code: string; what: string };
@@ -284,8 +289,9 @@ export function checkProgressBars(l: Lifter, snap: Snapshot): Problem[] {
 }
 
 /** One chart as the page draws it: the selected (day, exercise)'s points, and
- *  the places it puts them in (utils/exerciseDaySlots.ts). */
-type DrawnChart = { day: ProgramDayRef; name: string; points: ExerciseDataPoint[]; slots: ChartSlot[]; scopeLabel: string };
+ *  the places it puts them in (utils/exerciseDaySlots.ts). No day under All
+ *  programs: every session of the exercise. */
+type DrawnChart = { day?: ProgramDayRef; name: string; points: ExerciseDataPoint[]; slots: ChartSlot[]; scopeLabel: string };
 
 /** The Exercise Progress list and every chart it opens, for the scopes a
  *  lifter uses most. */
@@ -299,6 +305,13 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
   const everyDay = new Map<string, ExerciseDataPoint[]>();
   for (const { scope, label, programId } of scopesFor(snap)) {
     const scoped = filterByProgramScope(snap.history, scope, snap.programs);
+    // All programs lists every exercise rather than days.
+    if (scope.kind === "all") {
+      const all = checkAllExercises(l, snap, scoped, label);
+      out.push(...all.problems);
+      charts.push(...all.charts);
+      continue;
+    }
     const days = scopedProgramDays(scope, snap.programs, scoped);
     const mine = l.sessions.filter(s => programId === null || s.programId === programId);
     for (const day of days) {
@@ -328,8 +341,10 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
         out.push({ code: "progress/exercise-rows", what: `${where}: lists ${shownNames || "nothing"}; logged ${[...names.keys()].sort().join(", ") || "nothing"}` });
       }
 
-      // Each exercise's chart, its records, and the history page it opens.
-      if (scope.kind === "program") continue;
+      // Each exercise's chart, its records, and the history page it opens,
+      // under each program and Custom workouts: Current program is the
+      // active one's own scope, the same charts again.
+      if (scope.kind === "current") continue;
       for (const r of rows) {
         const points = collectExerciseHistory(scoped, r.name, day);
         // As the page reads them: the program's every session of it.
@@ -354,7 +369,7 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
       }
     }
   }
-  // One program day reads the same under All programs as under its program.
+  // One program day reads the same under Current program as under its program.
   for (const byScope of counts.values()) {
     const values = new Set(byScope.values());
     if (values.size > 1) {
@@ -364,8 +379,100 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
   return { problems: out, charts };
 }
 
+/** The picker's muscle order, from the catalogue's data, Other last. */
+const MUSCLE_CARDS: string[] = [...MUSCLE_GROUPS.filter(m => m !== "All"), "Other"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Exercise Progress under All programs (user request, 2026-10-26): every
+ * exercise logged, from any program, day or custom workout, listed once, in
+ * the card of the muscle the catalogue gives it (Other with none), the cards
+ * in the picker's order; a search for an exercise's name finds it first; and
+ * each exercise's chart holds every session that did it, as one day's chart is
+ * held, with its places checked by checkDateSlots.
+ */
+function checkAllExercises(l: Lifter, snap: Snapshot, scoped: CompletedWorkout[], where: string): { problems: Problem[]; charts: DrawnChart[] } {
+  const out: Problem[] = [];
+  const charts: DrawnChart[] = [];
+  const rows = collectLoggedExercises(scoped);
+  // Read as shown, so a renamed exercise's row carries its new name.
+  const shown = rows.map(r => norm(r.name));
+  const logged = [...new Set(l.sessions.flatMap(s => s.exercises.map(e => liftKey(e.name))))].sort();
+  if (shown.length !== new Set(shown).size || [...shown].sort().join(", ") !== logged.join(", ")) {
+    out.push({ code: "progress/all-exercises", what: `${where}: lists ${[...shown].sort().join(", ") || "nothing"}; logged ${logged.join(", ") || "nothing"}` });
+  }
+
+  const muscleOf = (name: string) => EXERCISES.find(e => norm(e.name) === liftKey(name))?.primaryMuscle ?? "Other";
+  const groups = groupByMuscle(rows, []);
+  const misplaced = groups.flatMap(g => g.rows.filter(r => muscleOf(r.name) !== g.label).map(r => `${r.name} under ${g.label}`));
+  const listed = groups.reduce((n, g) => n + g.rows.length, 0);
+  const order = groups.map(g => MUSCLE_CARDS.indexOf(g.label));
+  if (misplaced.length > 0 || listed !== rows.length || groups.some(g => g.rows.length === 0)
+    || order.some((at, i) => at < 0 || (i > 0 && at <= order[i - 1]))) {
+    out.push({ code: "progress/all-groups", what: `${where}: cards ${groups.map(g => `${g.label} (${g.rows.length})`).join(", ")} hold ${listed} of ${rows.length} exercises${misplaced.length ? `; ${misplaced.join(", ")}` : ""}` });
+  }
+
+  for (const r of rows) {
+    const first = searchLoggedExercises(rows, r.name, [])?.[0];
+    if (!first || norm(first.name) !== norm(r.name)) {
+      out.push({ code: "progress/all-search", what: `${where}: a search for "${r.name}" finds ${first ? first.name : "nothing"} first` });
+      break;
+    }
+  }
+
+  for (const r of rows) {
+    const points = collectExerciseHistory(scoped, r);
+    const slots = exerciseDateSlots(points, snap.history, snap.programs);
+    charts.push({ name: r.name, points, slots, scopeLabel: where });
+    out.push(...checkChart(l, snap, scoped, undefined, r.name, points, l.sessions, where));
+    out.push(...checkDateSlots(l, snap, points, slots, `${where} › ${r.name}`));
+  }
+  return { problems: out, charts };
+}
+
+/**
+ * The chart's places under All programs (utils/exerciseDaySlots.ts
+ * exerciseDateSlots): every session once, in the order done, none missed;
+ * each under its own date ("3 Mar"), or at the first session of a new year
+ * the year, with a line before it; and each saying the workout it was and the
+ * program it was logged in, from the ledger.
+ */
+function checkDateSlots(l: Lifter, snap: Snapshot, points: ExerciseDataPoint[], slots: ChartSlot[], at: string): Problem[] {
+  const out: Problem[] = [];
+  if (slots.length !== points.length || slots.some((s, i) => s.point?.workoutId !== points[i].workoutId || s.missed !== undefined)) {
+    out.push({ code: "chart-slots/sessions", what: `${at}: the chart's ${slots.length} places aren't its ${points.length} sessions, in order` });
+    return out;
+  }
+  const sessions = slots.map(s => l.sessions.find(x => x.id === s.point?.workoutId));
+  const { labels, yearBreaks } = dateAxisLabels(slots.map(s => s.point!.date));
+  const newYears = sessions.flatMap((s, i) => (s && sessions[i - 1] && sessions[i - 1]!.date.slice(0, 4) !== s.date.slice(0, 4) ? [i] : []));
+  for (const [i, s] of sessions.entries()) {
+    if (!s) continue;
+    const newYear = newYears.includes(i);
+    const [y, m, d] = s.date.split("-").map(Number);
+    const want = newYear ? String(y) : `${d} ${MONTHS[m - 1]}`;
+    if (labels[i].text !== want || labels[i].year !== newYear) {
+      out.push({ code: "chart-slots/date", what: `${at}: the session of ${s.date} reads "${labels[i].text}" under it, not "${want}"` });
+      break;
+    }
+  }
+  if (yearBreaks.join(",") !== newYears.join(",")) {
+    out.push({ code: "chart-slots/year", what: `${at}: lines before places ${yearBreaks.join(", ") || "none"}; new years start at ${newYears.join(", ") || "none"}` });
+  }
+  for (const [i, s] of sessions.entries()) {
+    if (!s) continue;
+    const program = s.programId ? snap.programs.find(p => p.id === s.programId)?.name : "Custom workout";
+    const want = `${s.workoutName} · ${program}`;
+    if (slots[i].from !== want) {
+      out.push({ code: "chart-slots/from", what: `${at}: the session of ${s.date} says "${slots[i].from ?? ""}"; it was ${want}` });
+      break;
+    }
+  }
+  return out;
+}
+
 function checkChart(
-  l: Lifter, snap: Snapshot, scoped: CompletedWorkout[], day: ProgramDayRef, name: string,
+  l: Lifter, snap: Snapshot, scoped: CompletedWorkout[], day: ProgramDayRef | undefined, name: string,
   points: ExerciseDataPoint[], logged: LedgerSession[], where: string,
 ): Problem[] {
   const out: Problem[] = [];
@@ -524,13 +631,14 @@ function checkChart(
     }
   }
 
-  // "See Exercise History": opened on the chart's day, the same sessions. The
-  // params the chart sends (ExerciseProgressionChart), read as the page reads
-  // them: a day of Custom workouts by its key alone.
-  const [chartDay] = picksFromHistoryParams(day.custom
+  // "See Exercise History": opened on the chart's day, the same sessions, and
+  // under All programs on every one. The params the chart sends
+  // (ExerciseProgressionChart), read as the page reads them: a day of Custom
+  // workouts by its key alone, no day at all under All programs.
+  const chartPicks: HistoryPick[] = !day ? [] : picksFromHistoryParams(day.custom
     ? { customDay: day.custom.key, dayName: day.label }
     : { programId: day.programId, dayId: day.dayId, dayName: day.label });
-  const page = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks: [chartDay], days: 365, today: snap.now });
+  const page = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks: chartPicks, days: 365, today: snap.now });
   const cutoff = addDaysYMD(snap.calendarToday, -365);
   const didIt = (s: LedgerSession) => s.date >= cutoff && s.exercises.some(e => liftKey(e.name) === liftKey(name) && e.sets.some(x => x.done));
   const shouldList = logged.filter(didIt);
@@ -540,29 +648,32 @@ function checkChart(
     const why = fromOther.length > 0
       ? ` (it also lists ${fromOther.length} from ${[...new Set(fromOther.map(s => `${programName(snap, s.programId)} ${s.workoutName}`))].join(", ")})`
       : "";
-    out.push({ code: "progress/history-page", what: `${at}: Exercise History lists ${page.length} sessions, the chart's day has ${shouldList.length}${why}` });
+    out.push({ code: "progress/history-page", what: `${at}: Exercise History lists ${page.length} sessions, the chart's ${day ? "day" : "exercise"} has ${shouldList.length}${why}` });
   }
   // Its filter: the chart's whole program (every day of it), and the free
   // workouts, each the sessions of it logged there; and both picked at once,
-  // the two together.
-  const programPick: HistoryPick[] = snap.programs.some(p => p.id === day.programId) ? [{ kind: "program", programId: day.programId }] : [];
-  const freePick: HistoryPick[] = [{ kind: "free" }];
-  for (const [picks, should, what] of [
-    [programPick, l.sessions.filter(s => s.programId === day.programId && didIt(s)), programName(snap, day.programId)],
-    [freePick, l.sessions.filter(s => s.programId === "" && didIt(s)), "free workouts"],
-    [[...programPick, ...freePick], l.sessions.filter(s => (s.programId === day.programId || s.programId === "") && didIt(s)), `${programName(snap, day.programId)} and free workouts`],
-  ] as const) {
-    if (picks.length === 0) continue;
-    const listed = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks, days: 365, today: snap.now });
-    if (ids(listed.map(r => ({ id: r.workoutId }))) !== ids([...should])) {
-      out.push({ code: "progress/history-filter", what: `${at}: Exercise History filtered to ${what} lists ${listed.length} sessions; ${should.length} were logged there` });
+  // the two together. (A day's chart: one under All programs is every
+  // program's, which the page's own filter starts on.)
+  if (day) {
+    const programPick: HistoryPick[] = snap.programs.some(p => p.id === day.programId) ? [{ kind: "program", programId: day.programId }] : [];
+    const freePick: HistoryPick[] = [{ kind: "free" }];
+    for (const [picks, should, what] of [
+      [programPick, l.sessions.filter(s => s.programId === day.programId && didIt(s)), programName(snap, day.programId)],
+      [freePick, l.sessions.filter(s => s.programId === "" && didIt(s)), "free workouts"],
+      [[...programPick, ...freePick], l.sessions.filter(s => (s.programId === day.programId || s.programId === "") && didIt(s)), `${programName(snap, day.programId)} and free workouts`],
+    ] as const) {
+      if (picks.length === 0) continue;
+      const listed = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks, days: 365, today: snap.now });
+      if (ids(listed.map(r => ({ id: r.workoutId }))) !== ids([...should])) {
+        out.push({ code: "progress/history-filter", what: `${at}: Exercise History filtered to ${what} lists ${listed.length} sessions; ${should.length} were logged there` });
+      }
     }
   }
 
   // Each session's top set against the one the page lists before it (in any
   // range), from what was typed: a change of weight, else of reps; and the
   // note written on it.
-  const everyListed = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks: [chartDay], days: 100_000, today: snap.now });
+  const everyListed = exerciseHistoryRows(snap.history, snap.programs, { exerciseName: name, picks: chartPicks, days: 100_000, today: snap.now });
   const typedTop = (id: string | undefined) => {
     const s = id ? l.sessions.find(x => x.id === id) : undefined;
     if (!s) return null;
@@ -664,7 +775,7 @@ export function checkChartLayout(drawn: DrawnChart[]): Problem[] {
     const slots = c.slots;
     const n = slots.length;
     if (n === 0) continue;
-    const name = `${c.day.programName} ${c.day.label} › ${c.name} (${c.points.length} sessions in ${n} places)`;
+    const name = `${c.day ? `${c.day.programName} ${c.day.label}` : c.scopeLabel} › ${c.name} (${c.points.length} sessions in ${n} places)`;
     for (const width of WIDTHS) {
       const g = exerciseChartGeometry(n, width);
       if (slotX(g, 0) < g.spacing / 2 - 0.01 || slotX(g, n - 1) > g.contentWidth - g.spacing / 2 + 0.01) {
@@ -949,6 +1060,23 @@ function hintToken(x: { weight: string; reps: string }, unitThen: "kg" | "lb", i
   return weight || x.reps ? `${weight}×${x.reps}` : "—";
 }
 
+/** Last time's sets as a card's rows should read them: each row its own kind,
+ *  by number. Where a kind has fewer rows than last time had sets of it, the
+ *  strongest stay (the heaviest, then the most reps, the earlier of two
+ *  equal), in the order lifted; a row past them reads "—". */
+function hintRows(sets: readonly LedgerSet[], unitThen: "kg" | "lb", isKgNow: boolean, rows: readonly ("warmup" | "working")[]): string[] {
+  const kept = (kind: "warmup" | "working") => sets
+    .map((x, i) => ({ x, i, kg: kgOf(x.weight, unitThen) ?? 0, reps: Number(x.reps) || 0 }))
+    .filter(({ x }) => x.type === kind)
+    .sort((a, b) => b.kg - a.kg || b.reps - a.reps || a.i - b.i)
+    .slice(0, rows.filter(r => r === kind).length)
+    .sort((a, b) => a.i - b.i)
+    .map(({ x }) => hintToken(x, unitThen, isKgNow));
+  const byKind = { warmup: kept("warmup"), working: kept("working") };
+  const next = { warmup: 0, working: 0 };
+  return rows.map(kind => byKind[kind][next[kind]++] ?? "—");
+}
+
 /** Two hint tokens read the same: weights within a rounding step. (A weight
  *  typed in lbs is stored to three decimals of a kilo, then shown to two, so
  *  the last digit can land either way: 83.91 or 83.92 for 185 lbs.) */
@@ -977,31 +1105,35 @@ export function checkHints(b: BeforeLog): Problem[] {
   for (const card of cards) {
     const where = `${workout.name} (${workout.dayId}) › ${card.name}${card.swappedFrom ? ` (in for ${card.swappedFrom})` : ""}`;
     // Sets: this place, done as this exercise; else the exercise by name on
-    // this day (the first time it appears in a session).
-    let want: string[] | undefined;
+    // this day (the first time it appears in a session). Lined up with the
+    // card's rows as it's finished with, each row its own kind.
+    let last: { sets: LedgerSet[]; unit: "kg" | "lb" } | undefined;
     const byName = () => {
       for (const s of day) {
         const e = s.exercises.find(x => liftKey(x.name) === liftKey(card.name));
-        if (e) return e.sets.map(x => hintToken(x, s.unit, isKg));
+        if (e) return { sets: e.sets, unit: s.unit };
       }
       return undefined;
     };
     if (card.programExerciseId && !card.swappedFrom) {
       for (const s of day) {
         const e = s.exercises.find(x => x.place === card.programExerciseId && liftKey(x.name) === liftKey(card.name));
-        if (e) { want = e.sets.map(x => hintToken(x, s.unit, isKg)); break; }
+        if (e) { last = { sets: e.sets, unit: s.unit }; break; }
       }
-      want ??= byName();
+      last ??= byName();
     } else {
-      want = byName();
+      last = byName();
     }
-    const shown = setsOf({ name: card.name, programExerciseId: card.programExerciseId, swappedFrom: card.swappedFrom })?.map(t => formatPrevHint(t, isKg));
-    const same = (want ?? []).length === (shown ?? []).length && (want ?? []).every((t, i) => sameToken(t, shown![i], isKg));
+    const want = hintRows(last?.sets ?? [], last?.unit ?? "kg", isKg, card.rows);
+    const shown = prevHintsForRows(setsOf({ name: card.name, programExerciseId: card.programExerciseId, swappedFrom: card.swappedFrom }), card.rows)
+      .map(t => formatPrevHint(t, isKg));
+    const same = want.length === shown.length && want.every((t, i) => sameToken(t, shown[i], isKg));
     if (!same) {
-      const weightOnly = (want ?? []).some((t, i) => t.endsWith("×") && shown?.[i] !== t);
+      const weightOnly = want.some((t, i) => t.endsWith("×") && shown[i] !== t);
+      const lifted = last ? last.sets.map(x => `${x.type === "warmup" ? "W " : ""}${hintToken(x, last!.unit, isKg)}`).join("  ") : "nothing";
       out.push({
         code: weightOnly ? "hints/prev-weight-only" : "hints/prev-sets",
-        what: `${where}: Previous reads ${shown?.join("  ") ?? "nothing"}; last time was ${want?.join("  ") ?? "nothing"} (${isKg ? "kg" : "lbs"} on screen)`,
+        what: `${where}: Previous reads ${shown.join("  ")}; should read ${want.join("  ")} on rows ${card.rows.map(r => (r === "warmup" ? "W" : "#")).join("")}, last time was ${lifted} (${isKg ? "kg" : "lbs"} on screen)`,
       });
     }
     // Notes: the last session this place was done in, as itself or by a swap

@@ -6,13 +6,14 @@ import {
   TouchableOpacity, KeyboardAvoidingView, Platform,
   Alert, Animated, AppState, Keyboard, Modal,
   PanResponder, Easing, useWindowDimensions,
+  type ScrollViewInstance, type TextInputInstance,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Path } from "react-native-svg";
 import { Ionicons } from "@expo/vector-icons";
@@ -32,8 +33,8 @@ import SquarePenIcon from "../../components/SquarePenIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { stampSession } from "../../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE, DANGER_BRIGHT } from "../../constants/theme";
-import { haloGlow, pill, pillGlow, PILL_H, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK, SET_INPUT_DARK } from "../../constants/theme";
+import { darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, type PlannedExercise, normaliseSets, getCurrentWeek } from "../../constants/programs";
@@ -41,7 +42,7 @@ import { programDays, workoutKey } from "../../utils/programDays";
 import { useWorkoutLiveActivity } from "../../hooks/useWorkoutLiveActivity";
 import { buildLiveActivityPayload, logWithLockScreenTicks } from "../../utils/liveActivity";
 import { nextSetOf } from "../../utils/nextSet";
-import { firstRows, flatIndexOf, nextRows, prevFillFor, rowsChanged, setRowKey, withoutSet } from "../../utils/setRows";
+import { firstRows, flatIndexOf, nextRows, prevFillFor, rowTypesOf, rowsChanged, setRowKey, withoutSet, type SetType } from "../../utils/setRows";
 import { ABOVE_KEYBOARD_TOOLS, ABOVE_REST_ON_KEYBOARD, BAR_STACK_GAP, KEYBOARD_TOOLS_GAP } from "../../constants/floatingBars";
 import { useFieldAboveKeyboard } from "../../hooks/useFieldAboveKeyboard";
 import { useTabBar } from "../../hooks/useTabBar";
@@ -49,7 +50,7 @@ import { tabScreen } from "../../components/TabScreen";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { sessionTimeRange, todayYMD } from "../../utils/dates";
-import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, lastSessionOfDay, prevDayScopeFor, swapOrigin, type DayOverride } from "../../utils/workout";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, swapOrigin, type DayOverride } from "../../utils/workout";
 import { lastTimeCues, planForDay, planOf, sessionChanges, type LastTimeCue, type SessionCue } from "../../utils/exerciseChanges";
 import { LastTimeCueLine, SessionCueLine, SkippedRow } from "../../components/ChangeCue";
 import { keepsHeldSession } from "../../utils/heldSession";
@@ -117,10 +118,12 @@ const EX_CARD_GAP = 20;
 
 // `doneAt` is when the set was ticked (epoch ms), set by every tick and cleared
 // by an untick: the set ticked last is where the session is up to
-// (utils/nextSet.ts). `id` is the set's own row on the page: rows animate in and
-// out by it, and removing a set removes exactly the one whose row went. Both
-// ride in the draft; Finish copies neither.
-type SetLog = { id?: string; weight: string; reps: string; done: boolean; doneAt?: number; fillKey: number; originWorkingIdx?: number };
+// (utils/nextSet.ts). `untickedAt` is the other way round, set by an untick and
+// cleared by a tick: a set unticked since the last tick is where the session
+// goes back to. `id` is the set's own row on the page: rows animate in and out
+// by it, and removing a set removes exactly the one whose row went. All three
+// ride in the draft; Finish copies none of them.
+type SetLog = { id?: string; weight: string; reps: string; done: boolean; doneAt?: number; untickedAt?: number; fillKey: number; originWorkingIdx?: number };
 type ExerciseLog = { warmup: SetLog[]; working: SetLog[]; notes: string };
 type WorkoutLog = Record<string, ExerciseLog>;
 
@@ -752,7 +755,7 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
   // it: sessions were saved as "Custom WorkoutLegs" (user report, 2026-10-22).
   const [nameInput, setNameInput] = useState("");
   const [addToProgram, setAddToProgram] = useState(false);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
 
   const slideY = useRef(new Animated.Value(500)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -849,7 +852,7 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
                 <Text style={[styles.cnToggleSub, { color: t.ts }]}>Saves stats under this program in your journal</Text>
               </View>
               <View style={[styles.cnToggle, addToProgram
-                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                 : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" }
               ]}>
                 {addToProgram && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -967,7 +970,7 @@ function CheckboxCell({ done, isDark, isActive, onToggle }: { done: boolean; isD
         backgroundColor: ACCT,
         shadowColor: ACCT,
         shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.5,
+        shadowOpacity: glowOpacity(0.5, isDark),
         shadowRadius: 6,
         borderWidth: 0,
       } : {
@@ -1000,7 +1003,6 @@ interface ExerciseCardProps {
   /** `cascade` marks typed input, which may auto-fill the sets below (Settings toggle). */
   onUpdateSet: (exId: string, type: "warmup" | "working", idx: number, field: "weight" | "reps", value: string, cascade?: boolean) => void;
   onToggleDone: (exId: string, type: "warmup" | "working", idx: number) => void;
-  onAutoTick: (exId: string, type: "warmup" | "working", idx: number) => void;
   /** Also how Reuse and Undo write: the notes field puts last time's note in,
    *  or empties the box again, through this same setter. */
   onUpdateNotes: (exId: string, notes: string) => void;
@@ -1043,7 +1045,7 @@ interface ExerciseCardProps {
   prFlags?: readonly boolean[];
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onAutoTick, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prBestKg, prFlags }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prBestKg, prFlags }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -1052,8 +1054,8 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
   const router = useRouter();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
   const [editing, setEditing] = useState(false);
-  const weightRefs = useRef<(TextInput | null)[]>([]);
-  const repsRefs = useRef<(TextInput | null)[]>([]);
+  const weightRefs = useRef<(TextInputInstance | null)[]>([]);
+  const repsRefs = useRef<(TextInputInstance | null)[]>([]);
   useEffect(() => { if (isLocked && editing) setEditing(false); }, [isLocked]);
 
   // Flatten all sets: warmup first, then working
@@ -1114,7 +1116,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                 <View style={{
                   width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT,
                   alignItems: "center", justifyContent: "center",
-                  shadowColor: ACCT, shadowOffset: { width: 1, height: 1 }, shadowOpacity: 0.5, shadowRadius: 3,
+                  shadowColor: ACCT, shadowOffset: { width: 1, height: 1 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 3,
                 }}>
                   <Ionicons name="checkmark" size={14} color="#fff" />
                 </View>
@@ -1241,9 +1243,12 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                 </Text>
               </View>
 
-              {/* WEIGHT input */}
+              {/* WEIGHT input. Typing never ticks the set, only its tick does:
+                  a box used to tick it when typing ended with both filled, so
+                  putting the keyboard down ticked it, and so did stepping
+                  through a set Auto-fill had filled (user report, 2026-10-28). */}
               <View style={styles.inputCell}>
-                <View style={[styles.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                <View style={[styles.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                   <TextInput
                     key={`w-${set.type}-${set.localIdx}-${set.fillKey}`}
                     ref={r => { weightRefs.current[flatIdx] = r; }}
@@ -1258,7 +1263,6 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                       flatIdx > 0 ? () => repsRefs.current[flatIdx - 1]?.focus() : null,
                     )}
                     onChangeText={v => onUpdateSet(exercise.id, set.type, set.localIdx, "weight", v, true)}
-                    onEndEditing={() => onAutoTick(exercise.id, set.type, set.localIdx)}
                     selectTextOnFocus
                   />
                 </View>
@@ -1266,7 +1270,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
               {/* REPS input */}
               <View style={styles.inputCell}>
-                <View style={[styles.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                <View style={[styles.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                   <TextInput
                     key={`r-${set.type}-${set.localIdx}-${set.fillKey}`}
                     ref={r => { repsRefs.current[flatIdx] = r; }}
@@ -1295,7 +1299,6 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                       }
                     }}
                     onChangeText={v => onUpdateSet(exercise.id, set.type, set.localIdx, "reps", v, true)}
-                    onEndEditing={() => onAutoTick(exercise.id, set.type, set.localIdx)}
                     selectTextOnFocus
                   />
                 </View>
@@ -1312,7 +1315,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <View style={styles.removeSetBtn}>
+                    <View style={[styles.removeSetBtn, darkGlow(styles.removeSetBtn, isDark)]}>
                       <Ionicons name="remove" size={13} color="#fff" />
                     </View>
                   </TouchableOpacity>
@@ -1681,8 +1684,8 @@ function WorkoutScreen() {
       return v;
     });
   }, []);
-  const scrollRef = useRef<ScrollView>(null);
-  const sessionNotesInputRef = useRef<TextInput | null>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const sessionNotesInputRef = useRef<TextInputInstance | null>(null);
 
   // ── Where you're up to ──────────────────────────────────────────────────────
   // Two ways back into a session open on the card it's up to (upToTargetOf,
@@ -2189,8 +2192,8 @@ function WorkoutScreen() {
       // in the flat warmup→working order (a warmup entry fills the working
       // sets too, matching the builder and log-workout). Unlike those bulk
       // flows, sets already ticked done hold real logged performance, so they
-      // are never overwritten — and filled sets are NOT auto-ticked; each set
-      // still completes via its own checkbox / blur auto-tick.
+      // are never overwritten — and filled sets are NOT ticked; a set is done
+      // only by its own tick.
       const fillFrom = (sets: SetLog[], from: number) =>
         sets.map((s, i) => (i === from || (i > from && !s.done)) ? { ...s, [field]: value } : s);
       const fillAll = (sets: SetLog[]) =>
@@ -2227,27 +2230,6 @@ function WorkoutScreen() {
     startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
   }, [wouldCompleteWorkout, dismissRestTimer, startRestTimer, workoutInfo]);
 
-  const autoTickIfComplete = useCallback((exId: string, type: "warmup" | "working", idx: number) => {
-    const cur = logRef.current[exId]?.[type]?.[idx];
-    const willTick = !!cur && !cur.done && !!cur.weight.trim() && !!cur.reps.trim();
-    setLog(prev => {
-      const exLog = prev[exId];
-      if (!exLog) return prev;
-      const set = exLog[type][idx];
-      if (!set.done && set.weight.trim() && set.reps.trim()) {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        const sets = [...exLog[type]];
-        sets[idx] = { ...set, done: true, doneAt: Date.now() };
-        return { ...prev, [exId]: { ...exLog, [type]: sets } };
-      }
-      return prev;
-    });
-    if (willTick) {
-      startTimer();
-      startRestAfterSet(exId, type, idx);
-    }
-  }, [startTimer, startRestAfterSet]);
-
   const toggleDone = useCallback((exId: string, type: "warmup" | "working", idx: number) => {
     const becomingDone = !logRef.current[exId]?.[type]?.[idx]?.done;
     setLog(prev => {
@@ -2255,7 +2237,8 @@ function WorkoutScreen() {
       if (!exLog) return prev;
       const sets = [...exLog[type]];
       const done = !sets[idx].done;
-      sets[idx] = { ...sets[idx], done, doneAt: done ? Date.now() : undefined };
+      const now = Date.now();
+      sets[idx] = { ...sets[idx], done, doneAt: done ? now : undefined, untickedAt: done ? undefined : now };
       return { ...prev, [exId]: { ...exLog, [type]: sets } };
     });
     startTimer();
@@ -2792,20 +2775,31 @@ function WorkoutScreen() {
       return [...warm, ...work];
     });
   }, [todaysCompletedWorkout, prevHistory]);
-  // Pre-formatted "prev" hint strings per session exercise, by its id: the
-  // card's placeholders and checkbox copy, and the Live Activity, all read this
-  // one map. Memoized so each card's `prevSets` prop keeps its identity across
-  // keystrokes (a fresh .map() per render would re-render every
-  // MemoExerciseCard every character); it only rebuilds when the session's
-  // exercises change (a swap, add, remove or reorder), never on typing.
+  // Each card's rows by kind, warm-ups first (rowTypesOf), which last time's
+  // sets are lined up with. Kept by what it reads, as one string: typing
+  // changes no row, so the hints below aren't rebuilt as you type.
+  const rowTypesKey = useMemo(
+    () => JSON.stringify(Object.fromEntries(Object.entries(log).map(([id, l]) => [id, rowTypesOf(l)]))),
+    [log],
+  );
+  // Pre-formatted "prev" hint strings per session exercise, by its id, one per
+  // row: a warm-up row shows last time's warm-up and a working row its working
+  // set of that number (prevHintsForRows). The card's placeholders and
+  // checkbox copy, and the Live Activity, all read this one map. Memoized so
+  // each card's `prevSets` prop keeps its identity across keystrokes (a fresh
+  // .map() per render would re-render every MemoExerciseCard every
+  // character); it only rebuilds when the session's exercises change (a swap,
+  // add, remove or reorder) or a card's sets do (one added, removed or turned
+  // into the other kind), never on typing.
   const prevHintsById = useMemo(() => {
+    const rows = JSON.parse(rowTypesKey) as Record<string, SetType[]>;
     const out: Record<string, string[]> = {};
     for (const ex of workoutInfo?.exercises ?? []) {
       const sets = prevSetsOf(ex);
-      if (sets) out[ex.id] = sets.map(p => formatPrevHint(p, isKg));
+      if (sets) out[ex.id] = prevHintsForRows(sets, rows[ex.id] ?? []).map(p => formatPrevHint(p, isKg));
     }
     return out;
-  }, [workoutInfo, prevSetsOf, isKg]);
+  }, [workoutInfo, prevSetsOf, isKg, rowTypesKey]);
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
@@ -3024,7 +3018,7 @@ function WorkoutScreen() {
           tint={ACCT}
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}
           accessibilityLabel="Add exercise"
-          solidStyle={styles.addGlow}
+          solidStyle={[styles.addGlow, darkGlow(styles.addGlow, isDark)]}
         >
           <Ionicons name="add" size={22} color="#fff" />
         </GlassButton>
@@ -3145,7 +3139,7 @@ function WorkoutScreen() {
           {/* Same pill as the paused screen's pair, but green — it's the only
               action here, so it's the primary one. */}
           <BounceButton onPress={openCustomWorkoutNaming} style={{ marginTop: 8 }} accessibilityLabel="Start a custom workout" accessibilityRole="button">
-            <View style={[styles.pausedSecondaryBtn, styles.pausedPrimaryBtn]}>
+            <View style={[styles.pausedSecondaryBtn, styles.pausedPrimaryBtn, darkGlow(styles.pausedPrimaryBtn, isDark)]}>
               <DumbbellIcon size={17} color="#fff" />
               <Text style={[styles.pausedSecondaryText, { color: "#fff" }]}>Custom Workout</Text>
             </View>
@@ -3202,7 +3196,7 @@ function WorkoutScreen() {
             accessibilityLabel="Resume program"
             accessibilityRole="button"
           >
-            <View style={[styles.pausedSecondaryBtn, styles.pausedPrimaryBtn]}>
+            <View style={[styles.pausedSecondaryBtn, styles.pausedPrimaryBtn, darkGlow(styles.pausedPrimaryBtn, isDark)]}>
               <Ionicons name="play" size={16} color="#fff" />
               <Text style={[styles.pausedSecondaryText, { color: "#fff" }]}>Resume Program</Text>
             </View>
@@ -3461,7 +3455,7 @@ function WorkoutScreen() {
                   numberBadge={i + 1}
                   sessionCue={lockedChanges?.cues[i]}
                   prFlags={lockedPrFlags?.[i]}
-                  onUpdateSet={() => {}} onToggleDone={() => {}} onAutoTick={() => {}}
+                  onUpdateSet={() => {}} onToggleDone={() => {}}
                   exNotes={lockedData.log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
                   onOpenReorder={() => {}} onChangeExercise={() => {}}
@@ -3509,7 +3503,6 @@ function WorkoutScreen() {
                   isDark={isDark}
                   onUpdateSet={updateSet}
                   onToggleDone={toggleDone}
-                  onAutoTick={autoTickIfComplete}
                   exNotes={log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={updateExNotes}
                   prevNote={prevNoteOf(exercise)}
@@ -3588,7 +3581,7 @@ function WorkoutScreen() {
               {
                 bottom: safeBottom + 162,
                 backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
-                shadowColor: isDark ? "#000" : "#a3afc0",
+                shadowColor: isDark ? CARD_SHADE_DARK : CARD_SHADE,
               },
               notesCardStyle,
             ]}
@@ -3605,7 +3598,7 @@ function WorkoutScreen() {
                     offer theirs: the empty box's placeholder, never its value. */}
                 <ReuseNoteChip value={notes} onChange={setNotes} prevNote={prevSessionNote} isDark={isDark} />
                 <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
-                  <View style={styles.notesTickBtn}>
+                  <View style={[styles.notesTickBtn, darkGlow(styles.notesTickBtn, isDark)]}>
                     <Ionicons name="checkmark" size={18} color="#fff" />
                   </View>
                 </BounceButton>
@@ -3666,7 +3659,7 @@ function WorkoutScreen() {
                   onPress={handleFinish}
                   style={{ flex: 1 }}
                   contentStyle={styles.focusFinishContent}
-                  solidStyle={styles.focusFinishGlow}
+                  solidStyle={[styles.focusFinishGlow, darkGlow(styles.focusFinishGlow, isDark)]}
                   accessibilityLabel="Complete workout"
                 >
                   <Ionicons name="checkmark-circle" size={18} color="#fff" />
@@ -3677,7 +3670,7 @@ function WorkoutScreen() {
                   tint={ACCT}
                   onPress={goNext}
                   size={FOCUS_NAV_BTN}
-                  solidStyle={styles.focusNextSolid}
+                  solidStyle={[styles.focusNextSolid, darkGlow(styles.focusNextSolid, isDark)]}
                   accessibilityLabel="Next exercise"
                 >
                   <Ionicons name="chevron-forward" size={22} color="#fff" />
@@ -4040,9 +4033,9 @@ const styles = StyleSheet.create({
   addHintTail:        { width: 0, height: 0, marginTop: -0.5, borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: ACCT },
 
   // Finish button
-  finishWrap:       { borderRadius: PILL_RADIUS, backgroundColor: "#8896A7", ...pillGlow("#4a5568", 0.3) },
+  finishWrap:       { borderRadius: PILL_RADIUS, backgroundColor: BTN_SLATE, ...pillGlow(BTN_SLATE, 0.3) },
   finishWrapActive: { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
-  finishBtn:        { ...pill(), backgroundColor: "#8896A7", gap: 8 },
+  finishBtn:        { ...pill(), backgroundColor: BTN_SLATE, gap: 8 },
   finishBtnActive:  { backgroundColor: ACCT },
   finishBtnText:    { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
 

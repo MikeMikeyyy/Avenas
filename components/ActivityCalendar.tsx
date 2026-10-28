@@ -1,12 +1,15 @@
 import React, { useMemo } from "react";
 import { View, Text, StyleSheet } from "react-native";
+import { useRouter } from "expo-router";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
+import BounceButton from "./BounceButton";
 import type { SavedProgram } from "../constants/programs";
 import { toYMD } from "../utils/dates";
 import { getWorkoutForDate } from "../utils/workout";
 
 const MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH_NAMES  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_ABBRS    = ["M","T","W","T","F","S","S"];
 
 type CellState = "workout" | "todayWorkout" | "rest" | "missed" | "future" | "today" | null;
@@ -70,8 +73,10 @@ function MonthSection({
   const rows: CellState[][] = [];
   for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
 
-  const darkCell  = isDark ? "#474C6D" : "#babeccff";
-  const lightCell = isDark ? "rgba(255,255,255,0.05)" : "#DDE0EA";
+  // A rest day, and an empty one, set against the card (white, or charcoal).
+  const darkCell  = isDark ? "#3B3D44" : "#BCC4D2";
+  const lightCell = isDark ? "rgba(255,255,255,0.06)" : "#E4E8EF";
+  const cardBg    = isDark ? NEU_BG_DARK : NEU_BG;
 
   const cellBg = (state: CellState): object => {
     if (!state) return {};
@@ -85,7 +90,7 @@ function MonthSection({
   };
 
   return (
-    <View style={s.monthCol}>
+    <View>
       <Text style={[s.monthLabel, { color: t.tp }]}>{MONTH_LABELS[month]} {year}</Text>
       <View style={s.row}>
         {DAY_ABBRS.map((d, i) => (
@@ -103,8 +108,8 @@ function MonthSection({
                 {isToday ? (
                   <>
                     <View style={[s.cell, { backgroundColor: state === "todayWorkout" ? ACCT : darkCell }]} />
-                    <View pointerEvents="none" style={[s.todayRing, { borderColor: ACCT, backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: ACCT }]} />
-                    <View style={[s.todayBadgeRing, { backgroundColor: isDark ? NEU_BG_DARK : NEU_BG }]}>
+                    <View pointerEvents="none" style={[s.todayRing, { borderColor: ACCT, backgroundColor: cardBg, shadowColor: ACCT }]} />
+                    <View style={[s.todayBadgeRing, { backgroundColor: cardBg }]}>
                       <View style={s.todayBadgeDot} />
                     </View>
                   </>
@@ -121,6 +126,7 @@ function MonthSection({
 }
 
 export default function ActivityCalendar({ isDark, workoutDates, activeProgram }: Props) {
+  const router   = useRouter();
   const today    = new Date();
   const todayStr = toYMD(today);
 
@@ -143,9 +149,26 @@ export default function ActivityCalendar({ isDark, workoutDates, activeProgram }
   return (
     <NeuCard dark={isDark} style={s.card}>
       <View style={s.inner}>
+        {/* Each month opens the Journal: the month before on its own month,
+            this month the Journal as it always opens (user request,
+            2026-10-28). */}
         <View style={s.months}>
-          <MonthSection year={prevYear} month={prevMonth} cells={prevCells} isDark={isDark} />
-          <MonthSection year={curYear}  month={curMonth}  cells={curCells}  isDark={isDark} />
+          <BounceButton
+            style={s.monthCol}
+            onPress={() => router.navigate({ pathname: "/journal", params: { month: `${prevYear}-${String(prevMonth + 1).padStart(2, "0")}` } })}
+            accessibilityRole="button"
+            accessibilityLabel={`${MONTH_NAMES[prevMonth]} ${prevYear}. Open it in the Journal`}
+          >
+            <MonthSection year={prevYear} month={prevMonth} cells={prevCells} isDark={isDark} />
+          </BounceButton>
+          <BounceButton
+            style={s.monthCol}
+            onPress={() => router.navigate("/journal")}
+            accessibilityRole="button"
+            accessibilityLabel={`${MONTH_NAMES[curMonth]} ${curYear}. Open the Journal`}
+          >
+            <MonthSection year={curYear}  month={curMonth}  cells={curCells}  isDark={isDark} />
+          </BounceButton>
         </View>
       </View>
     </NeuCard>

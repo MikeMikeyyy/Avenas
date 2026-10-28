@@ -18,7 +18,10 @@
 // conversation second.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, Keyboard, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator, Alert, AppState, Keyboard, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  type ScrollViewInstance, type TextInputInstance, type ViewInstance,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -26,7 +29,7 @@ import * as Haptics from "expo-haptics";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../../../components/MaskedView";
 
 import FadeScreen from "../../../../components/FadeScreen";
 import NeuCard from "../../../../components/NeuCard";
@@ -65,7 +68,7 @@ import {
   replacedTextColor,
   roleTextColor,
 } from "../../../../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
+import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
 import { CARD_META, CARD_TITLE, SUMMARY_ROW } from "../../../../constants/cards";
 import { scrollEndPadding } from "../../../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../../../hooks/useFloatingBars";
@@ -335,7 +338,7 @@ export default function GroupPageScreen() {
     setPage(p => p && { ...p, favouriteMemberIds: [...next] });
   }, []);
 
-  const searchInputRef = useRef<TextInput>(null);
+  const searchInputRef = useRef<TextInputInstance>(null);
   // Closing clears the query AND drops the keyboard in the same step, so the
   // search row and the keyboard go together rather than leaving one behind,
   // and reopening never shows a stale filter. The X does this, and so does the
@@ -361,9 +364,9 @@ export default function GroupPageScreen() {
   // keyboard's height (the ScrollView's paddingBottom) and scrolls just far
   // enough to lift the field SEARCH_KEYBOARD_GAP above it. When the keyboard
   // drops, the page goes back to where it was.
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const scrollY = useRef(0);
-  const searchBoxRef = useRef<View>(null);
+  const searchBoxRef = useRef<ViewInstance>(null);
   const [kbHeight, setKbHeight] = useState(0);
   const kbTop = useRef(0);
   const preSearchY = useRef<number | null>(null);
@@ -669,7 +672,7 @@ export default function GroupPageScreen() {
             needsConnection
             accessibilityLabel={iCoachGroup ? "Send a program to this group" : "Send a program to this group for review"}
           >
-            <View style={[styles.sendBtn, { backgroundColor: ACCT }]}>
+            <View style={[styles.sendBtn, { backgroundColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
               <SendIcon size={18} color="#fff" />
               <Text style={styles.sendText}>{iCoachGroup ? "Send a Program" : "Send a Program for Review"}</Text>
             </View>

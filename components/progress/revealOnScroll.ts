@@ -7,12 +7,12 @@
 // screen; with no page watching, a view comes in as soon as it's laid out.
 
 import { createContext, useContext, useEffect, useRef } from "react";
-import type { View } from "react-native";
+import type { ViewInstance } from "react-native";
 
 export type RevealWatcher = {
   /** Watches `view` until it's on screen, then calls `onReveal`, once.
    *  Returns a function that stops watching it. */
-  watch: (view: View, onReveal: () => void) => () => void;
+  watch: (view: ViewInstance, onReveal: () => void) => () => void;
 };
 
 export const RevealOnScrollContext = createContext<RevealWatcher | null>(null);
@@ -21,7 +21,7 @@ export const RevealOnScrollContext = createContext<RevealWatcher | null>(null);
  *  `onReveal` runs once, then never again for that view. */
 export function useRevealOnScroll(onReveal: () => void) {
   const watcher = useContext(RevealOnScrollContext);
-  const ref = useRef<View>(null);
+  const ref = useRef<ViewInstance>(null);
   const state = useRef<{ done: boolean; stop: (() => void) | null }>({ done: false, stop: null });
   useEffect(() => () => state.current.stop?.(), []);
   const onLayout = () => {

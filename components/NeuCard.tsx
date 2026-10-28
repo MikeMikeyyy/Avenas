@@ -1,13 +1,9 @@
 import { Platform, StyleSheet, View } from "react-native";
 import { StyleProp, ViewStyle } from "react-native";
-import { NEU_BG, NEU_BG_DARK } from "../constants/theme";
+import { CARD_EDGE_DARK, CARD_GLOW, CARD_SHADE, CARD_SHADE_DARK, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 
 // Re-exported for files that import NEU_BG from NeuCard directly
 export { NEU_BG, NEU_BG_DARK };
-
-// Light mode shadows
-const SHADOW_LIGHT = "#FFFFFF";
-const SHADOW_DARK  = "#a3afc0";
 
 type IosShadow = {
   shadowColor?: string;
@@ -77,34 +73,49 @@ export default function NeuCard({
   // reconciles the existing native views in place; if the tree depth differed
   // per mode (as it originally did), Fabric would repurpose views across roles
   // and leave children misplaced until the next full reload.
-  const shadowA = isInset ? SHADOW_LIGHT : SHADOW_DARK;
-  const shadowB = isInset ? SHADOW_DARK  : SHADOW_LIGHT;
+  const shadowA = isInset ? CARD_GLOW : CARD_SHADE;
+  const shadowB = isInset ? CARD_SHADE : CARD_GLOW;
 
-  // Outer: dark mode = clean single drop shadow; light mode = bottom-right depth
+  // Outer: dark mode = one deep drop shadow; light mode = a soft, wide shade
+  // down and to the right (inset: the pair swapped, and tighter)
   const iosOuterShadow: IosShadow & { elevation?: number } = dark
     ? {
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.35,
-        shadowRadius: 8,
+        shadowColor: CARD_SHADE_DARK,
+        shadowOffset: { width: 0, height: sm ? 5 : 8 },
+        shadowOpacity: 0.45,
+        shadowRadius: sm ? 8 : 12,
         elevation: 4,
       }
-    : {
-        shadowColor: shadowA,
-        shadowOffset: { width: sm ? 3 : 4, height: sm ? 3 : 4 },
-        shadowOpacity: isInset ? 1 : 0.5,
-        shadowRadius: isInset ? 5 : sm ? 5 : 8,
-      };
+    : isInset
+      ? {
+          shadowColor: shadowA,
+          shadowOffset: { width: sm ? 3 : 4, height: sm ? 3 : 4 },
+          shadowOpacity: 1,
+          shadowRadius: 5,
+        }
+      : {
+          shadowColor: shadowA,
+          shadowOffset: { width: sm ? 4 : 6, height: sm ? 5 : 8 },
+          shadowOpacity: 0.2,
+          shadowRadius: sm ? 8 : 12,
+        };
 
   // Middle: light mode = top-left highlight; dark mode = no highlight (opacity 0)
   const iosMidShadow: IosShadow = dark
     ? { shadowOpacity: 0 }
-    : {
-        shadowColor: shadowB,
-        shadowOffset: { width: sm ? -2 : -3, height: sm ? -2 : -3 },
-        shadowOpacity: 1,
-        shadowRadius: isInset ? 5 : sm ? 3 : 4,
-      };
+    : isInset
+      ? {
+          shadowColor: shadowB,
+          shadowOffset: { width: sm ? -2 : -3, height: sm ? -2 : -3 },
+          shadowOpacity: 1,
+          shadowRadius: 5,
+        }
+      : {
+          shadowColor: shadowB,
+          shadowOffset: { width: sm ? -3 : -4, height: sm ? -3 : -4 },
+          shadowOpacity: 0.9,
+          shadowRadius: sm ? 4 : 6,
+        };
 
   // Android: both shadows as one box-shadow on the outer layer (see toBoxShadow),
   // built from the iOS values above so the two can't drift apart. The middle
@@ -114,7 +125,7 @@ export default function NeuCard({
     : iosOuterShadow;
   const midShadow = Platform.OS === "android" ? undefined : iosMidShadow;
 
-  const borderColor = dark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)";
+  const borderColor = dark ? CARD_EDGE_DARK : "rgba(255,255,255,0.85)";
 
   return (
     // Outer shadow wrapper

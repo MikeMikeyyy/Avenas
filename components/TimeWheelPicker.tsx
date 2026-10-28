@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, type StyleProp, type TextStyle } from "react-native";
+import { View, Text, StyleSheet, ScrollView, type ScrollViewInstance, type StyleProp, type TextStyle } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import type { TimeVal } from "../utils/sessionTime";
@@ -35,7 +35,7 @@ export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColo
   band?: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   // Keep latest onSelect in a ref so the commit closure is never stale
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;

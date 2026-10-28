@@ -35,15 +35,18 @@ import {
   filterByProgramScope,
   programsInScope,
   scopedProgramDays,
-  groupDaysByProgram,
   workoutMatchesDay,
+  collectLoggedExercises,
   collectLoggedExercisesForDay,
   sessionCountForDay,
 } from "../utils/progressStats";
+import { groupByMuscle, muscleCardOf, searchLoggedExercises } from "../utils/allExercises";
+import { allProgressParams, allProgressRequest } from "../utils/progressSession";
+import { exerciseDateSlots } from "../utils/exerciseDaySlots";
 import { displayWorkoutName, historicalDays, markDayRefLabels, programDays, programDaysWithExtras } from "../utils/programDays";
 import {
   BAR_WIDTH, BLOCK_GAP, CHART_HEIGHT, LABEL_H, LABEL_INK_DOWN, LABEL_INK_UP, LINE_STROKE, PLOT_TOP, SESSION_SPACING,
-  axisLoadStep, barAxis, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, chartChange, dotY, drawsOn,
+  axisLoadStep, barAxis, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, chartChange, dateAxisLabels, dotY, drawsOn,
   exerciseChartAxis, exerciseChartGeometry, fmtChange, isExerciseMetric, linePathD, loadStep, percentChange, setStacks,
   setsTotal, slotX, sparkleD, strengthDots, strengthLabel, strengthLabelInkWidth, visibleSlots, volumeBars, windowAxis,
   type StrengthDot,
@@ -787,32 +790,111 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   eq(historicalDays(history, [program], programDays(program)).map(d => d.dayId), ["d0"], "historicalDays: skips ids the cycle still has");
 }
 
-// ── groupDaysByProgram ("All programs" in Exercise Progress) ──────────────────
+// ── "All programs" in Exercise Progress (utils/allExercises.ts) ───────────────
+// Every exercise logged, from any program, day or custom workout, once each,
+// in one card per muscle group, with a search over them all; each charted
+// across every session of it, by date (user request and decisions, 2026-10-26).
 {
-  const done = makeProgram({ id: "pDone", name: "Upper Lower", status: "completed", cyclePattern: ["Upper", "Lower", "Rest"], cycleDays: 3, dayIds: ["d0", "d1", "d2"] });
-  const later = makeProgram({ id: "pNew", name: "5x5", status: "created", cyclePattern: ["Push", "Rest"], cycleDays: 2, dayIds: ["d0", "d1"] });
   const running = makeProgram({ id: "pRun", name: "PPL", status: "active", dayIds: ["d0", "d1", "d2", "d3", "d4", "d5", "d6"] });
-  const history = [
-    // A day that has left the completed program, so it's appended after every
-    // live day in the scope, not beside its own program's days.
-    workout({ id: "h1", programId: "pDone", dayId: "gone", workoutName: "Arms", exercises: [ex("Curl", [set("20", "12")])] }),
+  const done = makeProgram({ id: "pDone", name: "Upper Lower", status: "completed", cyclePattern: ["Upper", "Lower", "Rest"], cycleDays: 3, dayIds: ["d0", "d1", "d2"] });
+  const programs = [running, done];
+  const customs: CustomExercise[] = [
+    { id: "cx1", name: "Cable Thing", muscles: ["Back", "Arms"] },
+    { id: "cx2", name: "Old Press", muscles: ["Chest"], deletedAt: "2026-01-10" },
   ];
-  const days = scopedProgramDays({ kind: "all" }, [done, later, running], history);
-  const groups = groupDaysByProgram(days, [done, later, running]);
-  eq(groups.map(g => g.programName), ["PPL", "5x5", "Upper Lower"], "groups: active, then not started, then completed");
-  eq(groups.map(g => g.status), ["active", "created", "completed"], "groups: each carries its program's status");
-  eq(groups[2].days.map(d => [d.label, d.isHistorical]), [["Upper", false], ["Lower", false], ["Arms", true]], "groups: a day that left a program is listed under it, after its live days");
-  eq(groups.reduce((n, g) => n + g.days.length, 0), days.length, "groups: every day in scope lands in exactly one group");
-  // "Push" is in PPL (twice) and in 5x5: within 5x5 it's unique, within PPL it isn't.
-  check(days.filter(d => d.label === "Push").every(d => d.duplicateLabel), "groups: across the whole scope every Push reads as duplicated");
-  eq(groups[1].days.map(d => d.duplicateLabel), [false], "groups: a name repeated only in ANOTHER program needs no qualifier under its heading");
-  check(groups[0].days.filter(d => d.label === "Push").every(d => d.duplicateLabel), "groups: a name repeated within one program is still qualified");
-  eq(
-    groups.flatMap(g => g.days).filter(d => d.absorbsUnidentified).map(d => d.key).sort(),
-    days.filter(d => d.absorbsUnidentified).map(d => d.key).sort(),
-    "groups: which row absorbs a session with no dayId is still decided across the whole scope",
-  );
-  eq(groupDaysByProgram([], [running]), [], "groups: no days, no groups");
+  const history: CompletedWorkout[] = [
+    workout({ id: "a1", date: "2025-12-29", programId: "pDone", dayId: "d0", workoutName: "Upper", exercises: [
+      ex("Barbell Bench Press", [set("80", "5")]), ex("Bent-Over Row", [set("60", "8")]),
+    ] }),
+    // A renamed exercise's old name: listed under the one it goes by now.
+    workout({ id: "a2", date: "2026-01-05", programId: "pRun", dayId: "d0", workoutName: "Push", exercises: [
+      ex("Barbell Bench Press", [set("82.5", "5")]), ex("Dumbbell Bench Press", [set("30", "10")]),
+      { name: "Old Press", customId: "cx2", notes: "", sets: [set("50", "8")] },
+    ] }),
+    // A free workout, with a name no catalogue knows (an import's) and a
+    // custom exercise.
+    workout({ id: "a3", date: "2026-01-07", programId: "", workoutName: "Custom WorkoutArms", exercises: [
+      ex("Barbell Curl", [set("30", "10")]), ex("Mystery Machine", [set("40", "10")]),
+      { name: "Cable Thing", customId: "cx1", notes: "", sets: [set("20", "12")] },
+    ] }),
+    // A deleted program's, its name kept.
+    { ...workout({ id: "a4", date: "2026-01-09", programId: "pGone", dayId: "d1", workoutName: "Legs", exercises: [
+      ex("Barbell Back Squat", [set("100", "5")]), ex("Plank", [set("", "60")]),
+    ] }), programName: "PPL Old" },
+    workout({ id: "a5", date: "2026-01-12", programId: "pRun", dayId: "d4", workoutName: "Push", exercises: [
+      ex("Barbell Bench Press", [set("85", "5")]), ex("Lateral Raise", [set("12", "10")]),
+    ] }),
+  ];
+  const rows = collectLoggedExercises(history);
+  eq(rows.map(r => r.name), [
+    "Barbell Bench Press", "Lateral Raise", "Barbell Back Squat", "Plank", "Barbell Curl", "Mystery Machine", "Cable Thing",
+    "Dumbbell Chest Press", "Old Press", "Bent-Over Row",
+  ], "all: every exercise once, from every program, day and custom workout, most recently logged first");
+  eq(rows.find(r => r.name === "Barbell Bench Press")?.sessionCount, 3, "all: an exercise's sessions in every program are one row's");
+  eq(rows.find(r => r.name === "Dumbbell Chest Press")?.sessionCount, 1, "all: a renamed exercise's old name is its row");
+  check(rows.every(r => r.inProgram), "all: none reads 'swapped out' (no one prescription to compare with)");
+  eq(rows.find(r => r.name === "Cable Thing")?.customId, "cx1", "all: a custom exercise keeps its id");
+
+  const groups = groupByMuscle(rows, customs);
+  eq(groups.map(g => [g.label, g.rows.map(r => r.name)]), [
+    ["Chest", ["Barbell Bench Press", "Dumbbell Chest Press", "Old Press"]],
+    ["Back", ["Cable Thing", "Bent-Over Row"]],
+    ["Shoulders", ["Lateral Raise"]],
+    ["Legs", ["Barbell Back Squat"]],
+    ["Arms", ["Barbell Curl"]],
+    ["Core", ["Plank"]],
+    ["Other", ["Mystery Machine"]],
+  ], "groups: the picker's order, Other last; each its own muscle, a custom one its first (deleted ones too), a name nobody knows Other");
+  eq(groupByMuscle(rows.filter(r => r.name === "Plank"), customs).map(g => g.label), ["Core"], "groups: a group with none is left out");
+  eq(groupByMuscle([], customs), [], "groups: nothing logged, no groups");
+  // The card Exercise History's "See All Progress" opens is the one the
+  // exercise is listed in.
+  eq([
+    muscleCardOf({ name: "Barbell Bench Press" }, customs),
+    muscleCardOf({ name: "Dumbbell Bench Press" }, customs),
+    muscleCardOf({ name: "Cable Thing", customId: "cx1" }, customs),
+    muscleCardOf({ name: "Mystery Machine" }, customs),
+  ], ["Chest", "Chest", "Back", "Other"], "card: its own muscle (by its old name too), a custom one's first, else Other");
+  check(groups.every(g => g.rows.every(r => muscleCardOf(r, customs) === g.label)), "card: every exercise is in the card it names");
+
+  // "See All Progress" rides on the navigation as params, a new `at` a tap.
+  const asked = allProgressRequest(allProgressParams({ name: "Cable Thing", customId: "cx1" }));
+  eq(asked && { name: asked.name, customId: asked.customId }, { name: "Cable Thing", customId: "cx1" }, "see all progress: which exercise, through the params");
+  check(!!asked && /^\d+$/.test(asked.at), "see all progress: with when it was asked");
+  eq(Object.keys(allProgressParams({ name: "Barbell Bench Press" })).sort(), ["allProgress", "allProgressAt"], "see all progress: no id for a catalogue exercise");
+  eq([allProgressRequest({}), allProgressRequest({ allProgress: "Barbell Bench Press" })], [null, null], "see all progress: none without its name and when");
+
+  const found = (text: string) => searchLoggedExercises(rows, text, customs)?.map(r => r.name) ?? null;
+  eq(found(""), null, "search: nothing typed, no search");
+  eq(found("   "), null, "search: spaces alone, no search");
+  eq(found("bench")?.[0], "Barbell Bench Press", "search: the closest first");
+  eq(found("db press")?.[0], "Dumbbell Chest Press", "search: gym shorthand and its other names, as the picker searches");
+  eq(found("lat raise")?.[0], "Lateral Raise", "search: the start of a word");
+  eq(found("Dumbbell Lateral Raise")?.[0], "Lateral Raise", "search: a renamed exercise by its old name");
+  eq(found("mystery"), ["Mystery Machine"], "search: a name no catalogue knows");
+  eq(found("cable")?.[0], "Cable Thing", "search: a custom exercise");
+  eq(found("zzzz"), [], "search: nothing matching, an empty list");
+
+  // The chart: every session of it from any program or day, oldest first, one
+  // place each, saying which workout it was.
+  const bench = collectExerciseHistory(history, "Barbell Bench Press");
+  const benchSlots = exerciseDateSlots(bench, history, programs);
+  eq(benchSlots.map(s => [s.point?.workoutId ?? null, s.number, s.run, s.missed ?? null]),
+    [["a1", 1, null, null], ["a2", 2, null, null], ["a5", 3, null, null]], "date slots: every session once, in order, nothing missed");
+  eq(benchSlots.map(s => s.from), ["Upper · Upper Lower", "Push · PPL", "Push · PPL"], "date slots: each says its workout and program");
+  eq(exerciseDateSlots(collectExerciseHistory(history, "Barbell Curl"), history, programs).map(s => s.from), ["Arms · Custom workout"],
+    "date slots: a free workout's, its name as the Journal shows it");
+  eq(exerciseDateSlots(collectExerciseHistory(history, "Barbell Back Squat"), history, programs).map(s => s.from), ["Legs · PPL Old"],
+    "date slots: a deleted program's, by the name it kept");
+  eq(computePRs(bench, history, "Barbell Bench Press").heaviest?.workoutId, "a5", "date slots: the records are across every program");
+
+  const axis = dateAxisLabels(bench.map(p => p.date));
+  eq(axis.labels.map(l => [l.text, l.year]), [["29 Dec", false], ["2026", true], ["12 Jan", false]],
+    "date axis: day first, and the year at a new year's first session");
+  eq(axis.yearBreaks, [1], "date axis: a line where the new year starts");
+  eq(dateAxisLabels(["2026-03-03", "2026-03-03", "2026-04-10"]), {
+    labels: [{ text: "3 Mar", year: false }, { text: "3 Mar", year: false }, { text: "10 Apr", year: false }], yearBreaks: [],
+  }, "date axis: two sessions in a day both say it; one year, no lines");
 }
 
 // ── the exercise chart ────────────────────────────────────────────────────────

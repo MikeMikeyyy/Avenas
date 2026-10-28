@@ -21,6 +21,7 @@ import {
   buildPrevNoteLookup,
   buildPrevSetsLookup,
   buildPrevSessionNote,
+  prevHintsForRows,
 } from "../utils/workout";
 import { parseStoredDate, formatStoredDate, todayYMD, sessionTimeRange } from "../utils/dates";
 import { stampSession, timeValFromDate } from "../utils/sessionTime";
@@ -302,8 +303,8 @@ const hist = [
   makeWorkout("w1", "2026-02-01T10:00:00.000Z", "bench press", "90", "5"),  // older, lowercase
   makeWorkout("w2", "2026-02-02T10:00:00.000Z", "Bench Press", "100", "5"), // newer, capitalized
 ];
-eq(buildPrevByName(hist)["bench press"], ["100×5"], "prev: newest wins + name normalized");
-eq(buildPrevByName(hist, "2026-02-02")["bench press"], ["90×5"], "prev beforeDate: excludes same-day, keeps earlier");
+eq(buildPrevByName(hist)["bench press"]?.working, ["100×5"], "prev: newest wins + name normalized");
+eq(buildPrevByName(hist, "2026-02-02")["bench press"]?.working, ["90×5"], "prev beforeDate: excludes same-day, keeps earlier");
 eq(buildPrevByName(hist, "2026-02-01"), {}, "prev beforeDate: excludes all at/after -> empty");
 
 // Timezone edge: a session logged on the morning of the 10th in a +UTC zone has
@@ -315,7 +316,7 @@ const tzHist: CompletedWorkout[] = [{
   exercises: [{ name: "Bench", notes: "", sets: [{ type: "working", weight: "100", reps: "5", done: true }] }],
 }];
 eq(buildPrevByName(tzHist, "2026-05-10"), {}, "prev beforeDate: same-local-day session (completedAt rolled to prev UTC day) is excluded");
-eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate: that session is included for the next day");
+eq(buildPrevByName(tzHist, "2026-05-11")["bench"]?.working, ["100×5"], "prev beforeDate: that session is included for the next day");
 
 // ── buildPrevNotesByName: the LAST session's note, and only that one ───────────
 // Week 1's note shows in week 2. Write a new one and week 3 shows that. Write
@@ -367,7 +368,7 @@ eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate:
     "swap: a swap-in with no note blocks the older one, like any session with no note");
 
   // Previous WEIGHTS stay by name: Dumbbell Press numbers under Bench Press would be wrong.
-  eq(buildPrevByName([week2, week1])["bench press"], ["100×5"],
+  eq(buildPrevByName([week2, week1])["bench press"]?.working, ["100×5"],
     "swap: previous weights still come from the last time the exercise itself was done");
 
   // The exercise done under its own name wins over a swap-in standing for it.
@@ -444,9 +445,9 @@ eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate:
   const backOffW = { name: "Bench Press", notes: "", sets: w("80", "8"), programExerciseId: "pex_2" };
   const wk1 = session("s-w1", "2026-03-09T10:00:00.000Z", [heavyW, backOffW]);
   const setsOf = buildPrevSetsLookup([wk1]);
-  eq([setsOf(heavyCard), setsOf(backOffCard)], [["100×5"], ["80×8"]],
+  eq([setsOf(heavyCard)?.working, setsOf(backOffCard)?.working], [["100×5"], ["80×8"]],
     "sets by place: the heavy and back-off benches each show their own numbers");
-  eq(buildPrevSetsLookup([session("s-w1m", "2026-03-09T10:00:00.000Z", [backOffW, heavyW])])(heavyCard), ["100×5"],
+  eq(buildPrevSetsLookup([session("s-w1m", "2026-03-09T10:00:00.000Z", [backOffW, heavyW])])(heavyCard)?.working, ["100×5"],
     "sets by place: reordering doesn't swap them");
 
   // Last week the heavy place was swapped for Dumbbell Press: its numbers
@@ -454,15 +455,27 @@ eq(buildPrevByName(tzHist, "2026-05-11")["bench"], ["100×5"], "prev beforeDate:
   const dbW = { name: "Dumbbell Press", notes: "", sets: w("30", "10"), programExerciseId: "pex_1", swappedFrom: "Bench Press" };
   const wk2 = session("s-w2", "2026-03-16T10:00:00.000Z", [dbW, backOffW]);
   const afterSwap = buildPrevSetsLookup([wk2, wk1]);
-  eq(afterSwap(heavyCard), ["100×5"], "sets by place: a swap-in's weights never show under the exercise it replaced");
-  eq(afterSwap({ name: "Dumbbell Press", programExerciseId: "pex_1", swappedFrom: "Bench Press" }), ["30×10"],
+  eq(afterSwap(heavyCard)?.working, ["100×5"], "sets by place: a swap-in's weights never show under the exercise it replaced");
+  eq(afterSwap({ name: "Dumbbell Press", programExerciseId: "pex_1", swappedFrom: "Bench Press" })?.working, ["30×10"],
     "sets by place: the swap-in card shows its own last numbers");
 
   // A place with no numbers of its own shows the lift's last numbers on this day.
-  eq(buildPrevSetsLookup([wk1])({ name: "Bench Press", programExerciseId: "pex_new" }), ["100×5"],
+  eq(buildPrevSetsLookup([wk1])({ name: "Bench Press", programExerciseId: "pex_new" })?.working, ["100×5"],
     "sets by place: a place never done yet falls back to the same lift, by name");
-  eq(buildPrevSetsLookup([session("s-w0", "2026-03-02T10:00:00.000Z", [{ name: "Bench Press", notes: "", sets: w("95", "5") }])])(backOffCard),
+  eq(buildPrevSetsLookup([session("s-w0", "2026-03-02T10:00:00.000Z", [{ name: "Bench Press", notes: "", sets: w("95", "5") }])])(backOffCard)?.working,
     ["95×5"], "sets by place: older history without places is read by name");
+
+  // Last time's sets come back by kind, each kind in the order lifted, even
+  // where a warm-up sat between working sets (a Journal log can do that).
+  const mixed = { name: "Bench Press", notes: "", programExerciseId: "pex_1", sets: [
+    { type: "warmup" as const, weight: "40", reps: "10", done: true },
+    { type: "working" as const, weight: "100", reps: "5", done: true },
+    { type: "warmup" as const, weight: "60", reps: "5", done: true },
+    { type: "working" as const, weight: "105", reps: "3", done: true },
+  ] };
+  eq(buildPrevSetsLookup([session("s-mix", "2026-03-09T10:00:00.000Z", [mixed])])(heavyCard),
+    { warmup: ["40×10", "60×5"], working: ["100×5", "105×3"] },
+    "sets by place: warm-ups and working sets come back apart, each in the order lifted");
 
   // What a swap records.
   eq(swapOrigin({ name: "Bench Press" }, { name: "Dumbbell Press" }), { swappedFrom: "Bench Press", swappedFromId: undefined },
@@ -548,9 +561,56 @@ const fmtHist: CompletedWorkout[] = [{
 // Both sides always, either blank: a lone "8" couldn't say whether it was the
 // weight or the reps, so ticking an empty set put a pull-up's 8 reps in the
 // weight box (found by scripts/verify-training-months.ts).
-eq(buildPrevByName(fmtHist)["var"], ["100×5", "100×", "×8", "—"], "prev: set formatting variants");
+eq(buildPrevByName(fmtHist)["var"]?.working, ["100×5", "100×", "×8", "—"], "prev: set formatting variants");
 eq(["100×5", "100×", "×8", "—"].map(t => formatPrevHint(t, false)), ["220.5×5", "220.5×", "×8", "—"],
   "prev: an lbs screen converts a weight with no reps too (it showed the stored kilos)");
+
+// ── prevHintsForRows: last time's sets lined up with the card's rows ──────────
+// A warm-up row reads last time's warm-ups and a working row its working sets,
+// each by its number among its own kind. By position alone, one warm-up fewer
+// moved every working set's numbers up a row and lost the last, usually the
+// top set (user request, 2026-10-28). Last week here: two warm-ups, two
+// working sets.
+{
+  const W = "warmup" as const;
+  const K = "working" as const;
+  const lastWeek = { warmup: ["40×10", "60×5"], working: ["100×5", "105×3"] };
+  eq(prevHintsForRows(lastWeek, [W, W, K, K]), ["40×10", "60×5", "100×5", "105×3"],
+    "rows: the same sets as last week read as they were");
+  // "−" takes the last set: two warm-ups and one working set, which shows the
+  // better of last week's two.
+  eq(prevHintsForRows(lastWeek, [W, W, K]), ["40×10", "60×5", "105×3"],
+    "rows: one working set fewer keeps last week's better working set");
+  // Then one warm-up turned into a working set: one warm-up, two working.
+  eq(prevHintsForRows(lastWeek, [W, K, K]), ["60×5", "100×5", "105×3"],
+    "rows: one warm-up fewer shows the heavier warm-up, and both working sets keep their numbers");
+  eq(prevHintsForRows(lastWeek, [K]), ["105×3"], "rows: down to one set, it shows last week's top set");
+
+  // Which set gives way: the lightest, then at the same weight the fewest reps,
+  // as the top set is picked. The rest keep their order.
+  eq(prevHintsForRows({ warmup: [], working: ["105×3", "90×8", "100×5"] }, [K, K]), ["105×3", "100×5"],
+    "rows: the lightest set gives way, the others keep their order");
+  eq(prevHintsForRows({ warmup: [], working: ["100×8", "100×6", "100×8"] }, [K, K]), ["100×8", "100×8"],
+    "rows: at the same weight, the fewest reps give way");
+  eq(prevHintsForRows({ warmup: [], working: ["—", "100×5"] }, [K]), ["100×5"], "rows: an empty set gives way first");
+  eq(prevHintsForRows({ warmup: [], working: ["×12", "10×8"] }, [K]), ["10×8"],
+    "rows: a weighted set beats a bodyweight one, as the top set does");
+  eq(prevHintsForRows({ warmup: [], working: ["×10", "×12"] }, [K]), ["×12"], "rows: bodyweight sets go by reps");
+
+  // More rows of a kind than last week had sets: the extra rows had no set.
+  eq(prevHintsForRows(lastWeek, [W, W, W, K, K]), ["40×10", "60×5", "—", "100×5", "105×3"],
+    "rows: a third warm-up has nothing from last week, and the working sets stay put");
+  eq(prevHintsForRows(lastWeek, [W, W, K, K, K]), ["40×10", "60×5", "100×5", "105×3", "—"],
+    "rows: an added working set has nothing from last week");
+  eq(prevHintsForRows({ warmup: [], working: ["100×5", "100×5", "100×5"] }, [W, K, K]), ["—", "100×5", "100×5"],
+    "rows: a warm-up where last week had none reads nothing, never a working set's numbers");
+
+  // The Journal's log keeps a set turned into a warm-up where it was, so a
+  // warm-up row can sit between working ones: each still reads its own kind.
+  eq(prevHintsForRows(lastWeek, [W, K, W, K]), ["40×10", "100×5", "60×5", "105×3"],
+    "rows: warm-ups between working sets each read their own kind");
+  eq(prevHintsForRows(undefined, [W, K]), ["—", "—"], "rows: nothing last time, nothing on any row");
+}
 
 // ── Reorder / multi-session "previous figures" invariants ──────────────────────
 // Two program weeks with the SAME exercises in DIFFERENT orders, plus exercises
@@ -577,12 +637,12 @@ const weekLast: CompletedWorkout = {
   ],
 };
 const prevMulti = buildPrevByName([week3ago, weekLast]);
-eq(prevMulti["bench"], ["90×5"],  "prev multi: reordered exercise (idx 1->0) takes LAST week, not 3 weeks ago");
-eq(prevMulti["squat"], ["110×5"], "prev multi: reordered exercise (idx 0->2) takes LAST week by name");
-eq(prevMulti["row"],   ["65×8"],  "prev multi: exercise added last week shows its own figures");
-eq(prevMulti["curl"],  ["20×12"], "prev multi: exercise only done 3 weeks ago still shows its last recorded figures");
+eq(prevMulti["bench"]?.working, ["90×5"],  "prev multi: reordered exercise (idx 1->0) takes LAST week, not 3 weeks ago");
+eq(prevMulti["squat"]?.working, ["110×5"], "prev multi: reordered exercise (idx 0->2) takes LAST week by name");
+eq(prevMulti["row"]?.working,   ["65×8"],  "prev multi: exercise added last week shows its own figures");
+eq(prevMulti["curl"]?.working,  ["20×12"], "prev multi: exercise only done 3 weeks ago still shows its last recorded figures");
 // Recency is decided by completedAt, not array order — reversing the input is identical.
-eq(buildPrevByName([weekLast, week3ago])["bench"], ["90×5"], "prev multi: array order irrelevant — newest completedAt wins");
+eq(buildPrevByName([weekLast, week3ago])["bench"]?.working, ["90×5"], "prev multi: array order irrelevant — newest completedAt wins");
 
 // ── buildPrevByName day scoping ─────────────────────────────────────────────────
 // The same exercise programmed on two days (Lateral Raise heavier on Push than
@@ -601,14 +661,14 @@ const dayHist = [
   mkDaySession("push1", "2026-06-01", "Push", [["Lateral Raise", "12", "10"], ["Bench", "100", "5"]]),
   mkDaySession("arms1", "2026-06-04", "Arms", [["Lateral Raise", "8", "15"], ["Curl", "20", "12"]]),
 ];
-eq(buildPrevByName(dayHist, undefined, { name: "Push" })["lateral raise"], ["12×10"], "prev day-scoped: Push day shows Push numbers even though Arms session is newer");
-eq(buildPrevByName(dayHist, undefined, { name: "Arms" })["lateral raise"], ["8×15"], "prev day-scoped: Arms day shows Arms numbers");
-eq(buildPrevByName(dayHist)["lateral raise"], ["8×15"], "prev unscoped: newest appearance on any day wins (unchanged)");
+eq(buildPrevByName(dayHist, undefined, { name: "Push" })["lateral raise"]?.working, ["12×10"], "prev day-scoped: Push day shows Push numbers even though Arms session is newer");
+eq(buildPrevByName(dayHist, undefined, { name: "Arms" })["lateral raise"]?.working, ["8×15"], "prev day-scoped: Arms day shows Arms numbers");
+eq(buildPrevByName(dayHist)["lateral raise"]?.working, ["8×15"], "prev unscoped: newest appearance on any day wins (unchanged)");
 eq(buildPrevByName(dayHist, undefined, { name: "Push" })["curl"], undefined, "prev day-scoped: exercise never done on this day shows NOTHING (no any-day borrow)");
-eq(buildPrevByName(dayHist, undefined, { name: " push " })["lateral raise"], ["12×10"], "prev day-scoped: day match is trimmed + case-insensitive");
+eq(buildPrevByName(dayHist, undefined, { name: " push " })["lateral raise"]?.working, ["12×10"], "prev day-scoped: day match is trimmed + case-insensitive");
 eq(buildPrevByName(dayHist, "2026-06-04", { name: "Arms" })["lateral raise"], undefined, "prev day-scoped + beforeDate: no earlier Arms session -> blank, not the earlier Push one");
 const dayHist2 = [...dayHist, mkDaySession("push2", "2026-06-08", "Push", [["Lateral Raise", "14", "8"]])];
-eq(buildPrevByName(dayHist2, undefined, { name: "Push" })["lateral raise"], ["14×8"], "prev day-scoped: newest session OF the day wins");
+eq(buildPrevByName(dayHist2, undefined, { name: "Push" })["lateral raise"]?.working, ["14×8"], "prev day-scoped: newest session OF the day wins");
 
 // Two days of one program that SHARE a name — the case a name alone can't tell
 // apart. "Upper" at cycle slots d0 and d3, the same press on both.
@@ -619,8 +679,8 @@ const twoUpper = [
 ];
 const upperA = { name: "Upper", dayId: "d0", programId: "P", absorbsUnidentified: true };
 const upperB = { name: "Upper", dayId: "d3", programId: "P", absorbsUnidentified: false };
-eq(buildPrevByName(twoUpper, undefined, upperB)["incline press"], ["40×8"], "prev two same-named days: 2nd Upper keeps its own numbers");
-eq(buildPrevByName(twoUpper, undefined, upperA)["incline press"], ["32×10"], "prev two same-named days: 1st Upper keeps its own numbers");
+eq(buildPrevByName(twoUpper, undefined, upperB)["incline press"]?.working, ["40×8"], "prev two same-named days: 2nd Upper keeps its own numbers");
+eq(buildPrevByName(twoUpper, undefined, upperA)["incline press"]?.working, ["32×10"], "prev two same-named days: 1st Upper keeps its own numbers");
 
 // A session the dayId backfill couldn't attribute (or a free workout) carries no
 // dayId, so it can only be matched by name. It attaches to the FIRST day with
@@ -630,8 +690,8 @@ const unidentified = [
   mkDaySession("u3", "2026-07-11", "Upper", [["Incline Press", "40", "8"]], { dayId: "d3", programId: "P" }),
   mkDaySession("uX", "2026-07-12", "Upper", [["Incline Press", "32", "10"]], { programId: "P" }),
 ];
-eq(buildPrevByName(unidentified, undefined, upperB)["incline press"], ["40×8"], "prev unidentified session: does NOT leak onto the 2nd same-named day");
-eq(buildPrevByName(unidentified, undefined, upperA)["incline press"], ["32×10"], "prev unidentified session: absorbed by the 1st same-named day");
+eq(buildPrevByName(unidentified, undefined, upperB)["incline press"]?.working, ["40×8"], "prev unidentified session: does NOT leak onto the 2nd same-named day");
+eq(buildPrevByName(unidentified, undefined, upperA)["incline press"]?.working, ["32×10"], "prev unidentified session: absorbed by the 1st same-named day");
 
 // Positional fallback ids (d0, d1, …) are only unique within a program, so a
 // slot id must never match across programs.
@@ -639,7 +699,7 @@ const crossProgram = [
   mkDaySession("old", "2026-07-12", "Upper", [["Incline Press", "20", "10"]], { dayId: "d3", programId: "OLD" }),
   mkDaySession("cur", "2026-07-08", "Upper", [["Incline Press", "40", "8"]], { dayId: "d3", programId: "P" }),
 ];
-eq(buildPrevByName(crossProgram, undefined, upperB)["incline press"], ["40×8"], "prev cross-program: another program's slot d3 does not match this program's d3");
+eq(buildPrevByName(crossProgram, undefined, upperB)["incline press"]?.working, ["40×8"], "prev cross-program: another program's slot d3 does not match this program's d3");
 
 // prevDayScopeFor marks the day against its own program: first "Upper" absorbs,
 // the second does not.

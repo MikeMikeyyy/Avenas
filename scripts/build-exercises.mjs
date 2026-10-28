@@ -149,10 +149,10 @@ async function main() {
     `//   EXERCISE_THUMBS: a still per exercise for lists (an illustration's small\n` +
     `//   square crop, or a kept photo).\n` +
     `//   EXERCISE_FRAMES: an illustration's full positions for the exercise screen\n` +
-    `//   (start and end, or one hold). Kept photos have none: their still is it.\n\n` +
-    `import type { ImageSourcePropType } from "react-native";\n\n` +
-    `export const EXERCISE_THUMBS: Record<string, ImageSourcePropType> = {\n` + thumbs.join("\n") + `\n};\n\n` +
-    `export const EXERCISE_FRAMES: Record<string, ImageSourcePropType[]> = {\n` + frames.join("\n") + `\n};\n`);
+    `//   (start and end, or one hold). Kept photos have none: their still is it.\n` +
+    `// Each is a bundled asset (require), which expo-image's source takes as is.\n\n` +
+    `export const EXERCISE_THUMBS: Record<string, number> = {\n` + thumbs.join("\n") + `\n};\n\n` +
+    `export const EXERCISE_FRAMES: Record<string, number[]> = {\n` + frames.join("\n") + `\n};\n`);
 
   const visible = records.filter((r) => !r.hidden).length;
   const bytes = fs.readdirSync(OUT_IMAGES).reduce((s, f) => s + fs.statSync(path.join(OUT_IMAGES, f)).size, 0);

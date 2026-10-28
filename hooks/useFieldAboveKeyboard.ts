@@ -24,12 +24,12 @@
 // Android's window resizes for the keyboard and keeps a focused field in view.
 
 import { useCallback, useEffect, useRef, type RefObject } from "react";
-import { Platform, TextInput, useWindowDimensions, type ScrollView } from "react-native";
+import { Platform, TextInput, useWindowDimensions, type ScrollViewInstance } from "react-native";
 
 type Field = ReturnType<typeof TextInput.State.currentlyFocusedInput>;
 
 export function useFieldAboveKeyboard(
-  scrollRef: RefObject<ScrollView | null>,
+  scrollRef: RefObject<ScrollViewInstance | null>,
   /** The keyboard's height while it's up, 0 while it's down. */
   kbHeight: number,
   /** How far above the keyboard's top the field must end. */

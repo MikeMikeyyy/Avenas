@@ -16,7 +16,7 @@ import { scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../MaskedView";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 

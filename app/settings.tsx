@@ -1,7 +1,7 @@
 import { Alert, Linking, Platform, View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";

@@ -19,22 +19,31 @@
 // cards do. A session the schedule can't place (a custom workout added to the
 // program has no slot) is counted within its run, as its card is.
 //
+// Under "All programs" the chart is every session of the exercise from any
+// program or day instead (exerciseDateSlots), labelled by date.
+//
 // Pure, so the verify scripts and the training simulation run it.
 
-import type { CompletedWorkout } from "../constants/programs";
+import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import type { ExerciseDataPoint } from "../constants/progress";
 import { exerciseIdentity, type ExerciseRef } from "./exerciseNames";
+import { sessionProgramName } from "./exerciseHistory";
 import { plannedIn, type LiftSlot } from "./programCompare";
+import { displayWorkoutName } from "./programDays";
 import type { DayTrack, SessionTracks } from "./sessionTrack";
 
 /** One place on the chart: a session of the exercise or a miss (LiftSlot),
  *  with its session number and its run. */
 export type ChartSlot = LiftSlot & {
-  /** The session number its card reads, from 1 in each run. */
+  /** The session number its card reads, from 1 in each run. Under All
+   *  programs (exerciseDateSlots), its place among the exercise's sessions. */
   number: number;
   /** Which run it's in, from 1, when the program has had more than one; null
    *  otherwise. */
   run: number | null;
+  /** Under All programs: the workout and program the session was ("Push ·
+   *  Push Pull Legs"), which its pop-up says. */
+  from?: string;
 };
 
 const dateOf = (s: LiftSlot): string => s.point?.date ?? s.missed ?? "";
@@ -109,4 +118,26 @@ export function exerciseDaySlots({ exercise, points, programPoints, history, tra
   // Oldest run first.
   blocks.sort((a, b) => dateOf(a[0]).localeCompare(dateOf(b[0])));
   return blocks.flat();
+}
+
+/**
+ * The chart's places under "All programs" (user request, 2026-10-26): every
+ * session of the exercise from any program, day or custom workout, oldest
+ * first, one place each however long since the last, so a month off leaves no
+ * gap. The chart labels them by date (utils/exerciseChartLayout.ts
+ * dateAxisLabels): a session number only means something on one day's
+ * schedule, and with no one schedule nothing is missed either. Each says the
+ * workout and program it was, as its Exercise History row does.
+ */
+export function exerciseDateSlots(
+  points: readonly ExerciseDataPoint[],
+  history: readonly CompletedWorkout[],
+  programs: readonly SavedProgram[],
+): ChartSlot[] {
+  const byId = new Map(history.map(w => [w.id, w]));
+  return points.map((point, i) => {
+    const w = byId.get(point.workoutId);
+    const from = w ? `${displayWorkoutName(w.workoutName)} · ${sessionProgramName(w, programs)}` : undefined;
+    return { point, number: i + 1, run: null, ...(from ? { from } : {}) };
+  });
 }

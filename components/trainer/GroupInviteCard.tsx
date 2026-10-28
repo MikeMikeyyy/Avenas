@@ -68,7 +68,7 @@ export default function GroupInviteCard({ invite, onAccept, onDecline }: {
             </View>
           </BounceButton>
           <BounceButton style={{ flex: 1 }} onPress={tap(onAccept)} accessibilityLabel={`Join ${invite.name}`}>
-            <View style={[styles.btn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+            <View style={[styles.btn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
               <Text style={[styles.btnText, { color: "#fff" }]}>Join group</Text>
             </View>
           </BounceButton>

@@ -25,7 +25,7 @@ import { scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../components/MaskedView";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../components/FadeScreen";
@@ -43,7 +43,7 @@ import ProgramPickerSheet from "../../components/trainer/ProgramPickerSheet";
 import RecipientPickerSheet from "../../components/trainer/RecipientPickerSheet";
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote } from "../../components/trainer/ReviewStatusPill";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../constants/buttons";
+import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../constants/buttons";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
@@ -483,7 +483,7 @@ export default function TrainerProgramsScreen() {
         <OfflineBanner />
 
         <BounceButton onPress={() => setSendOpen(true)} needsConnection accessibilityLabel="Send a program">
-          <View style={[styles.sendBtn, { backgroundColor: ACCT }]}>
+          <View style={[styles.sendBtn, { backgroundColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
             <SendIcon size={18} color="#fff" />
             <Text style={styles.sendText}>Send a Program</Text>
           </View>

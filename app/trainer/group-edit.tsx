@@ -34,7 +34,7 @@ import ReportReasonSheet from "../../components/trainer/ReportReasonSheet";
 import PeopleIcon from "../../components/icons/PeopleIcon";
 import FlagIcon from "../../components/icons/FlagIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { PILL_RADIUS } from "../../constants/buttons";
+import { darkGlow, glowOpacity, PILL_RADIUS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { createGroup, fetchGroup, fetchGroupMembers, isGroupFullError, isGroupLimitError, renameGroup, setGroupAvatar, setGroupMembers, uploadGroupAvatar } from "../../lib/groups";
 import { getMyUid, isCloudContactId } from "../../lib/chat";
@@ -422,7 +422,7 @@ export default function GroupEditScreen() {
                             </View>
                           )}
                           <View style={[styles.check, checked
-                            ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                            ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                             : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
                           ]}>
                             {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -435,7 +435,7 @@ export default function GroupEditScreen() {
               )}
 
               <BounceButton style={{ marginTop: 22 }} onPress={canSave ? onSave : undefined} accessibilityLabel={ctaLabel}>
-                <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT, opacity: canSave ? 1 : 0.4 }]}>
+                <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT, opacity: canSave ? 1 : 0.4 }, darkGlow(styles.cta, isDark)]}>
                   <Text style={styles.ctaText}>{ctaLabel}</Text>
                 </View>
               </BounceButton>

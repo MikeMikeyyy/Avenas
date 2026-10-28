@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -34,9 +34,10 @@ import {
   FontFamily,
   GOLD,
   GOLD_DARK,
+  ON_FILL,
   WARMUP_ORANGE,
 } from "../constants/theme";
-import { PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
+import { PILL_H_XS, PILL_SHADOW, darkGlow, pill, pillGlow } from "../constants/buttons";
 import { formatWeightForDisplay, toDisplayWeight, trimNumber } from "../utils/units";
 import { displayWorkoutName } from "../utils/programDays";
 import {
@@ -68,6 +69,7 @@ import {
 import { collectExerciseHistory, computePRs } from "../utils/progressStats";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { carriedExercises, customToShow, exercisePageParams, knownCustomExercises } from "../utils/customExerciseDetails";
+import { allProgressParams } from "../utils/progressSession";
 import BackButton, { BACK_TOP } from "../components/BackButton";
 
 // Day-of-week strings — local format, not from a library to avoid extra deps.
@@ -299,6 +301,18 @@ export default function ExerciseHistoryScreen() {
     return customToShow({ name: exerciseName, customId }, known, !!clientId)?.imageUri;
   }, [exerciseName, imageId, customId, customs, programs, clientId]);
 
+  // "See All Progress" (user request, 2026-10-26): every session of it
+  // charted across every program, the Progress page under All programs; on a
+  // trainer's view of a client, that client's Progress tab. This page sits over
+  // the tabs (or the client's page), so dismissTo goes back to them rather than
+  // push a second copy, as the workout bar does.
+  const goToAllProgress = () => {
+    if (!exerciseName) return;
+    const params = allProgressParams({ name: exerciseName, customId });
+    if (clientId) router.dismissTo({ pathname: "/trainer/client/[id]", params: { id: clientId, ...params } });
+    else router.dismissTo({ pathname: "/(tabs)/progress", params });
+  };
+
   // The picture and name open the exercise's screen (user request,
   // 2026-10-21), or go back to it when that's where this page was opened
   // from, rather than stacking the two pages again on top.
@@ -432,6 +446,23 @@ export default function ExerciseHistoryScreen() {
               ))}
             </View>
           </NeuCard>
+        ) : null}
+
+        {/* To the chart of every session of it, from any program: the
+            Progress chart's "See Exercise History" the other way. Whatever
+            the filter lists, so long as it was ever done. */}
+        {options.programs.length > 0 || options.free ? (
+          <BounceButton
+            style={tiles.length > 0 ? styles.progressBtnWrap : null}
+            onPress={goToAllProgress}
+            accessibilityRole="button"
+            accessibilityLabel={`See all progress for ${exerciseName ?? ""}, across every program`}
+          >
+            <View style={[styles.progressBtn, darkGlow(styles.progressBtn, isDark)]}>
+              <Text style={styles.progressBtnLabel} numberOfLines={1}>See All Progress</Text>
+              <Ionicons name="chevron-forward" size={16} color={ON_FILL} />
+            </View>
+          </BounceButton>
         ) : null}
 
         {sessions.length === 0 ? (
@@ -664,6 +695,13 @@ const styles = StyleSheet.create({
   tileValue: { fontFamily: FontFamily.bold, fontSize: 17, lineHeight: 22 },
   tileSuffix: { fontFamily: FontFamily.semibold, fontSize: 13 },
   tileSub: { fontFamily: FontFamily.regular, fontSize: 11, lineHeight: 15 },
+
+  // "See All Progress": the Progress chart's "See Exercise History" button
+  // (components/ExerciseProgressionChart.tsx), the canonical primary pill.
+  // Under the two numbers, or straight under the filter's own margin.
+  progressBtnWrap: { marginTop: 14 },
+  progressBtn: { ...pill(), paddingHorizontal: 18, gap: 10, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4), elevation: 8 },
+  progressBtnLabel: { flex: 1, textAlign: "center", fontFamily: FontFamily.bold, fontSize: 15, color: ON_FILL },
 
   // A month's heading: the section-label look (exercise-summary's), its
   // count across from it.

@@ -11,11 +11,14 @@
 //   - A lock-screen tick does what the card's checkbox does (prevFillFor): an
 //     empty set takes last time's numbers at its row. It came back ticked but
 //     empty.
+//   - The card gets every change (utils/liveActivity.ts cardPushes): a change
+//     waits out the debounce, and one still waiting goes as the app leaves the
+//     screen. Locked before it went, the card kept its old dots.
 //
 // Run:  npx tsx scripts/verify-rest-timer.ts
 // Exits non-zero (throws) if any assertion fails.
 
-import { buildLiveActivityQueue, logWithLockScreenTicks, restFromCard } from "../utils/liveActivity";
+import { buildLiveActivityQueue, cardPushes, logWithLockScreenTicks, restFromCard, type PushTimers } from "../utils/liveActivity";
 import { firstRows, flatIndexOf, nextRows, prevFillFor, setRowKey, withoutSet } from "../utils/setRows";
 
 let passed = 0;
@@ -48,6 +51,72 @@ eq(card(0, 0, E), null, "a rest started in the app before its push lands: it isn
 eq(card(E, E, E), null, "card and app agree: left alone");
 eq(card(NOW - 5_000, null, null), null, "after a relaunch, a rest that ended on the card starts nothing");
 eq(card(E + 1_000, E + 2_000, E), null, "within 1.5s of the app's: left alone, so the bar doesn't jump");
+
+// ─── the card gets every change ──────────────────────────────────────────────
+// iOS suspends the app soon after the phone locks or another app opens, and a
+// JS timer doesn't fire while it's suspended: a warm-up taken away just before
+// locking stayed among the card's dots (user report, 2026-10-28).
+{
+  let clock = 0;
+  let nextId = 1;
+  let pending: { id: number; at: number; run: () => void }[] = [];
+  const timers: PushTimers = {
+    set: (run, ms) => { const id = nextId++; pending.push({ id, at: clock + ms, run }); return id; },
+    clear: id => { pending = pending.filter(t => t.id !== id); },
+  };
+  const advance = (ms: number) => {
+    clock += ms;
+    const due = pending.filter(t => t.at <= clock);
+    pending = pending.filter(t => t.at > clock);
+    due.forEach(t => t.run());
+  };
+  const sent: string[] = [];
+  const pushes = cardPushes(json => { sent.push(json); }, 400, timers);
+
+  pushes.change("a");
+  eq(sent, [], "push: a change waits out the debounce");
+  advance(400);
+  eq(sent, ["a"], "push: ...then goes");
+  pushes.change("b"); advance(200); pushes.change("c"); advance(399);
+  eq(sent, ["a"], "push: typing coalesces, each change restarting the wait");
+  advance(1);
+  eq(sent, ["a", "c"], "push: ...and only the last goes");
+  pushes.change("c"); advance(1000);
+  eq(sent, ["a", "c"], "push: what the card already has isn't sent again");
+
+  // A warm-up taken away, then the phone locked before the wait was out.
+  pushes.change("one warm-up");
+  pushes.flush();
+  eq(sent, ["a", "c", "one warm-up"], "push: leaving the app sends a change still waiting, at once");
+  advance(1000);
+  eq(sent, ["a", "c", "one warm-up"], "push: ...and only once");
+  pushes.flush();
+  eq(sent, ["a", "c", "one warm-up"], "push: with nothing waiting, leaving sends nothing");
+
+  pushes.change("e"); pushes.cancel(); advance(1000);
+  eq(sent, ["a", "c", "one warm-up"], "push: a change dropped (the session ended) never goes");
+  eq(pushes.sent(), true, "push: the card has been sent something");
+  pushes.reset();
+  eq(pushes.sent(), false, "push: taken down, the next card has been sent nothing");
+  pushes.change("one warm-up"); advance(400);
+  eq(sent[sent.length - 1], "one warm-up", "push: so a new card gets its first payload, even one the last card had");
+
+  // What has reached the card: what its rest mirror echoes (restFromCard).
+  // The native push resolves later; a thenable resolved by hand plays it.
+  let land: (() => void) | null = null;
+  const later = () => ({ then: (done: () => void) => { land = done; } }) as unknown as Promise<void>;
+  const card2 = cardPushes(later, 400, timers);
+  eq(card2.landed(), null, "landed: nothing before the card's first push");
+  card2.change("rest 90s"); card2.flush();
+  eq(card2.landed(), null, "landed: sent, but not there until its push resolves");
+  land!();
+  eq(card2.landed(), "rest 90s", "landed: there once it resolves");
+  card2.change("rest skipped"); card2.flush();
+  card2.reset();
+  land!();
+  eq(card2.landed(), null, "landed: a push to a card that's gone, landing late, isn't the next card's");
+  eq(cardPushes(json => { sent.push(json); }, 400, timers).landed(), null, "landed: a new card starts with none");
+}
 
 // ─── set rows by identity ────────────────────────────────────────────────────
 
@@ -131,6 +200,10 @@ eq(withoutSet([], [s("a"), s("b")], "zz"), null, "a key that isn't there removes
   eq(again.bench.working[0].doneAt, 1000, "lock screen: a set already ticked isn't ticked again (a replay is idempotent)");
   eq(logWithLockScreenTicks(log, [{ exId: "gone", setType: "working", setIdx: 0, ts: 1 }], exId => hints[exId]), log,
     "lock screen: a tick for an exercise no longer in the session changes nothing");
+  const unticked = { bench: { warmup: [], working: [{ ...set("u"), untickedAt: 500 }], notes: "" } };
+  eq(logWithLockScreenTicks(unticked, [{ exId: "bench", setType: "working", setIdx: 0, ts: 600 }], () => []).bench.working[0],
+    { id: "u", weight: "", reps: "", done: true, doneAt: 600 },
+    "lock screen: a tick clears the set's untick, as a tick in the app does");
 
   // What the card showed on each set is exactly what the tick fills in.
   const { queue } = buildLiveActivityQueue(

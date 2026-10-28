@@ -26,7 +26,7 @@ import { scrollEndPadding } from "../constants/floatingBars";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { Ionicons } from "@expo/vector-icons";
 
 import FadeScreen from "../components/FadeScreen";
@@ -133,13 +133,13 @@ function ArchiveCard({ name, meta, pill, cycle, isDark, onRestore, onDelete, nee
         <CycleStrip cycle={cycle} isDark={isDark} />
         <View style={styles.actionRow}>
           <BounceButton style={{ flex: 1 }} onPress={onRestore} needsConnection={needsConnection} accessibilityLabel={`Restore ${name}`}>
-            <View style={[styles.actionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+            <View style={[styles.actionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
               <Ionicons name="arrow-undo" size={15} color="#fff" />
               <Text style={styles.actionText}>Restore</Text>
             </View>
           </BounceButton>
           <BounceButton style={{ flex: 1 }} onPress={onDelete} needsConnection={needsConnection} accessibilityLabel={`Delete ${name} for good`}>
-            <View style={[styles.actionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+            <View style={[styles.actionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT, 0.5, 6, isDark) }]}>
               <TrashIcon size={15} color="#fff" />
               <Text style={styles.actionText}>Delete</Text>
             </View>

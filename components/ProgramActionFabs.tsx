@@ -18,7 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import GlassButton from "./GlassButton";
 import SquarePenIcon from "./SquarePenIcon";
 import { APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
-import { haloGlow, PILL_H_SM } from "../constants/buttons";
+import { darkGlow, haloGlow, PILL_H_SM } from "../constants/buttons";
 
 export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpenSummary }: {
   /** Distance from the bottom of the screen, safe-area already included. */
@@ -57,7 +57,7 @@ export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpe
           tint={ACCT}
           onPress={onOpenSummary}
           contentStyle={styles.fab}
-          solidStyle={styles.summaryGlow}
+          solidStyle={[styles.summaryGlow, darkGlow(styles.summaryGlow, isDark)]}
           accessibilityLabel="Workout summary"
         >
           <Ionicons name="list" size={16} color="#fff" />

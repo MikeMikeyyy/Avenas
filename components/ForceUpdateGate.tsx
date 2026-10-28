@@ -34,6 +34,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import BounceButton from "./BounceButton";
 import { APP_DARK, APP_LIGHT, ACCT, FontFamily } from "../constants/theme";
+import { darkGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import {
   APP_STORE_ID, appStoreUrl, appStoreWebUrl,
@@ -136,7 +137,7 @@ export default function ForceUpdateGate({ children }: { children: React.ReactNod
       {/* The persistent affordance. The native alert closes on tap; this stays,
           so the screen is never a dead end. */}
       <BounceButton onPress={() => void openAppStore()} accessibilityLabel="Update now" accessibilityRole="button">
-        <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+        <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.cta, isDark)]}>
           <Text style={styles.ctaText}>Update Now</Text>
         </View>
       </BounceButton>

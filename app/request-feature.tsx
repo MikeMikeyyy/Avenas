@@ -2,7 +2,7 @@ import { useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Keyboard, TouchableWithoutFeedback } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
@@ -14,7 +14,7 @@ import BounceButton from "../components/BounceButton";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
-import { PILL_RADIUS } from "../constants/buttons";
+import { darkGlow, PILL_RADIUS } from "../constants/buttons";
 import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -86,7 +86,7 @@ export default function RequestFeatureScreen() {
               </Text>
               <BounceButton
                 onPress={() => router.back()}
-                style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}
+                style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.primaryBtn, isDark)]}
                 accessibilityLabel="Back to settings"
                 accessibilityRole="button"
               >

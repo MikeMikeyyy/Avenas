@@ -14,7 +14,8 @@ import { cycleDrift } from "./cycleDrift";
 import { heldOn, programAsOf } from "./programHolds";
 import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
 import { exerciseIdentity, exerciseKey, sameExercise, type ExerciseRef } from "./exerciseNames";
-import type { CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
+import type { SetType } from "./setRows";
+import type { CompletedSet, CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
   /** Index into cyclePattern. -1 when resolved from a free-workout override
@@ -435,9 +436,10 @@ export function prevDayScopeFor(
 }
 
 /**
- * Map of normalized exercise name → that exercise's set list from the most
- * recent prior session, formatted as "weight×reps", either side blank when it
- * was ("×8", "80×"), or "—" for an empty set (formatPrevSets).
+ * Map of normalized exercise name → that exercise's sets from the most recent
+ * prior session, warm-ups and working sets apart (PrevSets), each formatted as
+ * "weight×reps", either side blank when it was ("×8", "80×"), or "—" for an
+ * empty set (formatPrevSets).
  * History is sorted newest-first, so the first time a name is seen wins.
  * When `beforeDate` (a "YYYY-MM-DD") is given, only sessions strictly before it
  * are considered — used when logging a past workout. We compare on the workout's
@@ -538,14 +540,73 @@ function hintSessions(history: CompletedWorkout[], beforeDate?: string, day?: Pr
     .filter(w => (!beforeDate || w.date < beforeDate) && (!day || sessionIsOnDay(w, day)));
 }
 
+/** Last time's sets of one exercise as hints (formatPrevSets), the warm-ups
+ *  and the working sets apart, each in the order they were lifted: a card's
+ *  rows are matched to their own kind (prevHintsForRows). */
+export type PrevSets = { warmup: string[]; working: string[] };
+
 /** One logged exercise's sets as "weight×reps" hints, either side left blank
  *  when it was ("×8" a bodyweight set, "80×" one with no reps), or "—" for an
  *  empty set. Always both sides: a lone "8" couldn't say which it was, so a
  *  tick (utils/setRows.ts prevFillFor) put a pull-up's 8 reps in the weight
  *  box, and an lbs screen showed a weight-only set in raw kilos (formatPrevHint
  *  converts the part before the ×). */
-function formatPrevSets(ex: CompletedWorkout["exercises"][number]): string[] {
-  return ex.sets.map(s => (s.weight || s.reps ? `${s.weight}×${s.reps}` : "—"));
+function formatPrevSets(ex: CompletedWorkout["exercises"][number]): PrevSets {
+  const hint = (s: CompletedSet) => (s.weight || s.reps ? `${s.weight}×${s.reps}` : "—");
+  return {
+    warmup: ex.sets.filter(s => s.type === "warmup").map(hint),
+    working: ex.sets.filter(s => s.type !== "warmup").map(hint),
+  };
+}
+
+/**
+ * Last time's sets lined up with a card's rows: one hint per row, in the order
+ * the rows stand, "—" for a row with none. A warm-up row reads last time's
+ * warm-ups and a working row its working sets, each by its number among its
+ * own kind. They went by position alone, so doing one warm-up fewer moved
+ * every working set's numbers up a row and lost the last one, usually the top
+ * set (user request, 2026-10-28).
+ *
+ * With fewer rows of a kind than last time had sets of it, the weakest of that
+ * kind give way and the rest keep their order: the lightest, and at the same
+ * weight the fewest reps, as a session's top set is picked
+ * (utils/exerciseHistory.ts). Two warm-ups down to one shows the heavier; two
+ * working sets down to one, the better (user decision, 2026-10-28). A row
+ * beyond last time's sets of its kind reads "—": there was no such set.
+ */
+export function prevHintsForRows(prev: PrevSets | undefined, rows: readonly SetType[]): string[] {
+  const kept = {
+    warmup: strongest(prev?.warmup ?? [], rows.filter(r => r === "warmup").length),
+    working: strongest(prev?.working ?? [], rows.filter(r => r === "working").length),
+  };
+  const next = { warmup: 0, working: 0 };
+  return rows.map(type => kept[type][next[type]++] ?? "—");
+}
+
+/** `hints` down to `n`, the weakest dropped first (the later of two equal
+ *  ones), the rest in their order. */
+function strongest(hints: readonly string[], n: number): string[] {
+  const kept = [...hints];
+  while (kept.length > n) {
+    let weakest = kept.length - 1;
+    for (let i = weakest - 1; i >= 0; i--) if (weaker(kept[i], kept[weakest])) weakest = i;
+    kept.splice(weakest, 1);
+  }
+  return kept;
+}
+
+/** Whether hint `a` was a weaker set than `b`: lighter, or as heavy with fewer
+ *  reps (a hold's seconds). An empty set ("—") is the weakest of all. */
+function weaker(a: string, b: string): boolean {
+  const [aKg, aReps] = hintNumbers(a);
+  const [bKg, bReps] = hintNumbers(b);
+  return aKg !== bKg ? aKg < bKg : aReps < bReps;
+}
+
+/** A hint's weight and reps, 0 for a side left blank. */
+function hintNumbers(hint: string): [number, number] {
+  const [weight = "", reps = ""] = hint.split("×");
+  return [parseFloat(weight) || 0, parseFloat(reps) || 0];
 }
 
 /**
@@ -642,11 +703,11 @@ export function buildPrevByName(
   history: CompletedWorkout[],
   beforeDate?: string,
   day?: PrevDayScope,
-): Record<string, string[]> {
+): Record<string, PrevSets> {
   const sorted = [...history].sort(
     (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime(),
   );
-  const out: Record<string, string[]> = {};
+  const out: Record<string, PrevSets> = {};
   for (const workout of sorted) {
     if (beforeDate && !(workout.date < beforeDate)) continue;
     if (day && !sessionIsOnDay(workout, day)) continue;
@@ -676,12 +737,16 @@ export function buildPrevByName(
  *
  * Sessions saved before places were recorded are read by name, as before. A
  * swap-in, or an exercise added during the session, is looked up by name.
+ *
+ * Comes back as the sets were lifted, warm-ups and working sets apart; a
+ * screen lines them up with the card's rows as they stand through
+ * `prevHintsForRows`.
  */
 export function buildPrevSetsLookup(
   history: CompletedWorkout[],
   beforeDate?: string,
   day?: PrevDayScope,
-): (ex: PrevExerciseKey) => string[] | undefined {
+): (ex: PrevExerciseKey) => PrevSets | undefined {
   const sessions = hintSessions(history, beforeDate, day);
   const byName = buildPrevByName(history, beforeDate, day);
   return ex => {

@@ -74,8 +74,9 @@ function TabItem({ route, focused, onPress, color }: { route: any; focused: bool
 
 // ─── Animated Tab Bar ─────────────────────────────────────────────────────────
 
-/** The app's own bar, below iOS 26 and on Android. */
-function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) {
+/** The app's own bar, below iOS 26 and on Android. A tab goes by its route's
+ *  key (`navigateToTab`, what expo-router 58 hands a tab bar). */
+function AnimatedTabBar({ state, navigateToTab }: { state: any; navigateToTab: (routeKey: string) => void }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const pillScale  = useRef(new Animated.Value(1)).current;
   const [tabWidth, setTabWidth] = useState(0);
@@ -121,7 +122,7 @@ function AnimatedTabBar({ state, navigation }: { state: any; navigation: any }) 
       route={route}
       focused={state.index === index}
       color={tabColor()}
-      onPress={() => navigation.navigate(route.name)}
+      onPress={() => navigateToTab(route.key)}
     />
   ));
 
@@ -217,7 +218,7 @@ function AppTabLayout({ bg }: { bg: string }) {
     <Tabs
       screenOptions={{ headerShown: false, animation: "none", lazy: false, sceneStyle: { backgroundColor: bg } }}
       tabBar={(props) => (
-        <AnimatedTabBar state={props.state} navigation={props.navigation} />
+        <AnimatedTabBar state={props.state} navigateToTab={props.navigateToTab} />
       )}
     >
       <Tabs.Screen name="home" />

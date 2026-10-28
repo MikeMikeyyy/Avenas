@@ -3,9 +3,9 @@
 // sometimes back down), and the mess real logging has in it. Missed days,
 // Make Rest Day and Move to Tomorrow, a session finished after midnight, one
 // logged days later from the Journal, a machine taken (swap), an exercise
-// added, a custom workout, two sessions in a day, a session deleted, a
-// holiday with or without pausing first, kg switched to lbs, programs
-// finished, shelved and run again.
+// added, a warm-up or a set fewer, a custom workout, two sessions in a day, a
+// session deleted, a holiday with or without pausing first, kg switched to
+// lbs, programs finished, shelved and run again.
 //
 // Every write goes through the app's own functions, or repeats the screen's
 // few lines of storage writes with where they come from, as the solo flows do
@@ -19,7 +19,7 @@ import { getJSON, removeKey, setJSON } from "../../../utils/storage";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY,
   normaliseSets, programFinishDate,
-  type CompletedExercise, type CompletedWorkout, type Exercise, type PlannedExercise, type SavedProgram,
+  type CompletedExercise, type CompletedWorkout, type Exercise, type PlannedExercise, type ProgramSet, type SavedProgram,
 } from "../../../constants/programs";
 import { planOf } from "../../../utils/exerciseChanges";
 import { LB_PER_KG, UNIT_KEY, parseWeightToKg, trimNumber } from "../../../utils/units";
@@ -87,7 +87,15 @@ export type ProgramRun = { programId: string; startYMD: string; endYMD?: string;
 type Day = { name: string; exercises: Exercise[]; programId?: string; dayId?: string };
 
 /** A session exercise as the Workout tab holds it (withProgramIds, swaps). */
-export type SessionCard = { name: string; programExerciseId?: string; swappedFrom?: string; kind: LiftKind };
+export type SessionCard = {
+  name: string;
+  programExerciseId?: string;
+  swappedFrom?: string;
+  kind: LiftKind;
+  /** Its set rows by kind, warm-ups first, as it's finished with: what last
+   *  time's numbers are lined up with (utils/workout.ts prevHintsForRows). */
+  rows: ("warmup" | "working")[];
+};
 
 /** What the Workout tab has in front of it just before Complete Workout. */
 export type BeforeLog = {
@@ -119,6 +127,20 @@ function customDay(): Day {
     exercises: CUSTOM_WORKOUT.exercises.map(name => ({ id: "", name, sets: [1, 2, 3].map(() => ({ type: "working" as const, reps: "12" })) })),
   };
 }
+
+type SetKind = "warmup" | "working";
+
+/** What a card with no program exercise is done as: three sets of ten. */
+const UNPLANNED: ProgramSet[] = [1, 2, 3].map((): ProgramSet => ({ type: "working", reps: "10" }));
+
+/** `sets` with one of `kind` left out: the first warm-up (the lightest, so the
+ *  heavier is the one done) or the last working set (the one − takes). */
+function oneShort<T extends { type: SetKind }>(sets: T[], kind: SetKind | null): T[] {
+  if (!kind) return sets;
+  const at = kind === "warmup" ? sets.findIndex(s => s.type === "warmup") : sets.map(s => s.type).lastIndexOf("working");
+  return at < 0 ? sets : sets.filter((_, i) => i !== at);
+}
+
 const SHORT_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hm = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
@@ -141,6 +163,9 @@ export class Lifter {
   readonly phone: Phone;
   readonly seed: number;
   private readonly rand: () => number;
+  /** The chances of a set short (shortOf), apart from `rand` so leaving a set
+   *  out never changes what else the lifter does. */
+  private readonly shortRand: () => number;
   unit: "kg" | "lb" = "kg";
   readonly sessions: LedgerSession[] = [];
   readonly runs: ProgramRun[] = [];
@@ -166,6 +191,7 @@ export class Lifter {
   constructor(seed: number, readonly hooks: Hooks = {}) {
     this.seed = seed;
     this.rand = rng(seed);
+    this.shortRand = rng(seed ^ 0x5e75);
     this.phone = { uid: `lifter${seed}`, name: `Lifter ${seed}`, store: new Map(), offline: false };
     // A third of lifters switch to lbs for a stretch, somewhere in the run.
     this.unitSwitchDay = this.rand() < 0.35 ? 20 + Math.floor(this.rand() * 80) : -1;
@@ -486,10 +512,23 @@ export class Lifter {
     else if (this.chance(0.4)) this.strength.set(name, kg + (lift.stepKg ?? 2.5));
   }
 
+  /** Now and then a card is done a set short: a warm-up fewer (− takes the
+   *  last set, then a warm-up is turned into a working set) or a working set
+   *  fewer (−), which last time's numbers have to line up with
+   *  (prevHintsForRows). Decided from chances of its own, so each lifter's
+   *  story is the one it was before sets were left out. */
+  private shortOf(template: Exercise | null): SetKind | null {
+    const kinds = (template ? normaliseSets(template) : UNPLANNED).map(s => s.type);
+    const warmups = kinds.filter(k => k === "warmup").length;
+    if (warmups > 0 && this.shortRand() < 0.06) return "warmup";
+    if (kinds.length - warmups > 1 && this.shortRand() < 0.05) return "working";
+    return null;
+  }
+
   /** The sets the lifter logs for one card. */
   private setsFor(name: string, template: Exercise | null): LedgerSet[] {
     const lift = LIFTS[name];
-    const shape = template ? normaliseSets(template) : [{ type: "working" as const, reps: "10" }, { type: "working" as const, reps: "10" }, { type: "working" as const, reps: "10" }];
+    const shape = template ? normaliseSets(template) : UNPLANNED;
     const work = this.workingKg(name);
     let warmupN = 0;
     const warmups = shape.filter(s => s.type === "warmup").length;
@@ -528,7 +567,7 @@ export class Lifter {
   /** The Workout tab: today's workout, done and completed now (the clock). */
   private async trainToday(date: string, day: Day) {
     // withProgramIds, then swaps (the Change chip) and an add or two.
-    const cards: (SessionCard & { template: Exercise | null })[] = day.exercises.map(e => ({
+    const cards: (Omit<SessionCard, "rows"> & { template: Exercise | null })[] = day.exercises.map(e => ({
       name: e.name, programExerciseId: e.id, kind: LIFTS[e.name]?.kind ?? "weighted", template: e,
     }));
     for (const c of cards) {
@@ -555,6 +594,8 @@ export class Lifter {
       const [left] = cards.splice(this.between(1, cards.length - 1), 1);
       reordered.push(`skipped ${left.name}`);
     }
+    // A set short on a card now and then (shortOf).
+    const shorts = cards.map(c => this.shortOf(c.template));
     // The plan as the Workout tab set the session up: the day's exercises, in
     // the program's order (workout.tsx `planOf`, saved as CompletedWorkout.plan).
     const plan = day.dayId ? planOf(day.exercises) : undefined;
@@ -565,17 +606,21 @@ export class Lifter {
       history,
       programs: tab.programs,
       workout: { name: day.name, programId: day.programId, dayId: day.dayId },
-      cards: cards.map(({ template: _t, ...c }) => c),
+      cards: cards.map(({ template, ...c }, i) => {
+        // The card's rows as it's finished with, warm-ups first as the tab lays them out.
+        const kinds = oneShort(template ? normaliseSets(template) : UNPLANNED, shorts[i]).map(s => s.type);
+        return { ...c, rows: [...kinds.filter(k => k === "warmup"), ...kinds.filter(k => k !== "warmup")] };
+      }),
       isKg: this.unit === "kg",
       plan,
     });
 
-    const exercises: LedgerExercise[] = cards.map(c => ({
+    const exercises: LedgerExercise[] = cards.map((c, i) => ({
       name: c.name,
       place: c.programExerciseId,
       swappedFrom: c.swappedFrom,
       kind: c.kind,
-      sets: this.setsFor(c.name, c.template),
+      sets: oneShort(this.setsFor(c.name, c.template), shorts[i]),
       note: this.exerciseNote(),
     }));
     const finish = new Date();
@@ -594,7 +639,8 @@ export class Lifter {
       plan,
     });
     for (const c of cards) if (!c.swappedFrom) this.progress(c.name);
-    this.note(date, `logs ${day.name}${day.dayId ? ` (${day.dayId})` : ""} on ${tab.today}, done ${hm(finish)}${cards.some(c => c.swappedFrom) ? `, swapped ${cards.filter(c => c.swappedFrom).map(c => `${c.swappedFrom}→${c.name}`).join(", ")}` : ""}${reordered.length ? `, ${reordered.join(", ")}` : ""}`);
+    const fewer = cards.flatMap((c, i) => (shorts[i] ? [`${c.name} a ${shorts[i] === "warmup" ? "warm-up" : "working set"} short`] : []));
+    this.note(date, `logs ${day.name}${day.dayId ? ` (${day.dayId})` : ""} on ${tab.today}, done ${hm(finish)}${cards.some(c => c.swappedFrom) ? `, swapped ${cards.filter(c => c.swappedFrom).map(c => `${c.swappedFrom}→${c.name}`).join(", ")}` : ""}${reordered.length ? `, ${reordered.join(", ")}` : ""}${fewer.length ? `, ${fewer.join(", ")}` : ""}`);
   }
 
   /** The Workout tab's custom workout: named, exercises picked, maybe added

@@ -9,7 +9,9 @@
 // comparing one run of a program with another, user decision, 2026-10-13), and
 // a time the day came round without it keeps its slot as a miss (utils/
 // exerciseDaySlots.ts; user decision, 2026-10-22), so a row of the chart can
-// have no session in it. Past what fits, the row scrolls sideways and opens on
+// have no session in it. Under All programs the slots are every session from
+// any program, labelled by date instead (dateAxisLabels; user decision,
+// 2026-10-26). Past what fits, the row scrolls sideways and opens on
 // the newest, and the y-axis fits the sessions on screen. Pure, so the training
 // simulation checks every dot, block and bar lands inside the chart for every
 // number of sessions and every phone width (scripts/harness/training/
@@ -17,6 +19,7 @@
 // axis on the UI thread.
 
 import { niceAxis, type NiceAxis } from "./niceAxis";
+import { MONTH_NAMES } from "./dates";
 import type { ExerciseDataPoint, ExerciseMetricKey } from "../constants/progress";
 
 export function isExerciseMetric(v: unknown): v is ExerciseMetricKey {
@@ -183,6 +186,33 @@ export function visibleSlots(g: ExerciseChartGeometry, n: number, scrollX: numbe
     first: Math.max(0, Math.ceil((x0 - g.offset) / g.spacing - 0.5 - 1e-6)),
     last: Math.min(n - 1, Math.floor((x0 + g.viewportWidth - g.offset) / g.spacing - 0.5 + 1e-6)),
   };
+}
+
+/** What's written under a slot when the chart goes by date (All programs):
+ *  its session's date, or the year at the first session of a new year. */
+export type DateAxisLabel = { text: string; year: boolean };
+
+/**
+ * The labels under a chart that goes by date, one per slot (`dates` in slot
+ * order): "3 Mar", day first as the app writes dates, and at the first session
+ * of a new year the year itself, with a dashed line before it (`yearBreaks`,
+ * the slots that start one). A slot is too narrow for a date and a year both,
+ * and a year written over the plot would sit on its dots and bars; the year
+ * of every session is in its pop-up.
+ */
+export function dateAxisLabels(dates: readonly string[]): { labels: DateAxisLabel[]; yearBreaks: number[] } {
+  const labels: DateAxisLabel[] = [];
+  const yearBreaks: number[] = [];
+  dates.forEach((ymd, i) => {
+    const [y, m, d] = ymd.split("-").map(Number);
+    if (i > 0 && ymd.slice(0, 4) !== dates[i - 1].slice(0, 4)) {
+      yearBreaks.push(i);
+      labels.push({ text: String(y), year: true });
+      return;
+    }
+    labels.push({ text: Number.isFinite(d) && Number.isFinite(m) ? `${d} ${MONTH_NAMES[(m - 1) % 12]}` : ymd, year: false });
+  });
+  return { labels, yearBreaks };
 }
 
 /** A value's height from the top of the chart, on `axis`. */

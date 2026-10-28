@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT, GOLD, GOLD_DARK, NEU_BG, NEU_BG_DARK } from "../constants/theme";
-import { haloGlow, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { darkGlow, haloGlow, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { DEFAULT_SET_COUNT_KEY } from "../constants/programs";
 import { getJSON, setJSON } from "../utils/storage";
 import {
@@ -464,7 +464,7 @@ export default function ExercisePicker({
               accessibilityLabel={`Delete ${e.name}`}
               accessibilityRole="button"
             >
-              <View style={[styles.circleBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+              <View style={[styles.circleBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT, 0.5, 6, isDark) }]}>
                 <TrashIcon size={16} color="#fff" />
               </View>
             </BounceButton>
@@ -712,7 +712,7 @@ export default function ExercisePicker({
                     : `Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`}
                   accessibilityRole="button"
                 >
-                  <View style={styles.createCustomBtnWrap}>
+                  <View style={[styles.createCustomBtnWrap, darkGlow(styles.createCustomBtnWrap, isDark)]}>
                     <View style={styles.createCustomBtn}>
                       <Ionicons name={isChange ? "swap-horizontal" : "checkmark"} size={18} color="#fff" />
                       <Text style={styles.createCustomBtnText}>
@@ -726,7 +726,7 @@ export default function ExercisePicker({
               </View>
             ) : canAddCustom ? (
               <BounceButton onPress={() => onCreateCustom(search.trim())} accessibilityLabel="Create custom exercise" accessibilityRole="button">
-                <View style={styles.createCustomBtnWrap}>
+                <View style={[styles.createCustomBtnWrap, darkGlow(styles.createCustomBtnWrap, isDark)]}>
                   <View style={styles.createCustomBtn}>
                     <Ionicons name="add-circle-outline" size={18} color="#fff" />
                     <Text style={styles.createCustomBtnText}>Create Custom Exercise</Text>

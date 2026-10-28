@@ -4,7 +4,7 @@
 // as a log-in does. See lib/auth.ts for why it's a code and not a link.
 
 import { useEffect, useRef, useState } from "react";
-import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity } from "react-native";
+import { Alert, View, Text, StyleSheet, TextInput, TouchableOpacity, type TextInputInstance } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -69,7 +69,7 @@ export default function ForgotPasswordScreen() {
   // A code works once: after it's taken, only the password is retried.
   const [verified, setVerified] = useState(false);
   const [resendIn, setResendIn] = useState(0);
-  const codeRef = useRef<TextInput>(null);
+  const codeRef = useRef<TextInputInstance>(null);
 
   useEffect(() => {
     if (resendIn <= 0) return;

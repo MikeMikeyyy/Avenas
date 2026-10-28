@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Circle } from "react-native-svg";
 import { Image } from "expo-image";
@@ -23,7 +23,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
-import { pill, pillGlow } from "../constants/buttons";
+import { darkGlow, glowOpacity, pill, pillGlow } from "../constants/buttons";
 import {
   CUSTOM_KEY, MAX_CUSTOM, MAX_MEDIA_BYTES, MAX_VIDEO_SECONDS, MUSCLE_GROUPS,
   type SelectableMuscle, type CustomExercise,
@@ -366,7 +366,7 @@ export default function CreateCustomExerciseScreen() {
                     ...(active && {
                       shadowColor: ACCT,
                       shadowOffset: { width: 0, height: 3 },
-                      shadowOpacity: 0.5,
+                      shadowOpacity: glowOpacity(0.5, isDark),
                       shadowRadius: 8,
                     }),
                   },
@@ -487,7 +487,7 @@ export default function CreateCustomExerciseScreen() {
           onPress={canSave && !saving ? handleSave : undefined}
           style={{ opacity: canSave && !saving ? 1 : 0.4, marginTop: 8 }}
         >
-          <View style={styles.saveBtn}>
+          <View style={[styles.saveBtn, darkGlow(styles.saveBtn, isDark)]}>
             <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
             <Text style={styles.saveBtnText}>{saving ? "Saving..." : "Save Exercise"}</Text>
           </View>

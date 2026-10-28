@@ -19,8 +19,12 @@ public class AvenasAppearanceAppDelegateSubscriber: ExpoAppDelegateSubscriber {
     guard SavedTheme.isDark else { return }
 
     // A turn of the run loop later, so the light first frame is up to fade from.
+    // Since SDK 58 the window is the scene's (the iOS scene life cycle), and the
+    // scene's becoming active reaches this through Expo's forwarding; the app
+    // delegate's own window stays only as a fallback.
     DispatchQueue.main.async {
-      guard let window = UIApplication.shared.delegate?.window ?? nil,
+      let sceneWindow = MainActor.assumeIsolated { Utilities.keyWindow() }
+      guard let window = sceneWindow ?? UIApplication.shared.delegate?.window ?? nil,
             // The JavaScript has already set it: it read the setting itself.
             window.overrideUserInterfaceStyle == .unspecified else { return }
       UIView.transition(with: window, duration: 0.3, options: [.transitionCrossDissolve, .allowUserInteraction]) {

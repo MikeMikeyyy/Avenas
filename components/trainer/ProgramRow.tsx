@@ -81,13 +81,13 @@ export function RowActions({ label, onOpen, onRemove, accessibilityLabel, remove
       </BounceButton>
       {accept ? (
         <BounceButton style={{ flex: 1 }} onPress={accept.onPress} needsConnection accessibilityLabel={accept.accessibilityLabel}>
-          <View style={[styles.actionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+          <View style={[styles.actionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
             <Text style={[styles.actionText, { color: "#fff" }]}>Accept</Text>
           </View>
         </BounceButton>
       ) : null}
       <BounceButton style={{ flex: 1 }} onPress={onRemove} needsConnection={removeNeedsConnection} accessibilityLabel={removeLabel}>
-        <View style={[styles.actionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+        <View style={[styles.actionBtn, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT, 0.5, 6, isDark) }]}>
           <TrashIcon size={16} color="#fff" />
           <Text style={[styles.actionText, { color: "#fff" }]}>Remove</Text>
         </View>

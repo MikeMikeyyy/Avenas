@@ -24,7 +24,7 @@ import Avatar from "../Avatar";
 import GroupAvatar from "./GroupAvatar";
 import MemberStack from "./MemberStack";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, NEU_BG, NEU_BG_DARK, PAUSED_ORANGE } from "../../constants/theme";
-import { pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
+import { darkGlow, glowOpacity, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { fetchPeopleUnits } from "../../lib/clientTraining";
@@ -177,7 +177,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                 </Text>
               </View>
               <View style={[styles.check, sendToAll
-                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                 : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
               ]}>
                 {sendToAll && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -228,7 +228,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                         )}
                       </View>
                       <View style={[styles.check, checked
-                        ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                        ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                         : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
                       ]}>
                         {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -279,7 +279,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                       {c.note ? <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={1}>{c.note}</Text> : null}
                     </View>
                     <View style={[styles.check, checked
-                      ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                      ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                       : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
                     ]}>
                       {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -294,7 +294,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
 
       <View style={styles.actions}>
         <BounceButton onPress={canSend ? handleConfirm : undefined}>
-          <View style={[styles.send, { opacity: canSend ? 1 : 0.4 }]}>
+          <View style={[styles.send, darkGlow(styles.send, isDark), { opacity: canSend ? 1 : 0.4 }]}>
             <Text style={styles.sendText}>{ctaLabel}</Text>
           </View>
         </BounceButton>

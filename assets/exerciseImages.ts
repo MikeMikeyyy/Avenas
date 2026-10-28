@@ -3,10 +3,9 @@
 //   square crop, or a kept photo).
 //   EXERCISE_FRAMES: an illustration's full positions for the exercise screen
 //   (start and end, or one hold). Kept photos have none: their still is it.
+// Each is a bundled asset (require), which expo-image's source takes as is.
 
-import type { ImageSourcePropType } from "react-native";
-
-export const EXERCISE_THUMBS: Record<string, ImageSourcePropType> = {
+export const EXERCISE_THUMBS: Record<string, number> = {
   "90-90-hip-stretch": require("./exercises/90-90-hip-stretch-thumb.webp"),
   "ab-wheel-rollout": require("./exercises/ab-wheel-rollout-thumb.webp"),
   "adductor-rock-backs": require("./exercises/adductor-rock-backs-thumb.webp"),
@@ -445,7 +444,7 @@ export const EXERCISE_THUMBS: Record<string, ImageSourcePropType> = {
   "zottman-curl": require("./exercises/zottman-curl-thumb.webp"),
 };
 
-export const EXERCISE_FRAMES: Record<string, ImageSourcePropType[]> = {
+export const EXERCISE_FRAMES: Record<string, number[]> = {
   "90-90-hip-stretch": [require("./exercises/90-90-hip-stretch-hold.webp")],
   "ab-wheel-rollout": [require("./exercises/ab-wheel-rollout-start.webp"), require("./exercises/ab-wheel-rollout-end.webp")],
   "adductor-rock-backs": [require("./exercises/adductor-rock-backs-start.webp"), require("./exercises/adductor-rock-backs-end.webp")],

@@ -214,7 +214,7 @@ const prevNote = buildPrevNoteLookup(logged, undefined, scope);
 eq(prevSets({ ...asB, programExerciseId: "e3" }), undefined, "again: no \"Previous\" numbers from the deleted one");
 eq(prevSets(asB), undefined, "again: ...nor when added mid-session");
 eq(prevNote({ ...asB, programExerciseId: "e3" }), undefined, "again: no \"last time\" note from it either");
-eq(prevSets({ ...asA, programExerciseId: "e2" }), ["25×8", "25×8"], "again: (the deleted one's own numbers are still there for it)");
+eq(prevSets({ ...asA, programExerciseId: "e2" })?.working, ["25×8", "25×8"], "again: (the deleted one's own numbers are still there for it)");
 eq(prevNote({ ...asA, programExerciseId: "e2" }), "lean into it", "again: (and its note)");
 
 const firstB = session("w4", "2026-09-08", [
@@ -263,7 +263,7 @@ eq(customIdForName("Cable Twist", customs3), "cxC", "before ids: made again, it'
 const legacyScope = prevDayScopeFor(resolved!, program2);
 eq(buildPrevSetsLookup(legacyLogged, undefined, legacyScope)({ name: "Cable Twist", customId: "cxC" }), undefined,
   "before ids: the new one shows none of the old one's numbers");
-eq(buildPrevSetsLookup(legacyLogged, undefined, legacyScope)({ name: "Cable Twist" }), ["15×8"],
+eq(buildPrevSetsLookup(legacyLogged, undefined, legacyScope)({ name: "Cable Twist" })?.working, ["15×8"],
   "before ids: (the old one's are there for it)");
 
 // ─── 3. The store, on an in-memory phone ─────────────────────────────────────

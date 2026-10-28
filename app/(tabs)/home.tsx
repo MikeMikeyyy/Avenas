@@ -9,15 +9,15 @@ import { scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { useRouter, useFocusEffect } from "expo-router";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../components/MaskedView";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path, Circle, Defs, Filter, FeGaussianBlur, Line } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, NEU_BG, NEU_BG_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS, PAUSED_ORANGE } from "../../constants/theme";
-import { pill, pillGlow, PILL_RADIUS } from "../../constants/buttons";
+import { APP_LIGHT, APP_DARK, NEU_BG, CARD_SHADE, CARD_GLOW, CARD_SHADE_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS, PAUSED_ORANGE } from "../../constants/theme";
+import { glowOpacity, pill, pillGlow, PILL_RADIUS } from "../../constants/buttons";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useStreak } from "../../contexts/StreakContext";
@@ -623,7 +623,7 @@ function HomeScreen() {
                     <View style={[styles.quickOrbGlow, {
                       backgroundColor: ORB_GRADS[a.grad].glow,
                       shadowColor: ORB_GRADS[a.grad].glow,
-                      shadowOpacity: isDark ? 0.45 : 0.55,
+                      shadowOpacity: glowOpacity(0.55, isDark),
                     }]}>
                       <LinearGradient
                         colors={ORB_GRADS[a.grad].colors}
@@ -725,14 +725,8 @@ function HomeScreen() {
             <View style={styles.weekCircleCol}>
               <Text style={[styles.weekCircleLabelTop, { color: t.tp, alignSelf: "center" }]}>Completed Workouts</Text>
               <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-              <View style={[styles.weekCircleBtn, {
-                backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
-                shadowColor: isDark ? "#0e1020" : "#a3afc0",
-              }]}>
-                <View style={[styles.weekCircleBtnHighlight, {
-                  backgroundColor: isDark ? NEU_BG_DARK : NEU_BG,
-                  shadowColor: isDark ? "#2e3555" : "#FFFFFF",
-                }]}>
+              <View style={[styles.weekCircleBtn, isDark && styles.weekCircleFlat]}>
+                <View style={[styles.weekCircleBtnHighlight, isDark && styles.weekCircleFlat]}>
               <View style={styles.weekCircleWrap}>
                 <Svg width={SVG_SIZE} height={SVG_SIZE} style={{ transform: [{ rotate: "-90deg" }] }}>
                   <Defs>
@@ -862,8 +856,8 @@ function HomeScreen() {
       </View>
 
       <BounceButton style={[styles.avatar, { top: insets.top, right: 20 }]} onPress={() => router.navigate("/settings")}>
-        <View style={[styles.avatarHighlight, { shadowColor: isDark ? "#4d5363" : "#FFFFFF" }]}>
-          <View style={[styles.avatarShadow, { shadowColor: isDark ? "#4d5363" : "#a3afc0" }]}>
+        <View style={[styles.avatarHighlight, isDark && { shadowOpacity: 0 }]}>
+          <View style={[styles.avatarShadow, isDark && styles.avatarShadowDark]}>
             <BlurView intensity={90} tint="extraLight" style={styles.avatarBorder}>
               <View style={styles.avatarInner}>
                 {profile.photoUri
@@ -886,8 +880,10 @@ const styles = StyleSheet.create({
   name: { fontFamily: FontFamily.bold, fontSize: 28, color: TP, marginTop: 2 },
   logo: { width: 56, height: 56, marginBottom: 20 },
   avatar: { position: "absolute", zIndex: 10 },
-  avatarHighlight: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: "#FFFFFF", shadowOffset: { width: -3, height: -3 }, shadowOpacity: 0.9, shadowRadius: 6 },
-  avatarShadow: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: "#a3afc0", shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.7, shadowRadius: 7 },
+  avatarHighlight: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: CARD_GLOW, shadowOffset: { width: -3, height: -3 }, shadowOpacity: 0.9, shadowRadius: 6 },
+  avatarShadow: { borderRadius: 24, backgroundColor: AVATAR_BG, shadowColor: CARD_SHADE, shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.3, shadowRadius: 7 },
+  // On dark the white avatar sits on a plain black shadow, as the cards do.
+  avatarShadowDark: { shadowColor: CARD_SHADE_DARK, shadowOpacity: 0.55, shadowOffset: { width: 0, height: 4 } },
   avatarBorder: { width: 48, height: 48, borderRadius: 24, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   avatarInner: { width: 44, height: 44, borderRadius: 22, backgroundColor: AVATAR_BG, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   avatarImage: { width: 44, height: 44, borderRadius: 22 },
@@ -955,8 +951,11 @@ const styles = StyleSheet.create({
   weekDaysCol:         { flex: 1, justifyContent: "center" },
   weekVDivider:        { width: 1, marginHorizontal: 10, alignSelf: "stretch" },
   weekCircleCol:       { flex: 1, alignItems: "center", justifyContent: "flex-start", paddingTop: 6 },
-  weekCircleBtn:       { borderRadius: 999, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.55, shadowRadius: 8 },
-  weekCircleBtnHighlight: { borderRadius: 999, width: 124, height: 124, shadowOffset: { width: -2, height: -2 }, shadowOpacity: 0.6, shadowRadius: 4, alignItems: "center", justifyContent: "center" },
+  weekCircleBtn:       { borderRadius: 999, backgroundColor: NEU_BG, shadowColor: CARD_SHADE, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.35, shadowRadius: 8 },
+  weekCircleBtnHighlight: { borderRadius: 999, width: 124, height: 124, backgroundColor: NEU_BG, shadowColor: CARD_GLOW, shadowOffset: { width: -2, height: -2 }, shadowOpacity: 0.6, shadowRadius: 4, alignItems: "center", justifyContent: "center" },
+  // On dark the ring sits straight on the card, as Graphite was designed: the
+  // disc under it goes clear and casts nothing.
+  weekCircleFlat:      { backgroundColor: "transparent", shadowOpacity: 0 },
   weekStatCard:        { borderRadius: 20 },
   weekStatGrid:        { flexDirection: "row", alignItems: "center" },
   weekStatItem:        { flex: 1, alignItems: "center", paddingVertical: 6, gap: 3 },

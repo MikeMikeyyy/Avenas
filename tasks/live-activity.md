@@ -33,7 +33,7 @@ development is unaffected.
 | Widget extension (card UI, iOS 17+) | `targets/workout-widget/` |
 | ⚠️ Duplicate of the shared Swift file | `targets/workout-widget/WorkoutActivitySupport.swift` |
 | Pure payload builder | `utils/liveActivity.ts` |
-| Lifecycle hook (push / end / replay actions) | `hooks/useWorkoutLiveActivity.ts` |
+| Lifecycle hook (push / end / replay actions) | `hooks/useWorkoutLiveActivity.ts` (when pushes go: `cardPushes` in `utils/liveActivity.ts`) |
 | Screen wiring | `app/(tabs)/workout.tsx` ("Lock-screen Live Activity" block) |
 | Settings toggle | `app/settings.tsx` (`LIVE_ACTIVITY_KEY`, default ON) |
 
@@ -114,6 +114,12 @@ eas build --profile development --platform ios
    by itself.
 5. Finish or discard the workout → card disappears. Toggle OFF in Settings →
    card disappears mid-workout and stays gone.
+5a. Change a card's sets in the app (− the last set, turn a warmup into a
+   working set) and lock the phone **at once** → the lock-screen card's dots
+   and set match the page; the same leaving for the home screen (the Dynamic
+   Island). A change waits 400ms to coalesce typing, and one still waiting
+   goes as the app leaves the foreground (`cardPushes` flush). Before
+   2026-10-28 it didn't, and a quick lock left the card a change behind.
 6. Dynamic Island: compact shows the rest countdown while resting, elapsed
    otherwise; long-press expands to the full controls.
 

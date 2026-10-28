@@ -13,7 +13,7 @@
 //   saveBtn: { ...pill(), backgroundColor: ACCT, ...pillGlow(ACCT) }
 //   cancelBtn: { ...pill(PILL_H_SM) }
 
-import type { ViewStyle } from "react-native";
+import { StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 
 /** Big enough that the ends stay fully round at any height React Native gives
  *  the view — it clamps to half the shorter side. Deliberately not `height / 2`:
@@ -51,17 +51,40 @@ export const PILL_SHADOW: ViewStyle = {
   shadowRadius: 4,
 };
 
+/** A button's coloured glow on dark mode, as a share of its light-mode
+ *  strength. A glow blooms far brighter on Graphite's near-black page than on
+ *  a light one (user report, 2026-10-28: "a little too bright and glowy" on
+ *  dark), so every button glow is laid on at this share there. One number:
+ *  raise it for more glow on dark, lower it for less. */
+export const DARK_GLOW_SCALE = 0.6;
+
+/** A glow's shadowOpacity for the theme: `opacity` on light, DARK_GLOW_SCALE
+ *  of it on dark. For a button glow written out by hand. */
+export function glowOpacity(opacity: number, isDark: boolean): number {
+  return isDark ? opacity * DARK_GLOW_SCALE : opacity;
+}
+
+/** The dark-mode strength of the glow in a stylesheet entry, laid after it:
+ *  `[styles.saveBtn, darkGlow(styles.saveBtn, isDark)]`. Its shadowOpacity at
+ *  DARK_GLOW_SCALE; null on light, so nothing changes there. */
+export function darkGlow(style: StyleProp<ViewStyle>, isDark: boolean): ViewStyle | null {
+  if (!isDark) return null;
+  const opacity = StyleSheet.flatten(style)?.shadowOpacity;
+  return typeof opacity === "number" ? { shadowOpacity: opacity * DARK_GLOW_SCALE } : null;
+}
+
 /**
  * A CENTRED halo rather than a drop shadow — the colour bleeding evenly on all
  * sides instead of downward. This is the treatment destructive buttons use (the
  * round remove-set button in a workout card), and it reads as "this is hot"
- * where pillGlow's downward bleed just reads as raised.
+ * where pillGlow's downward bleed just reads as raised. Pass `isDark` where
+ * it's drawn inline, so dark mode lays it on softer (DARK_GLOW_SCALE).
  */
-export function haloGlow(color: string, opacity = 0.5, radius = 6): ViewStyle {
+export function haloGlow(color: string, opacity = 0.5, radius = 6, isDark = false): ViewStyle {
   return {
     shadowColor: color,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: opacity,
+    shadowOpacity: glowOpacity(opacity, isDark),
     shadowRadius: radius,
   };
 }
@@ -81,12 +104,13 @@ export const GLASS_DEPTH_SHAPE = {
 } as const;
 
 /** A coloured glow under a filled pill — the accent bleeding downward, which
- *  is what makes a primary button read as raised without a hard offset. */
-export function pillGlow(color: string, opacity = 0.35): ViewStyle {
+ *  is what makes a primary button read as raised without a hard offset. Pass
+ *  `isDark` where it's drawn inline, so dark mode lays it on softer. */
+export function pillGlow(color: string, opacity = 0.35, isDark = false): ViewStyle {
   return {
     shadowColor: color,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: opacity,
+    shadowOpacity: glowOpacity(opacity, isDark),
     shadowRadius: 10,
   };
 }

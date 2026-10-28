@@ -66,6 +66,12 @@ export function flatIndexOf(warmupCount: number, type: SetType, idx: number): nu
   return type === "warmup" ? idx : warmupCount + idx;
 }
 
+/** An exercise's rows by kind, in that same order: what last time's sets are
+ *  lined up with (utils/workout.ts prevHintsForRows). */
+export function rowTypesOf(sets: { warmup: readonly unknown[]; working: readonly unknown[] }): SetType[] {
+  return [...sets.warmup.map(() => "warmup" as const), ...sets.working.map(() => "working" as const)];
+}
+
 /** What ticking a still-empty set fills in: last time's numbers at its row
  *  ("80×8" is 80 and 8, "×8" a bodyweight set's 8 reps, "80×" a weight with no
  *  reps: utils/workout.ts formatPrevSets always writes both sides).

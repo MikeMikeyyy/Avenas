@@ -15,19 +15,21 @@ import {
   Easing,
   PanResponder,
   ScrollView,
+  type ScrollViewInstance,
+  type TextInputInstance,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
-import { useRouter, useNavigation, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useRouter, useFocusEffect, useLocalSearchParams, usePreventRemove } from "expo-router";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE } from "../constants/theme";
-import { haloGlow, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE, SET_INPUT_DARK } from "../constants/theme";
+import { darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, NEW_PROGRAM_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
 import { activateProgram, type FinishedProgram } from "../utils/programLifecycle";
@@ -81,8 +83,9 @@ function warnStorage(op: string, key: string, err: unknown) {
 /**
  * Compare two WorkoutMaps by value. Key insertion order is irrelevant
  * (sorting keys before stringify). Use this anywhere we ask "did the
- * workouts actually change?" — both the in-memo `hasChanges` flag and the
- * `beforeRemove` navigation guard must agree to avoid spurious prompts.
+ * workouts actually change?" — the `hasChanges` flag behind both the Update
+ * button and the unsaved-changes guard, so they agree and nothing prompts
+ * spuriously.
  */
 function workoutsEqual(a: WorkoutMap, b: WorkoutMap): boolean {
   const sortedJson = (w: WorkoutMap) =>
@@ -222,7 +225,7 @@ function WeightSetInput({
   valueKg: string | undefined;
   isKg: boolean;
   onCommitKg: (kg: string) => void;
-  inputRef: (r: TextInput | null) => void;
+  inputRef: (r: TextInputInstance | null) => void;
   onFocus: () => void;
   style: any;
   placeholderColor: string;
@@ -388,9 +391,9 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
   useEffect(() => { prevSetCount.current = sets.length; }, [sets.length]);
 
   // Refs for keyboard prev/next navigation across set inputs
-  const weightRefs  = useRef<Array<TextInput | null>>([]);
-  const repsRefs    = useRef<Array<TextInput | null>>([]);
-  const repsMaxRefs = useRef<Array<TextInput | null>>([]);
+  const weightRefs  = useRef<Array<TextInputInstance | null>>([]);
+  const repsRefs    = useRef<Array<TextInputInstance | null>>([]);
+  const repsMaxRefs = useRef<Array<TextInputInstance | null>>([]);
 
   // Pre-compute set labels (W for warmup, 1/2/3 for working)
   let wc = 0;
@@ -605,7 +608,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
 
             {/* Weight column */}
             <View style={styles.exSetValueCol}>
-              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                 <WeightSetInput
                   inputRef={r => { weightRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
@@ -630,7 +633,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
 
             {/* Rep column */}
             <View style={[styles.exSetValueCol, styles.exSetColRep]}>
-              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                 <TextInput
                   ref={r => { repsRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
@@ -652,7 +655,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
               <Reanimated.View style={[{ overflow: "hidden" }, rangeOuterStyle]}>
                 <Reanimated.View style={[{ flexDirection: "row", alignItems: "center", width: RANGE_EXTENSION_WIDTH, transformOrigin: "left" }, rangeInnerStyle]}>
                   <Text style={{ color: t.ts, fontSize: 13, fontFamily: FontFamily.semibold, marginHorizontal: 4 }}>–</Text>
-                  <View style={[styles.exSetInputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                  <View style={[styles.exSetInputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                     <TextInput
                       ref={r => { repsMaxRefs.current[idx] = r; }}
                       style={[styles.exSetInputText, { color: t.tp }]}
@@ -810,7 +813,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
                 accessibilityLabel="Confirm rest timer"
                 accessibilityRole="button"
               >
-                <View style={styles.restDoneWrap}>
+                <View style={[styles.restDoneWrap, darkGlow(styles.restDoneWrap, isDark)]}>
                   <View style={styles.restDoneBtn}>
                     <Text style={styles.restDone}>Done</Text>
                   </View>
@@ -880,7 +883,7 @@ function StepIndicator({ step, isDark, canStep2, onStepPress }: {
             borderColor: rim,
             shadowColor: ACCT,
             shadowOffset: { width: 0, height: 3 },
-            shadowOpacity: 0.55,
+            shadowOpacity: glowOpacity(0.55, isDark),
             shadowRadius: 8,
           }]}>
             <Text style={styles.stepDotText}>1</Text>
@@ -898,7 +901,7 @@ function StepIndicator({ step, isDark, canStep2, onStepPress }: {
             borderColor: rim,
             shadowColor: ACCT,
             shadowOffset: { width: 0, height: 3 },
-            shadowOpacity: 0.55,
+            shadowOpacity: glowOpacity(0.55, isDark),
             shadowRadius: 8,
           } : { backgroundColor: divider, borderColor: rim }]}>
             <Text style={[styles.stepDotText, { color: step === 2 ? "#fff" : muted }]}>2</Text>
@@ -931,8 +934,8 @@ function Step1({
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
-  const nameInputRef = useRef<TextInput | null>(null);
-  const dayInputRefs = useRef<Array<TextInput | null>>([]);
+  const nameInputRef = useRef<TextInputInstance | null>(null);
+  const dayInputRefs = useRef<Array<TextInputInstance | null>>([]);
 
   /**
    * The keyboard bar's arrows step through the WORKOUT days' names, top to
@@ -1085,7 +1088,7 @@ function Step1({
                     backgroundColor: ACCT,
                     shadowColor: ACCT,
                     shadowOffset: { width: 0, height: 3 },
-                    shadowOpacity: 0.5,
+                    shadowOpacity: glowOpacity(0.5, isDark),
                     shadowRadius: 8,
                   } : { backgroundColor: divider }]}
                   activeOpacity={0.7}
@@ -1416,7 +1419,7 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
               accessibilityLabel="Done"
               accessibilityRole="button"
             >
-              <View style={styles.restDoneWrap}>
+              <View style={[styles.restDoneWrap, darkGlow(styles.restDoneWrap, isDark)]}>
                 <View style={styles.restDoneBtn}>
                   <Text style={styles.restDone}>Done</Text>
                 </View>
@@ -1767,7 +1770,7 @@ function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, 
                 accessibilityLabel="Done"
                 accessibilityRole="button"
               >
-                <View style={styles.restDoneWrap}>
+                <View style={[styles.restDoneWrap, darkGlow(styles.restDoneWrap, isDark)]}>
                   <View style={styles.restDoneBtn}>
                     <Text style={styles.restDone}>Done</Text>
                   </View>
@@ -1790,7 +1793,7 @@ function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, 
                 accessibilityLabel="Add exercise"
                 accessibilityRole="button"
               >
-                <View style={styles.restDoneWrap}>
+                <View style={[styles.restDoneWrap, darkGlow(styles.restDoneWrap, isDark)]}>
                   <View style={[styles.restDoneBtn, { paddingHorizontal: 24 }]}>
                     <Text style={styles.restDone}>Add Exercise</Text>
                   </View>
@@ -1905,7 +1908,7 @@ const DayCard = memo(function DayCard({
             );
           })}
           <BounceButton onPress={() => onOpenPicker(day)} accessibilityLabel="Add exercise" accessibilityRole="button">
-            <View style={styles.addExBtnWrap}>
+            <View style={[styles.addExBtnWrap, darkGlow(styles.addExBtnWrap, isDark)]}>
               <View style={styles.addExBtn}>
                 <Ionicons name="add" size={18} color="#fff" />
                 <Text style={styles.addExText}>Add Exercise</Text>
@@ -1976,7 +1979,6 @@ export default function NewProgramScreen() {
   // How far up the workout bar reaches, so the page scrolls clear of it.
   const barsReach = useFloatingBarsReach();
   const router = useRouter();
-  const navigation = useNavigation();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { id: editId, reviewId, sharedId, groupId } = useLocalSearchParams<{ id?: string; reviewId?: string; sharedId?: string; groupId?: string }>();
@@ -2164,8 +2166,6 @@ export default function NewProgramScreen() {
 
   // Tracks whether the draft has been loaded — prevents auto-save overwriting it before load completes
   const isDraftLoaded = useRef(false);
-  // Set to true before intentional navigation so beforeRemove skips the dialog
-  const isLeavingIntentionally = useRef(false);
   // Snapshot of the program state as it was loaded in edit mode
   // `dayIds` rides along purely so the save can tell which days changed identity
   // (see forkChangedDayIds). It is deliberately NOT part of `hasChanges` — ids
@@ -2455,100 +2455,88 @@ export default function NewProgramScreen() {
     }
   }, []);
 
-  // Intercept back navigation — prompt save or discard
-  useEffect(() => {
-    const unsubscribe = navigation.addListener("beforeRemove", (e: any) => {
-      if (isLeavingIntentionally.current) return;
-
-      if (isEditMode || isReviewMode || isSharedEditMode) {
-        const orig = originalEdit.current;
-        if (!orig) return;
-        // Use workoutsEqual (sorted-keys form) — matches the `hasChanges` useMemo
-        // exactly. Previously this used plain JSON.stringify, so insertion-order
-        // differences between draft and original surfaced as phantom prompts.
-        const hasChanges =
-          name !== orig.name ||
-          totalWeeks !== orig.totalWeeks ||
-          cycleDays !== orig.cycleDays ||
-          JSON.stringify(isTrainingDay) !== JSON.stringify(orig.isTrainingDay) ||
-          JSON.stringify(cyclePattern) !== JSON.stringify(orig.cyclePattern) ||
-          !workoutsEqual(workouts, orig.workouts);
-        if (!hasChanges) return;
-      } else {
-        const hasDraft =
-          name.trim().length > 0 ||
-          step === 2 ||
-          Object.values(workouts).some(exs => exs.length > 0);
-        if (!hasDraft) return;
-      }
-
-      e.preventDefault();
-      Alert.alert(
-        "Unsaved Changes",
-        "Would you like to save your progress or discard it?",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Discard",
-            style: "destructive",
-            onPress: () => {
-              isLeavingIntentionally.current = true;
-              draftDeleted.current = true;
-              AsyncStorage.removeItem(DRAFT_KEY).catch((err) => warnStorage("removeItem", DRAFT_KEY, err));
-              navigation.dispatch(e.data.action);
-            },
+  // Leaving with something unsaved asks first: save it or discard it. Unsaved
+  // is a program being edited that has changed (`hasChanges`, through
+  // workoutsEqual's sorted keys: plain JSON.stringify read insertion-order
+  // differences as phantom changes), or a new one begun. usePreventRemove
+  // holds the screen while it would ask (expo-router 58 dropped the
+  // `beforeRemove` event this used to listen for); leaving on purpose, a save
+  // or Discard, stands it down first.
+  const [leaving, setLeaving] = useState(false);
+  const unsaved = isEditMode || isReviewMode || isSharedEditMode
+    ? hasChanges
+    : name.trim().length > 0 || step === 2 || Object.values(workouts).some(exs => exs.length > 0);
+  const standDownLeaveGuard = usePreventRemove(!leaving && unsaved, ({ repeat }) => {
+    Alert.alert(
+      "Unsaved Changes",
+      "Would you like to save your progress or discard it?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            setLeaving(true);
+            draftDeleted.current = true;
+            AsyncStorage.removeItem(DRAFT_KEY).catch((err) => warnStorage("removeItem", DRAFT_KEY, err));
+            repeat();
           },
-          {
-            text: isReviewMode ? "Save" : "Save Draft",
-            onPress: async () => {
-              if (isReviewMode && reviewId) {
-                // Review mode has no auto-save draft — persist edits to the
-                // SentProgram snapshot before navigating away.
-                const programName = name.trim() || "My Program";
-                const savedCyclePattern = cyclePattern.map((n, i) => isTrainingDay[i] ? (n.trim() || "Workout") : "Rest");
-                const savedDayIds = normalizeDayIds(dayIds, savedCyclePattern.length);
-                // Same re-key as handleFinish — this path can fire from Step 1,
-                // where a typed rename hasn't been folded into the keys yet.
-                const savedWorkouts = stampForSave(canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay));
-                const trainingDays = isTrainingDay.filter(Boolean).length;
-                try {
-                  const target = await loadReviewEntry();
-                  const prev = target?.programSnapshot;
-                  const startDate = formatStoredDate(new Date());
-                  const updatedSnap: SavedProgram = {
-                    id: prev?.id ?? `snap_${Date.now()}`,
-                    name: programName,
-                    totalWeeks,
-                    currentWeek: prev?.currentWeek ?? 0,
-                    status: prev?.status ?? "created",
-                    startDate: prev?.startDate ?? startDate,
-                    trainingDays,
-                    cycleDays,
-                    cyclePattern: savedCyclePattern,
-                    dayIds: savedDayIds,
-                    workouts: savedWorkouts,
-                    extraWorkouts: prev?.extraWorkouts,
-                    cycleOffset: prev?.cycleOffset,
-                    completedDate: prev?.completedDate,
-                  };
-                  await updateSentProgram(reviewId, { programSnapshot: updatedSnap, programName, lastEditedAtISO: new Date().toISOString() });
-                } catch (err) {
-                  // Stay put and say so: leaving looked like a save that
-                  // worked (withdrawn meanwhile, or offline). Discard is still
-                  // there to leave without it.
-                  Alert.alert("Couldn't save", alertMessage(err, "Check your connection and try again."));
-                  return;
-                }
+        },
+        {
+          text: isReviewMode ? "Save" : "Save Draft",
+          onPress: async () => {
+            if (isReviewMode && reviewId) {
+              // Review mode has no auto-save draft — persist edits to the
+              // SentProgram snapshot before navigating away.
+              const programName = name.trim() || "My Program";
+              const savedCyclePattern = cyclePattern.map((n, i) => isTrainingDay[i] ? (n.trim() || "Workout") : "Rest");
+              const savedDayIds = normalizeDayIds(dayIds, savedCyclePattern.length);
+              // Same re-key as handleFinish — this path can fire from Step 1,
+              // where a typed rename hasn't been folded into the keys yet.
+              const savedWorkouts = stampForSave(canonicalizeWorkouts(workouts, cyclePattern, isTrainingDay));
+              const trainingDays = isTrainingDay.filter(Boolean).length;
+              try {
+                const target = await loadReviewEntry();
+                const prev = target?.programSnapshot;
+                const startDate = formatStoredDate(new Date());
+                const updatedSnap: SavedProgram = {
+                  id: prev?.id ?? `snap_${Date.now()}`,
+                  name: programName,
+                  totalWeeks,
+                  currentWeek: prev?.currentWeek ?? 0,
+                  status: prev?.status ?? "created",
+                  startDate: prev?.startDate ?? startDate,
+                  trainingDays,
+                  cycleDays,
+                  cyclePattern: savedCyclePattern,
+                  dayIds: savedDayIds,
+                  workouts: savedWorkouts,
+                  extraWorkouts: prev?.extraWorkouts,
+                  cycleOffset: prev?.cycleOffset,
+                  completedDate: prev?.completedDate,
+                };
+                await updateSentProgram(reviewId, { programSnapshot: updatedSnap, programName, lastEditedAtISO: new Date().toISOString() });
+              } catch (err) {
+                // Stay put and say so: leaving looked like a save that
+                // worked (withdrawn meanwhile, or offline). Discard is still
+                // there to leave without it.
+                Alert.alert("Couldn't save", alertMessage(err, "Check your connection and try again."));
+                return;
               }
-              isLeavingIntentionally.current = true;
-              navigation.dispatch(e.data.action);
-            },
+            }
+            setLeaving(true);
+            repeat();
           },
-        ]
-      );
-    });
-    return unsubscribe;
-  }, [navigation, name, step, workouts, isEditMode, isReviewMode, isSharedEditMode, totalWeeks, cycleDays, isTrainingDay, cyclePattern, dayIds, loadReviewEntry, stampForSave]);
+        },
+      ]
+    );
+  });
+  /** Saved: back out without the guard asking. */
+  const leaveSaved = useCallback(() => {
+    setLeaving(true);
+    standDownLeaveGuard();
+    router.back();
+  }, [standDownLeaveGuard, router]);
 
   const handleCycleDaysChange = useCallback((next: number) => {
     const clamped = clamp(next, 2, 14);
@@ -2854,8 +2842,7 @@ export default function NewProgramScreen() {
           Alert.alert("Save failed", alertMessage(e, "Please try again."));
           return;
         }
-        isLeavingIntentionally.current = true;
-        router.back();
+        leaveSaved();
       };
       doSharedSave();
       return;
@@ -2890,8 +2877,7 @@ export default function NewProgramScreen() {
           Alert.alert("Save failed", alertMessage(e, "Please try again."));
           return;
         }
-        isLeavingIntentionally.current = true;
-        router.back();
+        leaveSaved();
       };
       doReview();
       return;
@@ -2923,8 +2909,7 @@ export default function NewProgramScreen() {
           Alert.alert("Save failed", alertMessage(e, "Please try again."));
           return;
         }
-        isLeavingIntentionally.current = true;
-        router.back();
+        leaveSaved();
       };
       doUpdate();
       return;
@@ -2973,10 +2958,9 @@ export default function NewProgramScreen() {
         Alert.alert("Save failed", alertMessage(e, "Please try again."));
         return;
       }
-      isLeavingIntentionally.current = true;
       draftDeleted.current = true;
       AsyncStorage.removeItem(DRAFT_KEY).catch((err) => warnStorage("removeItem", DRAFT_KEY, err));
-      router.back();
+      leaveSaved();
     };
 
     // Making it active ends the current program's run: it's shelved where it
@@ -3020,7 +3004,7 @@ export default function NewProgramScreen() {
         { text: "Cancel", style: "cancel" },
       ]
     );
-  }, [name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, router, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId, loadReviewEntry, stampForSave]);
+  }, [name, totalWeeks, cycleDays, cyclePattern, dayIds, isTrainingDay, workouts, leaveSaved, isEditMode, editId, isReviewMode, reviewId, isSharedEditMode, sharedId, loadReviewEntry, stampForSave]);
 
   const handleBack = () => { if (step === 2) setStep(1); else router.back(); };
 
@@ -3038,7 +3022,7 @@ export default function NewProgramScreen() {
   // at the bar edges. scrollY is native RN Animated (not Reanimated — avoids the
   // Reanimated.ScrollView reflow bug).
   const scrollY = useRef(new Animated.Value(0)).current;
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const dayOffsets = useRef<Record<string, number>>({});
   const [, bumpOffsets] = useState(0);
   const daysOrder = useMemo(() => Object.keys(workouts), [workouts]);
@@ -3359,7 +3343,7 @@ export default function NewProgramScreen() {
             tint={ACCT}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSummaryOpen(true); }}
             contentStyle={styles.createFab}
-            solidStyle={styles.summaryFabGlow}
+            solidStyle={[styles.summaryFabGlow, darkGlow(styles.summaryFabGlow, isDark)]}
             accessibilityLabel="Workout summary"
           >
             <Ionicons name="list" size={16} color="#fff" />
@@ -3461,7 +3445,7 @@ export default function NewProgramScreen() {
               </View>
 
               <BounceButton onPress={dismissCycleCoach} accessibilityLabel="Got it" accessibilityRole="button">
-                <View style={styles.coachBtnWrap}>
+                <View style={[styles.coachBtnWrap, darkGlow(styles.coachBtnWrap, isDark)]}>
                   <View style={styles.coachBtn}>
                     <Text style={styles.coachBtnText}>Got it</Text>
                   </View>
@@ -3505,7 +3489,7 @@ export default function NewProgramScreen() {
                     accessibilityLabel="Next tip"
                     accessibilityRole="button"
                   >
-                    <View style={styles.coachBtnWrap}>
+                    <View style={[styles.coachBtnWrap, darkGlow(styles.coachBtnWrap, isDark)]}>
                       <View style={styles.coachBtn}>
                         <Text style={styles.coachBtnText}>Next</Text>
                       </View>
@@ -3521,7 +3505,7 @@ export default function NewProgramScreen() {
 
                   {/* Replica of the per-day Add Exercise button */}
                   <View style={styles.coachDemoRow}>
-                    <View style={styles.addExBtnWrap}>
+                    <View style={[styles.addExBtnWrap, darkGlow(styles.addExBtnWrap, isDark)]}>
                       <View style={styles.addExBtn}>
                         <Ionicons name="add" size={18} color="#fff" />
                         <Text style={styles.addExText}>Add Exercise</Text>
@@ -3530,7 +3514,7 @@ export default function NewProgramScreen() {
                   </View>
 
                   <BounceButton onPress={dismissWorkoutsCoach} accessibilityLabel="Got it" accessibilityRole="button">
-                    <View style={styles.coachBtnWrap}>
+                    <View style={[styles.coachBtnWrap, darkGlow(styles.coachBtnWrap, isDark)]}>
                       <View style={styles.coachBtn}>
                         <Text style={styles.coachBtnText}>Got it</Text>
                       </View>

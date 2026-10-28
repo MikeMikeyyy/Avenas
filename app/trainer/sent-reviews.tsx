@@ -25,7 +25,7 @@ import { scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../components/MaskedView";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../components/FadeScreen";
@@ -38,7 +38,7 @@ import ProgramRow, { CycleStrip, RowActions } from "../../components/trainer/Pro
 import ReviewStatusPill from "../../components/trainer/ReviewStatusPill";
 import SendForReviewSheet from "../../components/trainer/SendForReviewSheet";
 import { ACCT, APP_DARK, APP_LIGHT, AWAITING_ORANGE, FontFamily } from "../../constants/theme";
-import { pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
+import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { EMPTY_GYM_HUB, fetchGymHub, peekGymHub, saveGymHub, type GymHubData } from "../../utils/trainerHub";
@@ -194,7 +194,7 @@ export default function SentForReviewScreen() {
             needsConnection
             accessibilityLabel={`Send a program to ${pt.name} for review`}
           >
-            <View style={[styles.sendBtn, { backgroundColor: ACCT }]}>
+            <View style={[styles.sendBtn, { backgroundColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
               <SendIcon size={18} color="#fff" />
               <Text style={styles.sendText}>Send a Program for Review</Text>
             </View>

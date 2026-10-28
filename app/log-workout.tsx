@@ -4,9 +4,10 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Modal, Animated, Easing, KeyboardAvoidingView,
   Platform, Alert, PanResponder, Keyboard,
+  type ScrollViewInstance, type TextInputInstance,
 } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
@@ -25,8 +26,8 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, stampSession, type WorkoutTime } from "../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
-import { haloGlow, pillGlow, PILL_H, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK, SET_INPUT_DARK } from "../constants/theme";
+import { darkGlow, glowOpacity, haloGlow, pillGlow, PILL_H, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
   normaliseSets, type SavedProgram, type CompletedWorkout, type PlannedExercise, type ProgramSet,
@@ -35,7 +36,7 @@ import { planForDay } from "../utils/exerciseChanges";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { MONTH_FULL } from "../utils/dates";
 import { programsAfterPastLog } from "../utils/programLifecycle";
-import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, swapOrigin, type PrevExerciseKey } from "../utils/workout";
+import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, prevHintsForRows, swapOrigin, type PrevExerciseKey, type PrevSets } from "../utils/workout";
 import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
@@ -186,7 +187,7 @@ function TimePickerSheet({ visible, isDark, initialTime, onConfirm, onClear, onC
         {/* Confirm */}
         <View style={{ alignItems: "center", paddingHorizontal: 20 }}>
           <BounceButton onPress={() => { onConfirm(wt); dismiss(); }}>
-            <View style={s.timeConfirmWrap}>
+            <View style={[s.timeConfirmWrap, darkGlow(s.timeConfirmWrap, isDark)]}>
               <View style={s.timeConfirmBtn}>
                 <Text style={s.timeConfirmText}>Save Session Time</Text>
               </View>
@@ -309,7 +310,7 @@ function CheckboxCell({ done, isDark, onToggle }: { done: boolean; isDark: boole
         backgroundColor: ACCT,
         shadowColor: ACCT,
         shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.5,
+        shadowOpacity: glowOpacity(0.5, isDark),
         shadowRadius: 6,
         borderWidth: 0,
       } : {
@@ -530,7 +531,7 @@ function LogReorderSheet({ visible, exercises, isDark, workoutName, onReorder, o
           </View>
           <View style={s.sheetDoneRow}>
             <BounceButton onPress={closeSheet}>
-              <View style={s.sheetDoneWrap}>
+              <View style={[s.sheetDoneWrap, darkGlow(s.sheetDoneWrap, isDark)]}>
                 <View style={s.sheetDoneBtn}>
                   <Text style={s.sheetDoneText}>Done</Text>
                 </View>
@@ -583,8 +584,8 @@ function ExerciseCard({
   const t = isDark ? APP_DARK : APP_LIGHT;
   const divider = t.div;
   const [editing, setEditing] = useState(false);
-  const weightRefs = useRef<(TextInput | null)[]>([]);
-  const repsRefs = useRef<(TextInput | null)[]>([]);
+  const weightRefs = useRef<(TextInputInstance | null)[]>([]);
+  const repsRefs = useRef<(TextInputInstance | null)[]>([]);
 
   const [collapsingSetIdx, setCollapsingSetIdx] = useState<number | null>(null);
   const prevSetCount = useRef(ex.sets.length);
@@ -612,7 +613,7 @@ function ExerciseCard({
               <View style={{
                 width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT,
                 alignItems: "center", justifyContent: "center",
-                shadowColor: ACCT, shadowOffset: { width: 1, height: 1 }, shadowOpacity: 0.5, shadowRadius: 3,
+                shadowColor: ACCT, shadowOffset: { width: 1, height: 1 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 3,
               }}>
                 <Ionicons name="checkmark" size={14} color="#fff" />
               </View>
@@ -695,7 +696,7 @@ function ExerciseCard({
                   </View>
 
                   {/* Weight */}
-                  <View style={[s.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                  <View style={[s.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                     <TextInput
                       ref={r => { weightRefs.current[idx] = r; }}
                       style={[s.inputText, { color: isDark ? "#fff" : t.tp }]}
@@ -713,7 +714,7 @@ function ExerciseCard({
                   </View>
 
                   {/* Reps / Hold */}
-                  <View style={[s.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                  <View style={[s.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                     <TextInput
                       ref={r => { repsRefs.current[idx] = r; }}
                       style={[s.inputText, { color: isDark ? "#fff" : t.tp }]}
@@ -744,7 +745,7 @@ function ExerciseCard({
                         }}
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       >
-                        <View style={s.removeSetBtn}>
+                        <View style={[s.removeSetBtn, darkGlow(s.removeSetBtn, isDark)]}>
                           <Ionicons name="remove" size={13} color="#fff" />
                         </View>
                       </TouchableOpacity>
@@ -922,7 +923,7 @@ export default function LogWorkoutScreen() {
   // Floating Session Notes card animation — matches the workout screen (scales out
   // of / sucks back into the Session Notes button; notesKbShift lifts it above the
   // keyboard as a separate animated offset so closing never jumps).
-  const sessionNotesInputRef = useRef<TextInput | null>(null);
+  const sessionNotesInputRef = useRef<TextInputInstance | null>(null);
   const notesAnim = useSharedValue(0);
   const notesKbShift = useSharedValue(0);
   const notesCardStyle = useAnimatedStyle(() => {
@@ -941,7 +942,7 @@ export default function LogWorkoutScreen() {
   const [timePickerVisible, setTimePickerVisible] = useState(false);
   // Functions in state, so the updater form is needed to store them (a bare
   // function would be called as one). Empty until history has loaded.
-  const [prevSetsOf, setPrevSetsOf] = useState<(ex: PrevExerciseKey) => string[] | undefined>(() => () => undefined);
+  const [prevSetsOf, setPrevSetsOf] = useState<(ex: PrevExerciseKey) => PrevSets | undefined>(() => () => undefined);
   const [prevNoteOf, setPrevNoteOf] = useState<(ex: PrevExerciseKey) => string | undefined>(() => () => undefined);
   const [prevSessionNote, setPrevSessionNote] = useState<string | undefined>(undefined);
   // Every saved session, for the PR trophy: a ticked set heavier than its
@@ -978,7 +979,7 @@ export default function LogWorkoutScreen() {
   // (hooks/useFieldAboveKeyboard.ts), as on the Workout tab. The floating
   // session notes card lifts itself (notesKbShift), so it reports through
   // handleInputFocus alone.
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const listFieldFocused = useFieldAboveKeyboard(scrollRef, kbHeight, ABOVE_KEYBOARD_TOOLS);
   const handleListFieldFocus = useCallback((fn: (() => void) | null, prevFn: (() => void) | null) => {
     handleInputFocus(fn, prevFn);
@@ -1465,7 +1466,10 @@ export default function LogWorkoutScreen() {
               onToggleIsometric={() => toggleIsometric(ex.id)}
               onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
               onInputFocus={handleListFieldFocus}
-              prevSets={(prevSetsOf(ex) ?? []).map(p => formatPrevHint(p, isKg))}
+              // Last time's sets lined up with this card's rows by kind
+              // (prevHintsForRows). A set turned into a warm-up here stays
+              // where it is, so a warm-up row can sit between working ones.
+              prevSets={prevHintsForRows(prevSetsOf(ex), ex.sets.map(s => s.type)).map(p => formatPrevHint(p, isKg))}
               prevNote={prevNoteOf(ex)}
               prBestKg={bestLifts.get(exerciseIdentity(ex))}
             />
@@ -1496,7 +1500,7 @@ export default function LogWorkoutScreen() {
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddExVisible(true); }}
             size={ADD_SIZE}
             accessibilityLabel="Add exercise"
-            solidStyle={s.addGlow}
+            solidStyle={[s.addGlow, darkGlow(s.addGlow, isDark)]}
           >
             <Ionicons name="add" size={24} color="#fff" />
           </GlassButton>
@@ -1517,7 +1521,7 @@ export default function LogWorkoutScreen() {
         pointerEvents={showNotes ? "auto" : "none"}
         style={[
           s.notesFloatCard,
-          { bottom: safeBottom + 140, backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? "#000" : "#a3afc0" },
+          { bottom: safeBottom + 140, backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? CARD_SHADE_DARK : CARD_SHADE },
           notesCardStyle,
         ]}
       >
@@ -1532,7 +1536,7 @@ export default function LogWorkoutScreen() {
             {/* Last time's session note, as on the Workout tab. */}
             <ReuseNoteChip value={notes} onChange={setNotes} prevNote={prevSessionNote} isDark={isDark} />
             <BounceButton onPress={closeNotes} accessibilityLabel="Save notes">
-              <View style={s.notesTickBtn}>
+              <View style={[s.notesTickBtn, darkGlow(s.notesTickBtn, isDark)]}>
                 <Ionicons name="checkmark" size={18} color="#fff" />
               </View>
             </BounceButton>

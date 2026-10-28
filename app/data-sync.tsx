@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -32,7 +32,7 @@ import BounceButton from "../components/BounceButton";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER } from "../constants/theme";
-import { pill, pillGlow } from "../constants/buttons";
+import { darkGlow, pill, pillGlow } from "../constants/buttons";
 import { MONTH_NAMES } from "../utils/dates";
 import { cloudCounts, type SyncCounts } from "../lib/cloud";
 import { backUpNow, getBackupStatus, subscribeBackupStatus, type BackupStatus } from "../lib/syncManager";
@@ -196,7 +196,7 @@ export default function DataSyncScreen() {
                 </View>
 
                 <BounceButton onPress={onBackUpNow} accessibilityLabel="Back up now" accessibilityRole="button">
-                  <View style={[styles.primaryBtn, { backgroundColor: ACCT }, busy && styles.disabled]}>
+                  <View style={[styles.primaryBtn, { backgroundColor: ACCT }, darkGlow(styles.primaryBtn, isDark), busy && styles.disabled]}>
                     {busy
                       ? <ActivityIndicator color="#fff" />
                       : <>

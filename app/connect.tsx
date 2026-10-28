@@ -37,7 +37,7 @@ import SheetPill from "../components/SheetPill";
 import UserRoundMinusIcon from "../components/icons/UserRoundMinusIcon";
 import FlagIcon from "../components/icons/FlagIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
+import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
 import { askConnectionRole, promptUndecidedConnectionRoles } from "../utils/connectionRolePrompt";
 import type { ReportReason } from "../constants/chat";
@@ -417,7 +417,7 @@ export default function ConnectScreen() {
         {/* Add a connection */}
         <Text style={[styles.label, { color: t.ts }]}>ADD A CONNECTION</Text>
         <BounceButton onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setScannerOpen(true); }} accessibilityLabel="Scan a QR code">
-          <View style={[styles.scanWrap, { backgroundColor: ACCT }]}>
+          <View style={[styles.scanWrap, { backgroundColor: ACCT }, darkGlow(styles.scanWrap, isDark)]}>
             <Ionicons name="qr-code-outline" size={20} color="#fff" />
             <Text style={styles.scanText}>Scan QR Code</Text>
           </View>
@@ -438,7 +438,7 @@ export default function ConnectScreen() {
             />
           </NeuCard>
           <BounceButton onPress={() => void submitCode(manual)} accessibilityLabel="Send connection request">
-            <View style={[styles.connectBtn, { backgroundColor: ACCT }, (busy || !manual.trim()) && styles.disabled]}>
+            <View style={[styles.connectBtn, { backgroundColor: ACCT }, darkGlow(styles.connectBtn, isDark), (busy || !manual.trim()) && styles.disabled]}>
               {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.connectBtnText}>Connect</Text>}
             </View>
           </BounceButton>

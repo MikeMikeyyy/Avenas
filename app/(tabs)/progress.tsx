@@ -1,8 +1,9 @@
-import { useState, useCallback } from "react";
-import { useFocusEffect } from "expo-router";
+import { useState, useCallback, useMemo } from "react";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import ProgressView from "../../components/progress/ProgressView";
 import { tabScreen } from "../../components/TabScreen";
 import { getJSON } from "../../utils/storage";
+import { allProgressRequest } from "../../utils/progressSession";
 import {
   PROGRAMS_KEY,
   WORKOUT_HISTORY_KEY,
@@ -18,6 +19,13 @@ function ProgressScreen() {
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // Exercise History's "See All Progress" opens this tab on one exercise
+  // across every program (utils/progressSession.ts).
+  const { allProgress, allProgressId, allProgressAt } = useLocalSearchParams<{ allProgress?: string; allProgressId?: string; allProgressAt?: string }>();
+  const show = useMemo(
+    () => allProgressRequest({ allProgress, allProgressId, allProgressAt }),
+    [allProgress, allProgressId, allProgressAt],
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -44,6 +52,7 @@ function ProgressScreen() {
       programs={programs}
       customExercises={customExercises}
       loaded={loaded}
+      show={show}
     />
   );
 }

@@ -147,8 +147,8 @@ function checkUpperB(label: string, after: SavedProgram, slot: number, expectAtt
   if (expectAttached) {
     eq(matched.map(w => w.id), ["s4", "s2"], `${label}: both Upper B sessions still match the day`);
     eq(sessionCountForDay(history, ref), 2, `${label}: session count intact`);
-    eq(prev["incline press"], ["42×8"], `${label}: prev is Upper B's own last numbers`);
-    eq(prev["curl"], ["24×12"], `${label}: prev for an exercise on BOTH days stays Upper B's`);
+    eq(prev["incline press"]?.working, ["42×8"], `${label}: prev is Upper B's own last numbers`);
+    eq(prev["curl"]?.working, ["24×12"], `${label}: prev for an exercise on BOTH days stays Upper B's`);
     eq(
       collectExerciseHistory(history, "Incline Press", ref).map(p => p.date),
       ["2026-07-11", "2026-07-18"],
@@ -171,8 +171,8 @@ function checkUpperB(label: string, after: SavedProgram, slot: number, expectAtt
     const prevA = buildPrevByName(history, undefined, prevDayScopeFor(
       { name: refA.label, programId: after.id, dayId: refA.dayId }, after,
     ));
-    eq(prevA["bench press"], ["102×5"], `${label}: Upper A prev untouched`);
-    eq(prevA["curl"], ["20×12"], `${label}: Upper A's Curl is its own, not Upper B's`);
+    eq(prevA["bench press"]?.working, ["102×5"], `${label}: Upper A prev untouched`);
+    eq(prevA["curl"]?.working, ["20×12"], `${label}: Upper A's Curl is its own, not Upper B's`);
   }
 
   eq(JSON.stringify(history), historyBefore, `${label}: logged sessions byte-identical (Journal)`);
@@ -384,8 +384,8 @@ function checkUpperB(label: string, after: SavedProgram, slot: number, expectAtt
     "J mid-session swap: the program itself is untouched",
   );
   const scope = prevDayScopeFor({ name: "Upper", programId: "P", dayId: "d3" }, program);
-  eq(buildPrevByName(withSession, undefined, scope)["incline press"], ["44×8"], "J mid-session: next time prev comes from the session just logged");
-  eq(buildPrevByName(withSession, undefined, scope)["machine row"], ["55×10"], "J mid-session: the substitute now has prev on this day");
+  eq(buildPrevByName(withSession, undefined, scope)["incline press"]?.working, ["44×8"], "J mid-session: next time prev comes from the session just logged");
+  eq(buildPrevByName(withSession, undefined, scope)["machine row"]?.working, ["55×10"], "J mid-session: the substitute now has prev on this day");
 }
 
 // ─── K. an edit never moves the program's own progress ───────────────────────

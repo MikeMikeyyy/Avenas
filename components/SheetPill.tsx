@@ -63,8 +63,8 @@ export default function SheetPill({
   // On the slate, the page's own colours: white on near-black, navy on off-white.
   const color = filled ? "#fff" : slate ? (isDark ? APP_DARK.bg : "#fff") : selected ? ACCT : (tint ?? t.tp);
   const surface: ViewStyle =
-    variant === "primary" ? { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }
-    : variant === "danger" ? { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }
+    variant === "primary" ? { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }
+    : variant === "danger" ? { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT, 0.5, 6, isDark) }
     : slate ? { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, ...PILL_SHADOW }
     : { backgroundColor: t.ctrl, ...PILL_SHADOW };
 

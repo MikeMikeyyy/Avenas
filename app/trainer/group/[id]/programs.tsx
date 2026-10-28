@@ -21,7 +21,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../../../components/MaskedView";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../../../components/FadeScreen";
@@ -37,7 +37,7 @@ import ProgramRow, { CycleStrip, RowActions, StatusPill, rowButtonStyles } from 
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "../../../../components/trainer/ReviewStatusPill";
 import GroupSendSheet, { type GroupSendMode } from "../../../../components/trainer/GroupSendSheet";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../../../constants/theme";
-import { pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
+import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
 import { scrollEndPadding } from "../../../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../../../hooks/useFloatingBars";
 import { useTheme } from "../../../../contexts/ThemeContext";
@@ -189,7 +189,7 @@ function BatchRow({ batch, kind, myUid, iCoachGroup, from, nameFor, first, open,
       meta={meta}
       trailing={kind === "accept" ? (
         <BounceButton onPress={onAccept} needsConnection accessibilityLabel={`Accept ${batch.programName}`}>
-          <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+          <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
             <Text style={rowButtonStyles.text}>Accept</Text>
           </View>
         </BounceButton>
@@ -241,6 +241,7 @@ function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemov
   onView: () => void;
   onRemove: () => void;
 }) {
+  const { isDark } = useTheme();
   const stage = reviewStage(review);
   const back = stage === "returned";
   return (
@@ -253,7 +254,7 @@ function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemov
       meta={back ? `Back from review · ${fmtAgo(review.returnedAtISO ?? review.sentAtISO)}` : `Sent ${fmtAgo(review.sentAtISO)}`}
       trailing={back ? (
         <BounceButton onPress={onAccept} needsConnection accessibilityLabel={`Accept the trainer's changes to ${review.programName}`}>
-          <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+          <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
             <Text style={rowButtonStyles.text}>Accept</Text>
           </View>
         </BounceButton>
@@ -659,7 +660,7 @@ export default function GroupProgramsScreen() {
           {iCoachGroup ? (
             <>
               <BounceButton onPress={() => setPicker("send")} needsConnection accessibilityLabel="Send a program to this group">
-                <View style={[styles.sendBtn, { backgroundColor: ACCT }]}>
+                <View style={[styles.sendBtn, { backgroundColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                   <SendIcon size={18} color="#fff" />
                   <Text style={styles.sendText}>Send a Program</Text>
                 </View>
@@ -675,7 +676,7 @@ export default function GroupProgramsScreen() {
             </>
           ) : (
             <BounceButton onPress={() => setPicker("review")} needsConnection accessibilityLabel="Send a program to this group for review">
-              <View style={[styles.sendBtn, { backgroundColor: ACCT }]}>
+              <View style={[styles.sendBtn, { backgroundColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                 <SendIcon size={18} color="#fff" />
                 <Text style={styles.sendText}>Send a Program for Review</Text>
               </View>

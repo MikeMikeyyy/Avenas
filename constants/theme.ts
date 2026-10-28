@@ -3,30 +3,48 @@
 // Share Pinterest/reference images with Claude in Antigravity and say
 // "update the theme file based on these"
 
-// ─── Neumorphic base backgrounds ──────────────────────────────────────────────
-// These drive NeuCard shadows — every screen bg must match these exactly.
-export const NEU_BG      = "#f2f4f8";
-export const NEU_BG_DARK = "#252840";  // dark navy card — lighter than page bg
+// ─── Cards ────────────────────────────────────────────────────────────────────
+// The card (NeuCard) on each theme's page: white on Porcelain's pale cool page,
+// charcoal on Graphite's near-black one (user picks, 2026-10-28, from the Light
+// Mode Whites and Dark Mode Home canvases; tried on Home, then app-wide). They
+// replaced a grey-blue neumorphic card (#f2f4f8 on #e8ecf3) and a navy one
+// (#252840 on #1B1E2C).
+export const NEU_BG      = "#FFFFFF";
+export const NEU_BG_DARK = "#1C1D21";
+// A light card's two shadows: a cool shade down and to the right, softer and
+// wider than the old #a3afc0, and a white glow up and to the left. A dark card
+// casts plain black, and a faint white edge does the glow's job.
+export const CARD_SHADE      = "#8896AF";
+export const CARD_GLOW       = "#FFFFFF";
+export const CARD_SHADE_DARK = "#000000";
+export const CARD_EDGE_DARK  = "rgba(255,255,255,0.06)";
 
 // ─── App-wide light / dark palette ────────────────────────────────────────────
 // Import these in every screen instead of redefining LIGHT/DARK locally.
+//
+// Porcelain (light): a pale cool page, and greys dark enough to read on its
+// white cards: ts is 5.4:1 on the card and 4.7:1 on the page (the old #8896A7
+// was under 3:1 on its grey card).
 export const APP_LIGHT = {
-  bg:   "#e8ecf3",
-  tp:   "#2D3748",  // text primary
-  ts:   "#8896A7",  // text secondary
-  icon: "#3a3f47",
-  div:  "#D8DCE0",  // divider
+  bg:   "#EDF1F6",
+  tp:   "#1E2738",  // text primary
+  ts:   "#5E6B82",  // text secondary
+  icon: "#2C3446",
+  div:  "#E4E8EF",  // divider
   ctrl: "#ffffff",  // floating control surface — see the note on APP_DARK.ctrl
   nav:  "#ffffff",  // floating tab bar — see the note on APP_DARK.nav
   navEdge: "rgba(0,0,0,0.06)",
   field: "rgba(0,0,0,0.04)",  // a search field on the page — see the note on APP_DARK.field
 } as const;
 
+// Graphite (dark): a near-black page under charcoal cards, neutral rather than
+// the navy it replaced, and lighter greys: ts is 6.3:1 on the card (the old
+// #6B7396 was about 3:1 on the navy card).
 export const APP_DARK = {
-  bg:   "#1B1E2C",
-  tp:   "#E4E6F0",  // slightly blue-tinted white
-  ts:   "#6B7396",  // muted blue-gray
-  icon: "#8B93AE",  // navy-tinted icon
+  bg:   "#111214",
+  tp:   "#F3F4F6",
+  ts:   "#9A9EA8",
+  icon: "#D1D4DA",
   // Dividers, hairlines, chart gridlines and the quiet control fills.
   //
   // A TRANSLUCENT WHITE, not a solid navy. It used to be #252840, which is
@@ -37,10 +55,10 @@ export const APP_DARK = {
   // (SegmentedControl's TRACK_DARK still names the problem). An overlay lifts
   // off whatever dark surface it sits on, so one token now works everywhere.
   //
-  // 0.14 rather than the 0.10 those workarounds used: over the dark card that
-  // lands about as far from its background as light mode's #D8DCE0 does from
-  // white, so a hairline carries the same weight in both themes.
-  div:  "rgba(255,255,255,0.14)",
+  // 0.10 over Graphite's charcoal card lands about as far from it as light
+  // mode's #E4E8EF does from white, so a hairline carries the same weight in
+  // both themes (it was 0.14 over the old navy card).
+  div:  "rgba(255,255,255,0.10)",
   // Background for floating chrome (back / plus / chat / jump buttons, timer
   // pills) — anything round that sits ON the page rather than in a card.
   // Slightly stronger than div: these are things you press.
@@ -50,7 +68,7 @@ export const APP_DARK = {
   // the page bg, so the bar melted into the background. Solid rather than
   // translucent like ctrl, because content scrolls underneath it and there's no
   // blur behind the fallback bar to hide it.
-  nav:  "#30354F",
+  nav:  "#2A2B30",
   // Hairline that defines the bar's edge. Does most of the work in dark mode,
   // where a drop shadow is close to invisible.
   navEdge: "rgba(255,255,255,0.10)",
@@ -206,11 +224,12 @@ export const REPLACED_ORANGE = PAUSED_ORANGE;
 
 // ─── Change cues ──────────────────────────────────────────────────────────────
 // The quiet line under an exercise that was moved, swapped, added or skipped
-// (components/ChangeCue.tsx, utils/exerciseChanges.ts). A grey a shade darker
-// than the text-secondary greys, which read at about 3:1 on a card: this line
-// is information, so it's held to 4.5:1 (4.7 on the light card, 5 on the dark).
+// (components/ChangeCue.tsx, utils/exerciseChanges.ts). A grey held to 4.5:1
+// because this line is information (5.2 on the light card, 6 on the dark). It
+// was a shade darker than the text-secondary greys when those read at about
+// 3:1; since Porcelain and Graphite it sits about level with them.
 export const CUE_INK      = "#5F6E83";
-export const CUE_INK_DARK = "#8E97B8";
+export const CUE_INK_DARK = "#959AA5";
 // The replaced orange's WORDS ("Instead of Push", "Instead of Cable Fly",
 // "Last session: Pec Deck instead"), deepened for a light card, where
 // REPLACED_ORANGE as text reads at 2:1 (this, 4.7:1). Dark mode keeps
@@ -259,18 +278,23 @@ export const AURORA = {
   // own tokens rather than replacing `mint`/`aqua`/`blush`, because those three
   // are still doing duty as counter-glows on other pages and in the Home mix —
   // repointing them would move backdrops that aren't part of this change.
-  orchid:  "#F18BFF",  // journal family  — from ORB_GRADS.blush #ed64ff
-  sky:     "#70E2FF",  // My Programs     — from ORB_GRADS.aqua  #47daff
-  seafoam: "#56F5C5",  // New Program     — from ORB_GRADS.green #2ff3b8
+  orchid:  "#F18BFF",  // journal family  — from the first blush orb's #ed64ff
+  sky:     "#70E2FF",  // My Programs     — from the first aqua orb's  #47daff
+  seafoam: "#56F5C5",  // New Program     — from the first green orb's #2ff3b8
 } as const;
 
-// Gradient orb buttons (Home quick actions). `glow` doubles as the shadow color.
-// Green is deliberately softer than raw ACCT — at full saturation it shouts
-// over its aqua/blush siblings, so it's pulled toward their pastel weight.
+// Gradient orb buttons (Home's quick actions, the Journal's add button). `glow`
+// doubles as the shadow color. New Program sky to mint, My Programs an ocean
+// blue, View Journal periwinkle to orchid (user picks, 2026-10-28, from the
+// Light Mode Whites canvas). The canvas's own values (#70E2FF to #1DECA0,
+// #4BE1F2 to #1E88F5, #8F96F9 to #E06AF0) looked very dull on the phone (user
+// report, the same day): a wide-colour monitor shows them more saturated than
+// an iPhone, which draws them exactly. So each stop here is that colour pushed
+// out to the most saturated version of itself the phone draws.
 export const ORB_GRADS = {
-  green: { colors: ["#a2ffe8ff", "#2ff3b8ff"] as const, glow: "#37d19bff" },
-  aqua:  { colors: ["#94f8ffff", "#47daffff"] as const, glow: "#3dbdf8ff" },
-  blush: { colors: ["#ffc7ecff", "#ed64ffff"] as const, glow: "#c17ff7ff" },
+  green: { colors: ["#2EE5FF", "#00F099"] as const, glow: "#10DDBD" },
+  aqua:  { colors: ["#00E5F5", "#008AFD"] as const, glow: "#0AA6F7" },
+  blush: { colors: ["#8D96FF", "#F161F7"] as const, glow: "#B56EF8" },
 } as const;
 
 // ─── The timer and the rest ───────────────────────────────────────────────────
@@ -284,17 +308,23 @@ export const TIMER_GRADIENT = [AURORA.sky, ACCT] as const;
 export function timerDialInk(isDark: boolean): { track: string; tickOff: string; tickOn: string } {
   return isDark
     ? { track: "rgba(255,255,255,0.08)", tickOff: "rgba(255,255,255,0.18)", tickOn: ACCT }
-    : { track: "rgba(163,175,192,0.28)", tickOff: "rgba(136,150,167,0.45)", tickOn: ACCT_DEEP };
+    : { track: "rgba(136,150,175,0.28)", tickOff: "rgba(94,107,130,0.45)", tickOn: ACCT_DEEP };
 }
 
 
 // ─── Bubble pill ──────────────────────────────────────────────────────────────
 // Small floating pill controls that sit on cards (the SegmentedControl thumb):
-// white with a soft drop shadow in light mode, a lifted navy one step above
+// white with a soft drop shadow in light mode, a lifted charcoal one step above
 // NEU_BG_DARK in dark mode. DropdownPicker's buttons used this too; they're now
 // the app's pill button on `ctrl`, matching the sheet they open.
 export const BUBBLE_LIGHT = "#FFFFFF";
-export const BUBBLE_DARK  = "#363C5E";
+export const BUBBLE_DARK  = "#2C2D33";
+
+// ─── Set inputs ───────────────────────────────────────────────────────────────
+// A set's weight and reps boxes on dark (the Workout tab, Log Workout, Workout
+// Detail, the program builder): a step above the card, ringed in white. Light
+// mode lays them on the page colour (t.bg). They were a lifted navy (#343759).
+export const SET_INPUT_DARK = "#2C2D33";
 
 // ─── Switch ───────────────────────────────────────────────────────────────────
 // Off-state track for the iOS Switches in LIGHT mode (Settings, the Workout

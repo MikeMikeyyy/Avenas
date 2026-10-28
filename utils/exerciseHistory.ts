@@ -137,8 +137,16 @@ function compareTops(now: CompletedSet, before: CompletedSet): TopSetChange {
  *  program with a day of its name that was running then. The rule the
  *  Progress page and the workout cards go by (workoutBelongsToProgram), so a
  *  session is under Custom workouts on all three or on none. */
-function ownerOf(w: CompletedWorkout, programs: SavedProgram[]): SavedProgram | undefined {
+function ownerOf(w: CompletedWorkout, programs: readonly SavedProgram[]): SavedProgram | undefined {
   return programs.find(p => workoutBelongsToProgram(w, p));
+}
+
+/** What a session's row says it was from: its program, or in no program, the
+ *  deleted program it was logged under when that's known
+ *  (CompletedWorkout.programName). The Progress chart's pop-up under All
+ *  programs says the same (utils/exerciseDaySlots.ts exerciseDateSlots). */
+export function sessionProgramName(w: CompletedWorkout, programs: readonly SavedProgram[]): string {
+  return ownerOf(w, programs)?.name ?? w.programName ?? (w.programId ? "Deleted program" : "Custom workout");
 }
 
 /** Whether a session is on a day pick, exactly as the Progress chart scopes a
@@ -203,7 +211,6 @@ export function exerciseHistoryRows(
     const doneSets = mine.flatMap(e => e.sets.filter(s => s.done));
     if (doneSets.length === 0) continue;
     const best = bestBefore.get(w.id);
-    const owningProgram = ownerOf(w, programs);
     const notes = [...new Set(mine.map(e => (typeof e.notes === "string" ? e.notes.trim() : "")).filter(Boolean))];
     all.push({
       dayMs: new Date(yy, mm - 1, dd).getTime(),
@@ -212,9 +219,7 @@ export function exerciseHistoryRows(
         date: w.date,
         completedAt: w.completedAt,
         workoutName: w.workoutName,
-        // In no program: the deleted program it was logged under when that's
-        // known (CompletedWorkout.programName).
-        programName: owningProgram?.name ?? w.programName ?? (w.programId ? "Deleted program" : "Custom workout"),
+        programName: sessionProgramName(w, programs),
         sets: doneSets,
         prs: doneSets.map(s => isPrSet({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) }, best)),
         top: topSetOf(doneSets),

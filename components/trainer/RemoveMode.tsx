@@ -12,6 +12,7 @@ import Animated, { FadeIn, FadeOut, ZoomIn, ZoomOut } from "react-native-reanima
 import BounceButton from "../BounceButton";
 import { APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../../constants/theme";
 import { haloGlow, pill, PILL_H_XS, PILL_SHADOW } from "../../constants/buttons";
+import { useTheme } from "../../contexts/ThemeContext";
 
 /** Above the list while removing: what to do, and Done to stop. */
 export function RemoveModeBar({ isDark, onDone }: { isDark: boolean; onDone: () => void }) {
@@ -31,10 +32,11 @@ export function RemoveModeBar({ isDark, onDone }: { isDark: boolean; onDone: () 
 /** The red minus on a trainer's card while removing. It disconnects on the
  *  server, so it needs a connection (dims offline and says why). */
 export function RemoveCircleButton({ onPress, accessibilityLabel }: { onPress: () => void; accessibilityLabel: string }) {
+  const { isDark } = useTheme();
   return (
     <Animated.View entering={ZoomIn.duration(180)} exiting={ZoomOut.duration(140)}>
       <BounceButton onPress={onPress} needsConnection accessibilityRole="button" accessibilityLabel={accessibilityLabel}>
-        <View style={[styles.circle, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT) }]}>
+        <View style={[styles.circle, { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT, 0.5, 6, isDark) }]}>
           <View style={styles.minus} />
         </View>
       </BounceButton>

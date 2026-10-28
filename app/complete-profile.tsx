@@ -20,7 +20,7 @@ import BounceButton from "../components/BounceButton";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import { ABOVE_KEYBOARD_TOOLS } from "../constants/floatingBars";
 import { APP_DARK, APP_LIGHT, ACCT, BTN_SLATE, BTN_SLATE_DARK, FontFamily } from "../constants/theme";
-import { pill, PILL_H } from "../constants/buttons";
+import { glowOpacity, pill, PILL_H } from "../constants/buttons";
 import { pullProfile, pushProfile } from "../lib/cloud";
 import { signOut } from "../lib/auth";
 import { alertMessage } from "../utils/errors";
@@ -31,7 +31,7 @@ function Choice({ label, selected, onPress, dark }: { label: string; selected: b
   return (
     <TouchableOpacity style={{ flex: 1 }} activeOpacity={0.85} onPress={onPress} accessibilityRole="button" accessibilityState={{ selected }}>
       <View style={[styles.choice, selected
-        ? { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 6 }
+        ? { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: glowOpacity(0.5, dark), shadowRadius: 6 }
         : { backgroundColor: dark ? "rgba(255,255,255,0.08)" : t.div },
       ]}>
         <Text style={[styles.choiceText, { color: selected ? "#fff" : t.tp }]}>{label}</Text>

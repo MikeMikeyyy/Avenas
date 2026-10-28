@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { View, Text, StyleSheet, useWindowDimensions, LayoutChangeEvent, ScrollView } from "react-native";
+import { View, Text, StyleSheet, useWindowDimensions, LayoutChangeEvent, ScrollView, type ScrollViewInstance } from "react-native";
 import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS, SharedValue } from "react-native-reanimated";
 import { BarChart } from "react-native-gifted-charts";
 import * as Haptics from "expo-haptics";
@@ -102,7 +102,7 @@ export default function VolumeBarChart({ buckets, unit, slotsCount, rangeText, m
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { width: screenWidth } = useWindowDimensions();
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
 
   // Reset focused index if the bucket count changes (range / scope switch).
   useEffect(() => {

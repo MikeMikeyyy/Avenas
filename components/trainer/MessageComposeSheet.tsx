@@ -14,6 +14,7 @@ import NeuCard from "../NeuCard";
 import Avatar from "../Avatar";
 import SendIcon from "../icons/SendIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { darkGlow, glowOpacity } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { ChatContact } from "../../constants/chat";
 
@@ -99,7 +100,7 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
                 </Text>
               </View>
               <View style={[styles.check, sendToAll
-                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                 : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
               ]}>
                 {sendToAll && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -133,7 +134,7 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
                       {c.subtitle ? <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={1}>{c.subtitle}</Text> : null}
                     </View>
                     <View style={[styles.check, checked
-                      ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                      ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                       : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
                     ]}>
                       {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -160,7 +161,7 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
           />
         </View>
         <TouchableOpacity onPress={handleSend} disabled={!canSend} activeOpacity={0.8} accessibilityLabel={ctaLabel} accessibilityRole="button">
-          <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }]}>
+          <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }, darkGlow(styles.sendBtn, isDark)]}>
             <SendIcon size={18} color="#fff" />
           </View>
         </TouchableOpacity>

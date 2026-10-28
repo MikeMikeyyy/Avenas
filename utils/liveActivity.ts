@@ -7,7 +7,8 @@
 // The queue mirrors the Workout screen's semantics exactly:
 //   - It runs in the order the session will get to its sets (utils/nextSet.ts),
 //     so its head is the set the Workout screen glows on: after the set ticked
-//     last, with skipped sets at the end. Within an exercise it's the flat
+//     last, or back on a set unticked since, with skipped sets at the end, so
+//     an untick in the app takes the card back too. Within an exercise it's the flat
 //     warmup→working order ExerciseCard renders.
 //   - Each entry's weight/reps are what the card shows for the set: values the
 //     user already typed win; a fully empty set falls back to the
@@ -23,7 +24,7 @@ import type {
 import { pendingSetsInOrder } from "./nextSet";
 import { flatIndexOf, prevFillFor } from "./setRows";
 
-type LiveSet = { weight: string; reps: string; done: boolean; doneAt?: number };
+type LiveSet = { weight: string; reps: string; done: boolean; doneAt?: number; untickedAt?: number };
 type LiveExerciseLog = { warmup: LiveSet[]; working: LiveSet[] };
 export type LiveActivityExercise = { id: string; name: string; restSeconds?: number; isHold?: boolean };
 
@@ -115,8 +116,9 @@ export type LockScreenTick = { exId: string; setType: "warmup" | "working"; setI
  * what the card's checkbox does: an empty set takes last time's numbers at its
  * row (prevFillFor, from the screen's own previous-set hints, which is what the
  * lock screen showed on it), anything typed before locking stays, and it's
- * stamped with when it was ticked there so the set ticked last stays right. A
- * set already ticked, or no longer there, is left alone. It used to come back
+ * stamped with when it was ticked there so the set ticked last stays right
+ * (and an untick it had is cleared, as a tick in the app clears it). A set
+ * already ticked, or no longer there, is left alone. It used to come back
  * ticked but empty (user report, 2026-10-05).
  */
 export function logWithLockScreenTicks<
@@ -135,7 +137,7 @@ export function logWithLockScreenTicks<
     if (!exLog || !sets || !set || set.done) continue;
     const updated = [...sets];
     const prevHint = prevHintsFor(t.exId)?.[flatIndexOf(exLog.warmup.length, t.setType, t.setIdx)];
-    updated[t.setIdx] = { ...set, ...prevFillFor(set, prevHint), done: true, doneAt: t.ts };
+    updated[t.setIdx] = { ...set, ...prevFillFor(set, prevHint), done: true, doneAt: t.ts, untickedAt: undefined };
     next = { ...next, [t.exId]: { ...exLog, [t.setType]: updated } };
   }
   return next;
@@ -169,6 +171,94 @@ export function restFromCard(args: {
   const card = cardEnd > now + 1000 ? cardEnd : 0;
   const app = appEnd != null && appEnd > now + 1000 ? appEnd : 0;
   return Math.abs(card - app) > 1500 ? card : null;
+}
+
+/** The timers a push waits on: the real ones, or a test's. */
+export type PushTimers = {
+  set: (run: () => void, ms: number) => unknown;
+  clear: (id: unknown) => void;
+};
+
+const REAL_TIMERS: PushTimers = {
+  set: (run, ms) => setTimeout(run, ms),
+  clear: id => clearTimeout(id as ReturnType<typeof setTimeout>),
+};
+
+/** What the lock-screen card is sent, and when (hooks/useWorkoutLiveActivity). */
+export type CardPushes = {
+  /** The payload as it stands: sent once it has held still for the wait,
+   *  unless the card already has it. A later change replaces one waiting. */
+  change(json: string): void;
+  /** Send a change still waiting, now. */
+  flush(): void;
+  /** Drop a change still waiting. */
+  cancel(): void;
+  /** Drop it, and forget what the card has: the card is gone. */
+  reset(): void;
+  /** Whether the card has been sent anything since it was put up. */
+  sent(): boolean;
+  /** The payload last sent that has reached the card (its push resolved), or
+   *  null before one has: what the card's rest mirror echoes (restFromCard). */
+  landed(): string | null;
+};
+
+/**
+ * The card's pushes. A change waits `waitMs` so typing a weight goes as one
+ * update (iOS limits how often a card updates), and `flush` sends one still
+ * waiting at once: the screen does when the app leaves the foreground. iOS
+ * suspends the app soon after the phone locks or another app opens, and a JS
+ * timer doesn't fire while it's suspended, so the card kept the session as it
+ * was before the last change: a warm-up taken away stayed among its dots
+ * (user report, 2026-10-28). While the app is open the card isn't on screen,
+ * so it only has to be right by the time the app goes.
+ */
+export function cardPushes(
+  send: (json: string) => Promise<unknown> | void,
+  waitMs: number,
+  timers: PushTimers = REAL_TIMERS,
+): CardPushes {
+  let last: string | null = null;
+  let arrived: string | null = null;
+  // Bumped when the card goes, so a push to the old one landing late isn't
+  // taken for the new card's.
+  let card = 0;
+  let waiting: { json: string; id: unknown } | null = null;
+  const cancel = () => {
+    if (waiting) timers.clear(waiting.id);
+    waiting = null;
+  };
+  const go = (json: string) => {
+    waiting = null;
+    last = json;
+    const sentTo = card;
+    const land = () => { if (sentTo === card) arrived = json; };
+    const pushed = send(json);
+    if (pushed) void pushed.then(land);
+    else land();
+  };
+  return {
+    change(json) {
+      cancel();
+      if (json === last) return;
+      const id = timers.set(() => go(json), waitMs);
+      waiting = { json, id };
+    },
+    flush() {
+      const w = waiting;
+      if (!w) return;
+      timers.clear(w.id);
+      go(w.json);
+    },
+    cancel,
+    reset() {
+      cancel();
+      last = null;
+      arrived = null;
+      card += 1;
+    },
+    sent: () => last !== null,
+    landed: () => arrived,
+  };
 }
 
 export function buildLiveActivityPayload(args: {

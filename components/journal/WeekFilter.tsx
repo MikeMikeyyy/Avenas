@@ -24,7 +24,7 @@ import SheetPill from "../SheetPill";
 import SimpleSheet from "../trainer/SimpleSheet";
 import FunnelIcon from "../icons/FunnelIcon";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
-import { haloGlow } from "../../constants/buttons";
+import { darkGlow, haloGlow } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { ProgramWeek } from "../../utils/programHistory";
 
@@ -46,7 +46,7 @@ export function WeekFilterButton({ picked, onPress }: {
       style={[styles.floating, { top: insets.top + BACK_TOP }]}
       // Matches the back button it faces, which has no shadow; picked, the
       // glow of a picked chip.
-      solidStyle={active ? styles.pickedGlow : undefined}
+      solidStyle={active ? [styles.pickedGlow, darkGlow(styles.pickedGlow, isDark)] : undefined}
       accessibilityLabel={active ? `Filter by week, ${picked} ${picked === 1 ? "week" : "weeks"} showing` : "Filter by week"}
     >
       <FunnelIcon size={18} color={active ? "#fff" : t.tp} />

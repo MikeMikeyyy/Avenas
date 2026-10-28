@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -36,7 +36,7 @@ import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
-import { pill, PILL_H_SM } from "../constants/buttons";
+import { darkGlow, pill, PILL_H_SM } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { alertOffline, useOffline } from "../contexts/ConnectivityContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
@@ -504,7 +504,7 @@ export default function ProgramViewScreen() {
                         style={{ flex: 1 }}
                         onPress={() => router.navigate({ pathname: "/programs", params: { focus: sent!.programId } })}
                       >
-                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.primaryBtn, isDark)]}>
                           <Text style={styles.primaryBtnText}>Open in My Programs</Text>
                         </View>
                       </BounceButton>
@@ -517,7 +517,7 @@ export default function ProgramViewScreen() {
                   ) : accepted ? (
                     accountType === "pt" ? (
                       <BounceButton style={{ flex: 1 }} onPress={handleOpenPassDown} needsConnection>
-                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.primaryBtn, isDark)]}>
                           <Ionicons name="paper-plane-outline" size={16} color="#fff" />
                           <Text style={styles.primaryBtnText}>Send to my clients</Text>
                         </View>
@@ -531,7 +531,7 @@ export default function ProgramViewScreen() {
                             : "/programs"
                         )}
                       >
-                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+                        <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.primaryBtn, isDark)]}>
                           <Ionicons name="folder-open-outline" size={16} color="#fff" />
                           <Text style={styles.primaryBtnText}>Open in My Programs</Text>
                         </View>

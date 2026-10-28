@@ -1,6 +1,6 @@
 // Where a workout session is up to (utils/nextSet.ts): after the set ticked
-// last, with skipped sets left for the end, and the lock-screen queue that
-// walks the same order (utils/liveActivity.ts).
+// last, back on a set unticked since, with skipped sets left for the end, and
+// the lock-screen queue that walks the same order (utils/liveActivity.ts).
 //
 // Run:  npx tsx scripts/verify-next-set.ts
 // Exits non-zero (throws) if any assertion fails.
@@ -17,11 +17,13 @@ function eq(actual: unknown, expected: unknown, label: string) {
   failures.push(`✗ ${label}\n    expected: ${b}\n    actual:   ${a}`);
 }
 
-type S = { weight: string; reps: string; done: boolean; doneAt?: number };
+type S = { weight: string; reps: string; done: boolean; doneAt?: number; untickedAt?: number };
 /** Unticked. */
 const o = (weight = "", reps = ""): S => ({ weight, reps, done: false });
 /** Ticked at `at` (epoch-ish ms); no `at` = ticked by a build that kept no time. */
 const t = (at?: number): S => (at === undefined ? { weight: "", reps: "", done: true } : { weight: "", reps: "", done: true, doneAt: at });
+/** Ticked, then unticked at `at`. */
+const u = (at: number): S => ({ weight: "", reps: "", done: false, untickedAt: at });
 const ex = (working: S[], warmup: S[] = []) => ({ warmup, working });
 
 const IDS = ["A", "B", "C"];
@@ -86,6 +88,44 @@ eq(
 );
 eq(nextSetOf(IDS, { A: ex([t(1)]), B: ex([t(2)]), C: ex([t(3)]) }), null, "every set ticked: nothing is next");
 
+// ─── after an untick ─────────────────────────────────────────────────────────
+// (user request, 2026-10-28: an untick in the app took no card back unless it
+// was the set ticked last)
+
+eq(order({ A: ex([t(1), t(2), u(3)]), B: ex([o(), o()]) }), ["A3", "B1", "B2"], "the set ticked last unticked: it's next again");
+eq(
+  order({ A: ex([t(1), t(2), u(6), t(4)]), B: ex([t(5), o()]) }),
+  ["A3", "B2"],
+  "an older set unticked, with B under way: the session goes back to it, then on to B",
+);
+eq(
+  order({ A: ex([t(1), u(4), t(3)]), B: ex([o(), o()]) }),
+  ["A2", "B1", "B2"],
+  "a double tap undone from the top: back on the first of the two, the second still ticked",
+);
+eq(order({ A: ex([t(1), u(4), u(5)]), B: ex([o(), o()]) }), ["A2", "A3", "B1", "B2"], "...and both undone: back on the first");
+eq(
+  order({ A: ex([u(7), t(2)]), B: ex([t(3), u(6)]), C: ex([o()]) }),
+  ["A1", "B2", "C1"],
+  "several unticked: the highest on the page is next, whichever went first",
+);
+eq(
+  order({ A: ex([t(1), t(2), u(3), o()]), B: ex([t(4), o()]) }),
+  ["B2", "A3*", "A4*"],
+  "a tick after the untick: the session follows that tick, and the unticked set waits at the end",
+);
+eq(
+  order({ A: ex([o(), o()]), B: ex([u(2), o()]) }),
+  ["B1", "B2", "A1", "A2"],
+  "the session's only tick undone: back on it, the exercises not started after",
+);
+eq(
+  nextSetOf(IDS, { A: ex([t(1), u(3), t(2)]) }),
+  { exId: "A", exIndex: 0, setType: "working", setIdx: 1, flatIdx: 1, skipped: false },
+  "a set gone back to is never marked skipped",
+);
+eq(order({ A: ex([t(1), u(2), t(3)]), B: ex([o()]) }), ["B1", "A2*"], "an untick older than the last tick doesn't count");
+
 // ─── ticks from before times were kept ───────────────────────────────────────
 
 eq(order({ A: ex([t(), t(), o()]), B: ex([t(), o()]) }), ["B2", "A3*"], "untimed ticks: the lowest on the page counts as last");
@@ -133,6 +173,16 @@ eq(
   eq(queue[3].exerciseName, "Bench Press", "lock screen: each entry names its own exercise");
   eq(queue[0].restSeconds, 60, "lock screen: rest comes from the set's own exercise");
   eq(queue[2].restSeconds, 0, "lock screen: no rest set means none");
+}
+{
+  // An untick in the app takes the card back with the page (user request,
+  // 2026-10-28).
+  const exercises = [{ id: "A", name: "Bench Press", restSeconds: 90 }, { id: "B", name: "Row", restSeconds: 60 }];
+  const log = { A: ex([t(1), t(2), u(6), t(4)]), B: ex([t(5), o()]) };
+  const { queue, doneCount } = buildLiveActivityQueue(exercises, log, () => []);
+  eq(queue.map(q => `${q.exId}${q.setIdx + 1}`), ["A3", "B2"], "lock screen: an older set unticked in the app is the card's next set");
+  eq(queue[0].setDone, [true, true, false, true], "lock screen: ...its dots keep the sets either side of it done");
+  eq(doneCount, 4, "lock screen: ...and the count drops by the set unticked");
 }
 {
   const exercises = [{ id: "A", name: "Squat" }];

@@ -54,16 +54,17 @@ struct CardPalette {
   let ring: Color  // a set still to come
   let isDark: Bool
 
+  // Graphite on dark and Porcelain on light, as the app (2026-10-28).
   static let dark = CardPalette(
-    bg: Color(hex: 0x1B1E2C), tp: Color(hex: 0xE4E6F0), ts: Color(hex: 0x8B93AE),
-    chip: .white.opacity(0.12), ring: Color(hex: 0x8B93AE, opacity: 0.6), isDark: true)
+    bg: Color(hex: 0x111214), tp: Color(hex: 0xF3F4F6), ts: Color(hex: 0x9A9EA8),
+    chip: .white.opacity(0.12), ring: Color(hex: 0x9A9EA8, opacity: 0.6), isDark: true)
   static let light = CardPalette(
-    bg: .white, tp: Color(hex: 0x2D3748), ts: Color(hex: 0x8896A7),
-    chip: Color(hex: 0xE8ECF3), ring: Color(hex: 0xC4CAD3), isDark: false)
+    bg: .white, tp: Color(hex: 0x1E2738), ts: Color(hex: 0x5E6B82),
+    chip: Color(hex: 0xEDF1F6), ring: Color(hex: 0xC4CAD3), isDark: false)
   /// The Dynamic Island is always black, whatever the theme.
   static let island = CardPalette(
-    bg: .black, tp: .white, ts: Color(hex: 0x8B93AE),
-    chip: .white.opacity(0.14), ring: Color(hex: 0x8B93AE, opacity: 0.6), isDark: true)
+    bg: .black, tp: .white, ts: Color(hex: 0x9A9EA8),
+    chip: .white.opacity(0.14), ring: Color(hex: 0x9A9EA8, opacity: 0.6), isDark: true)
 
   /// The app's Dark Mode, from the card. A card an older build put up has
   /// none, and reads light, the app's default.

@@ -6,10 +6,11 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useEffectEvent, type ReactElement } from "react";
 import {
   View, Text, StyleSheet, Animated, type NativeScrollEvent, type NativeSyntheticEvent, type RefreshControlProps,
+  type ViewInstance,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../MaskedView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import FadeScreen from "../FadeScreen";
@@ -21,6 +22,8 @@ import StrengthRadarChart from "../StrengthRadarChart";
 import DayExerciseList from "../DayExerciseList";
 import ExerciseProgressionChart from "../ExerciseProgressionChart";
 import DumbbellIcon from "../DumbbellIcon";
+import KeyboardDismissButton from "../KeyboardDismissButton";
+import AllExercisesList from "./AllExercisesList";
 import CompareButton from "./CompareButton";
 import CompareHeader from "./CompareHeader";
 import CompareSheet, { type CompareSheetSide } from "./CompareSheet";
@@ -39,15 +42,18 @@ import { SCROLL_CLEAR_GAP, scrollEndPadding } from "../../constants/floatingBars
 import { type CompletedWorkout, type ProgramDayRef, type SavedProgram } from "../../constants/programs";
 import { sameExercise, type ExerciseRef } from "../../utils/exerciseNames";
 import { type CustomExercise, type SelectableMuscle } from "../../constants/exercises";
-import type { ExerciseDataPoint, MuscleGroupStat, PRs, RangeKey } from "../../constants/progress";
+import type { ExerciseDataPoint, LoggedExerciseRow, MuscleGroupStat, PRs, RangeKey } from "../../constants/progress";
 import { RANGE_OPTIONS } from "../../constants/progress";
-import { progressSessionKey } from "../../utils/progressSession";
+import { progressSessionKey, type AllProgressRequest } from "../../utils/progressSession";
+import { muscleCardOf } from "../../utils/allExercises";
 import { useProgressSelection } from "../../hooks/useProgressSelection";
+import { useSectionSearch } from "../../hooks/useSectionSearch";
 import {
   bucketMetricByDay,
   bucketMetricByMonth,
   bucketMetricByRollingWeeks,
   collectExerciseHistory,
+  collectLoggedExercises,
   computeMuscleGroupStats,
   computePRs,
   computeWorkoutDurationMinutes,
@@ -68,7 +74,7 @@ import { buildSessionTracks } from "../../utils/sessionTrack";
 import { toDisplayWeight } from "../../utils/units";
 import { carriedExercises, knownCustomExercises } from "../../utils/customExerciseDetails";
 import { getEffectiveToday } from "../../utils/workout";
-import { exerciseDaySlots } from "../../utils/exerciseDaySlots";
+import { exerciseDateSlots, exerciseDaySlots } from "../../utils/exerciseDaySlots";
 import { findRunView, programRunViews, sameRun, type ProgramRunView, type RunRef } from "../../utils/programRuns";
 import {
   compareCandidates, compareFirstPicks, compareLifts, compareReadiness, compareStartGreen, glanceStats, liftSlots, missedDates, muscleStatsPerWeek, runDates, runName, runStatus,
@@ -77,7 +83,7 @@ import {
 
 /** A view waiting to be scrolled into sight, and where it sits in the page's
  *  content once measured. */
-type Watched = { view: View; onReveal: () => void; y?: number; h?: number };
+type Watched = { view: ViewInstance; onReveal: () => void; y?: number; h?: number };
 /** How far into the screen a view comes before it counts as seen. */
 const REVEAL_INSET = 24;
 
@@ -147,9 +153,14 @@ export interface ProgressViewProps {
   /** A trainer viewing a client: the exercise chart's history page and PR
    *  tiles then open that client's copy, read-only. */
   clientId?: string;
+  /** "See All Progress" from Exercise History (utils/progressSession.ts): All
+   *  programs, with this exercise charted. */
+  show?: AllProgressRequest | null;
 }
 
 const NO_CUSTOM: CustomExercise[] = [];
+const NO_DAYS: ProgramDayRef[] = [];
+const NO_ROWS: LoggedExerciseRow[] = [];
 
 /** How long after the scroll to the chart it's measured again, in case it was
  *  still moving: a day panel's open tween (DayExerciseList) is 280ms. */
@@ -176,6 +187,7 @@ function ProgressBody({
   bottomPadding,
   refreshControl,
   clientId,
+  show,
   sessionKey,
 }: ProgressViewProps & { sessionKey: string }) {
   const { isDark } = useTheme();
@@ -195,17 +207,21 @@ function ProgressBody({
   // held as an identified ref, so two days that share a NAME are two selections
   // too.
   const [selectedExercise, setSelectedExercise] = useProgressSelection(sessionKey, "selectedExercise");
-  const [expandedProgram, setExpandedProgram] = useProgressSelection(sessionKey, "expandedProgram");
+  // Under All programs: an exercise from any program or day, and the muscle
+  // group open in the list.
+  const [allExercise, setAllExercise] = useProgressSelection(sessionKey, "allExercise");
+  const [expandedMuscle, setExpandedMuscle] = useProgressSelection(sessionKey, "expandedMuscle");
   const [expandedDay, setExpandedDay] = useProgressSelection(sessionKey, "expandedDay");
   const [exerciseMetric, setExerciseMetric] = useProgressSelection(sessionKey, "exerciseMetric");
   const [compare, setCompare] = useProgressSelection(sessionKey, "compare");
   const [compareSpan, setCompareSpan] = useProgressSelection(sessionKey, "compareSpan");
   const [compareLift, setCompareLift] = useProgressSelection(sessionKey, "compareLift");
+  const [allProgressAt, setAllProgressAt] = useProgressSelection(sessionKey, "allProgressAt");
   const [scopeFallbackNote, setScopeFallbackNote] = useState<string | null>(null);
 
   const scrollRef = useRef<any>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
-  const exerciseSectionRef = useRef<View>(null);
+  const exerciseSectionRef = useRef<ViewInstance>(null);
   const exerciseSectionY = useRef(0);
   const exerciseSectionH = useRef(0);
   const viewportH = useRef(0);
@@ -310,6 +326,22 @@ function ProgressBody({
     () => knownCustomExercises(customExercises, carriedExercises(programs)),
     [customExercises, programs],
   );
+
+  // Exercise History's "See All Progress" (user request, 2026-10-26): All
+  // programs with that exercise charted, its muscle group open, a comparison
+  // put away, and the page taken down to the chart. Each request once (a new
+  // `at` every tap), and only once the sessions are in, so the chart is there
+  // to go to. Adjusted while rendering, as React has state follow a prop,
+  // rather than in an effect.
+  if (show && loaded && show.at !== allProgressAt) {
+    setAllProgressAt(show.at);
+    setScope({ kind: "all" });
+    setCompare(null);
+    setCompareLift(null);
+    setAllExercise(show.customId ? { name: show.name, customId: show.customId } : { name: show.name });
+    setExpandedMuscle(muscleCardOf(show, knownCustoms));
+    setChartScrollRequest(n => n + 1);
+  }
   const { muscleStats, prevMuscleStats, radarWindowDays } = useMemo(() => {
     const { startYMD, endYMD } = dateWindow;
     const prev = previousComparableWindow(startYMD, endYMD);
@@ -348,9 +380,10 @@ function ProgressBody({
 
   // Scoped sessions are passed in so days that have LEFT the program (deleted,
   // or renamed + rebuilt into a new day) still appear, reconstructed from the
-  // sessions logged against them.
+  // sessions logged against them. Under All programs the list is every
+  // exercise instead (allRows), so there are no days.
   const daysInScope = useMemo(
-    () => scopedProgramDays(scope, programs, scopedWorkouts),
+    () => (scope.kind === "all" ? NO_DAYS : scopedProgramDays(scope, programs, scopedWorkouts)),
     [scope, programs, scopedWorkouts],
   );
 
@@ -372,6 +405,30 @@ function ProgressBody({
     const p = computePRs(eh, scopedWorkouts, selectedExercise, selectedDay);
     return { exerciseHistory: eh, prs: p };
   }, [scopedWorkouts, selectedExercise, selectedDay]);
+
+  // ── All programs: every exercise logged, each charted across every session
+  // of it from any program, day or custom workout, by date (user request,
+  // 2026-10-26). ───────────────────────────────────────────────────────────
+  const allRows = useMemo(
+    () => (scope.kind === "all" ? collectLoggedExercises(scopedWorkouts) : NO_ROWS),
+    [scope.kind, scopedWorkouts],
+  );
+  // The live row behind the pick, as selectedDay is for a day's: once every
+  // session of it is deleted, the chart goes.
+  const allSelected = useMemo(
+    () => (allExercise ? allRows.find(r => sameExercise(r, allExercise)) ?? null : null),
+    [allRows, allExercise],
+  );
+  const allChart = useMemo(() => {
+    if (!allSelected) return null;
+    const kg = collectExerciseHistory(scopedWorkouts, allSelected);
+    const points = displayPoints(kg, isKg);
+    return {
+      points,
+      slots: exerciseDateSlots(points, history, programs),
+      prs: displayRecords(computePRs(kg, scopedWorkouts, allSelected), isKg),
+    };
+  }, [allSelected, scopedWorkouts, history, programs, isKg]);
 
   // ── kg → display-unit conversion for the charts ──────────────────────────────
   // All stats are computed in canonical kg; convert the weight/volume-valued
@@ -430,6 +487,26 @@ function ProgressBody({
   const greenView = useMemo(() => (compare ? findRunView(compare.green, programs, history) : null), [compare, programs, history]);
   const blueView = useMemo(() => (compare ? findRunView(compare.blue, programs, history) : null), [compare, programs, history]);
   const comparing = !!(greenView && blueView);
+
+  // ── The search over every exercise, under All programs (user request,
+  // 2026-10-26): the round button on the Exercise Progress heading opens it
+  // (hooks/useSectionSearch.ts, which keeps it clear of the keyboard). It
+  // closes when the list goes: another scope picked, a comparison started. ─
+  const allList = scope.kind === "all" && !comparing;
+  const exerciseHeadingRef = useRef<ViewInstance>(null);
+  const {
+    open: searchOpen, query, setQuery, toggle: toggleSearch, close: closeSearch, onKeyboardDown, picked: pickedFromSearch,
+    inputRef: searchInputRef, extraPadding: searchPadding,
+  } = useSectionSearch({ scrollRef, headingRef: exerciseHeadingRef, topInset: withTopInset ? insets.top : 0, shown: allList });
+  const onSelectAllExercise = useCallback((ex: ExerciseRef) => {
+    // Picked from the search: the page goes on down to the chart.
+    pickedFromSearch();
+    setAllExercise(prev =>
+      prev && sameExercise(prev, ex) ? prev : { name: ex.name, ...(ex.customId ? { customId: ex.customId } : {}) },
+    );
+    setChartScrollRequest(n => n + 1);
+  }, [pickedFromSearch]);
+
   // The sheet: up or not, and its step, which outlasts it closing so its list
   // holds still as it slides away. The first pick waits here for the second.
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -551,6 +628,7 @@ function ProgressBody({
   // The compare button: the first pick, unless only one program can be green,
   // when the sheet opens on the second with that one green already.
   const startComparing = () => {
+    closeSearch();
     if (firstPicks.length === 1) {
       setFirstPick(firstPicks[0].ref);
       openSheet("blue");
@@ -734,7 +812,9 @@ function ProgressBody({
           checkReveals();
         }}
         onContentSizeChange={() => watched.current.forEach(measureWatched)}
-        contentContainerStyle={[styles.scroll, { paddingTop: topPad, paddingBottom: botPad }]}
+        // Without it the keyboard takes the first tap on a search match.
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[styles.scroll, { paddingTop: topPad, paddingBottom: botPad + searchPadding }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
         onScrollEndDrag={onScrollStop}
         onMomentumScrollEnd={onScrollStop}
@@ -748,7 +828,11 @@ function ProgressBody({
           </View>
         )}
 
-        <View style={{ marginTop: comparing ? 10 : 18 }}>
+        {/* Comparing under the page title, the header is pulled up: its label
+            row is as tall as the ✕'s 44pt touch area, which left "Comparing"
+            well below the title (user report, 2026-10-28). Not on a client's
+            page, which has no title above it. */}
+        <View style={{ marginTop: comparing ? (title !== "" ? -4 : 10) : 18 }}>
           {comparing && greenView && blueView ? (
             // Comparing: the two programs in place of the filters. Each
             // program is read whole, so there's no time range. A finished
@@ -768,7 +852,7 @@ function ProgressBody({
               <ProgramScopePicker
                 scope={scope}
                 programs={programs}
-                onChange={s => { setScope(s); setScopeFallbackNote(null); }}
+                onChange={s => { setScope(s); setScopeFallbackNote(null); closeSearch(); }}
                 hasCustom={hasCustom}
                 style={{ flex: 1 }}
               />
@@ -872,19 +956,32 @@ function ProgressBody({
               metric={strengthMetric}
               onMetricChange={setStrengthMetric}
             />
-            <DayExerciseList
-              days={daysInScope}
-              workouts={scopedWorkouts}
-              selectedExercise={selectedExercise}
-              onSelectExercise={onSelectExercise}
-              customExercises={knownCustoms}
-              expandedDay={expandedDay}
-              onExpandedDayChange={setExpandedDay}
-              groupByProgram={scope.kind === "all"}
-              programs={programs}
-              expandedProgram={expandedProgram}
-              onExpandedProgramChange={setExpandedProgram}
-            />
+            {scope.kind === "all" ? (
+              <AllExercisesList
+                rows={allRows}
+                customExercises={knownCustoms}
+                selected={allExercise}
+                onSelect={onSelectAllExercise}
+                expandedMuscle={expandedMuscle}
+                onExpandedMuscleChange={setExpandedMuscle}
+                searchOpen={searchOpen}
+                query={query}
+                onQueryChange={setQuery}
+                onToggleSearch={toggleSearch}
+                searchInputRef={searchInputRef}
+                headingRef={exerciseHeadingRef}
+              />
+            ) : (
+              <DayExerciseList
+                days={daysInScope}
+                workouts={scopedWorkouts}
+                selectedExercise={selectedExercise}
+                onSelectExercise={onSelectExercise}
+                customExercises={knownCustoms}
+                expandedDay={expandedDay}
+                onExpandedDayChange={setExpandedDay}
+              />
+            )}
           </>
         )}
 
@@ -906,6 +1003,27 @@ function ProgressBody({
               unit={unit}
               clientId={clientId}
               seriesKey={`${compare.green.programId}|${compare.green.run}|${compare.blue.programId}|${compare.blue.run}|${selectedLiftView.lift.key}`}
+            />
+          </View>
+        ) : allList && allSelected && allChart ? (
+          <View
+            ref={exerciseSectionRef}
+            onLayout={e => {
+              exerciseSectionY.current = e.nativeEvent.layout.y;
+              exerciseSectionH.current = e.nativeEvent.layout.height;
+            }}
+          >
+            <ExerciseProgressionChart
+              exerciseName={allSelected.name}
+              customId={allSelected.customId}
+              allPrograms
+              history={allChart.points}
+              slots={allChart.slots}
+              prs={allChart.prs}
+              unit={unit}
+              clientId={clientId}
+              metric={exerciseMetric}
+              onMetricChange={setExerciseMetric}
             />
           </View>
         ) : !comparing && selectedExercise && selectedDay && displayPrs ? (
@@ -952,6 +1070,10 @@ function ProgressBody({
         onBack={() => setSheetStep("first")}
         onClose={() => setSheetOpen(false)}
       />
+
+      {/* The keyboard's down key, for the exercise search: it closes the
+          search too. Renders nothing without a keyboard. */}
+      {allList ? <KeyboardDismissButton onPress={onKeyboardDown} /> : null}
     </Wrapper>
   );
 }

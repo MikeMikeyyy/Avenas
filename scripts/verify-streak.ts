@@ -6,10 +6,13 @@
 
 import {
   STREAK_GRACE_DAYS,
+  isStreakRecord,
   isStreakRiskDay,
   missedStreakDays,
   streakBreakDate,
+  streakOnOpen,
   streakSurvives,
+  type StreakRecord,
 } from "../utils/streak";
 import { daysBetweenYMD, fromYMD, toYMD } from "../utils/dates";
 import type { SavedProgram } from "../constants/programs";
@@ -143,6 +146,53 @@ eq(streakBreakDate(everyDay, "bad-date", 7), null, "reminder: malformed date sch
 for (const [prog, label] of [[everyDay, "every-day"], [mwf, "MWF"], [null, "no program"]] as const) {
   const d = streakBreakDate(prog, WED, 14);
   eq(d !== null && d > WED, true, `reminder: ${label} never nags on the day just opened`);
+}
+
+// ─── each open, launched or back from the background ─────────────────────────
+// contexts/StreakContext.tsx runs streakOnOpen on launch AND on every return to
+// the foreground. It ran on launch only, and iOS keeps the app in memory for
+// days: a week away came back to the old number, and a day the app was only
+// brought back on went uncounted (user report, 2026-10-28).
+
+{
+  const at = (day: string, count: number, extra: Partial<StreakRecord> = {}): StreakRecord => ({
+    count, startDate: "2026-09-01", highestStreak: Math.max(count, 9), lastOpenedDate: day, openedDates: [day], dayBasis: "local", ...extra,
+  });
+  const open = (saved: StreakRecord | null, today: string, program: SavedProgram | null = mwf) => streakOnOpen(saved, today, program);
+
+  const first = open(null, MON);
+  eq([first.record.count, first.record.highestStreak, first.record.openedDates, first.write], [1, 1, [MON], true], "open: the first ever starts at 1");
+  const again = open(at(MON, 5), MON);
+  eq([again.record.count, again.write, again.grew], [5, false, false], "open: a second open the same day changes nothing, writes nothing");
+
+  const wed = open(at(MON, 5), WED);
+  eq([wed.record.count, wed.grew, wed.record.lastOpenedDate, wed.record.openedDates], [6, true, WED, [MON, WED]],
+    "open: back on Wednesday (Tuesday a rest day) carries the streak on");
+
+  // Opened every day, each one only bringing the app back. Every day counts.
+  let daily = at(MON, 5);
+  for (const day of [TUE, WED, THU, FRI, SAT, SUN, NEXT_MON]) daily = open(daily, day).record;
+  eq([daily.count, daily.openedDates.length], [12, 8], "open: every day the app is brought back counts, a week of them +7");
+  // What happened when those days weren't recorded: the next launch measured
+  // from Monday, found Wed, Fri and Mon unopened, and ended a streak kept daily.
+  eq(open(at(MON, 5), NEXT_TUE).record.count, 1, "open: (unrecorded days look like a week away, which ends it)");
+
+  // A week away, back on Tuesday, the auto-pause holding the program from that
+  // day: Wed, Fri and Mon were missed, so it ends, the best kept.
+  const away = open(at(MON, 5, { highestStreak: 20 }), NEXT_TUE, { ...mwf, pausedAt: NEXT_TUE });
+  eq([away.record.count, away.record.highestStreak, away.record.startDate, away.grew], [1, 20, NEXT_TUE, false],
+    "open: a week away ends it, even with the program held from the day you come back");
+  // Held before going away: a hold freezes it (as it always has).
+  eq(open(at(MON, 5), "2026-12-25", held).record.count, 6, "open: held from before the absence, months away still carry on");
+  eq(open(at(MON, 9, { highestStreak: 9 }), WED).record.highestStreak, 10, "open: a new best is kept as the best");
+
+  // Older records.
+  const legacy = { count: 3, startDate: MON, highestStreak: 3, lastOpenedDate: MON } as StreakRecord;
+  const legacySame = open(legacy, MON);
+  eq([legacySame.record.openedDates, legacySame.record.dayBasis, legacySame.write], [[MON], "local", true],
+    "open: a record from before opened dates and local days gains both, and is written");
+  eq(isStreakRecord(legacy), true, "record: an older one without opened dates still reads as a streak");
+  eq(isStreakRecord({ count: "3" }), false, "record: anything else doesn't");
 }
 
 if (failures.length > 0) {

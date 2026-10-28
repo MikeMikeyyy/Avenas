@@ -25,7 +25,7 @@ import { scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../../components/MaskedView";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../components/FadeScreen";
@@ -66,9 +66,10 @@ function fmtAgo(iso: string): string {
 /** The green Accept on a row that's waiting on me: white words, as the app's
  *  other green buttons (user decision, 2026-10-21). */
 function AcceptButton({ onPress, accessibilityLabel }: { onPress: () => void; accessibilityLabel: string }) {
+  const { isDark } = useTheme();
   return (
     <BounceButton onPress={onPress} needsConnection accessibilityLabel={accessibilityLabel}>
-      <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+      <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
         <Text style={rowButtonStyles.text}>Accept</Text>
       </View>
     </BounceButton>

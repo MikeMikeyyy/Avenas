@@ -208,7 +208,7 @@ function AchievementCard({ achievement, isDark, isKg, streakColor, onOpenWorkout
               accessibilityRole="button"
               accessibilityLabel="View the workout these PRs were set in"
             >
-              <View style={[styles.viewBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) }]}>
+              <View style={[styles.viewBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
                 <Text style={styles.viewText}>View workout</Text>
                 <Ionicons name="chevron-forward" size={14} color="#fff" />
               </View>

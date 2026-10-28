@@ -14,6 +14,7 @@ import PagerDots from "./onboarding/PagerDots";
 import Confetti from "./onboarding/Confetti";
 import MedalIcon from "./icons/MedalIcon";
 import { APP_LIGHT, APP_DARK, ACCT, FontFamily } from "../constants/theme";
+import { darkGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { getJSON } from "../utils/storage";
@@ -347,7 +348,7 @@ export default function WorkoutSummarySheet({
         <View style={styles.footer}>
           <PagerDots count={Math.max(pages.length, 1)} width={width} scrollX={scrollX} dark={isDark} />
           <BounceButton onPress={handleDone} accessibilityRole="button" accessibilityLabel="Done">
-            <View style={styles.doneBtn}>
+            <View style={[styles.doneBtn, darkGlow(styles.doneBtn, isDark)]}>
               <Text style={styles.doneText}>Done</Text>
             </View>
           </BounceButton>

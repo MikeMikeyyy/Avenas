@@ -23,7 +23,7 @@ import BounceButton from "./BounceButton";
 import DumbbellIcon from "./DumbbellIcon";
 import { useRestTimer } from "../contexts/RestTimerContext";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, TIMER_GRADIENT } from "../constants/theme";
-import { PILL_RADIUS } from "../constants/buttons";
+import { darkGlow, PILL_RADIUS } from "../constants/buttons";
 import { barButtonFill } from "../constants/floatingBars";
 
 const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
@@ -136,7 +136,7 @@ export function RestActions({ isDark }: { isDark: boolean }) {
       <BounceButton onPress={() => adjustRestTimer(15)} style={[styles.chip, fill]} accessibilityRole="button" accessibilityLabel="15 seconds more rest">
         <Text style={[styles.chipText, { color: ink }]}>+15s</Text>
       </BounceButton>
-      <BounceButton onPress={dismissRestTimer} style={styles.skip} accessibilityRole="button" accessibilityLabel="Skip the rest">
+      <BounceButton onPress={dismissRestTimer} style={[styles.skip, darkGlow(styles.skip, isDark)]} accessibilityRole="button" accessibilityLabel="Skip the rest">
         <Text style={styles.skipText}>Skip</Text>
       </BounceButton>
     </View>

@@ -6,9 +6,10 @@ import {
   Keyboard,
   ScrollView,
   TextInput,
+  type TextInputInstance,
 } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -45,10 +46,11 @@ function statusLabel(status: SavedProgram["status"]): string {
   return "Not Started";
 }
 
-function statusColor(status: SavedProgram["status"]): string {
+/** A status badge's colour; one not started yet takes the page's quiet grey. */
+function statusColor(status: SavedProgram["status"], quiet: string): string {
   if (status === "active" || status === "completed") return ACCT;
   if (status === "paused") return PAUSED_ORANGE;
-  return "#8896A7";
+  return quiet;
 }
 
 const TP  = APP_LIGHT.tp;
@@ -84,7 +86,7 @@ export default function ProgramHistoryScreen() {
     }, [clientId])
   );
 
-  const searchInputRef = useRef<TextInput>(null);
+  const searchInputRef = useRef<TextInputInstance>(null);
   // Closing clears the query AND drops the keyboard together, so the X never
   // leaves one of the two behind, and reopening shows no stale filter. The
   // keyboard's down button does the same while you're typing a search.
@@ -223,7 +225,7 @@ export default function ProgramHistoryScreen() {
         {/* Program cards */}
         {sorted.map(prog => {
           const week = getCurrentWeek(prog);
-          const sColor = statusColor(prog.status);
+          const sColor = statusColor(prog.status, t.ts);
 
           return (
             <BounceButton

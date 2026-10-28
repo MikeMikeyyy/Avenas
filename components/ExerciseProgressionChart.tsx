@@ -11,7 +11,7 @@ import ExerciseChartPlot, { type ChartRecords } from "./progress/ExerciseChartPl
 import RecordsHeading from "./progress/RecordsHeading";
 import { displayWorkoutName } from "../utils/programDays";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
-import { pill, pillGlow } from "../constants/buttons";
+import { darkGlow, pill, pillGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { MONTH_NAMES } from "../utils/dates";
 import { trimNumber } from "../utils/units";
@@ -44,6 +44,11 @@ interface Props {
    *  full-history page then lists that day's sessions in no program, and
    *  never a program's day of the same name. */
   customDay?: string;
+  /** Every session of it from any program or day instead, picked under "All
+   *  programs" (user request, 2026-10-26): the header says so, the plot goes
+   *  by date (utils/exerciseDaySlots.ts exerciseDateSlots), and the
+   *  full-history page opens on every session. No day props with it. */
+  allPrograms?: boolean;
   history: ExerciseDataPoint[];
   /** Where the chart puts them: a place for every time the day came round,
    *  with the session number its card reads (utils/exerciseDaySlots.ts). */
@@ -118,6 +123,7 @@ export default function ExerciseProgressionChart({
   dayId,
   programId,
   customDay,
+  allPrograms = false,
   history,
   slots,
   prs,
@@ -149,9 +155,10 @@ export default function ExerciseProgressionChart({
   }), [prs]);
 
   // Day context leads the subline (e.g. "Push · Sessions logged · 4") so two
-  // day-scoped charts for the same exercise name are visually distinct.
+  // day-scoped charts for the same exercise name are visually distinct; under
+  // All programs, "All programs".
   const headerLabel = (() => {
-    const day = dayName?.trim() ? `${displayWorkoutName(dayName.trim())} · ` : "";
+    const day = allPrograms ? "All programs · " : dayName?.trim() ? `${displayWorkoutName(dayName.trim())} · ` : "";
     if (history.length === 0) return `${day}No sessions yet`;
     return `${day}Sessions logged · ${history.length}`;
   })();
@@ -279,8 +286,9 @@ export default function ExerciseProgressionChart({
               slots={slots}
               metric={metric}
               unit={unit}
-              seriesKey={`${exerciseName}|${programId ?? ""}|${dayId ?? dayName ?? ""}`}
+              seriesKey={allPrograms ? `all|${customId ?? ""}|${exerciseName}` : `${exerciseName}|${programId ?? ""}|${dayId ?? dayName ?? ""}`}
               records={records}
+              byDate={allPrograms}
             />
           </View>
         )}
@@ -357,7 +365,7 @@ export default function ExerciseProgressionChart({
       accessibilityRole="button"
       accessibilityLabel={`See full history for ${exerciseName}`}
     >
-      <View style={styles.historyBtn}>
+      <View style={[styles.historyBtn, darkGlow(styles.historyBtn, isDark)]}>
         <Text style={styles.historyBtnLabel} numberOfLines={1}>
           See Exercise History
         </Text>

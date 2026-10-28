@@ -266,7 +266,7 @@ export default function ChatThreadView<T extends ThreadMessage>({
             />
           </View>
           <TouchableOpacity onPress={send} disabled={!canSend} activeOpacity={0.8} accessibilityLabel="Send message" accessibilityRole="button">
-            <View style={[styles.sendGlow, pillGlow(grad[1], 0.4), { opacity: canSend ? 1 : 0.4 }]}>
+            <View style={[styles.sendGlow, pillGlow(grad[1], 0.4, isDark), { opacity: canSend ? 1 : 0.4 }]}>
               <LinearGradient colors={grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.sendBtn}>
                 <SendIcon size={18} color="#fff" />
               </LinearGradient>

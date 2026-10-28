@@ -13,14 +13,15 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  type TextInputInstance,
 } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
-import { useRouter, useFocusEffect } from "expo-router";
+import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -37,6 +38,7 @@ import SessionFilter, { RecentActivityHeading, SessionGroupHeading, useSessionFi
 import SheetPill from "../components/SheetPill";
 import SquarePenIcon from "../components/SquarePenIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
+import { glowOpacity } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
   type SavedProgram, type CompletedWorkout, type ProgramDayRef,
@@ -204,7 +206,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
   const insets = useSafeAreaInsets();
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
-  const customInputRef = useRef<TextInput>(null);
+  const customInputRef = useRef<TextInputInstance>(null);
 
   const [step, setStep] = useState<PickerStep>("menu");
   const [focusedProgram, setFocusedProgram] = useState<SavedProgram | null>(null);
@@ -393,7 +395,7 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
                   <Text style={[styles.cnToggleSub, { color: t.ts }]}>Saves stats under this program in your journal</Text>
                 </View>
                 <View style={[styles.cnToggle, addToActive
-                  ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 }
+                  ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
                   : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" }
                 ]}>
                   {addToActive && <Ionicons name="checkmark" size={14} color="#fff" />}
@@ -441,6 +443,9 @@ export default function JournalScreen() {
   // How far up the workout bar reaches, so the page scrolls clear of it.
   const barsReach = useFloatingBarsReach();
   const router = useRouter();
+  // "YYYY-MM": the month the calendar opens on, from a tap on Home's calendar
+  // (its month before this one). None opens it on this month, as always.
+  const { month: openMonth } = useLocalSearchParams<{ month?: string }>();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
@@ -646,13 +651,16 @@ export default function JournalScreen() {
           <View style={{ width: 66 }} />
         </View>
 
-        {/* Monthly activity calendar */}
+        {/* Monthly activity calendar, keyed on the month it opens on, so a
+            new one asked for (from Home's calendar) starts it there. */}
         <JournalCalendar
+          key={openMonth ?? "this-month"}
           isDark={isDark}
           workoutDates={workoutDates}
           workoutHistory={workoutHistory}
           activeProgram={activeProgram}
           onDayPress={handleCalendarDayPress}
+          initialMonth={openMonth}
         />
 
         {/* Programs shortcut (shared with a trainer's view of this page) */}
@@ -692,7 +700,7 @@ export default function JournalScreen() {
               <View style={[styles.emptyOrbGlow, {
                 backgroundColor: ORB_GRADS.blush.glow,
                 shadowColor: ORB_GRADS.blush.glow,
-                shadowOpacity: isDark ? 0.45 : 0.55,
+                shadowOpacity: glowOpacity(0.55, isDark),
               }]}>
                 <LinearGradient
                   colors={ORB_GRADS.blush.colors}

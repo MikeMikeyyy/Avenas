@@ -68,7 +68,9 @@ export default function CompareHeader({ green, blue, onChangeGreen, onChangeBlue
 
 const styles = StyleSheet.create({
   wrap: { marginHorizontal: 20 },
-  labelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 6, marginBottom: 4 },
+  // 10 under it, so the ✕ (as tall as this row) keeps clear of the card below:
+  // at 4 its circle all but sat on it (user report, 2026-10-28).
+  labelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 6, marginBottom: 10 },
   label: { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.6, textTransform: "uppercase" },
   // The circle's right edge on the card's, the touch area a little past it.
   // The circle is the Compare button's size (40, GlassButton's), which this ✕

@@ -20,7 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import { ACCT, APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../../constants/theme";
-import { pill, PILL_H_XS, PILL_SHADOW } from "../../constants/buttons";
+import { glowOpacity, pill, PILL_H_XS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { AccountType } from "../../contexts/AccountTypeContext";
 import {
@@ -148,7 +148,7 @@ function NoticeCard({ notice, accountType, onResolved, onChanged }: {
                 style={[
                   styles.btn,
                   b.tone === "primary"
-                    ? { backgroundColor: ACCT, shadowColor: ACCT, shadowOpacity: 0.35 }
+                    ? { backgroundColor: ACCT, shadowColor: ACCT, shadowOpacity: glowOpacity(0.35, isDark) }
                     : { backgroundColor: t.ctrl },
                   busy && styles.busy,
                 ]}

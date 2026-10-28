@@ -1,6 +1,6 @@
 # Avenas
 
-iOS-first React Native + Expo (SDK 57, RN 0.86, New Architecture), TypeScript strict, Expo Router. Shipped to the App Store.
+iOS-first React Native + Expo (SDK 58, RN 0.88, React 19.3, New Architecture), TypeScript strict, Expo Router. Shipped to the App Store.
 
 **The full record of every rule, decision and why is in `docs/ARCHITECTURE.md`.** It is not loaded automatically. Before changing a feature, grep it for that feature's file or name and read its section: most rules there came from a real bug. Keep new detail there; add a one-liner here only for a rule that's easy to break.
 
@@ -16,6 +16,8 @@ iOS-first React Native + Expo (SDK 57, RN 0.86, New Architecture), TypeScript st
 - **Packages:** `npx expo install <pkg> -- --legacy-peer-deps`, never `npm install`.
 - **Never import `@react-navigation/*`** (fails the bundle). `useFocusEffect` etc. come from `expo-router`.
 - `StyleSheet.absoluteFill`, never `absoluteFillObject` (removed in RN 0.86).
+- **Refs to RN components take instance types** (RN 0.88's strict API): `useRef<TextInputInstance>`, `ScrollViewInstance`, `ViewInstance`, never `useRef<TextInput>`. `MaskedView` comes from `components/MaskedView.tsx`, never the package (its types predate RN 0.88).
+- **Leaving a screen with unsaved work:** `usePreventRemove` from `expo-router` (`beforeRemove` is gone since SDK 58); a custom tab bar switches with `navigateToTab(route.key)`.
 - **An absolute child is placed in points, never a percentage** (`right: "100%"`, `top: "50%"`): RN's Yoga measures the percentage against the room the parent was given, not the parent, so it lands off (the PR trophy sat off the card; a tab divider sat 4pt high).
 - **Content measured inside a view that collapses to 0 high is absolute while shut** (left/right 0): Yoga lays a flow child of a 0-high view out at 0, so it measures as empty (Progress's program cards never reopened, then opened without animating).
 - **Safe areas:** `useSafeAreaInsets()`, never hardcoded.
@@ -30,6 +32,7 @@ iOS-first React Native + Expo (SDK 57, RN 0.86, New Architecture), TypeScript st
 - **Forgot Password is a code, never a link.**
 - **Modals:** one RN Modal mounted per screen; bottom sheets use `presentationStyle="overFullScreen"`. A sheet's interactions are steps of one sheet.
 - **Liquid Glass:** only on functional chrome, guarded by `isGlassEffectAPIAvailable()` with an rgba fallback; never `opacity` on `GlassView` or its parents; `overflow: 'hidden'`. A button that stays put over a page (corner, top bar, floating pill) is `GlassButton` (`components/GlassButton.tsx`), never a `t.ctrl` circle in `BounceButton`/`TouchableOpacity`; dim it with `disabled`/`needsConnection`, which fade only the icon.
+- **Button glows are softer on dark** (`DARK_GLOW_SCALE`, `constants/buttons.ts`): a coloured glow goes through `pillGlow`/`haloGlow` with `isDark` inline, `glowOpacity(x, isDark)` when written by hand, or `darkGlow(styles.x, isDark)` after a stylesheet glow.
 - **Animations:** Reanimated on the UI thread. Light haptic on every primary tap. A `useAnimatedStyle`/`useAnimatedProps` callback reads every shared value itself and passes it to helpers as arguments.
 - **Copy:** no em dashes in user-facing text.
 
@@ -44,7 +47,7 @@ iOS-first React Native + Expo (SDK 57, RN 0.86, New Architecture), TypeScript st
 - **Dates:** `utils/dates.ts`. `parseStoredDate` returns `null` on bad input: treat as "no program / no workout", never a fallback date. Day arithmetic rounds, never floors (DST).
 - **Weights** are stored in kg; `isKg` is a display lens. A prescribed weight shows in the unit it was typed in (`ProgramSet.weightUnit`); never convert a prescription.
 - **A day is identified by `dayIds[i]`, never its name** (a cycle can repeat a name). Lists from `programDays(program)`, lookups via `indexOfDayId`, history matching via `workoutMatchesDay`. Every builder load/save path runs `canonicalizeWorkouts`; every path persisting a program runs `normalizeDriftDates`. `WorkoutMap` equality uses sorted keys (`workoutsEqual`).
-- **Today's workout / previous values / notes hints:** always via `utils/workout.ts` (`resolveTodayWorkout`, `resolveWorkoutForDate`, `buildPrevSetsLookup`, `buildPrevNoteLookup`, `prevDayScopeFor`). Never re-implement cycle math. "Today" is `getEffectiveToday` (before 3am is still yesterday).
+- **Today's workout / previous values / notes hints:** always via `utils/workout.ts` (`resolveTodayWorkout`, `resolveWorkoutForDate`, `buildPrevSetsLookup` + `prevHintsForRows` (a row reads last time's set of its kind and number, never its position), `buildPrevNoteLookup`, `prevDayScopeFor`). Never re-implement cycle math. "Today" is `getEffectiveToday` (before 3am is still yesterday).
 - **Exercise identity:** compare names with `exerciseKey`, exercises with `exerciseIdentity` / `sameExercise`, never `toLowerCase()`. Exercise list is `scripts/exercise-library.json` → `node scripts/build-exercises.mjs`.
 - **Logged history is a snapshot**, never rewritten by program edits. `completedAt` is the real finish (stamped via `utils/sessionTime.ts:stampSession`); screens show `date`.
 - **Deleting a program:** `keepDeletedProgramName(program)` (`utils/programDelete.ts`) first, so its sessions keep its name in Custom workouts.

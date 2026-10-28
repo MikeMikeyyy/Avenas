@@ -33,7 +33,7 @@ import TrashIcon from "../../../components/TrashIcon";
 import SheetPill from "../../../components/SheetPill";
 import JournalProgramsBlock from "../../../components/journal/JournalProgramsBlock";
 import { APP_DARK, APP_LIGHT, BUBBLE_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../../constants/theme";
-import { PILL_RADIUS, PILL_SHADOW } from "../../../constants/buttons";
+import { darkGlow, PILL_RADIUS, PILL_SHADOW } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAccountType } from "../../../contexts/AccountTypeContext";
 import { UnitLens, useUnit } from "../../../contexts/UnitContext";
@@ -57,6 +57,7 @@ import UnreadBadge from "../../../components/UnreadBadge";
 import { loadThread, loadReads, countUnreadInThread } from "../../../utils/chatStore";
 import { loadHiddenMessageIds, blockContact, unaddContact, reportUser } from "../../../utils/moderation";
 import { getJSON } from "../../../utils/storage";
+import { allProgressRequest } from "../../../utils/progressSession";
 import { removeShareConfirm } from "../../../utils/removeShare";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
 import { alertMessage } from "../../../utils/errors";
@@ -116,7 +117,7 @@ function fmtSynced(iso: string): string | null {
 }
 
 export default function ClientDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, allProgress, allProgressId, allProgressAt } = useLocalSearchParams<{ id: string; allProgress?: string; allProgressId?: string; allProgressAt?: string }>();
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -133,6 +134,19 @@ export default function ClientDetailScreen() {
   const [unreadFromClient, setUnreadFromClient] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<Tab>("progress");
+  // "See All Progress" on this client's Exercise History: their Progress tab,
+  // on that exercise across every program (utils/progressSession.ts). The tab
+  // follows each new request while rendering, as React has state follow a
+  // prop.
+  const show = useMemo(
+    () => allProgressRequest({ allProgress, allProgressId, allProgressAt }),
+    [allProgress, allProgressId, allProgressAt],
+  );
+  const [shownAt, setShownAt] = useState<string | null>(null);
+  if (show && show.at !== shownAt) {
+    setShownAt(show.at);
+    setTab("progress");
+  }
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
   const [shared, setShared] = useState<SharedProgram[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
@@ -583,6 +597,7 @@ export default function ClientDetailScreen() {
             bottomPadding={insets.bottom + 140}
             refreshControl={refreshControl}
             clientId={client.id}
+            show={show}
           />
         )}
         {tab === "journal" && (
@@ -607,7 +622,7 @@ export default function ClientDetailScreen() {
           >
             <OfflineBanner />
             <BounceButton style={{ marginBottom: 16 }} onPress={() => setShareOpen(true)} needsConnection>
-              <View style={[styles.shareBtn, { backgroundColor: ACCT, shadowColor: ACCT }]}>
+              <View style={[styles.shareBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.shareBtn, isDark)]}>
                 <SendIcon size={18} color="#fff" />
                 <Text style={styles.shareBtnText}>Share a Program</Text>
               </View>

@@ -10,6 +10,7 @@ import BounceButton from "./BounceButton";
 import TrashIcon from "./TrashIcon";
 import { DANGER_BRIGHT } from "../constants/theme";
 import { haloGlow } from "../constants/buttons";
+import { useTheme } from "../contexts/ThemeContext";
 
 /** Its diameter; beside it, a pill of the same height lines up with it. */
 export const DELETE_CIRCLE_SIZE = 32;
@@ -18,9 +19,10 @@ export default function DeleteCircleButton({ onPress, accessibilityLabel }: {
   onPress: () => void;
   accessibilityLabel: string;
 }) {
+  const { isDark } = useTheme();
   return (
     <BounceButton onPress={onPress} accessibilityRole="button" accessibilityLabel={accessibilityLabel}>
-      <View style={[styles.circle, haloGlow(DANGER_BRIGHT)]}>
+      <View style={[styles.circle, haloGlow(DANGER_BRIGHT, 0.5, 6, isDark)]}>
         <TrashIcon size={16} color="#fff" />
       </View>
     </BounceButton>

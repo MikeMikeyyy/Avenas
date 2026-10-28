@@ -67,6 +67,7 @@ import {
 } from "../utils/workoutTimerStore";
 import { buildLiveActivityQueue, logWithLockScreenTicks } from "../utils/liveActivity";
 import { nextSetOf } from "../utils/nextSet";
+import { withoutSet } from "../utils/setRows";
 
 let passed = 0;
 const failures: string[] = [];
@@ -455,6 +456,63 @@ eq(upNextFrom(undefined, ["a"], "kg"), null, "up next: no set left, none");
   eq(upNextFrom({ ...buildLiveActivityQueue(exercises, { bench: { warmup: [], working: [set("a")] } }, () => []).queue[0], exId: "gone" }, ids, "kg")?.exerciseNumber, 1,
     "up next: an exercise no longer on the page still reads as a number, never 0");
   eq(upNextTail({ ...first!, numbers: "" }), "· Warmup 1", "up next: the bar's line with nothing to go on is just the set");
+}
+
+{
+  // An untick in the app takes the timer's card, the bar's Up next and the
+  // lock screen card back to the set (user request, 2026-10-28): a double tap
+  // on the lock screen ticked Set 2 and Set 3, undone in the app from the top.
+  type Set = { id: string; weight: string; reps: string; done: boolean; doneAt?: number; untickedAt?: number };
+  const set = (id: string, doneAt?: number): Set => ({ id, weight: "", reps: "", done: doneAt !== undefined, doneAt });
+  const exercises = [{ id: "bench", name: "Barbell Bench Press" }, { id: "row", name: "Seated Cable Row" }];
+  const ids = exercises.map(e => e.id);
+  let log: Record<string, { warmup: Set[]; working: Set[] }> = {
+    bench: { warmup: [], working: [set("a", 1), set("b", 2), set("c", 3), set("d")] },
+    row: { warmup: [], working: [set("r1"), set("r2")] },
+  };
+  // The Workout tab's checkbox, unticking a set (toggleDone).
+  const untick = (exId: string, setIdx: number, at: number) => {
+    const working = [...log[exId].working];
+    working[setIdx] = { ...working[setIdx], done: false, doneAt: undefined, untickedAt: at };
+    log = { ...log, [exId]: { ...log[exId], working } };
+  };
+  const shown = () => {
+    const card = upNextFrom(buildLiveActivityQueue(exercises, log, () => []).queue[0], ids, "kg");
+    return card && `${card.exerciseName}, ${card.setLabel}`;
+  };
+  eq(shown(), "Barbell Bench Press, Set 4 of 4", "untick: before it, the card is past the double tap");
+  untick("bench", 1, 4);
+  eq(shown(), "Barbell Bench Press, Set 2 of 4", "untick: the first of the two undone, the card is back on it");
+  eq(nextSetOf(ids, log)?.setIdx, 1, "untick: ...the set the page glows on");
+  untick("bench", 2, 5);
+  eq(shown(), "Barbell Bench Press, Set 2 of 4", "untick: both undone, still the first of them");
+  log = logWithLockScreenTicks(log, [{ exId: "bench", setType: "working", setIdx: 1, ts: 6 }], () => []);
+  eq(shown(), "Barbell Bench Press, Set 3 of 4", "untick: ticked again, the card moves on from it");
+}
+
+{
+  // A set taken away, or turned into the other kind, shows at once in what
+  // reads the next set: the lock screen card, the timer's card and the bar's
+  // Up next line (user report, 2026-10-28: a warm-up taken away stayed among
+  // the lock screen's dots). Two warm-ups, the first done, and two working
+  // sets; then − takes the last set, and the other warm-up is turned into a
+  // working set (to the front of them, as the Workout tab's toggleSetType does).
+  type Set = { id: string; weight: string; reps: string; done: boolean; doneAt?: number };
+  const set = (id: string, doneAt?: number): Set => ({ id, weight: "", reps: "", done: doneAt !== undefined, doneAt });
+  const exercises = [{ id: "bench", name: "Barbell Bench Press" }];
+  let log: Record<string, { warmup: Set[]; working: Set[] }> = {
+    bench: { warmup: [set("w1", 1), set("w2")], working: [set("a"), set("b")] },
+  };
+  const shown = () => {
+    const u = upNextFrom(buildLiveActivityQueue(exercises, log, () => []).queue[0], ["bench"], "kg");
+    return u && { warmups: u.warmupDone, working: u.setDone, set: u.setLabel };
+  };
+  eq(shown(), { warmups: [true, false], working: [false, false], set: "Warmup 2" }, "sets changed: two warm-ups and two working sets to start");
+  log = { bench: { ...log.bench, ...withoutSet(log.bench.warmup, log.bench.working, "b")! } };
+  eq(shown(), { warmups: [true, false], working: [false], set: "Warmup 2" }, "sets changed: − takes the last set, and its dot goes");
+  log = { bench: { warmup: [log.bench.warmup[0]], working: [log.bench.warmup[1], ...log.bench.working] } };
+  eq(shown(), { warmups: [true], working: [false, false], set: "Set 1 of 2" },
+    "sets changed: the warm-up turned working leaves one warm-up dot, and it's up next as set 1");
 }
 
 // ─── the store ───────────────────────────────────────────────────────────────

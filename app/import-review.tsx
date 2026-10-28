@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Platform } from "react-native";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -32,7 +32,7 @@ import SegmentedControl from "../components/SegmentedControl";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ON_FILL, accentTextColor } from "../constants/theme";
-import { PILL_H, pillGlow } from "../constants/buttons";
+import { PILL_H, darkGlow, pillGlow } from "../constants/buttons";
 import { BAR_STACK_GAP, scrollEndPadding } from "../constants/floatingBars";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
@@ -316,7 +316,7 @@ export default function ImportReviewScreen() {
           onPress={onImport}
           disabled={!ready || saving || nothingNew}
           contentStyle={styles.importContent}
-          solidStyle={styles.importGlow}
+          solidStyle={[styles.importGlow, darkGlow(styles.importGlow, isDark)]}
           accessibilityLabel={`Import ${summary.adding} workouts`}
         >
           {saving

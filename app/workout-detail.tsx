@@ -14,13 +14,15 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  type ScrollViewInstance,
+  type TextInputInstance,
 } from "react-native";
 import Reanimated, {
   useSharedValue, useAnimatedStyle, withTiming, Easing as ReEasing,
 } from "react-native-reanimated";
 import { Svg, Path } from "react-native-svg";
 import { BlurView } from "expo-blur";
-import MaskedView from "@react-native-masked-view/masked-view";
+import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
@@ -40,8 +42,8 @@ import TrashIcon from "../components/TrashIcon";
 import TimeEditSheet from "../components/TimeEditSheet";
 import WorkoutAchievements from "../components/WorkoutAchievements";
 import { stampSession } from "../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT } from "../constants/theme";
-import { haloGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, DANGER_BRIGHT, SET_INPUT_DARK } from "../constants/theme";
+import { darkGlow, glowOpacity, haloGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import { SessionCueLine, SkippedRow } from "../components/ChangeCue";
 import { sessionChanges } from "../utils/exerciseChanges";
@@ -133,7 +135,7 @@ function WorkoutMetaRow({ dateYMD, completedIso, durationSeconds, isDark, editab
         </View>
       ))}
       {editable && (
-        <View style={[styles.metaChip, styles.metaEditChip]}>
+        <View style={[styles.metaChip, styles.metaEditChip, darkGlow(styles.metaEditChip, isDark)]}>
           <Ionicons name="pencil" size={12} color="#fff" />
           <Text style={[styles.metaText, { color: "#fff" }]}>Edit</Text>
         </View>
@@ -509,7 +511,7 @@ export default function WorkoutDetailScreen() {
   // edit/save flow (saved on blur / close), mirroring the live workout page.
   const [editedSessionNotes, setEditedSessionNotes] = useState("");
   const [showSessionNotes, setShowSessionNotes]     = useState(false);
-  const sessionNotesRef = useRef<TextInput | null>(null);
+  const sessionNotesRef = useRef<TextInputInstance | null>(null);
   const setRowHeightRef = useRef(0);
   const [collapsingIndices, setCollapsingIndices] = useState<Set<number>>(new Set());
   const startCollapseEx = (idx: number) => setCollapsingIndices(prev => new Set(prev).add(idx));
@@ -518,14 +520,14 @@ export default function WorkoutDetailScreen() {
   const [hasPrev, setHasPrev] = useState(false);
   const nextFnRef = useRef<(() => void) | null>(null);
   const prevFnRef = useRef<(() => void) | null>(null);
-  const inputRefs = useRef<Record<string, TextInput | null>>({});
+  const inputRefs = useRef<Record<string, TextInputInstance | null>>({});
 
   // Every field on this page is in the list (session notes, names, sets,
   // exercise notes), so each one that focuses is scrolled clear of the keyboard
   // and its tools (hooks/useFieldAboveKeyboard.ts), as on the Workout tab.
   // Editing notes low on the page left them behind the keyboard (user report,
   // 2026-10-13).
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const fieldFocused = useFieldAboveKeyboard(scrollRef, kbHeight, ABOVE_KEYBOARD_TOOLS);
   const handleInputFocus = useCallback((nextFn: (() => void) | null, prevFn: (() => void) | null = null) => {
     setHasNext(nextFn !== null);
@@ -858,7 +860,7 @@ export default function WorkoutDetailScreen() {
             <GlassButton onPress={handleCancel} size={BACK_SIZE} accessibilityLabel="Cancel editing">
               <Ionicons name="close" size={22} color={t.tp} />
             </GlassButton>
-            <GlassButton tint={ACCT} onPress={handleSave} size={BACK_SIZE} accessibilityLabel="Save changes" solidStyle={styles.saveGlow}>
+            <GlassButton tint={ACCT} onPress={handleSave} size={BACK_SIZE} accessibilityLabel="Save changes" solidStyle={[styles.saveGlow, darkGlow(styles.saveGlow, isDark)]}>
               <Ionicons name="checkmark" size={22} color="#fff" />
             </GlassButton>
           </>
@@ -929,7 +931,7 @@ export default function WorkoutDetailScreen() {
                     <View style={styles.sessionNotesHeader}>
                       <Text style={[styles.sessionNotesTitle, { color: t.tp }]}>Session Notes</Text>
                       <BounceButton onPress={closeSessionNotes} accessibilityLabel="Save session notes">
-                        <View style={styles.notesTickBtn}>
+                        <View style={[styles.notesTickBtn, darkGlow(styles.notesTickBtn, isDark)]}>
                           <Ionicons name="checkmark" size={18} color="#fff" />
                         </View>
                       </BounceButton>
@@ -1084,7 +1086,7 @@ export default function WorkoutDetailScreen() {
                             </View>
                             <View style={{ width: 32 }} />
                             <View style={styles.inputCell}>
-                              <View style={[styles.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                              <View style={[styles.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                                 <TextInput
                                   ref={r => { inputRefs.current[`${ei}-${j}-w`] = r; }}
                                   style={[styles.inputText, { color: isDark ? "#fff" : t.tp }]}
@@ -1104,7 +1106,7 @@ export default function WorkoutDetailScreen() {
                               </View>
                             </View>
                             <View style={[styles.inputCell, { paddingRight: 20 }]}>
-                              <View style={[styles.inputBox, { backgroundColor: isDark ? "#343759" : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                              <View style={[styles.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
                                 <TextInput
                                   ref={r => { inputRefs.current[`${ei}-${j}-r`] = r; }}
                                   style={[styles.inputText, { color: isDark ? "#fff" : t.tp }]}
@@ -1131,7 +1133,7 @@ export default function WorkoutDetailScreen() {
                                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                 style={{ position: "absolute", right: 0, top: 16 }}
                               >
-                                <View style={styles.removeSetBtn}>
+                                <View style={[styles.removeSetBtn, darkGlow(styles.removeSetBtn, isDark)]}>
                                   <Ionicons name="remove" size={13} color="#fff" />
                                 </View>
                               </TouchableOpacity>
@@ -1262,7 +1264,7 @@ export default function WorkoutDetailScreen() {
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}
             size={ADD_SIZE}
             accessibilityLabel="Add exercise"
-            solidStyle={styles.addGlow}
+            solidStyle={[styles.addGlow, darkGlow(styles.addGlow, isDark)]}
           >
             <Ionicons name="add" size={24} color="#fff" />
           </GlassButton>

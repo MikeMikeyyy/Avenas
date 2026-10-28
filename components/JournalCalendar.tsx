@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, LayoutChangeEvent, Platform } from "react-native";
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK, BUBBLE_DARK, CARD_GLOW, CARD_SHADE, CARD_SHADE_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { getWorkoutForDate } from "../utils/workout";
@@ -10,13 +10,14 @@ import { getWorkoutForDate } from "../utils/workout";
 const MONTH_LABELS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_ABBRS    = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 
-// Rest-day colours
+// Rest-day colours (the dark ones neutral charcoal since Graphite, where they
+// were navy)
 const REST_BG_LIGHT     = "#b8bec8";
-const REST_BG_DARK      = "#3a3f58";
+const REST_BG_DARK      = "#3B3D44";
 const REST_SHADOW_LIGHT = "#8a9099";
-const REST_SHADOW_DARK  = "#1e2235";
+const REST_SHADOW_DARK  = "#0A0B0D";
 const REST_HI_LIGHT     = "#d0d4da";
-const REST_HI_DARK      = "#484e6e";
+const REST_HI_DARK      = "#4A4C53";
 
 type CellState = "workout" | "todayWorkout" | "today" | "rest" | "missed" | "future" | null;
 
@@ -26,6 +27,9 @@ interface Props {
   workoutHistory: CompletedWorkout[];
   activeProgram: SavedProgram | null;
   onDayPress: (date: string, workoutId?: string) => void;
+  /** The month to open on, "YYYY-MM" (Home's calendar sends the month before
+   *  this one when that month is tapped). Otherwise it opens on this month. */
+  initialMonth?: string;
 }
 
 // Local toYMD has a different signature — (year, month, day) — than the one
@@ -35,14 +39,28 @@ function toYMD(year: number, month: number, day: number): string {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-export default function JournalCalendar({ isDark, workoutDates, workoutHistory, activeProgram, onDayPress }: Props) {
+// The first month the calendar goes back to.
+const FIRST_YEAR  = 2026;
+const FIRST_MONTH = 0;
+
+/** The month the calendar opens on: `initialMonth` ("YYYY-MM") when one is
+ *  given, held between FIRST_YEAR/FIRST_MONTH and this month; else this month. */
+function openingMonth(initialMonth: string | undefined, curYear: number, curMonth: number): { year: number; month: number } {
+  const m = initialMonth?.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return { year: curYear, month: curMonth };
+  const asked = Number(m[1]) * 12 + Number(m[2]) - 1;
+  const shown = Math.min(Math.max(asked, FIRST_YEAR * 12 + FIRST_MONTH), curYear * 12 + curMonth);
+  return { year: Math.floor(shown / 12), month: shown % 12 };
+}
+
+export default function JournalCalendar({ isDark, workoutDates, workoutHistory, activeProgram, onDayPress, initialMonth }: Props) {
   const today    = useMemo(() => new Date(), []);
   const curYear  = today.getFullYear();
   const curMonth = today.getMonth();
   const todayStr = toYMD(curYear, curMonth, today.getDate());
 
-  const [viewYear, setViewYear]   = useState(curYear);
-  const [viewMonth, setViewMonth] = useState(curMonth);
+  const [viewYear, setViewYear]   = useState(() => openingMonth(initialMonth, curYear, curMonth).year);
+  const [viewMonth, setViewMonth] = useState(() => openingMonth(initialMonth, curYear, curMonth).month);
 
   const gridHeight       = useSharedValue(0);
   const gridInitialized  = useRef(false);
@@ -64,7 +82,7 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
 
   const t = isDark ? APP_DARK : APP_LIGHT;
   const atCurrentMonth = viewYear === curYear && viewMonth === curMonth;
-  const atMinMonth = viewYear === 2026 && viewMonth === 0;
+  const atMinMonth = viewYear === FIRST_YEAR && viewMonth === FIRST_MONTH;
 
   const goBack = useCallback(() => {
     if (atMinMonth) return;
@@ -128,8 +146,8 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
 
   // Theme-derived shadow colours
   const neutralBg    = isDark ? NEU_BG_DARK : NEU_BG;
-  const outerShadow  = isDark ? "#0d0f1e" : "#8896a0";
-  const innerShadow  = isDark ? "#2e3555" : "#ffffff";
+  const outerShadow  = isDark ? CARD_SHADE_DARK : CARD_SHADE;
+  const innerShadow  = isDark ? BUBBLE_DARK : CARD_GLOW;
 
   function renderCell(cell: { day: number; state: CellState } | null, ci: number) {
     if (!cell) return <View key={ci} style={s.cellWrap} />;
