@@ -34,7 +34,7 @@ export default function GroupAvatar({ uri, size, isDark, colorKey }: {
     );
   }
 
-  const { bg, ink } = avatarColors(colorKey, isDark);
+  const { bg, ink } = avatarColors(colorKey, isDark, "group");
   return (
     <View style={[styles.fallback, { width: size, height: size, borderRadius: radius, backgroundColor: bg }]}>
       {/* Roughly half the circle, which is where the icon sat at every size

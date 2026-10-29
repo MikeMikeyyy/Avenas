@@ -64,15 +64,13 @@ import {
   APP_LIGHT,
   AWAITING_ORANGE,
   FontFamily,
-  ROLE_MEMBER,
-  ROLE_OWNER,
-  ROLE_TRAINER,
   chatOrchid,
   chatOrchidText,
   compareBlue,
   compareBlueText,
   dangerTextColor,
   replacedTextColor,
+  roleColor,
   roleTextColor,
 } from "../../../../constants/theme";
 import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
@@ -85,7 +83,7 @@ import { useAuth } from "../../../../contexts/AuthContext";
 import { fetchGroupMemberStatus, fetchGroupMembers, leaveGroup, setGroupMemberRole, setGroupMembers, subscribeToGroup } from "../../../../lib/groups";
 import { isActiveNow, presenceLabel, PRESENCE_REFRESH_MS } from "../../../../utils/presence";
 import { getMyUid } from "../../../../lib/chat";
-import { loadFavouriteMemberIds, loadGroupUnread, sortByFavourite, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
+import { groupMemberOrder, loadFavouriteMemberIds, loadGroupUnread, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
 import { loadGroupReviewPrograms, loadGroupSharedPrograms } from "../../../../utils/trainerStore";
 import {
   dropGroupPage,
@@ -100,7 +98,7 @@ import {
 import { groupProgramLists, groupProgramsTile } from "../../../../utils/groupPrograms";
 import { getJSON } from "../../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../../constants/programs";
-import { canCoachGroup, type GroupMember, type GroupRole } from "../../../../constants/groups";
+import { canCoachGroup, ROLE_LABEL, type GroupMember, type GroupRole } from "../../../../constants/groups";
 import { alertMessage } from "../../../../utils/errors";
 
 /** Space kept between the bottom of the member search field and the keyboard.
@@ -111,18 +109,6 @@ const SEARCH_KEYBOARD_GAP = 130;
 
 /** The round buttons on the Members heading (search, add members). */
 const SECTION_BTN = 36;
-
-const ROLE_LABEL: Record<GroupRole, string> = {
-  owner:   "OWNER",
-  trainer: "TRAINER",
-  member:  "MEMBER",
-};
-
-const ROLE_COLOR: Record<GroupRole, string> = {
-  owner:   ROLE_OWNER,
-  trainer: ROLE_TRAINER,
-  member:  ROLE_MEMBER,
-};
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -478,13 +464,13 @@ export default function GroupPageScreen() {
   const recipientIds = useMemo(() => members.filter(m => m.id !== myUid).map(m => m.id), [members, myUid]);
 
   // Filters the list only: the count and a program send stay whole-group.
-  // Starred people first, oldest star at the top, then the roster's own order
-  // (owner, trainers, then by name), sorted AFTER the search filter so a
-  // search's matches are pinned the same way the full list is.
+  // The owner at the top, then trainers, then everyone else, each starred
+  // first (groupMemberOrder), sorted AFTER the search filter so a search's
+  // matches keep the full list's order.
   const visibleMembers = (() => {
     const q = query.trim().toLowerCase();
     const matched = q ? members.filter(m => m.name.toLowerCase().includes(q)) : members;
-    return sortByFavourite(matched, favouriteMembers);
+    return groupMemberOrder(matched, favouriteMembers);
   })();
 
   /** My own row reads its program from MY programs, not from the per-client
@@ -526,7 +512,7 @@ export default function GroupPageScreen() {
       member: m,
       isMe,
       badge: isBlocked ? "BLOCKED" : isMe ? `YOU · ${ROLE_LABEL[m.role]}` : m.accepted ? ROLE_LABEL[m.role] : "INVITED",
-      badgeFill: roleShown ? `${ROLE_COLOR[m.role]}22` : t.div,
+      badgeFill: roleShown ? `${roleColor(m.role)}22` : t.div,
       badgeInk: roleShown ? roleTextColor(m.role, isDark) : t.ts,
       meta: [program, lastActive ? presenceLabel(lastActive) : null].filter(Boolean).join(" · "),
       lastActive,

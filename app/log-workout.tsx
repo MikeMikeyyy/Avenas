@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, Easing as ReEasing } from "react-native-reanimated";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Modal, Animated, Easing, KeyboardAvoidingView,
-  Platform, Alert, PanResponder, Keyboard,
+  Platform, Alert, Keyboard,
   type ScrollViewInstance, type TextInputInstance,
 } from "react-native";
 import { BlurView } from "expo-blur";
@@ -25,9 +25,11 @@ import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
+import ReorderExercisesSheet, { DragHandleIcon } from "../components/ReorderExercisesSheet";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, stampSession, type WorkoutTime } from "../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK, SET_INPUT_DARK } from "../constants/theme";
-import { darkGlow, glowOpacity, haloGlow, pillGlow, PILL_H, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK } from "../constants/theme";
+import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, haloGlow, pillGlow, PILL_H, PILL_RADIUS, PILL_SHADOW, setInputSurface } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
   normaliseSets, type SavedProgram, type CompletedWorkout, type PlannedExercise, type ProgramSet,
@@ -42,6 +44,7 @@ import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
 import { bestLiftsBefore, isPrSet } from "../utils/achievements";
 import { exerciseIdentity } from "../utils/exerciseNames";
+import { exercisePageParams } from "../utils/customExerciseDetails";
 import PrTrophy from "../components/PrTrophy";
 import { useUnit } from "../contexts/UnitContext";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -50,6 +53,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import BackButton, { BACK_LEFT, BACK_TOP, BACK_SIZE } from "../components/BackButton";
 import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import { useFieldAboveKeyboard } from "../hooks/useFieldAboveKeyboard";
+import { useSheetDrag } from "../hooks/useSheetDrag";
 
 const WARMUP_ORANGE = "#ffbf0f";
 /** The floating +, a size up from the round buttons beside it and at the top. */
@@ -141,40 +145,44 @@ function TimePickerSheet({ visible, isDark, initialTime, onConfirm, onClear, onC
       Animated.timing(backdropOp, { toValue: 0, duration: 200, useNativeDriver: true }),
     ]).start(() => { slideY.setValue(600); backdropOp.setValue(0); onClose(); });
   }, [onClose]);
+  // Held by its top (the handle and the title row) and dragged down, it closes.
+  const drag = useSheetDrag({ slideY, backdrop: backdropOp, onClose: dismiss });
 
   const durationMins = computeDurationMins(wt.start, wt.end);
   const divider = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.07)";
-  const bgColor = t.bg;
 
   return (
     <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={dismiss}>
-      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.45)", opacity: backdropOp }]} />
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: SHEET_DIM, opacity: backdropOp }]} />
       <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={dismiss} />
-      <Animated.View style={[s.timeSheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 16, transform: [{ translateY: slideY }] }]}>
-        <View style={s.sheetHandleArea}><View style={s.sheetHandle} /></View>
+      <Animated.View style={[s.timeSheet, sheetSurface(t.bg), { paddingBottom: sheetFootGap(insets.bottom) + 16, transform: [{ translateY: slideY }] }]}>
+        <SheetGlass />
+        <View {...drag}>
+          <View style={s.sheetHandleArea}><View style={s.sheetHandle} /></View>
 
-        {/* Header */}
-        <View style={[s.timeSheetHeader, { borderBottomColor: divider }]}>
-          <View style={{ width: 44 }} />
-          <Text style={[s.timeSheetTitle, { color: t.tp, flex: 1, textAlign: "center" }]}>Workout Time</Text>
-          <View style={{ width: 44, alignItems: "flex-end" }}>
-            {initialTime && (
-              <TouchableOpacity onPress={() => { onClear(); dismiss(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={{ fontFamily: FontFamily.semibold, fontSize: 14, color: DANGER_BRIGHT }}>Clear</Text>
-              </TouchableOpacity>
-            )}
+          {/* Header */}
+          <View style={[s.timeSheetHeader, { borderBottomColor: divider }]}>
+            <View style={{ width: 44 }} />
+            <Text style={[s.timeSheetTitle, { color: t.tp, flex: 1, textAlign: "center" }]}>Workout Time</Text>
+            <View style={{ width: 44, alignItems: "flex-end" }}>
+              {initialTime && (
+                <TouchableOpacity onPress={() => { onClear(); dismiss(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={{ fontFamily: FontFamily.semibold, fontSize: 14, color: DANGER_BRIGHT }}>Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </View>
 
         {/* Pickers — TimeRow is module-level so it never remounts on wt change */}
         <View style={[s.timePickerBody, { borderBottomColor: divider }]}>
           <TimeRow
-            label="Start" val={wt.start} isDark={isDark} bgColor={bgColor}
+            label="Start" val={wt.start} isDark={isDark}
             onChange={v => setWt(prev => ({ ...prev, start: v }))}
           />
           <View style={[s.timeRowDivider, { backgroundColor: divider }]} />
           <TimeRow
-            label="End" val={wt.end} isDark={isDark} bgColor={bgColor}
+            label="End" val={wt.end} isDark={isDark}
             onChange={v => setWt(prev => ({ ...prev, end: v }))}
           />
         </View>
@@ -194,6 +202,7 @@ function TimePickerSheet({ visible, isDark, initialTime, onConfirm, onClear, onC
             </View>
           </BounceButton>
         </View>
+        <SheetCloseButton onPress={dismiss} />
       </Animated.View>
     </Modal>
   );
@@ -207,16 +216,6 @@ function KeyboardDismissIcon({ color }: { color: string }) {
       <Path d="M2 2.5C2 1.67 2.67 1 3.5 1h19c.83 0 1.5.67 1.5 1.5v10c0 .83-.67 1.5-1.5 1.5h-19C2.67 14 2 13.33 2 12.5v-10z" stroke={color} strokeWidth="1.4"/>
       <Path d="M6 5.5h1.2M10 5.5h1.2M14 5.5h1.2M18 5.5h1.2M6 8.5h1.2M10 8.5h1.2M14 8.5h1.2M18 8.5h1.2M8 11.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
       <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-    </Svg>
-  );
-}
-
-// ─── DragHandleIcon ────────────────────────────────────────────────────────────
-
-function DragHandleIcon({ color }: { color: string }) {
-  return (
-    <Svg width={16} height={12} viewBox="0 0 16 12" fill="none">
-      <Path d="M1 1.5h14M1 6h14M1 10.5h14" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
     </Svg>
   );
 }
@@ -324,226 +323,6 @@ function CheckboxCell({ done, isDark, onToggle }: { done: boolean; isDark: boole
   );
 }
 
-// ─── LogDraggableList ──────────────────────────────────────────────────────────
-
-function LogDraggableList({ exercises, isDark, t, onReorder }: {
-  exercises: LogExercise[];
-  isDark: boolean;
-  t: typeof APP_LIGHT | typeof APP_DARK;
-  onReorder: (exercises: LogExercise[]) => void;
-}) {
-  const [activeIdx, setActiveIdx] = useState<number | null>(null);
-  const activeIdxRef = useRef<number | null>(null);
-  const hoverIdxRef = useRef<number | null>(null);
-  const rowHeightRef = useRef(50);
-
-  const rowAnimsMap = useRef(new Map<string, Animated.Value>());
-  exercises.forEach(ex => {
-    if (!rowAnimsMap.current.has(ex.id)) rowAnimsMap.current.set(ex.id, new Animated.Value(0));
-  });
-
-  const exercisesRef = useRef(exercises);
-  exercisesRef.current = exercises;
-  const onReorderRef = useRef(onReorder);
-  onReorderRef.current = onReorder;
-
-  useLayoutEffect(() => {
-    rowAnimsMap.current.forEach(a => a.setValue(0));
-  }, [exercises]);
-
-  const panResponders = useMemo(() =>
-    exercises.map((ex, idx) =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponderCapture: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponderCapture: () => true,
-        onPanResponderGrant: () => {
-          activeIdxRef.current = idx;
-          hoverIdxRef.current = idx;
-          rowAnimsMap.current.forEach(a => a.setValue(0));
-          setActiveIdx(idx);
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        },
-        onPanResponderMove: (_, gs) => {
-          rowAnimsMap.current.get(ex.id)?.setValue(gs.dy);
-          const rh = rowHeightRef.current;
-          const exList = exercisesRef.current;
-          const newHover = Math.max(0, Math.min(exList.length - 1, Math.round(idx + gs.dy / rh)));
-          if (newHover !== hoverIdxRef.current) {
-            hoverIdxRef.current = newHover;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            exList.forEach((item, i) => {
-              if (i === idx) return;
-              let toVal = 0;
-              if (newHover > idx && i > idx && i <= newHover) toVal = -rh;
-              else if (newHover < idx && i < idx && i >= newHover) toVal = rh;
-              Animated.spring(rowAnimsMap.current.get(item.id)!, {
-                toValue: toVal, useNativeDriver: false, damping: 20, stiffness: 280,
-              }).start();
-            });
-          }
-        },
-        onPanResponderRelease: () => {
-          const from = activeIdxRef.current!;
-          const to = hoverIdxRef.current ?? from;
-          if (to !== from) {
-            const arr = [...exercisesRef.current];
-            const [moved] = arr.splice(from, 1);
-            arr.splice(to, 0, moved);
-            onReorderRef.current(arr);
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          } else {
-            rowAnimsMap.current.forEach(a => a.setValue(0));
-          }
-          activeIdxRef.current = null;
-          hoverIdxRef.current = null;
-          setActiveIdx(null);
-        },
-        onPanResponderTerminate: () => {
-          rowAnimsMap.current.forEach(a => a.setValue(0));
-          activeIdxRef.current = null;
-          hoverIdxRef.current = null;
-          setActiveIdx(null);
-        },
-      })
-    ),
-  [exercises]);
-
-  const divider = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
-
-  return (
-    <>
-      {exercises.map((ex, i) => {
-        const isActive = activeIdx === i;
-        const anim = rowAnimsMap.current.get(ex.id)!;
-        return (
-          <Animated.View
-            key={ex.id}
-            style={[
-              s.dragRow,
-              i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isActive ? "transparent" : divider },
-              { transform: [{ translateY: anim }], zIndex: isActive ? 10 : 1 },
-              isActive && {
-                backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)",
-                borderRadius: 8,
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.2,
-                shadowRadius: 8,
-              },
-            ]}
-            onLayout={i === 0 ? e => { rowHeightRef.current = e.nativeEvent.layout.height; } : undefined}
-          >
-            <View {...panResponders[i].panHandlers} style={s.dragHandle}>
-              <DragHandleIcon color={t.ts} />
-            </View>
-            <View style={[s.dragNumChip, { backgroundColor: ACCT + "18" }]}>
-              <Text style={[s.dragNum, { color: ACCT }]}>{i + 1}</Text>
-            </View>
-            <View style={s.dragNameWrap}>
-              <Text style={[s.dragName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
-            </View>
-          </Animated.View>
-        );
-      })}
-    </>
-  );
-}
-
-// ─── LogReorderSheet ───────────────────────────────────────────────────────────
-
-function LogReorderSheet({ visible, exercises, isDark, workoutName, onReorder, onClose }: {
-  visible: boolean;
-  exercises: LogExercise[];
-  isDark: boolean;
-  workoutName: string;
-  onReorder: (exercises: LogExercise[]) => void;
-  onClose: () => void;
-}) {
-  const t = isDark ? APP_DARK : APP_LIGHT;
-  const slideY = useRef(new Animated.Value(500)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) { slideY.setValue(g.dy); backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300)); }
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 120 || g.vy > 0.8) {
-          Animated.parallel([
-            Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
-            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
-        } else {
-          Animated.parallel([
-            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
-            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
-          ]).start();
-        }
-      },
-    })
-  ).current;
-
-  const closeSheet = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
-      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
-  }, [slideY, backdropOpacity, onClose]);
-
-  useEffect(() => {
-    if (visible) {
-      slideY.setValue(500);
-      backdropOpacity.setValue(0);
-      Animated.parallel([
-        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      ]).start();
-    }
-  }, [visible]);
-
-  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
-
-  return (
-    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={closeSheet}>
-      <View style={s.sheetBackdrop}>
-        <Animated.View style={[StyleSheet.absoluteFill, s.sheetOverlay, { opacity: backdropOpacity }]} />
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
-        <Animated.View style={[s.sheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
-          <View {...panResponder.panHandlers} style={s.sheetHandleArea}>
-            <View style={s.sheetHandle} />
-          </View>
-          <View style={[s.sheetHeader, { borderBottomColor: divider }]}>
-            <Text style={[s.sheetTitle, { color: t.tp }]}>Reorder Exercises</Text>
-            <Text style={[s.sheetSubtitle, { color: t.ts }]}>{workoutName}</Text>
-          </View>
-          <View style={s.sheetListWrap}>
-            <LogDraggableList
-              exercises={exercises}
-              isDark={isDark}
-              t={t}
-              onReorder={onReorder}
-            />
-          </View>
-          <View style={s.sheetDoneRow}>
-            <BounceButton onPress={closeSheet}>
-              <View style={[s.sheetDoneWrap, darkGlow(s.sheetDoneWrap, isDark)]}>
-                <View style={s.sheetDoneBtn}>
-                  <Text style={s.sheetDoneText}>Done</Text>
-                </View>
-              </View>
-            </BounceButton>
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
-  );
-}
-
 // ─── ExerciseCard ─────────────────────────────────────────────────────────────
 
 interface ExerciseCardProps {
@@ -582,7 +361,10 @@ function ExerciseCard({
 }: ExerciseCardProps) {
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const router = useRouter();
   const divider = t.div;
+  // A set's boxes, as the Workout tab draws them (setInputSurface).
+  const inputSurface = setInputSurface(t, isDark);
   const [editing, setEditing] = useState(false);
   const weightRefs = useRef<(TextInputInstance | null)[]>([]);
   const repsRefs = useRef<(TextInputInstance | null)[]>([]);
@@ -601,10 +383,21 @@ function ExerciseCard({
 
         {/* Header */}
         <View style={s.exHeader}>
-          <View style={{ flex: 1 }}>
+          {/* The name opens the exercise's page, as on the Workout tab (user
+              request, 2026-10-30). */}
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.navigate({ pathname: "/exercise-summary", params: exercisePageParams({ name: ex.name, customId: ex.customId }) });
+            }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`View ${ex.name} summary`}
+          >
             <Text style={[s.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
             <Text style={[s.exName, { color: t.tp }]}>{ex.name}</Text>
-          </View>
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setEditing(e => !e); }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -696,7 +489,7 @@ function ExerciseCard({
                   </View>
 
                   {/* Weight */}
-                  <View style={[s.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                  <View style={[s.inputBox, inputSurface]}>
                     <TextInput
                       ref={r => { weightRefs.current[idx] = r; }}
                       style={[s.inputText, { color: isDark ? "#fff" : t.tp }]}
@@ -714,7 +507,7 @@ function ExerciseCard({
                   </View>
 
                   {/* Reps / Hold */}
-                  <View style={[s.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                  <View style={[s.inputBox, inputSurface]}>
                     <TextInput
                       ref={r => { repsRefs.current[idx] = r; }}
                       style={[s.inputText, { color: isDark ? "#fff" : t.tp }]}
@@ -798,7 +591,7 @@ function ExerciseCard({
               <TouchableOpacity
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(); }}
                 activeOpacity={0.8}
-                style={[s.editChip, { backgroundColor: t.ctrl, flex: 0, paddingHorizontal: 14 }]}
+                style={[s.editChip, cardButton(t), { flex: 0, paddingHorizontal: 14 - CARD_BUTTON_BORDER }]}
               >
                 <Ionicons name="add" size={13} color={ACCT} />
                 <Text style={[s.editChipText, { color: ACCT }]}>Add Set</Text>
@@ -838,7 +631,7 @@ function ExerciseCard({
                 },
               ].map(({ onPress, icon, label, color }) => (
                 <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
-                  <View style={[s.editChip, { backgroundColor: t.ctrl }]}>
+                  <View style={[s.editChip, cardButton(t)]}>
                     {icon}
                     <Text style={[s.editChipText, { color }]}>{label}</Text>
                   </View>
@@ -1640,13 +1433,17 @@ export default function LogWorkoutScreen() {
         isDark={isDark}
       />
 
-      {/* Reorder sheet */}
-      <LogReorderSheet
+      {/* Reorder sheet. Its Change runs once it has slid away, so the change
+          picker never presents over it; Remove takes the row out in place. */}
+      <ReorderExercisesSheet
         visible={reorderOpen}
-        exercises={exercises}
-        isDark={isDark}
-        workoutName={workoutName ?? ""}
+        subtitle={workoutName ?? undefined}
+        items={exercises}
+        keyOf={ex => ex.id}
+        nameOf={ex => ex.name}
         onReorder={setExercises}
+        onChange={ex => setChangingExId(ex.id)}
+        onRemove={ex => removeExercise(ex.id)}
         onClose={() => setReorderOpen(false)}
       />
 
@@ -1708,7 +1505,9 @@ const s = StyleSheet.create({
   exReorderBtn: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 36, paddingRight: 14 },
   exReorderIcon:{ width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   editChipsRow: { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
-  editChip:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, paddingHorizontal: 8, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
+  // A button inside the exercise card (cardButton), a point less padding for
+  // its hairline.
+  editChip:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10 - CARD_BUTTON_BORDER, paddingHorizontal: 8 - CARD_BUTTON_BORDER, borderRadius: PILL_RADIUS },
   editChipText: { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   // Exercise notes
@@ -1742,28 +1541,9 @@ const s = StyleSheet.create({
   saveGlow:    pillGlow("#4a5568", 0.3),
   saveBtnText:{ fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.3 },
 
-  // Reorder sheet
-  sheetBackdrop:  { flex: 1, justifyContent: "flex-end" },
-  sheetOverlay:   { backgroundColor: "rgba(0,0,0,0.45)" },
-  sheet:          { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36 },
-  sheetHandleArea:{ paddingVertical: 12, alignItems: "center" },
+  // The time picker sheet's grabber row, with the X beside it (SheetChrome).
+  sheetHandleArea:{ ...SHEET_TOP_ROW },
   sheetHandle:    { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
-  sheetHeader:    { alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1 },
-  sheetTitle:     { fontFamily: FontFamily.bold, fontSize: 16 },
-  sheetSubtitle:  { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
-  sheetListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
-  sheetDoneRow:   { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
-  sheetDoneWrap:  { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 10 },
-  sheetDoneBtn:   { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
-  sheetDoneText:  { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
-
-  // Draggable list
-  dragRow:    { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
-  dragHandle: { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },
-  dragNumChip:{ width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  dragNum:    { fontFamily: FontFamily.bold, fontSize: 13 },
-  dragNameWrap:{ flex: 1, flexDirection: "row", alignItems: "center" },
-  dragName:   { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
 
   // Time display in header
   timeLabel:  { fontFamily: FontFamily.semibold, fontSize: 14, letterSpacing: 0.2 },

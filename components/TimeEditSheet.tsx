@@ -6,6 +6,7 @@ import * as Haptics from "expo-haptics";
 import SheetPill from "./SheetPill";
 import { TimeRow, computeDurationMins, fmtDurationMins, timeValFromDate, type TimeVal } from "./TimeWheelPicker";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "./SheetChrome";
 
 // ─── TimeEditSheet ───────────────────────────────────────────────────────────────
 // Shared bottom sheet for editing a workout's start/end time. Uses the same wheel
@@ -86,7 +87,8 @@ export default function TimeEditSheet({
       <View style={styles.backdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.overlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => animateClose(onClose)} />
-        <Animated.View style={[styles.sheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 16, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.sheet, sheetSurface(t.bg), { paddingBottom: sheetFootGap(insets.bottom) + 16, transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           <View {...panResponder.panHandlers} style={styles.handleArea}>
             <View style={styles.handle} />
           </View>
@@ -102,9 +104,9 @@ export default function TimeEditSheet({
           </View>
 
           <View style={[styles.body, { borderBottomColor: divider }]}>
-            <TimeRow label="Start" val={start} isDark={isDark} bgColor={t.bg} minuteStep={1} onChange={setStart} />
+            <TimeRow label="Start" val={start} isDark={isDark} minuteStep={1} onChange={setStart} />
             <View style={[styles.rowDivider, { backgroundColor: divider }]} />
-            <TimeRow label="End" val={end} isDark={isDark} bgColor={t.bg} minuteStep={1} onChange={setEnd} />
+            <TimeRow label="End" val={end} isDark={isDark} minuteStep={1} onChange={setEnd} />
           </View>
 
           <Text style={[styles.duration, { color: t.ts }]}>Duration: {fmtDurationMins(durationMins)}</Text>
@@ -116,6 +118,7 @@ export default function TimeEditSheet({
               onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); animateClose(() => onConfirm(start, end)); }}
             />
           </View>
+          <SheetCloseButton onPress={() => animateClose(onClose)} />
         </Animated.View>
       </View>
     </Modal>
@@ -124,9 +127,10 @@ export default function TimeEditSheet({
 
 const styles = StyleSheet.create({
   backdrop:    { flex: 1, justifyContent: "flex-end" },
-  overlay:     { backgroundColor: "rgba(0,0,0,0.45)" },
+  // The dim and the grabber row with the X beside it: SheetChrome.
+  overlay:     { backgroundColor: SHEET_DIM },
   sheet:       { borderTopLeftRadius: 28, borderTopRightRadius: 28 },
-  handleArea:  { paddingVertical: 12, alignItems: "center" },
+  handleArea:  { ...SHEET_TOP_ROW },
   handle:      { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
   header:      { alignItems: "center", paddingHorizontal: 20, paddingBottom: 16, paddingTop: 2, borderBottomWidth: 1, gap: 4 },
   checkCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: ACCT, alignItems: "center", justifyContent: "center", marginBottom: 6, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 8 },

@@ -12,6 +12,10 @@
 // sheet shrinks into what's left and its content scrolls. Whatever must stay
 // in reach however long the content runs (a picker's Send and Cancel, a
 // message box) goes in `footer`, pinned under the scrolling part.
+//
+// On iOS 26 it's a floating glass sheet with a glass X in its top right
+// corner, as every pop-up is (components/SheetChrome.tsx; user request,
+// 2026-10-30).
 
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -21,6 +25,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { APP_DARK, APP_LIGHT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
 
 /** The least of the page left showing above a sheet, under the status bar. */
 const SHEET_TOP_GAP = 12;
@@ -28,21 +33,36 @@ const SHEET_TOP_GAP = 12;
 interface Props {
   visible: boolean;
   onClose: () => void;
-  children: ReactNode;
+  /** Or a function of the sheet's own close, for content that leaves through
+   *  it: the sheet slides away, then `onClose` runs. A button that opens
+   *  another sheet can so wait for this one to go first (one RN Modal at a
+   *  time), where closing from the parent removes the sheet at once. */
+  children: ReactNode | ((close: () => void) => ReactNode);
   /** Pinned under the content, which scrolls above it once the sheet is as
-   *  tall as the screen allows. */
-  footer?: ReactNode;
+   *  tall as the screen allows. A function of the sheet's own close, like
+   *  `children`, for a button that slides it away (the reorder sheet's Done). */
+  footer?: ReactNode | ((close: () => void) => ReactNode);
+  /** False while something in the content takes the finger's drags itself
+   *  (a row being dragged into a new place), so the content holds still. */
+  scrollEnabled?: boolean;
+  /** Drawn over the sheet and its dim, in the sheet's own Modal: a first-time
+   *  guide to it (components/GuideCard.tsx). A pop-up can't open over a
+   *  pop-up any other way, one RN Modal at a time. */
+  over?: ReactNode;
 }
 
-export default function SimpleSheet({ visible, onClose, children, footer }: Props) {
+export default function SimpleSheet({ visible, onClose, children, footer, scrollEnabled = true, over }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
   // Hidden a whole screen down: a sheet can now be nearly that tall, and 600
   // left the top of a tall one showing before it slid up.
   const { height: screenH } = useWindowDimensions();
-  const slideY = useRef(new Animated.Value(screenH)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  // In state, not a ref's `.current`: `dismiss` reads them and goes to
+  // `children` and `footer` in render, which the hooks lint takes for reading
+  // a ref during render.
+  const [slideY] = useState(() => new Animated.Value(screenH));
+  const [backdropOpacity] = useState(() => new Animated.Value(0));
 
   // The home-indicator inset is dead space behind the keyboard — drop it while
   // the keyboard is up so input rows (e.g. the message composer) sit snug above
@@ -61,7 +81,7 @@ export default function SimpleSheet({ visible, onClose, children, footer }: Prop
       Animated.timing(slideY, { toValue: screenH, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
     ]).start(() => { slideY.setValue(screenH); backdropOpacity.setValue(0); onClose(); });
-  }, [onClose, screenH]);
+  }, [onClose, screenH, slideY, backdropOpacity]);
 
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -92,12 +112,12 @@ export default function SimpleSheet({ visible, onClose, children, footer }: Prop
       slideY.setValue(screenH);
       backdropOpacity.setValue(0);
     }
-  }, [visible, screenH]);
+  }, [visible, screenH, slideY, backdropOpacity]);
 
   // Under the last thing in the sheet. Without a footer it's inside the
   // scrolling part, so the last button's shadow has room before the edge
   // that clips it; with one, it's under the footer.
-  const bottomGap = kbVisible ? 12 : insets.bottom + 12;
+  const bottomGap = kbVisible ? 12 : sheetFootGap(insets.bottom) + 12;
 
   return (
     <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
@@ -108,9 +128,13 @@ export default function SimpleSheet({ visible, onClose, children, footer }: Prop
               than the status bar and SHEET_TOP_GAP: a taller sheet gives way
               instead (it shrinks, `flexShrink`, and its content scrolls). */}
           <TouchableOpacity style={{ flex: 1, minHeight: insets.top + SHEET_TOP_GAP }} activeOpacity={1} onPress={dismiss} />
-          <Animated.View style={[styles.sheet, { backgroundColor: t.bg, paddingBottom: footer ? bottomGap : 0, transform: [{ translateY: slideY }] }]}>
+          <Animated.View style={[styles.sheet, sheetSurface(t.bg), { paddingBottom: footer ? bottomGap : 0, transform: [{ translateY: slideY }] }]}>
+            {/* The glass is the sheet's surface, behind everything on it. It
+                slides with the sheet; nothing above it ever fades (glass draws
+                wrongly under any opacity), the dim being its own layer. */}
+            <SheetGlass />
             <View {...panResponder.panHandlers}>
-              <View style={styles.handleArea}><View style={styles.handle} /></View>
+              <View style={SHEET_TOP_ROW}><View style={styles.handle} /></View>
             </View>
             {/* As tall as its content until the sheet reaches the top, then
                 it shrinks and scrolls. Content that fits doesn't bounce. Taps
@@ -120,21 +144,23 @@ export default function SimpleSheet({ visible, onClose, children, footer }: Prop
               contentContainerStyle={footer ? undefined : { paddingBottom: bottomGap }}
               alwaysBounceVertical={false}
               keyboardShouldPersistTaps="handled"
+              scrollEnabled={scrollEnabled}
             >
-              {children}
+              {typeof children === "function" ? children(dismiss) : children}
             </ScrollView>
-            {footer}
+            {typeof footer === "function" ? footer(dismiss) : footer}
+            <SheetCloseButton onPress={dismiss} />
           </Animated.View>
         </View>
       </KeyboardAvoidingView>
+      {over}
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop:    { backgroundColor: "rgba(0,0,0,0.45)" },
+  backdrop:    { backgroundColor: SHEET_DIM },
   sheet:       { borderTopLeftRadius: 28, borderTopRightRadius: 28, flexShrink: 1 },
   body:        { flexGrow: 0 },
-  handleArea:  { alignItems: "center", paddingTop: 12, paddingBottom: 8 },
   handle:      { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
 });

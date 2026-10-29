@@ -30,6 +30,7 @@ import {
   firstName,
   fromLine,
   fromTrainerLists,
+  groupMemberOrder,
   gymTileCounts,
   isReturnedDismissed,
   myTrainersBadge,
@@ -81,6 +82,16 @@ eq(rosterOrder([client("p", "2026-10-02T00:00:00.000Z"), client("q", "2026-10-02
 eq(roster.map(c => c.id), ["a", "b", "c", "d", "e"], "roster: the list it was given is left alone");
 eq(sortByFavourite([{ id: "1" }, { id: "2" }, { id: "3" }], new Set(["3", "1"])).map(x => x.id), ["3", "1", "2"],
   "favourites: starred in star order, the rest as they came");
+
+// ─── A group's members ───────────────────────────────────────────────────────
+const gm = (id: string, role: "owner" | "trainer" | "member") => ({ id, role, isOwner: role === "owner" });
+const group = [gm("m1", "member"), gm("t1", "trainer"), gm("m2", "member"), gm("o", "owner"), gm("t2", "trainer"), gm("m3", "member")];
+eq(groupMemberOrder(group, new Set()).map(m => m.id), ["o", "t1", "t2", "m1", "m2", "m3"],
+  "group members: the owner, then trainers, then everyone else, each in the roster's order");
+eq(groupMemberOrder(group, new Set(["m3", "t2", "m1"])).map(m => m.id), ["o", "t2", "t1", "m3", "m1", "m2"],
+  "group members: a star never lifts anyone above the owner or a trainer, only within their own place, in star order");
+eq(groupMemberOrder([gm("x", "member"), { id: "y", role: "member" as const, isOwner: true }], new Set(["x"])).map(m => m.id), ["y", "x"],
+  "group members: the owner leads by isOwner too");
 
 // ─── Reviews sent to me ──────────────────────────────────────────────────────
 const review = (id: string, sentAtISO: string, extra: Partial<SentProgram> = {}): SentProgram =>

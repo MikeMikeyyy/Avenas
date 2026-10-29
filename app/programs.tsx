@@ -22,6 +22,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GlassButton from "../components/GlassButton";
 import SheetPill from "../components/SheetPill";
+import { SHEET_DIM, SHEET_TOP_ROW, SHEET_TOP_ROW_H, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
 import SquarePenIcon from "../components/SquarePenIcon";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
@@ -91,7 +92,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
   const [selected, setSelected] = useState<number | null>(null);
 
   const ROW_H = 52;
-  const OVERHEAD = 28 + 90 + 16 + 54 + 12 + insets.bottom; // handle + header + footer padding + button + gap
+  const OVERHEAD = SHEET_TOP_ROW_H + 90 + 16 + 54 + 12 + sheetFootGap(insets.bottom); // grabber row + header + footer padding + button + gap
   const sheetHeight = Math.min(OVERHEAD + program.cyclePattern.length * ROW_H, screenHeight * 0.82);
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -159,7 +160,8 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
         <TouchableWithoutFeedback onPress={() => dismiss(true)}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
         </TouchableWithoutFeedback>
-        <Animated.View style={[styles.swSheet, { backgroundColor: t.bg, height: sheetHeight, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.swSheet, sheetSurface(t.bg), { height: sheetHeight, transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           {/* Drag handle + header share the pan responder so both areas dismiss on swipe down */}
           <View {...panResponder.panHandlers}>
             <View style={styles.swHandleArea}>
@@ -206,7 +208,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
             })}
           </ScrollView>
           {/* Confirm button */}
-          <View style={[styles.swFooter, { paddingBottom: insets.bottom + 12, borderTopColor: t.div }]}>
+          <View style={[styles.swFooter, { paddingBottom: sheetFootGap(insets.bottom) + 12, borderTopColor: t.div }]}>
             <BounceButton onPress={selected !== null ? handleConfirm : undefined}>
               <View style={[styles.swConfirmWrap, darkGlow(styles.swConfirmWrap, isDark), { opacity: selected === null ? 0.45 : 1 }]}>
                 <View style={styles.swConfirmBtn}>
@@ -218,6 +220,9 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
               </View>
             </BounceButton>
           </View>
+          {/* Closes out to the programs list; the back chevron and a drag
+              down return to the program's menu. */}
+          <SheetCloseButton onPress={() => dismiss(false)} />
         </Animated.View>
       </View>
     </Modal>
@@ -493,16 +498,16 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
         <TouchableWithoutFeedback onPress={() => close()}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
         </TouchableWithoutFeedback>
-        <Animated.View style={[styles.paSheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 16, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.paSheet, sheetSurface(t.bg), { paddingBottom: sheetFootGap(insets.bottom) + 16, transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           <View {...panResponder.panHandlers}>
             <View style={styles.swHandleArea}>
               <View style={styles.swHandle} />
             </View>
+            {/* Its plain × that sat on this row is the glass X above now
+                (SheetCloseButton, as every pop-up's). */}
             <View style={[styles.paHeader, { borderBottomColor: t.div }]}>
               <Text style={[styles.paTitle, { color: t.tp }]} numberOfLines={1}>{program.name}</Text>
-              <TouchableOpacity onPress={() => close()} style={styles.swClose} activeOpacity={0.7}>
-                <Ionicons name="close" size={22} color={t.tp} />
-              </TouchableOpacity>
             </View>
           </View>
           <View style={styles.paList}>
@@ -517,6 +522,7 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
               />
             ))}
           </View>
+          <SheetCloseButton onPress={() => close()} />
         </Animated.View>
       </View>
     </Modal>
@@ -1137,14 +1143,14 @@ const styles = StyleSheet.create({
 
   // Set Workout Picker
   swBackdrop:         { flex: 1, justifyContent: "flex-end" },
-  swOverlay:          { backgroundColor: "rgba(0,0,0,0.45)" },
+  // The sheets' dim and grabber row with the X beside it: SheetChrome.
+  swOverlay:          { backgroundColor: SHEET_DIM },
   swSheet:            { borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden" },
-  swHandleArea:       { paddingVertical: 12, alignItems: "center" },
+  swHandleArea:       { ...SHEET_TOP_ROW },
   swHandle:           { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
   swHeader:           { flexDirection: "row", alignItems: "flex-start", paddingHorizontal: 20, paddingBottom: 16, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   swTitle:            { fontFamily: FontFamily.bold, fontSize: 18, marginBottom: 4 },
   swSubtitle:         { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
-  swClose:            { width: 36, height: 36, alignItems: "center", justifyContent: "center", marginTop: -4 },
   swBack:             { width: 32, height: 32, alignItems: "center", justifyContent: "center", marginLeft: -6, marginTop: -2 },
   swDayRow:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, gap: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   swDayBadge:         { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },

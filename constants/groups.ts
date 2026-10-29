@@ -32,6 +32,14 @@ export type Group = {
  */
 export type GroupRole = "owner" | "trainer" | "member";
 
+/** A role's badge on a member's line (the group page, Manage Group); its
+ *  colours are roleColor / roleTextColor in constants/theme.ts. */
+export const ROLE_LABEL: Record<GroupRole, string> = {
+  owner:   "OWNER",
+  trainer: "TRAINER",
+  member:  "MEMBER",
+};
+
 /** A member of a group, resolved through get_group_members(). */
 export type GroupMember = {
   id: string;

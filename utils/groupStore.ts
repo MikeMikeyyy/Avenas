@@ -15,7 +15,7 @@ import { countUnreadInThread, previewText } from "./chatStore";
 import { loadBlockedIds, loadHiddenMessageIds } from "./moderation";
 import { getJSON, setJSON } from "./storage";
 import { GROUP_FAVOURITES_KEY, MEMBER_FAVOURITES_KEY, type Group, type GroupMessage } from "../constants/groups";
-import { sortByFavourite } from "./trainerLists";
+import { groupMemberOrder, sortByFavourite } from "./trainerLists";
 
 /** A group as the conversations list renders it. */
 export type GroupChatRow = {
@@ -135,6 +135,7 @@ export async function toggleFavouriteMember(memberId: string): Promise<Set<strin
   return new Set(next);
 }
 
-// Starred first, oldest star on top: pure, so it lives with the Trainer tab's
-// other list rules (utils/trainerLists.ts) and is re-exported here.
-export { sortByFavourite };
+// Starred first, oldest star on top, and a group's members owner first, then
+// trainers, each starred first: pure, so they live with the Trainer tab's
+// other list rules (utils/trainerLists.ts) and are re-exported here.
+export { groupMemberOrder, sortByFavourite };

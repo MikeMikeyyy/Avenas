@@ -1,8 +1,8 @@
 // components/WorkoutTimerScreen.tsx
 //
 // The Workout tab's timer (the stopwatch button, top right), full screen: a
-// soft dial with the aurora ring (sky into mint) and its 60 ticks lighting up
-// with it, the time big in the middle, white −15s and +15s either side of the
+// soft dial with the aurora ring (sky into mint) for the whole time and its 60
+// ticks for the minute it's in, the time big in the middle, white −15s and +15s either side of the
 // main button on Timer, Reset under it, and the set the session is up to at
 // the foot with a tick. User design and decisions, 2026-10-15 (the Workout
 // Timer canvas, option A). It replaced a small pop-up card that knew nothing of
@@ -75,7 +75,7 @@ import {
   type WheelPlace,
 } from "../utils/workoutTimer";
 import {
-  ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, CARD_SHADE, CUE_INK, CUE_INK_DARK, FontFamily, NEU_BG, NEU_BG_DARK,
+  ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, CARD_SHADE, CUE_INK, CUE_INK_DARK, FontFamily, NEU_BG_DARK,
   TIMER_GRADIENT, WARMUP_ORANGE, accentTextColor, replacedTextColor, timerDialInk,
 } from "../constants/theme";
 import { darkGlow, PILL_RADIUS } from "../constants/buttons";
@@ -469,13 +469,13 @@ function Dial({
   const ringProps = useAnimatedProps(() => ({ strokeDashoffset: circ * (1 - progress.value) }));
 
   // The wheels, sized and rounded to sit inside the ring of ticks, where
-  // their fades (in the disc's own colour) can't cover any.
+  // their fades can't cover any.
   const rowH = Math.round(disc * 0.17);
   const wheelW = Math.round(rowH * 1.45);
   const wheelText = [styles.wheelText, { fontSize: Math.round(rowH * 0.7), color: t.tp }];
-  const discBg = isDark ? NEU_BG_DARK : NEU_BG;
 
-  // The ticks round the disc, the lit ones keeping pace with the ring.
+  // The ticks round the disc: a minute clock, lit to the seconds shown, while
+  // the ring is the whole time (dialView's litTicks).
   const half = disc / 2;
   const outer = half - Math.round(disc * 0.04);
   const ticks = Array.from({ length: 60 }, (_, i) => {
@@ -553,7 +553,6 @@ function Dial({
                 onSelect={index => onWheel("min", index)}
                 isDark={isDark}
                 width={wheelW}
-                bgColor={discBg}
                 rowH={rowH}
                 textStyle={wheelText}
                 band={false}
@@ -565,7 +564,6 @@ function Dial({
                 onSelect={index => onWheel("sec", index)}
                 isDark={isDark}
                 width={wheelW}
-                bgColor={discBg}
                 rowH={rowH}
                 textStyle={wheelText}
                 band={false}

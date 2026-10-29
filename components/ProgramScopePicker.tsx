@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -15,9 +15,11 @@ import Svg, { Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import GlassButton from "./GlassButton";
 import SheetPill from "./SheetPill";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "./SheetChrome";
 import { PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
+import { useSheetDrag } from "../hooks/useSheetDrag";
 import type { SavedProgram } from "../constants/programs";
 import type { ProgramScope } from "../constants/progress";
 import { CUSTOM_WORKOUTS_NAME } from "../utils/progressStats";
@@ -51,8 +53,8 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
   const [mounted, setMounted] = useState(false);
 
   // Slide-up + backdrop fade — same pattern as SetWorkoutPicker / ExercisePicker.
-  const slideY = useRef(new Animated.Value(600)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [slideY] = useState(() => new Animated.Value(600));
+  const [backdropOpacity] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     if (open) {
@@ -92,6 +94,9 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
       });
     }
   }, [open, mounted, slideY, backdropOpacity]);
+
+  // Held by its top and dragged down, it closes the way a tap outside does.
+  const drag = useSheetDrag({ slideY, backdrop: backdropOpacity, onClose: () => setOpen(false) });
 
   const activeProgram = useMemo(() => programs.find(p => p.status === "active") ?? null, [programs]);
 
@@ -160,7 +165,7 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
             <Animated.View
               style={[
                 StyleSheet.absoluteFill,
-                { backgroundColor: "rgba(0,0,0,0.45)", opacity: backdropOpacity },
+                { backgroundColor: SHEET_DIM, opacity: backdropOpacity },
               ]}
             />
           </TouchableWithoutFeedback>
@@ -170,17 +175,20 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
             <Animated.View
               style={[
                 styles.sheet,
+                sheetSurface(t.bg),
                 {
-                  backgroundColor: t.bg,
-                  paddingBottom: insets.bottom + 16,
+                  paddingBottom: sheetFootGap(insets.bottom) + 16,
                   transform: [{ translateY: slideY }],
                 },
               ]}
             >
-              <View style={styles.handleWrap}>
-                <View style={styles.handle} />
+              <SheetGlass />
+              <View {...drag}>
+                <View style={styles.handleWrap}>
+                  <View style={styles.handle} />
+                </View>
+                <Text style={[styles.sheetTitle, { color: t.tp }]}>Show progress for</Text>
               </View>
-              <Text style={[styles.sheetTitle, { color: t.tp }]}>Show progress for</Text>
 
               <ScrollView
                 // Negative margin + matching content padding widens the
@@ -241,6 +249,7 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
                   );
                 })}
               </ScrollView>
+              <SheetCloseButton onPress={() => setOpen(false)} />
             </Animated.View>
           </View>
         </View>
@@ -305,9 +314,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 4,
   },
+  // The grabber row, with the X beside it (SheetChrome).
   handleWrap: {
-    paddingVertical: 12,
-    alignItems: "center",
+    ...SHEET_TOP_ROW,
   },
   handle: {
     width: 36,

@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Modal, TouchableWithoutFeedback, ScrollView, Animated, Easing, PanResponder } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import SheetPill from "../SheetPill";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
 import { Ionicons } from "@expo/vector-icons";
 import { ACCT, APP_DARK, APP_LIGHT, CUE_INK, CUE_INK_DARK, FontFamily, accentTextColor, compareBlue } from "../../constants/theme";
 import { PILL_RADIUS } from "../../constants/buttons";
@@ -236,12 +237,13 @@ export default function CompareSheet({ side, options, selected, other, todayYMD,
           on a row picked whichever row had slid under the finger. */}
       <View style={{ flex: 1 }} pointerEvents={side ? "auto" : "none"}>
         <TouchableWithoutFeedback onPress={onClose}>
-          <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.45)", opacity: backdrop }]} />
+          <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: SHEET_DIM, opacity: backdrop }]} />
         </TouchableWithoutFeedback>
         <View style={styles.sheetWrap} pointerEvents="box-none">
           <Animated.View
-            style={[styles.sheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 16, transform: [{ translateY: slideY }] }]}
+            style={[styles.sheet, sheetSurface(t.bg), { paddingBottom: sheetFootGap(insets.bottom) + 16, transform: [{ translateY: slideY }] }]}
           >
+            <SheetGlass />
             {/* What takes the drag: the handle, the title and what's under it,
                 never the list, which scrolls, or a button. */}
             <View {...drag.panHandlers}>
@@ -296,6 +298,7 @@ export default function CompareSheet({ side, options, selected, other, todayYMD,
             )}
             {backShown ? <SheetPill label="Back" onPress={onBack} style={{ marginTop: 16 }} /> : null}
             <SheetPill label={shownLocked ? "Close" : "Cancel"} variant="cancel" onPress={onClose} style={{ marginTop: backShown ? 12 : 16 }} />
+            <SheetCloseButton onPress={onClose} />
           </Animated.View>
         </View>
       </View>
@@ -306,7 +309,8 @@ export default function CompareSheet({ side, options, selected, other, todayYMD,
 const styles = StyleSheet.create({
   sheetWrap: { ...StyleSheet.absoluteFill, justifyContent: "flex-end" },
   sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 4 },
-  handleWrap: { paddingVertical: 12, alignItems: "center" },
+  // The grabber row, with the X beside it (SheetChrome).
+  handleWrap: { ...SHEET_TOP_ROW },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
   title: { fontFamily: FontFamily.bold, fontSize: 18, marginTop: 4, marginLeft: 4 },
   otherRow: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 4, marginLeft: 4 },

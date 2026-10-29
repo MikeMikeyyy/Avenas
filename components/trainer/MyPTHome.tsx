@@ -59,7 +59,7 @@ import {
   replacedTextColor,
   dangerTextColor,
 } from "../../constants/theme";
-import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../constants/buttons";
+import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { CARD_META, CARD_TITLE, SUMMARY_ROW } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
@@ -404,7 +404,7 @@ export default function MyPTHome() {
                   accessibilityLabel={unreadFromTrainer > 0 ? `Message ${pt.name}, ${unreadFromTrainer} unread` : `Message ${pt.name}`}
                 >
                   <View>
-                    <View style={[styles.heroBtn, { backgroundColor: t.ctrl }]}>
+                    <View style={[styles.heroBtn, cardButton(t)]}>
                       <ChatIcon size={17} color={t.tp} />
                       <Text style={[styles.heroBtnText, { color: t.tp }]}>Message</Text>
                     </View>
@@ -536,7 +536,9 @@ const styles = StyleSheet.create({
   presenceDot: { width: 7, height: 7, borderRadius: 4 },
   presenceText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   heroActions: { alignSelf: "stretch", flexDirection: "row", gap: 10, marginTop: 16 },
-  heroBtn: { ...pill(PILL_H_SM), gap: 8, ...PILL_SHADOW },
+  // Inside the trainer's card: Message is the card's button (cardButton),
+  // Send for Review glows green.
+  heroBtn: { ...pill(PILL_H_SM), gap: 8 },
   heroBtnText: { fontFamily: FontFamily.bold, fontSize: 14 },
   heroBadge: { position: "absolute", top: -5, right: -3 },
   // Placeholder while the trainer resolves, sized to the real card.

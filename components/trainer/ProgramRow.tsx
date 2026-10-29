@@ -23,7 +23,7 @@ import ChevronToggle from "../ChevronToggle";
 import ExpandReveal, { useReveal } from "../ExpandReveal";
 import TrashIcon from "../TrashIcon";
 import { ACCT, APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../../constants/theme";
-import { haloGlow, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { cardButton, haloGlow, pillGlow, PILL_RADIUS } from "../../constants/buttons";
 import { CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, REVEAL_BLEED } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 
@@ -90,7 +90,7 @@ export function RowActions({ label, onOpen, onRemove, accessibilityLabel, remove
   return (
     <View style={styles.actionRow}>
       <BounceButton style={{ flex: 1 }} onPress={onOpen} accessibilityLabel={accessibilityLabel}>
-        <View style={[styles.actionBtn, { backgroundColor: t.ctrl }]}>
+        <View style={[styles.actionBtn, cardButton(t)]}>
           <Text style={[styles.actionText, { color: t.tp }]}>{label}</Text>
         </View>
       </BounceButton>
@@ -216,7 +216,8 @@ const styles = StyleSheet.create({
   cycleChipText: { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
   actionRow: { flexDirection: "row", gap: 10 },
   // Pills rather than NeuCards: these sit INSIDE a card, and a raised button on
-  // a raised card reads as two stacked surfaces.
-  actionBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
+  // a raised card reads as two stacked surfaces. The plain one is the card's
+  // button (cardButton); Accept and Remove carry their own glows.
+  actionBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS },
   actionText: { fontFamily: FontFamily.bold, fontSize: 14 },
 });

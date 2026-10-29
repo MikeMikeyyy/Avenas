@@ -14,6 +14,7 @@
 //   cancelBtn: { ...pill(PILL_H_SM) }
 
 import { StyleSheet, type StyleProp, type ViewStyle } from "react-native";
+import { SET_INPUT_DARK, SET_INPUT_RING_DARK } from "./theme";
 
 /** Big enough that the ends stay fully round at any height React Native gives
  *  the view — it clamps to half the shorter side. Deliberately not `height / 2`:
@@ -50,6 +51,33 @@ export const PILL_SHADOW: ViewStyle = {
   shadowOpacity: 0.1,
   shadowRadius: 4,
 };
+
+/** A button inside a card (user pick, 2026-10-29, option D of the Buttons on
+ *  Cards canvas, app-wide the same day): the theme's `cardCtrl`
+ *  fill, a hairline in its divider colour, and no shadow. The white control
+ *  pill (`ctrl` + PILL_SHADOW) stays for buttons on the page and in sheets,
+ *  where the page colour around it sets it off; on Porcelain's white cards it
+ *  was the card's own white, and only its faint shadow showed. The hairline is
+ *  part of the button's size: one with a set height keeps it, and one sized by
+ *  its padding takes CARD_BUTTON_BORDER off that padding to keep its size. */
+export const CARD_BUTTON_BORDER = 1;
+
+export function cardButton(t: { cardCtrl: string; div: string }): ViewStyle {
+  return { backgroundColor: t.cardCtrl, borderWidth: CARD_BUTTON_BORDER, borderColor: t.div };
+}
+
+/** A set's weight and reps boxes, on every page that has them: the Workout
+ *  tab, a logged workout, Log Workout and the program builder's targets. On
+ *  light, the card's button look (cardButton), so the boxes and the buttons
+ *  round them read as one family; in the page colour they read a bit off on
+ *  the white card (user requests, 2026-10-29: the Workout tab's first, then
+ *  the rest to match it). On dark, a step above the card, ringed in white.
+ *  Its colours are theme.ts's. */
+export function setInputSurface(t: { cardCtrl: string; div: string }, isDark: boolean): ViewStyle {
+  return isDark
+    ? { backgroundColor: SET_INPUT_DARK, borderWidth: CARD_BUTTON_BORDER, borderColor: SET_INPUT_RING_DARK }
+    : cardButton(t);
+}
 
 /** A button's coloured glow on dark mode, as a share of its light-mode
  *  strength. A glow blooms far brighter on Graphite's near-black page than on
@@ -88,20 +116,6 @@ export function haloGlow(color: string, opacity = 0.5, radius = 6, isDark = fals
     shadowRadius: radius,
   };
 }
-
-/** The sizes of a glass button's depth (components/GlassButton.tsx; its
- *  colours are GLASS_DEPTH in constants/theme.ts), in points:
- *  `rim` the bright border's width; `edge` how far the lit top edge and the
- *  shaded bottom edge reach in, `edgeBlur` how soft they are; `dropY` how far
- *  the shadow under the button falls, `dropBlur` how soft and wide it spreads.
- *  0 takes that part away. */
-export const GLASS_DEPTH_SHAPE = {
-  rim: 1,
-  edge: 1,
-  edgeBlur: 1.5,
-  dropY: 2,
-  dropBlur: 10,
-} as const;
 
 /** A coloured glow under a filled pill — the accent bleeding downward, which
  *  is what makes a primary button read as raised without a hard offset. Pass

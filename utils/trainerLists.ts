@@ -4,6 +4,7 @@
 // page (app/trainer/programs.tsx) groups what's been sent and received:
 //
 //   * the roster: starred first, then whoever was active most recently;
+//   * a group's members: the owner, then trainers, then the rest;
 //   * what's been sent, one entry per send ("a batch": one program sent at one
 //     moment, to one person, several, or a group);
 //   * what's been sent to them for review, 1:1 and from groups they coach,
@@ -23,6 +24,7 @@
 // re-exported where they always were (utils/groupStore.ts,
 // utils/trainerStore.ts, ReviewStatusPill).
 
+import type { GroupRole } from "../constants/groups";
 import type { SavedProgram } from "../constants/programs";
 import type { Client, SentProgram, SharedProgram } from "./trainerStore";
 
@@ -45,6 +47,19 @@ export function sortByFavourite<T extends { id: string }>(items: T[], favourites
     .filter(x => rank.has(x.id))
     .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
   return [...starred, ...items.filter(x => !rank.has(x.id))];
+}
+
+/**
+ * A group's members as its pages list them (the group page, Manage Group and
+ * View members): the owner at the top, then the group's trainers, then
+ * everyone else, and within each of those starred people first (oldest star
+ * first), then the roster's own order (by name). Starred people used to lead
+ * the whole list, which put the owner, me on my own group, in the middle of it
+ * (user request, 2026-10-30).
+ */
+export function groupMemberOrder<T extends { id: string; role: GroupRole; isOwner?: boolean }>(members: T[], favourites: Set<string>): T[] {
+  const tier = (m: T) => (m.isOwner || m.role === "owner" ? 0 : m.role === "trainer" ? 1 : 2);
+  return [0, 1, 2].flatMap(n => sortByFavourite(members.filter(m => tier(m) === n), favourites));
 }
 
 /**

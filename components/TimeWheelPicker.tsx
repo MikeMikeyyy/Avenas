@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, type ScrollViewInstance, type StyleProp, type TextStyle } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import MaskedView from "./MaskedView";
 import { APP_LIGHT, APP_DARK, FontFamily } from "../constants/theme";
 import type { TimeVal } from "../utils/sessionTime";
 
@@ -24,9 +25,9 @@ export const PERIODS = ["AM", "PM"];
 // component). Defining it inside a render function creates a new type on every
 // parent re-render, causing React to unmount/remount and losing scroll position.
 
-export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColor, rowH = WHEEL_H, textStyle, band = true }: {
+export function WheelPicker({ items, initialIdx, onSelect, isDark, width, rowH = WHEEL_H, textStyle, band = true }: {
   items: string[]; initialIdx: number; onSelect: (idx: number) => void;
-  isDark: boolean; width: number; bgColor: string;
+  isDark: boolean; width: number;
   /** A row's height (three show); the journal's and the finish sheet's by default. */
   rowH?: number;
   /** The items' text, over the default semibold 20. */
@@ -61,40 +62,43 @@ export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColo
     onSelectRef.current(idx);
   };
 
-  const fadeColor = bgColor;
+  // The top and bottom rows fade out through a mask on the wheel itself, over
+  // its first and last row and a little more. They were gradients from the
+  // sheet's colour laid over the wheel, which needed that colour, and a glass
+  // sheet (components/SheetChrome.tsx) has none.
+  const fadeTo = (rowH + 6) / (rowH * 3);
 
   return (
     <View style={{ width, height: rowH * 3 }}>
-      <ScrollView
-        ref={scrollRef}
-        contentOffset={openedAt}
-        snapToInterval={rowH}
-        decelerationRate="fast"
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingVertical: rowH }}
-        onMomentumScrollEnd={e => commit(e.nativeEvent.contentOffset.y)}
-        onScrollEndDrag={e => commit(e.nativeEvent.contentOffset.y)}
+      <MaskedView
+        style={{ flex: 1 }}
+        maskElement={
+          <LinearGradient
+            colors={["transparent", "black", "black", "transparent"]}
+            locations={[0, fadeTo, 1 - fadeTo, 1]}
+            style={{ flex: 1 }}
+          />
+        }
       >
-        {items.map((item, i) => (
-          <View key={i} style={{ height: rowH, width, alignItems: "center", justifyContent: "center" }}>
-            <Text style={[{ fontFamily: FontFamily.semibold, fontSize: 20, color: t.tp }, textStyle]}>
-              {item}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-
-      {/* Top and bottom gradient fades — no overflow:hidden needed */}
-      <LinearGradient
-        pointerEvents="none"
-        colors={[fadeColor, fadeColor + "00"]}
-        style={{ position: "absolute", top: 0, left: 0, right: 0, height: rowH + 6 }}
-      />
-      <LinearGradient
-        pointerEvents="none"
-        colors={[fadeColor + "00", fadeColor]}
-        style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: rowH + 6 }}
-      />
+        <ScrollView
+          ref={scrollRef}
+          contentOffset={openedAt}
+          snapToInterval={rowH}
+          decelerationRate="fast"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingVertical: rowH }}
+          onMomentumScrollEnd={e => commit(e.nativeEvent.contentOffset.y)}
+          onScrollEndDrag={e => commit(e.nativeEvent.contentOffset.y)}
+        >
+          {items.map((item, i) => (
+            <View key={i} style={{ height: rowH, width, alignItems: "center", justifyContent: "center" }}>
+              <Text style={[{ fontFamily: FontFamily.semibold, fontSize: 20, color: t.tp }, textStyle]}>
+                {item}
+              </Text>
+            </View>
+          ))}
+        </ScrollView>
+      </MaskedView>
 
       {/* Center selection band */}
       {band ? (
@@ -113,9 +117,9 @@ export function WheelPicker({ items, initialIdx, onSelect, isDark, width, bgColo
 // `minuteStep` controls the minute wheel granularity (5 = journal default,
 // 1 = per-minute precision for the workout-complete sheet).
 
-export function TimeRow({ label, val, onChange, isDark, bgColor, minuteStep = 5 }: {
+export function TimeRow({ label, val, onChange, isDark, minuteStep = 5 }: {
   label: string; val: TimeVal; onChange: (v: TimeVal) => void;
-  isDark: boolean; bgColor: string; minuteStep?: number;
+  isDark: boolean; minuteStep?: number;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const minutes = Array.from({ length: Math.round(60 / minuteStep) }, (_, i) =>
@@ -127,18 +131,18 @@ export function TimeRow({ label, val, onChange, isDark, bgColor, minuteStep = 5 
       <Text style={[styles.timeRowLabel, { color: t.ts }]}>{label}</Text>
       <View style={styles.wheelGroup}>
         <WheelPicker
-          items={HOURS} isDark={isDark} width={52} bgColor={bgColor}
+          items={HOURS} isDark={isDark} width={52}
           initialIdx={val.hour - 1}
           onSelect={idx => onChange({ ...val, hour: idx + 1 })}
         />
         <Text style={[styles.wheelColon, { color: t.tp }]}>:</Text>
         <WheelPicker
-          items={minutes} isDark={isDark} width={52} bgColor={bgColor}
+          items={minutes} isDark={isDark} width={52}
           initialIdx={minuteIdx}
           onSelect={idx => onChange({ ...val, minute: idx * minuteStep })}
         />
         <WheelPicker
-          items={PERIODS} isDark={isDark} width={52} bgColor={bgColor}
+          items={PERIODS} isDark={isDark} width={52}
           initialIdx={val.period === "AM" ? 0 : 1}
           onSelect={idx => onChange({ ...val, period: idx === 0 ? "AM" : "PM" })}
         />

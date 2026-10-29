@@ -21,11 +21,13 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import SheetPill from "../SheetPill";
+import { SHEET_DIM, SHEET_TOP_ROW, SHEET_TOP_ROW_H, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
 import SegmentedControl from "../SegmentedControl";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { EXERCISE_RANGE_OPTIONS, type ExerciseRangeKey } from "../../constants/progress";
 import type { SavedProgram } from "../../constants/programs";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useSheetDrag } from "../../hooks/useSheetDrag";
 import {
   isPicked,
   pickLabel,
@@ -36,10 +38,11 @@ import {
 } from "../../utils/exerciseHistory";
 import { CUSTOM_WORKOUTS_NAME } from "../../utils/progressStats";
 
-// What sits in the sheet besides the programs (handle, title, the two
+// What sits in the sheet besides the programs (the grabber row, title, the two
 // headings, the range and the button), so the list scrolls rather than
-// pushing the sheet past the top of the screen.
-const SHEET_CHROME = 330;
+// pushing the sheet past the top of the screen. 302 under a 28pt grabber row,
+// plus whatever the shared one is (SheetChrome's, with room for the X).
+const SHEET_CHROME = 302 + SHEET_TOP_ROW_H;
 
 interface Props {
   visible: boolean;
@@ -65,8 +68,8 @@ export default function HistoryFilterSheet({ visible, onClose, options, programs
   // Nothing animates while it's shut. (Its first build kept its own copy of
   // `visible` and slid "down" as the page loaded; on iOS it never appeared and
   // the empty modal left on the page took every tap but the back button.)
-  const slideY = useRef(new Animated.Value(600)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [slideY] = useState(() => new Animated.Value(600));
+  const [backdropOpacity] = useState(() => new Animated.Value(0));
   const [draft, setDraft] = useState<HistoryPick[]>(picks);
   const [draftRange, setDraftRange] = useState<ExerciseRangeKey>(range);
   // A close already sliding down: another tap mustn't start a second.
@@ -84,7 +87,7 @@ export default function HistoryFilterSheet({ visible, onClose, options, programs
       Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
     ]).start();
-  }, [visible]); // picks and range are read as they stand when it opens
+  }, [visible, slideY, backdropOpacity]); // picks and range are read as they stand when it opens
 
   // Slides down, then hands over to the page, which closes it.
   const animateClose = (after: () => void) => {
@@ -96,6 +99,7 @@ export default function HistoryFilterSheet({ visible, onClose, options, programs
     ]).start(() => after());
   };
   const close = () => animateClose(onClose);
+  const drag = useSheetDrag({ slideY, backdrop: backdropOpacity, onClose: close });
 
   const count = visible ? countFor(draft, draftRange) : 0;
   const tap = (item: HistoryFilterItem) => setDraft(d => togglePick(d, item, options));
@@ -126,7 +130,7 @@ export default function HistoryFilterSheet({ visible, onClose, options, programs
       <View style={{ flex: 1 }}>
         <TouchableWithoutFeedback onPress={close}>
           <Animated.View
-            style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.45)", opacity: backdropOpacity }]}
+            style={[StyleSheet.absoluteFill, { backgroundColor: SHEET_DIM, opacity: backdropOpacity }]}
           />
         </TouchableWithoutFeedback>
 
@@ -134,13 +138,18 @@ export default function HistoryFilterSheet({ visible, onClose, options, programs
           <Animated.View
             style={[
               styles.sheet,
-              { backgroundColor: t.bg, paddingBottom: insets.bottom + 16, transform: [{ translateY: slideY }] },
+              sheetSurface(t.bg),
+              { paddingBottom: sheetFootGap(insets.bottom) + 16, transform: [{ translateY: slideY }] },
             ]}
           >
-            <View style={styles.handleWrap}>
-              <View style={styles.handle} />
+            <SheetGlass />
+            {/* Held here and dragged down, it closes (hooks/useSheetDrag.ts). */}
+            <View {...drag}>
+              <View style={styles.handleWrap}>
+                <View style={styles.handle} />
+              </View>
+              <Text style={[styles.sheetTitle, { color: t.tp }]}>Filter sessions</Text>
             </View>
-            <Text style={[styles.sheetTitle, { color: t.tp }]}>Filter sessions</Text>
 
             <Text style={[styles.sectionLabel, { color: t.ts }]}>Program</Text>
             <ScrollView
@@ -178,6 +187,7 @@ export default function HistoryFilterSheet({ visible, onClose, options, programs
               onPress={() => animateClose(() => onApply(draft, draftRange))}
               style={styles.apply}
             />
+            <SheetCloseButton onPress={close} />
           </Animated.View>
         </View>
       </View>
@@ -196,9 +206,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 4,
   },
+  // The grabber row, with the X beside it (SheetChrome).
   handleWrap: {
-    paddingVertical: 12,
-    alignItems: "center",
+    ...SHEET_TOP_ROW,
   },
   handle: {
     width: 36,

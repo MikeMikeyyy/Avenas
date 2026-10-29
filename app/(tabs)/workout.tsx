@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, withRepeat, withDelay, Easing as ReEasing } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import {
@@ -25,6 +25,10 @@ import BounceButton from "../../components/BounceButton";
 import GlassButton, { GlassSurface } from "../../components/GlassButton";
 import SheetPill, { SheetToggle } from "../../components/SheetPill";
 import ExercisePicker from "../../components/ExercisePicker";
+import ExerciseSheet from "../../components/ExerciseSheet";
+import NumberBadge from "../../components/NumberBadge";
+import ReorderExercisesSheet from "../../components/ReorderExercisesSheet";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetSurface } from "../../components/SheetChrome";
 import TrashIcon from "../../components/TrashIcon";
 import ExerciseNotesField, { PrevNoteTag, ReuseNoteChip, prevNotePlaceholder } from "../../components/ExerciseNotesField";
 import DumbbellIcon from "../../components/DumbbellIcon";
@@ -33,8 +37,8 @@ import SquarePenIcon from "../../components/SquarePenIcon";
 import TimeEditSheet from "../../components/TimeEditSheet";
 import WorkoutSummarySheet from "../../components/WorkoutSummarySheet";
 import { stampSession } from "../../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK, SET_INPUT_DARK } from "../../constants/theme";
-import { darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, PAUSED_ORANGE, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK } from "../../constants/theme";
+import { darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H, PILL_H_SM, PILL_RADIUS, PILL_SHADOW, setInputSurface } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY, type SavedProgram, type Exercise, type ProgramSet, type CompletedWorkout, type ProgramDayRef, type PlannedExercise, normaliseSets, getCurrentWeek } from "../../constants/programs";
@@ -58,7 +62,7 @@ import { completedExercises, draftIsOver, hasEnteredSets, lastActivityAt, sessio
 import { addExtraWorkout, fileStaleDraft, loadSavedClock, saveSessionToHistory } from "../../utils/unfinishedSessionStore";
 import { deleteCustomExercise as deleteCustomEverywhere } from "../../utils/customExerciseStore";
 import { resumeWithPrompt } from "../../utils/programPause";
-import { exerciseSummaryParams } from "../../utils/customExerciseDetails";
+import { exercisePageParams, exerciseSummaryParams } from "../../utils/customExerciseDetails";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
 import { formatWeightForDisplay, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder, parseWeightToKg } from "../../utils/units";
 import { bestLiftsBefore, isPrSet, prSetsOfWorkout } from "../../utils/achievements";
@@ -237,259 +241,6 @@ function KeyboardDismissIcon({ color }: { color: string }) {
   );
 }
 
-// ─── DragHandleIcon ────────────────────────────────────────────────────────────
-
-function DragHandleIcon({ color }: { color: string }) {
-  return (
-    <Svg width={16} height={12} viewBox="0 0 16 12" fill="none">
-      <Path d="M1 1.5h14M1 6h14M1 10.5h14" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
-    </Svg>
-  );
-}
-
-// ─── WorkoutDraggableList ──────────────────────────────────────────────────────
-
-interface WorkoutDraggableListProps {
-  exercises: Exercise[];
-  isDark: boolean;
-  t: typeof APP_LIGHT | typeof APP_DARK;
-  onReorderExercises: (exercises: Exercise[]) => void;
-  onRemoveExercise: (id: string) => void;
-  onEditExercise: (id: string) => void;
-}
-
-function WorkoutDraggableList({ exercises, isDark, t, onReorderExercises, onRemoveExercise, onEditExercise }: WorkoutDraggableListProps) {
-  const [activeIdx, setActiveIdx] = useState<number | null>(null);
-  const activeIdxRef = useRef<number | null>(null);
-  const hoverIdxRef = useRef<number | null>(null);
-  const rowHeightRef = useRef(50);
-
-  const rowAnimsMap = useRef(new Map<string, Animated.Value>());
-  exercises.forEach(ex => {
-    if (!rowAnimsMap.current.has(ex.id)) rowAnimsMap.current.set(ex.id, new Animated.Value(0));
-  });
-
-  const exercisesRef = useRef(exercises);
-  exercisesRef.current = exercises;
-  const onReorderRef = useRef(onReorderExercises);
-  onReorderRef.current = onReorderExercises;
-
-  useLayoutEffect(() => {
-    rowAnimsMap.current.forEach(a => a.setValue(0));
-  }, [exercises]);
-
-  const panResponders = useMemo(() =>
-    exercises.map((ex, idx) =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponderCapture: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponderCapture: () => true,
-        onPanResponderGrant: () => {
-          activeIdxRef.current = idx;
-          hoverIdxRef.current = idx;
-          rowAnimsMap.current.forEach(a => a.setValue(0));
-          setActiveIdx(idx);
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        },
-        onPanResponderMove: (_, gs) => {
-          rowAnimsMap.current.get(ex.id)?.setValue(gs.dy);
-          const rh = rowHeightRef.current;
-          const exList = exercisesRef.current;
-          const newHover = Math.max(0, Math.min(exList.length - 1, Math.round(idx + gs.dy / rh)));
-          if (newHover !== hoverIdxRef.current) {
-            hoverIdxRef.current = newHover;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            exList.forEach((item, i) => {
-              if (i === idx) return;
-              let toVal = 0;
-              if (newHover > idx && i > idx && i <= newHover) toVal = -rh;
-              else if (newHover < idx && i < idx && i >= newHover) toVal = rh;
-              Animated.spring(rowAnimsMap.current.get(item.id)!, {
-                toValue: toVal, useNativeDriver: false, damping: 20, stiffness: 280,
-              }).start();
-            });
-          }
-        },
-        onPanResponderRelease: () => {
-          const from = activeIdxRef.current!;
-          const to = hoverIdxRef.current ?? from;
-          if (to !== from) {
-            const arr = [...exercisesRef.current];
-            const [moved] = arr.splice(from, 1);
-            arr.splice(to, 0, moved);
-            onReorderRef.current(arr);
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          } else {
-            rowAnimsMap.current.forEach(a => a.setValue(0));
-          }
-          activeIdxRef.current = null;
-          hoverIdxRef.current = null;
-          setActiveIdx(null);
-        },
-        onPanResponderTerminate: () => {
-          rowAnimsMap.current.forEach(a => a.setValue(0));
-          activeIdxRef.current = null;
-          hoverIdxRef.current = null;
-          setActiveIdx(null);
-        },
-      })
-    ),
-  [exercises]);
-
-  const divider = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
-
-  return (
-    <>
-      {exercises.map((ex, i) => {
-        const isActive = activeIdx === i;
-        const anim = rowAnimsMap.current.get(ex.id)!;
-        return (
-          <Animated.View
-            key={ex.id}
-            style={[
-              styles.woDragRow,
-              i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isActive ? "transparent" : divider },
-              { transform: [{ translateY: anim }], zIndex: isActive ? 10 : 1 },
-              isActive && {
-                backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)",
-                borderRadius: 8,
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.2,
-                shadowRadius: 8,
-              },
-            ]}
-            onLayout={i === 0 ? (e) => { rowHeightRef.current = e.nativeEvent.layout.height; } : undefined}
-          >
-            <View {...panResponders[i].panHandlers} style={styles.woDragHandle}>
-              <DragHandleIcon color={t.ts} />
-            </View>
-            <View style={[styles.woDragNumChip, { backgroundColor: ACCT + "18" }]}>
-              <Text style={[styles.woDragNum, { color: ACCT }]}>{i + 1}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.woDragNameBtn}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(ex.id); }}
-              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-            >
-              <Text style={[styles.woDragName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                Alert.alert("Remove Exercise", `Remove "${ex.name}"?`, [
-                  { text: "Cancel", style: "cancel" },
-                  { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(ex.id) },
-                ]);
-              }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <TrashIcon size={18} color={DANGER_BRIGHT} />
-            </TouchableOpacity>
-          </Animated.View>
-        );
-      })}
-    </>
-  );
-}
-
-// ─── WorkoutReorderSheet ───────────────────────────────────────────────────────
-
-interface WorkoutReorderSheetProps {
-  visible: boolean;
-  workoutName: string;
-  exercises: Exercise[];
-  isDark: boolean;
-  t: typeof APP_LIGHT | typeof APP_DARK;
-  onReorderExercises: (exercises: Exercise[]) => void;
-  onRemoveExercise: (id: string) => void;
-  onEditExercise: (id: string) => void;
-  onClose: () => void;
-}
-
-function WorkoutReorderSheet({ visible, workoutName, exercises, isDark, t, onReorderExercises, onRemoveExercise, onEditExercise, onClose }: WorkoutReorderSheetProps) {
-  const slideY = useRef(new Animated.Value(500)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) {
-          slideY.setValue(g.dy);
-          backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300));
-        }
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 120 || g.vy > 0.8) {
-          Animated.parallel([
-            Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
-            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
-        } else {
-          Animated.parallel([
-            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
-            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
-          ]).start();
-        }
-      },
-    })
-  ).current;
-
-  useEffect(() => {
-    if (visible) {
-      slideY.setValue(500);
-      backdropOpacity.setValue(0);
-      Animated.parallel([
-        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      ]).start();
-    }
-  }, [visible]);
-
-  const closeSheet = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
-      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
-  }, [slideY, backdropOpacity, onClose]);
-
-  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
-
-  return (
-    <Modal visible={visible} transparent presentationStyle="overFullScreen" statusBarTranslucent animationType="none" onRequestClose={closeSheet}>
-      <View style={styles.woReorderBackdrop}>
-        <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
-        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
-          <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
-            <View style={styles.woReorderHandle} />
-          </View>
-          <View style={[styles.woReorderHeader, { borderBottomColor: divider }]}>
-            <Text style={[styles.woReorderTitle, { color: t.tp }]}>Reorder Exercises</Text>
-            <Text style={[styles.woReorderSubtitle, { color: t.ts }]}>{workoutName}</Text>
-          </View>
-          <View style={styles.woReorderListWrap}>
-            <WorkoutDraggableList
-              exercises={exercises}
-              isDark={isDark}
-              t={t}
-              onReorderExercises={onReorderExercises}
-              onRemoveExercise={onRemoveExercise}
-              onEditExercise={onEditExercise}
-            />
-          </View>
-          <View style={styles.woReorderDoneRow}>
-            <SheetPill label="Done" variant="primary" onPress={closeSheet} />
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
-  );
-}
-
 // ─── WorkoutOptionsSheet ───────────────────────────────────────────────────────
 
 function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, onClose, focusMode, onToggleFocusMode }: {
@@ -546,7 +297,8 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
-        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.woReorderSheet, sheetSurface(t.bg), { transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
             <View style={styles.woReorderHandle} />
           </View>
@@ -570,6 +322,7 @@ function WorkoutOptionsSheet({ visible, isDark, t, onStartCustom, onChangeDay, o
             />
             <SheetPill label="Cancel" variant="cancel" onPress={closeSheet} />
           </View>
+          <SheetCloseButton onPress={closeSheet} />
         </Animated.View>
       </View>
     </Modal>
@@ -691,7 +444,8 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => animateOut(onDismiss)} />
-        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.woReorderSheet, sheetSurface(t.bg), { transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
             <View style={styles.woReorderHandle} />
           </View>
@@ -735,6 +489,7 @@ function ChangeDaySheet({ visible, isDark, t, activeProgram, programs, currentWo
               </>
             )}
           </ScrollView>
+          <SheetCloseButton onPress={() => animateOut(onDismiss)} />
         </Animated.View>
       </View>
     </Modal>
@@ -811,7 +566,8 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
       <View style={styles.woReorderBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.woReorderOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => animateOut(onClose)} />
-        <Animated.View style={[styles.woReorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.woReorderSheet, sheetSurface(t.bg), { transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           <View {...panResponder.panHandlers} style={styles.woReorderHandleArea}>
             <View style={styles.woReorderHandle} />
           </View>
@@ -868,76 +624,11 @@ function CustomWorkoutNameSheet({ visible, isDark, t, activeProgram, onStart, on
             />
           </View>
           <View style={{ height: 12 }} />
+          <SheetCloseButton onPress={() => animateOut(onClose)} />
         </Animated.View>
       </View>
       </KeyboardAvoidingView>
     </Modal>
-  );
-}
-
-// ─── ExpandablePanel ───────────────────────────────────────────────────────────
-
-function ExpandablePanel({ expanded, children, duration = 280, clip = false }: { expanded: boolean; children: React.ReactNode; duration?: number; clip?: boolean }) {
-  const height = useSharedValue(0);
-  const opacity = useSharedValue(0);
-  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (measuredHeight === null) return;
-    if (expanded) {
-      height.value = withTiming(measuredHeight, { duration, easing: ReEasing.out(ReEasing.cubic) });
-      if (!clip) opacity.value = withTiming(1, { duration: duration * 0.8, easing: ReEasing.out(ReEasing.cubic) });
-    } else {
-      if (!clip) opacity.value = withTiming(0, { duration: duration * 0.5 });
-      height.value = withTiming(0, { duration, easing: ReEasing.out(ReEasing.cubic) });
-    }
-  }, [expanded, measuredHeight]);
-
-  // clip mode: overflow:hidden reveals content with height — no separate fade-in.
-  //   Shadows are progressively revealed as the clip boundary passes each button.
-  // default mode: opacity hides absolutely-positioned content while height animates.
-  const animStyle = useAnimatedStyle(() =>
-    clip
-      ? { height: height.value, overflow: "hidden" }
-      : { height: height.value, opacity: opacity.value }
-  );
-
-  // In clip mode, negative horizontal margin extends the clip boundary beyond the
-  // content area so left/right neumorphic shadows aren't cropped. Matching
-  // paddingHorizontal + paddingBottom on the wrapper keeps content visually aligned
-  // and gives bottom shadows room. The measurement view mirrors the same wrapper so
-  // measuredHeight includes the bottom buffer.
-  const clipWrap: object | null = clip ? { paddingHorizontal: 12, paddingBottom: 14 } : null;
-
-  return (
-    <View>
-      {measuredHeight === null && (
-        <View
-          style={{ position: "absolute", left: clip ? -12 : 0, right: clip ? -12 : 0, top: 0, opacity: 0 }}
-          pointerEvents="none"
-          onLayout={e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setMeasuredHeight(h); }}
-        >
-          {clip ? <View style={clipWrap!}>{children}</View> : children}
-        </View>
-      )}
-      <Reanimated.View style={[animStyle, clip && { marginHorizontal: -12 }]}>
-        {clip ? (
-          <View style={clipWrap!}>{children}</View>
-        ) : (
-          <View
-            style={{ position: "absolute", left: 0, right: 0, top: 0 }}
-            onLayout={e => {
-              const h = e.nativeEvent?.layout?.height;
-              if (h == null || h <= 0 || measuredHeight === null || h === measuredHeight) return;
-              setMeasuredHeight(h);
-              if (expanded) height.value = withTiming(h, { duration: 200, easing: ReEasing.out(ReEasing.cubic) });
-            }}
-          >
-            {children}
-          </View>
-        )}
-      </Reanimated.View>
-    </View>
   );
 }
 
@@ -989,6 +680,10 @@ function CheckboxCell({ done, isDark, isActive, onToggle }: { done: boolean; isD
 // Stable empty fallback for `prevSets` — a fresh [] per render would defeat the
 // React.memo below (every card would re-render on every parent keystroke).
 const EMPTY_PREV: string[] = [];
+// The same for the exercise sheet's sets while it's open on nothing.
+const NO_SETS: SetLog[] = [];
+// A set row on the card never closes itself: sets go from the exercise sheet.
+const NOOP = () => {};
 
 // All callbacks are exId-FIRST so the parent can pass the same stable function
 // references to every card; the card supplies its own exercise.id at the call
@@ -1007,15 +702,10 @@ interface ExerciseCardProps {
    *  or empties the box again, through this same setter. */
   onUpdateNotes: (exId: string, notes: string) => void;
   exNotes: string;
-  onAddSet: (exId: string) => void;
-  /** The set whose row was removed, by its row key (setRowKey). */
-  onRemoveSet: (exId: string, rowKey: string) => void;
-  onOpenReorder: () => void;
-  onChangeExercise: (exId: string) => void;
-  onRemoveExercise: (exId: string) => void;
+  /** ··· in its corner: the exercise sheet (components/ExerciseSheet.tsx),
+   *  where its sets and the exercise itself are changed. */
+  onOpenOptions: (exId: string) => void;
   isIsometric: boolean;
-  onToggleIsometric: (exId: string) => void;
-  onToggleSetType: (exId: string, type: "warmup" | "working", localIdx: number) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   activeSetFlatIdx: number | null;
   isLocked?: boolean;
@@ -1045,7 +735,7 @@ interface ExerciseCardProps {
   prFlags?: readonly boolean[];
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onUpdateNotes, exNotes, onAddSet, onRemoveSet, onOpenReorder, onChangeExercise, onRemoveExercise, isIsometric, onToggleIsometric, onToggleSetType, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prBestKg, prFlags }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onUpdateNotes, exNotes, onOpenOptions, isIsometric, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prBestKg, prFlags }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -1053,10 +743,11 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
   // typing in a set from re-rendering every other card.
   const router = useRouter();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
-  const [editing, setEditing] = useState(false);
+  // A set's weight and reps boxes: the card's button look on light, a step
+  // above the card on dark (setInputSurface, shared with every page's boxes).
+  const inputSurface = setInputSurface(t, isDark);
   const weightRefs = useRef<(TextInputInstance | null)[]>([]);
   const repsRefs = useRef<(TextInputInstance | null)[]>([]);
-  useEffect(() => { if (isLocked && editing) setEditing(false); }, [isLocked]);
 
   // Flatten all sets: warmup first, then working
   const programSets = normaliseSets(exercise);
@@ -1069,9 +760,8 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
   const workingCounter = { count: 0 };
 
   // Rows come and go by their set's own key, never by position
-  // (utils/setRows.ts). One row closes at a time; a row opens when its set was
-  // just added, to the height the other rows measure.
-  const [collapsingKey, setCollapsingKey] = useState<string | null>(null);
+  // (utils/setRows.ts). A row opens when its set was just added (in the
+  // exercise sheet), to the height the other rows measure.
   const [rowHeight, setRowHeight] = useState(0);
   const rowKeys = allSets.map(s => s.rowKey);
   const [drawn, setDrawn] = useState(() => firstRows(rowKeys));
@@ -1083,11 +773,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
         {/* ── Header ── */}
         <View style={styles.exHeader}>
-          {numberBadge != null && (
-            <NeuCard dark={isDark} radius={16} style={styles.exNumBadge} innerStyle={styles.exNumInner}>
-              <Text style={[styles.exNumText, { color: ACCT }]}>{numberBadge}</Text>
-            </NeuCard>
-          )}
+          {numberBadge != null && <NumberBadge n={numberBadge} isDark={isDark} />}
           {/* Tapping the name opens that exercise's summary page (with a button
               on to full history) — the same destination the program builder's
               thumbnail goes to. There's no thumbnail on this card, so the name
@@ -1109,20 +795,15 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           </TouchableOpacity>
           {!isLocked && (
             <TouchableOpacity
-              onPress={() => setEditing(e => !e)}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onOpenOptions(exercise.id);
+              }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`${exercise.name} options`}
             >
-              {editing ? (
-                <View style={{
-                  width: 22, height: 22, borderRadius: 11, backgroundColor: ACCT,
-                  alignItems: "center", justifyContent: "center",
-                  shadowColor: ACCT, shadowOffset: { width: 1, height: 1 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 3,
-                }}>
-                  <Ionicons name="checkmark" size={14} color="#fff" />
-                </View>
-              ) : (
-                <Ionicons name="ellipsis-horizontal" size={22} color={t.ts} />
-              )}
+              <Ionicons name="ellipsis-horizontal" size={22} color={t.ts} />
             </TouchableOpacity>
           )}
         </View>
@@ -1175,10 +856,8 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
         {allSets.map((set, flatIdx) => {
           if (!set.isWarmup) workingCounter.count += 1;
           const setLabel = set.isWarmup ? "W" : workingCounter.count;
-          const isLast = flatIdx === allSets.length - 1;
-          const rowIsActive = !editing && flatIdx === activeSetFlatIdx;
+          const rowIsActive = flatIdx === activeSetFlatIdx;
           const isNew = !!drawn.added?.has(set.rowKey) && rowHeight > 0;
-          const isClosing = set.rowKey === collapsingKey;
           // A new PR: the weight as Finish will save it (kg), against the best
           // from before today. The finished session's own flags come from
           // what it saved.
@@ -1189,52 +868,27 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           return (
             <CollapsibleCard
               key={set.rowKey}
-              isCollapsing={isClosing}
-              onCollapsed={() => { setCollapsingKey(null); onRemoveSet(exercise.id, set.rowKey); }}
+              isCollapsing={false}
+              onCollapsed={NOOP}
               expanding={isNew}
               naturalHeight={isNew ? rowHeight : undefined}
             >
             <SetRow isActive={rowIsActive}>
             <View
               style={styles.dataRow}
-              onLayout={(!isNew && !isClosing) ? e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setRowHeight(h); } : undefined}
+              onLayout={!isNew ? e => { const h = e.nativeEvent?.layout?.height; if (h != null && h > 0) setRowHeight(h); } : undefined}
             >
               {/* SET label */}
-              {editing ? (
-                <View style={[
-                  styles.setCol,
-                  { alignItems: "center", justifyContent: "center" },
-                ]}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      onToggleSetType(exercise.id, set.type, set.localIdx);
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    activeOpacity={0.6}
-                  >
-                    <View style={[
-                      styles.setEditBadge,
-                      { borderColor: set.isWarmup ? WARMUP_ORANGE : divider },
-                    ]}>
-                      <Text style={[styles.setText, { color: set.isWarmup ? WARMUP_ORANGE : t.tp }]}>
-                        {setLabel}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
+              <View style={styles.setCell}>
+                {/* The trophy hangs off the number's own left edge, so it
+                    sits the same gap away from "3" as from "10". */}
+                <View>
+                  <Text style={[styles.setText, { color: set.isWarmup ? WARMUP_ORANGE : t.tp }]}>
+                    {setLabel}
+                  </Text>
+                  <PrTrophy show={isPr} />
                 </View>
-              ) : (
-                <View style={styles.setCell}>
-                  {/* The trophy hangs off the number's own left edge, so it
-                      sits the same gap away from "3" as from "10". */}
-                  <View>
-                    <Text style={[styles.setText, { color: set.isWarmup ? WARMUP_ORANGE : t.tp }]}>
-                      {setLabel}
-                    </Text>
-                    <PrTrophy show={isPr} />
-                  </View>
-                </View>
-              )}
+              </View>
 
               {/* PREV */}
               <View style={styles.prevCol}>
@@ -1248,7 +902,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   putting the keyboard down ticked it, and so did stepping
                   through a set Auto-fill had filled (user report, 2026-10-28). */}
               <View style={styles.inputCell}>
-                <View style={[styles.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                <View style={[styles.inputBox, inputSurface]}>
                   <TextInput
                     key={`w-${set.type}-${set.localIdx}-${set.fillKey}`}
                     ref={r => { weightRefs.current[flatIdx] = r; }}
@@ -1270,7 +924,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
 
               {/* REPS input */}
               <View style={styles.inputCell}>
-                <View style={[styles.inputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                <View style={[styles.inputBox, inputSurface]}>
                   <TextInput
                     key={`r-${set.type}-${set.localIdx}-${set.fillKey}`}
                     ref={r => { repsRefs.current[flatIdx] = r; }}
@@ -1304,45 +958,25 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                 </View>
               </View>
 
-              {/* Checkbox or remove-set button */}
+              {/* Checkbox. Sets are added, removed and switched in the
+                  exercise sheet, never under the finger here, so the ticks
+                  are always live (the card's edit mode used to dim them). */}
               <View style={styles.checkCol}>
-                {editing && isLast && allSets.length > 1 ? (
-                  <TouchableOpacity
-                    onPress={() => {
-                      if (collapsingKey !== null || allSets.length <= 1) return;
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setCollapsingKey(set.rowKey);
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <View style={[styles.removeSetBtn, darkGlow(styles.removeSetBtn, isDark)]}>
-                      <Ionicons name="remove" size={13} color="#fff" />
-                    </View>
-                  </TouchableOpacity>
-                ) : (
-                  // While the card is being edited its checkboxes rest, dimmed:
-                  // rows come and go under your finger there, and a tap meant
-                  // for − (or for Add Set, moving up as a row closed) ticked
-                  // the set beside it and started a rest. Nor does a row on
-                  // its way out take a tick.
-                  <View style={editing ? styles.checkResting : undefined} pointerEvents={editing || isClosing ? "none" : "auto"}>
-                    <CheckboxCell
-                      done={set.done}
-                      isDark={isDark}
-                      isActive={rowIsActive}
-                      onToggle={isLocked ? () => {} : () => {
-                        // An empty set takes last time's numbers as it's
-                        // ticked (prevFillFor, the lock screen's rule too).
-                        const fill = set.done ? null : prevFillFor(set, prevSets?.[flatIdx]);
-                        if (fill) {
-                          onUpdateSet(exercise.id, set.type, set.localIdx, "weight", fill.weight);
-                          onUpdateSet(exercise.id, set.type, set.localIdx, "reps", fill.reps);
-                        }
-                        onToggleDone(exercise.id, set.type, set.localIdx);
-                      }}
-                    />
-                  </View>
-                )}
+                <CheckboxCell
+                  done={set.done}
+                  isDark={isDark}
+                  isActive={rowIsActive}
+                  onToggle={isLocked ? () => {} : () => {
+                    // An empty set takes last time's numbers as it's
+                    // ticked (prevFillFor, the lock screen's rule too).
+                    const fill = set.done ? null : prevFillFor(set, prevSets?.[flatIdx]);
+                    if (fill) {
+                      onUpdateSet(exercise.id, set.type, set.localIdx, "weight", fill.weight);
+                      onUpdateSet(exercise.id, set.type, set.localIdx, "reps", fill.reps);
+                    }
+                    onToggleDone(exercise.id, set.type, set.localIdx);
+                  }}
+                />
               </View>
             </View>
             </SetRow>
@@ -1350,84 +984,6 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           );
         })}
         </View>
-
-        {/* ── Edit mode controls ── */}
-        <ExpandablePanel expanded={editing} duration={500} clip>
-          <>
-            {/* Move row */}
-            <View style={[styles.editMoveRow, { borderTopColor: divider }]}>
-              {/* Icon AND label in one target. The handle alone was a 36pt box
-                  with the words sitting outside it, so the obvious thing to
-                  aim at wasn't the thing that worked. Moving is a finished edit,
-                so the card leaves edit mode as if ticked: the panel folds away
-                behind the opening sheet, and the card comes back as a plain
-                card wherever it lands. */}
-              <TouchableOpacity
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setEditing(false); onOpenReorder(); }}
-                activeOpacity={0.7}
-                style={styles.exReorderBtn}
-                accessibilityLabel="Reorder exercises"
-                accessibilityRole="button"
-              >
-                <View style={styles.exReorderIcon}>
-                  <DragHandleIcon color={t.ts} />
-                </View>
-                <Text style={[styles.editMoveLabel, { color: t.ts }]}>Move exercise</Text>
-              </TouchableOpacity>
-              <View style={{ flex: 1 }} />
-              <TouchableOpacity
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onAddSet(exercise.id); }}
-                activeOpacity={0.8}
-                // White with GREEN text rather than a green fill, matching the
-                // builder: the round + for Add Exercise is already solid green,
-                // and two greens in one view leave neither reading as primary.
-                style={[styles.editChip, { backgroundColor: t.ctrl, flex: 0, paddingHorizontal: 14 }]}
-              >
-                <Ionicons name="add" size={13} color={ACCT} />
-                <Text style={[styles.editChipText, { color: ACCT }]}>Add Set</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Three chip buttons */}
-            <View style={styles.editChipsRow}>
-              {[
-                {
-                  onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggleIsometric(exercise.id); },
-                  icon: <Ionicons name="timer-outline" size={13} color={isIsometric ? ACCT : t.ts} />,
-                  label: isIsometric ? "Hold" : "Reps",
-                  color: isIsometric ? ACCT : t.ts,
-                },
-                {
-                  onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChangeExercise(exercise.id); },
-                  icon: <Ionicons name="swap-horizontal" size={13} color={t.ts} />,
-                  label: "Change",
-                  color: t.ts,
-                },
-                {
-                  onPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); Alert.alert(
-                    "Remove Exercise",
-                    `Remove "${exercise.name}" from today's workout?`,
-                    [{ text: "Cancel", style: "cancel" }, { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(exercise.id) }]
-                  ); },
-                  icon: <TrashIcon size={13} color={DANGER_BRIGHT} />,
-                  label: "Remove",
-                  color: DANGER_BRIGHT,
-                },
-              ].map(({ onPress, icon, label, color }) => (
-                // One flat pill on the white control surface. This was three
-                // nested Views faking a raised neumorphic card — inside a card
-                // that is already raised, which read as stacked surfaces and
-                // cost three extra views per chip per exercise.
-                <TouchableOpacity key={label} onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
-                  <View style={[styles.editChip, { backgroundColor: t.ctrl }]}>
-                    {icon}
-                    <Text style={[styles.editChipText, { color }]}>{label}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </>
-        </ExpandablePanel>
 
         {/* ── Exercise notes ── */}
         <View style={[styles.exNotesRow, { borderTopColor: divider }]}>
@@ -2245,12 +1801,17 @@ function WorkoutScreen() {
     if (becomingDone) startRestAfterSet(exId, type, idx);
   }, [startTimer, startRestAfterSet]);
 
-  const addSet = useCallback((exId: string) => {
+  // A warm-up set goes after the warm-ups and a working set after the working
+  // sets: each lands where it belongs, with nothing to switch over after.
+  const addSet = useCallback((exId: string, type: SetType) => {
     markShaped();
     setLog(prev => {
       const exLog = prev[exId];
       if (!exLog) return prev;
-      return { ...prev, [exId]: { ...exLog, working: [...exLog.working, makeSet()] } };
+      const set = makeSet();
+      return { ...prev, [exId]: type === "warmup"
+        ? { ...exLog, warmup: [...exLog.warmup, set] }
+        : { ...exLog, working: [...exLog.working, set] } };
     });
   }, [markShaped]);
 
@@ -2336,10 +1897,10 @@ function WorkoutScreen() {
 
   const [collapsingIds, setCollapsingIds] = useState<Set<string>>(new Set());
   const startCollapse = useCallback((exId: string) => setCollapsingIds(prev => new Set(prev).add(exId)), []);
-  // Stable card-callback identities for MemoExerciseCard (inline closures at the
-  // render site would re-create per keystroke and defeat the memo).
+  // Stable identities for MemoExerciseCard and the memoized exercise sheet
+  // (inline closures at the render site would re-create per keystroke and
+  // defeat the memo).
   const openReorder = useCallback(() => setReorderOpen(true), []);
-  const openChangeExercise = useCallback((exId: string) => setChangingExId(exId), []);
   const toggleIsometricEx = useCallback((exId: string) => {
     markShaped();
     setIsometricExIds(prev => {
@@ -2351,6 +1912,43 @@ function WorkoutScreen() {
   }, [markShaped]);
 
   const [reorderOpen, setReorderOpen] = useState(false);
+
+  // The exercise sheet, from ··· on a card (components/ExerciseSheet.tsx): the
+  // exercise it's open on. Its sets and the exercise itself change there; the
+  // card only logs. The keyboard goes down first, or it would sit over the
+  // sheet.
+  const [sheetExId, setSheetExId] = useState<string | null>(null);
+  const openExerciseSheet = useCallback((exId: string) => { Keyboard.dismiss(); setSheetExId(exId); }, []);
+  const closeExerciseSheet = useCallback(() => setSheetExId(null), []);
+  // The screen's own handlers with the sheet's exercise bound in. Change,
+  // History and Remove (and Move, openReorder) run once the sheet has closed.
+  const sheetToggleSetType = useCallback((type: SetType, localIdx: number) => {
+    if (sheetExId) toggleSetType(sheetExId, type, localIdx);
+  }, [sheetExId, toggleSetType]);
+  const sheetAddSet = useCallback((type: SetType) => {
+    if (sheetExId) addSet(sheetExId, type);
+  }, [sheetExId, addSet]);
+  const sheetRemoveSet = useCallback((rowKey: string) => {
+    if (sheetExId) removeSet(sheetExId, rowKey);
+  }, [sheetExId, removeSet]);
+  const sheetToggleHold = useCallback(() => {
+    if (sheetExId) toggleIsometricEx(sheetExId);
+  }, [sheetExId, toggleIsometricEx]);
+  const sheetChange = useCallback(() => {
+    if (sheetExId) setChangingExId(sheetExId);
+  }, [sheetExId]);
+  const sheetRemove = useCallback(() => {
+    if (sheetExId) startCollapse(sheetExId);
+  }, [sheetExId, startCollapse]);
+  const sheetHistory = useCallback(() => {
+    const ex = workoutInfo?.exercises.find(e => e.id === sheetExId);
+    if (ex) router.navigate({ pathname: "/exercise-history", params: exercisePageParams(ex) });
+  }, [workoutInfo, sheetExId, router]);
+  const sheetExercise = sheetExId ? workoutInfo?.exercises.find(e => e.id === sheetExId) : undefined;
+  const sheetLog = sheetExId ? log[sheetExId] : undefined;
+  const sheetPosition = sheetExercise && workoutInfo
+    ? `EXERCISE ${workoutInfo.exercises.indexOf(sheetExercise) + 1} OF ${workoutInfo.exercises.length}`
+    : undefined;
   const reorderExercises = useCallback((exercises: Exercise[]) => {
     markShaped();
     setWorkoutInfo(prev => prev ? { ...prev, exercises } : prev);
@@ -3457,10 +3055,8 @@ function WorkoutScreen() {
                   prFlags={lockedPrFlags?.[i]}
                   onUpdateSet={() => {}} onToggleDone={() => {}}
                   exNotes={lockedData.log[exercise.id]?.notes ?? ""}
-                  onUpdateNotes={() => {}} onAddSet={() => {}} onRemoveSet={() => {}}
-                  onOpenReorder={() => {}} onChangeExercise={() => {}}
-                  onRemoveExercise={() => {}} isIsometric={false} onToggleIsometric={() => {}}
-                  onToggleSetType={() => {}} onInputFocus={() => {}} activeSetFlatIdx={null}
+                  onUpdateNotes={() => {}} onOpenOptions={() => {}}
+                  isIsometric={false} onInputFocus={() => {}} activeSetFlatIdx={null}
                 />
               </React.Fragment>
             ))}
@@ -3506,12 +3102,7 @@ function WorkoutScreen() {
                   exNotes={log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={updateExNotes}
                   prevNote={prevNoteOf(exercise)}
-                  onAddSet={addSet}
-                  onRemoveSet={removeSet}
-                  onOpenReorder={openReorder}
-                  onChangeExercise={openChangeExercise}
-                  onRemoveExercise={startCollapse}
-                  onToggleSetType={toggleSetType}
+                  onOpenOptions={openExerciseSheet}
                   onInputFocus={handleListFieldFocus}
                   isIsometric={isometricExIds.has(exercise.id)}
                   activeSetFlatIdx={nextSet?.exId === exercise.id ? nextSet.flatIdx : null}
@@ -3521,7 +3112,6 @@ function WorkoutScreen() {
                   changeCue={changeCueById[exercise.id]}
                   sessionCue={sessionCueById[exercise.id]}
                   prBestKg={prBestById[exercise.id]}
-                  onToggleIsometric={toggleIsometricEx}
                 />
               </CollapsibleCard>
             );
@@ -3752,8 +3342,29 @@ function WorkoutScreen() {
       />
 
 
+      {/* The exercise sheet, from ··· on a card. Its Move and Change open the
+          reorder sheet and the picker below once it has closed, and those
+          wait on it besides, so two sheets are never up at once. */}
+      <ExerciseSheet
+        visible={!!sheetExercise && !!sheetLog}
+        onClose={closeExerciseSheet}
+        name={sheetExercise?.name ?? ""}
+        position={sheetPosition}
+        warmup={sheetLog?.warmup ?? NO_SETS}
+        working={sheetLog?.working ?? NO_SETS}
+        isHold={!!sheetExId && isometricExIds.has(sheetExId)}
+        onToggleSetType={sheetToggleSetType}
+        onAddSet={sheetAddSet}
+        onRemoveSet={sheetRemoveSet}
+        onToggleHold={sheetToggleHold}
+        onMove={openReorder}
+        onChange={sheetChange}
+        onHistory={sheetHistory}
+        onRemove={sheetRemove}
+      />
+
       {/* Exercise picker — change exercise for current session */}
-      {changingExId !== null && (
+      {changingExId !== null && sheetExId === null && (
         <ExercisePicker
           visible
           subtitle="CHANGE EXERCISE"
@@ -3802,15 +3413,18 @@ function WorkoutScreen() {
         />
       )}
 
-      <WorkoutReorderSheet
-        visible={reorderOpen}
-        workoutName={workoutInfo?.name ?? ""}
-        exercises={workoutInfo?.exercises ?? []}
-        isDark={isDark}
-        t={t}
-        onReorderExercises={reorderExercises}
-        onRemoveExercise={id => { startCollapse(id); setReorderOpen(false); }}
-        onEditExercise={id => { setChangingExId(id); setReorderOpen(false); }}
+      {/* Change and Remove run once the sheet has slid away: the picker can't
+          present over it, and a removed card is seen collapsing. */}
+      <ReorderExercisesSheet
+        visible={reorderOpen && sheetExId === null}
+        subtitle={workoutInfo?.name}
+        items={workoutInfo?.exercises ?? []}
+        keyOf={ex => ex.id}
+        nameOf={ex => ex.name}
+        onReorder={reorderExercises}
+        onChange={ex => setChangingExId(ex.id)}
+        onRemove={ex => startCollapse(ex.id)}
+        closeOnRemove
         onClose={() => setReorderOpen(false)}
       />
 
@@ -3957,9 +3571,6 @@ const styles = StyleSheet.create({
   exCard:       { marginBottom: EX_CARD_GAP, borderRadius: 20 },
   exCardInner:  { padding: 16, gap: 10 },
   exHeader:     { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 2 },
-  exNumBadge:   { width: 32, height: 32 },
-  exNumInner:   { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
-  exNumText:    { fontFamily: FontFamily.bold, fontSize: 13 },
   exTitleBlock: { flex: 1, justifyContent: "center", gap: 6 },
   exNumLabel:   { fontFamily: FontFamily.semibold, fontSize: 13 },
   // The card's gap is 10; the cue sits 4 under the name, as the design has it.
@@ -3985,29 +3596,15 @@ const styles = StyleSheet.create({
   inputHeaderCol:{ flex: 1, alignItems: "center", justifyContent: "flex-end", marginHorizontal: 4 },
   inputCell:     { flex: 1, marginHorizontal: 4, alignItems: "center" },
   checkCol:      { width: 32, alignItems: "center", justifyContent: "center" },
-  checkResting:  { opacity: 0.35 },
 
   // Data rows
   dataRow:       { flexDirection: "row", alignItems: "center", height: 56, paddingHorizontal: 4 },
   setText:       { fontFamily: FontFamily.semibold, fontSize: 15, textAlign: "center" },
   prevText:      { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center" },
-  setEditBadge:  { width: 28, height: 28, borderRadius: 6, borderWidth: 1, alignItems: "center", justifyContent: "center" },
 
   // Inputs
   inputBox:      { width: "100%", height: 40, borderRadius: 10, justifyContent: "center" },
   inputBoxText:  { fontFamily: FontFamily.bold, fontSize: 15, textAlign: "center", flex: 1, paddingVertical: 0 },
-
-  // Remove set
-  removeSetBtn:  { width: 24, height: 24, borderRadius: 13, backgroundColor: DANGER_BRIGHT, alignItems: "center", justifyContent: "center", shadowColor: DANGER_BRIGHT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6 },
-
-  // Edit actions
-  editMoveRow:   { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingTop: 10 },
-  editMoveLabel: { fontFamily: FontFamily.regular, fontSize: 12, marginLeft: 2 },
-  editChipsRow:  { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
-  // Shared by the Reps / Change / Remove row and the Add Set button, so the
-  // four read as one set of controls.
-  editChip:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, paddingHorizontal: 8, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
-  editChipText:  { fontFamily: FontFamily.semibold, fontSize: 12 },
 
   // Session Notes — floating card + tick button
   notesInput:     { fontFamily: FontFamily.regular, fontSize: 14, minHeight: 72, lineHeight: 22 },
@@ -4058,22 +3655,16 @@ const styles = StyleSheet.create({
   // Keyboard floating dismiss button
   kbFloatBtn: { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
 
-  // Reorder button in exercise edit panel
-  // The whole handle-plus-label run, with slack past the words so the target
-  // doesn't end exactly where the text does.
-  exReorderBtn:   { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 36, paddingRight: 14 },
-  exReorderIcon:  { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
-
   // Workout reorder sheet
   woReorderBackdrop:  { flex: 1, justifyContent: "flex-end" },
-  woReorderOverlay:   { backgroundColor: "rgba(0,0,0,0.45)" },
+  // The sheets' dim, surface (sheetSurface) and grabber row with the X beside
+  // it: components/SheetChrome.tsx.
+  woReorderOverlay:   { backgroundColor: SHEET_DIM },
   woReorderSheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36 },
-  woReorderHandleArea:{ paddingVertical: 12, alignItems: "center" },
+  woReorderHandleArea:{ ...SHEET_TOP_ROW },
   woReorderHandle:    { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
-  woReorderHeader:    { alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1 },
   woReorderTitle:     { fontFamily: FontFamily.bold, fontSize: 16 },
   woReorderSubtitle:  { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
-  woReorderListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
   woReorderDoneRow:   { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
 
   // Shared step-header (matches journal pickerStepHeader style)
@@ -4093,14 +3684,6 @@ const styles = StyleSheet.create({
   cnToggleTitle:   { fontFamily: FontFamily.semibold, fontSize: 15 },
   cnToggleSub:     { fontFamily: FontFamily.regular, fontSize: 13, marginTop: 2 },
   cnToggle:        { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-
-  // Draggable list rows
-  woDragRow:      { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
-  woDragHandle:   { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },
-  woDragNumChip:  { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  woDragNum:      { fontFamily: FontFamily.bold, fontSize: 13 },
-  woDragNameBtn:  { flex: 1, flexDirection: "row", alignItems: "center" },
-  woDragName:     { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
 
   // Empty states
   emptyWrap:      { flex: 1, alignItems: "center", paddingHorizontal: 40, gap: 14 },

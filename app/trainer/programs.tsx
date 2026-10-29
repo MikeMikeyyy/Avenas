@@ -53,7 +53,7 @@ import ProgramPickerSheet from "../../components/trainer/ProgramPickerSheet";
 import RecipientPickerSheet from "../../components/trainer/RecipientPickerSheet";
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote } from "../../components/trainer/ReviewStatusPill";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
-import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../constants/buttons";
+import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
@@ -293,7 +293,7 @@ function ReviewRow({ review, sender, groupPhotoUri, from, first, open, onToggle,
       // 2026-10-22; it was orange). Done: where it stands, as everywhere else.
       trailing={awaiting ? (
         <BounceButton onPress={onOpen} accessibilityLabel={`Review ${review.programName}`}>
-          <View style={[rowButtonStyles.pill, { backgroundColor: t.ctrl, ...PILL_SHADOW }]}>
+          <View style={[rowButtonStyles.pill, cardButton(t)]}>
             <Text style={[rowButtonStyles.text, { color: t.tp }]}>Review</Text>
           </View>
         </BounceButton>

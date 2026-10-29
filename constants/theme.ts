@@ -32,9 +32,11 @@ export const APP_LIGHT = {
   icon: "#2C3446",
   div:  "#E4E8EF",  // divider
   ctrl: "#ffffff",  // floating control surface — see the note on APP_DARK.ctrl
+  cardCtrl: "#F7F9FC",  // a button inside a card — see the note on APP_DARK.cardCtrl
   nav:  "#ffffff",  // floating tab bar — see the note on APP_DARK.nav
   navEdge: "rgba(0,0,0,0.06)",
   field: "rgba(0,0,0,0.04)",  // a search field on the page — see the note on APP_DARK.field
+  sheetLine: "rgba(30,39,56,0.12)",  // a line between rows on a sheet — see the note on APP_DARK.sheetLine
 } as const;
 
 // Graphite (dark): a near-black page under charcoal cards, neutral rather than
@@ -63,6 +65,13 @@ export const APP_DARK = {
   // pills) — anything round that sits ON the page rather than in a card.
   // Slightly stronger than div: these are things you press.
   ctrl: "rgba(255,255,255,0.12)",
+  // A button INSIDE a card (cardButton, constants/buttons.ts), with a div
+  // hairline round it and no shadow (user pick, 2026-10-29, option D of the
+  // Buttons on Cards canvas). Light mode's ctrl is white, the card's own colour,
+  // so a white button on a card showed only as its faint shadow; light mode's
+  // cardCtrl is a step off the white instead. Here ctrl already lifts off the
+  // charcoal card, so cardCtrl is the same.
+  cardCtrl: "rgba(255,255,255,0.12)",
   // The floating tab bar. A rung ABOVE the cards rather than level with them:
   // it used NEU_BG_DARK (#252840), which is the card colour and only ~6% off
   // the page bg, so the bar melted into the background. Solid rather than
@@ -76,6 +85,11 @@ export const APP_DARK = {
   // of whatever is under it, the faded look, quieter than ctrl so it reads as
   // a place to type rather than a button (user decision, 2026-10-22).
   field: "rgba(255,255,255,0.06)",
+  // A line between rows on a sheet (the reorder sheet's exercises): stronger
+  // than div, which is pitched for a solid card and all but vanished on a
+  // glass sheet (user report, 2026-10-30: the lines between exercises had
+  // gone). Light mode's is the ink at 12%, so it shows on glass and page alike.
+  sheetLine: "rgba(255,255,255,0.16)",
 } as const;
 
 export type AppTheme = typeof APP_LIGHT;
@@ -174,6 +188,12 @@ export const ROLE_MEMBER  = "#60A5FA";  // soft blue
 export const ROLE_TRAINER_INK = "#6B4FD8";
 export const ROLE_MEMBER_INK  = "#2563C9";
 
+/** A role badge's colour: its fill, laid on at 22 alpha. */
+export function roleColor(role: "owner" | "trainer" | "member"): string {
+  if (role === "owner") return ROLE_OWNER;
+  return role === "trainer" ? ROLE_TRAINER : ROLE_MEMBER;
+}
+
 /** A role badge's words: the deeper ink on a light card. */
 export function roleTextColor(role: "owner" | "trainer" | "member", isDark: boolean): string {
   if (role === "owner") return accentTextColor(isDark);
@@ -222,13 +242,33 @@ export const AVATAR_HUES = [
   { tint: "#FF9461", ink: "#A2461A", inkDark: "#FFB48E" }, // peach
 ] as const;
 
+/** A 32-bit hash with every character of the key stirred into every bit of it
+ *  (FNV-1a, then murmur3's finaliser). The colour is read off its low bits,
+ *  and the djb2 it replaced left those as the key's character sum (user
+ *  report, 2026-10-29: the colours went in the same order), so ids a character
+ *  apart walked through the hues one after another. */
+function mixedHash(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
 /** The colour a person or group is drawn in without a photo: the circle and
  *  what's on it. Keyed by their id (a person's user id, a group's id), so the
- *  same one comes out on every page; no key is the mint. */
-export function avatarColors(key: string | undefined, isDark: boolean): { bg: string; ink: string } {
-  let h = 5381;
-  for (let i = 0; i < (key ?? "").length; i++) h = ((h << 5) + h + key!.charCodeAt(i)) | 0;
-  const hue = AVATAR_HUES[key ? Math.abs(h) % AVATAR_HUES.length : 0];
+ *  same one comes out on every page; no key is the mint. People and groups are
+ *  mixed apart (`kind`), so the two never share one pattern. */
+export function avatarColors(
+  key: string | undefined, isDark: boolean, kind: "person" | "group" = "person",
+): { bg: string; ink: string } {
+  const hue = AVATAR_HUES[key ? mixedHash(`${kind}:${key}`) % AVATAR_HUES.length : 0];
   return { bg: `${hue.tint}${isDark ? "29" : "2E"}`, ink: isDark ? hue.inkDark : hue.ink };
 }
 
@@ -363,8 +403,19 @@ export const BUBBLE_DARK  = "#2C2D33";
 // ─── Set inputs ───────────────────────────────────────────────────────────────
 // A set's weight and reps boxes on dark (the Workout tab, Log Workout, Workout
 // Detail, the program builder): a step above the card, ringed in white. Light
-// mode lays them on the page colour (t.bg). They were a lifted navy (#343759).
+// mode gives them the card's button look instead (setInputSurface in
+// constants/buttons.ts, which draws them all). They were a lifted navy
+// (#343759).
 export const SET_INPUT_DARK = "#2C2D33";
+export const SET_INPUT_RING_DARK = "rgba(255,255,255,0.45)";
+
+// ─── Tips ─────────────────────────────────────────────────────────────────────
+// A first-time tip inside a card (the program builder's warm-up tip): the
+// accent washed over the card, solid rather than translucent, so the pointer
+// drawn half under the tip's edge is exactly its colour where the two overlap.
+export function tipFill(isDark: boolean): string {
+  return washOver(isDark ? NEU_BG_DARK : NEU_BG, ACCT, isDark ? 0.14 : 0.12);
+}
 
 // ─── Switch ───────────────────────────────────────────────────────────────────
 // Off-state track for the iOS Switches in LIGHT mode (Settings, the Workout
@@ -382,30 +433,6 @@ export const BTN_SLATE_DARK = APP_DARK.tp; // dark mode: app's existing off-whit
 // Words and icons on a filled button (ACCT, DANGER_BRIGHT, the light mode
 // slate), in both themes. On the dark mode slate they're APP_DARK.bg instead.
 export const ON_FILL = "#ffffff";
-
-// ─── Liquid Glass depth ───────────────────────────────────────────────────────
-// What makes the glass buttons (components/GlassButton.tsx) stand off the page
-// as Bevel's and Apple's do (user request, 2026-10-23: theirs looked more 3D,
-// with more of a border): a thin bright RIM round the edge, the top edge LIT
-// and the bottom edge in SHADE just inside it, and a soft DROP shadow under
-// the button. Each is a colour's strength: raise the last number (the alpha)
-// for more, lower it for less, 0 takes that part away. Their sizes are
-// GLASS_DEPTH_SHAPE in constants/buttons.ts. On iOS 26 only: the solid buttons
-// below that keep their own shadows.
-export const GLASS_DEPTH = {
-  light: {
-    rim:   "rgba(255,255,255,0.7)",
-    lit:   "rgba(255,255,255,0.9)",
-    shade: "rgba(0,0,0,0.07)",
-    drop:  "rgba(0,0,0,0.16)",
-  },
-  dark: {
-    rim:   "rgba(255,255,255,0.16)",
-    lit:   "rgba(255,255,255,0.24)",
-    shade: "rgba(0,0,0,0.3)",
-    drop:  "rgba(0,0,0,0.5)",
-  },
-} as const;
 
 // ─── Legacy colours (pre-design-token era) ────────────────────────────────────
 export const Colors = {

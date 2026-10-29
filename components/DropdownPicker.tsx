@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, ReactNode } from "react";
+import { useState, useEffect, ReactNode } from "react";
 import {
   View,
   Text,
@@ -12,9 +12,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import GlassButton from "./GlassButton";
 import SheetPill from "./SheetPill";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "./SheetChrome";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
-import { PILL_H_CHIP, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
+import { cardButton, PILL_H_CHIP, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
+import { useSheetDrag } from "../hooks/useSheetDrag";
 
 interface Option<T extends string> {
   key: T;
@@ -72,8 +74,8 @@ export default function DropdownPicker<T extends string>({
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const slideY = useRef(new Animated.Value(600)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [slideY] = useState(() => new Animated.Value(600));
+  const [backdropOpacity] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     if (open) {
@@ -114,22 +116,26 @@ export default function DropdownPicker<T extends string>({
     }
   }, [open, mounted, slideY, backdropOpacity]);
 
+  // Held by its top and dragged down, it closes the way a tap outside does.
+  const drag = useSheetDrag({ slideY, backdrop: backdropOpacity, onClose: () => setOpen(false) });
+
   const current = options.find(o => o.key === value) ?? options[0];
   const bar = size === "bar";
 
   return (
     <>
       {/* The app's pill button (constants/buttons.ts), glass on iOS 26
-          (components/GlassButton.tsx; user request, 2026-10-23), the white
-          control pill below that, as the buttons in its sheet (SheetPill) are.
-          The icon-only trigger is that pill at equal width and height: a round
-          button. */}
+          (components/GlassButton.tsx; user request, 2026-10-23). Below that,
+          in a card's header it's the card's button (cardButton), and on the
+          page the white control pill, as the buttons in its sheet (SheetPill)
+          are. The icon-only trigger is that pill at equal width and height: a
+          round button. */}
       <GlassButton
         pill={!triggerIcon}
         size={bar && !triggerIcon ? PILL_H_XS : PILL_H_CHIP}
         onPress={() => setOpen(true)}
         contentStyle={triggerIcon ? undefined : bar ? styles.btnBar : styles.btn}
-        solidStyle={PILL_SHADOW}
+        solidStyle={bar ? PILL_SHADOW : cardButton(t)}
         accessibilityLabel={`${sheetTitle}: ${current.label}. Tap to change.`}
       >
         {triggerIcon ? (
@@ -151,7 +157,7 @@ export default function DropdownPicker<T extends string>({
             <Animated.View
               style={[
                 StyleSheet.absoluteFill,
-                { backgroundColor: "rgba(0,0,0,0.45)", opacity: backdropOpacity },
+                { backgroundColor: SHEET_DIM, opacity: backdropOpacity },
               ]}
             />
           </TouchableWithoutFeedback>
@@ -160,17 +166,20 @@ export default function DropdownPicker<T extends string>({
             <Animated.View
               style={[
                 styles.sheet,
+                sheetSurface(t.bg),
                 {
-                  backgroundColor: t.bg,
-                  paddingBottom: insets.bottom + 16,
+                  paddingBottom: sheetFootGap(insets.bottom) + 16,
                   transform: [{ translateY: slideY }],
                 },
               ]}
             >
-              <View style={styles.handleWrap}>
-                <View style={styles.handle} />
+              <SheetGlass />
+              <View {...drag}>
+                <View style={styles.handleWrap}>
+                  <View style={styles.handle} />
+                </View>
+                <Text style={[styles.sheetTitle, { color: t.tp }]}>{sheetTitle}</Text>
               </View>
-              <Text style={[styles.sheetTitle, { color: t.tp }]}>{sheetTitle}</Text>
 
               <View style={styles.list}>
                 {options.map(opt => {
@@ -192,6 +201,7 @@ export default function DropdownPicker<T extends string>({
                   );
                 })}
               </View>
+              <SheetCloseButton onPress={() => setOpen(false)} />
             </Animated.View>
           </View>
         </View>
@@ -233,9 +243,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 4,
   },
+  // The grabber row, with the X beside it (SheetChrome).
   handleWrap: {
-    paddingVertical: 12,
-    alignItems: "center",
+    ...SHEET_TOP_ROW,
   },
   handle: {
     width: 36,

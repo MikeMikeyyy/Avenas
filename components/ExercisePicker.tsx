@@ -26,6 +26,7 @@ import FavouriteStar from "./FavouriteStar";
 import TrashIcon from "./TrashIcon";
 import SquarePenIcon from "./SquarePenIcon";
 import BounceButton from "./BounceButton";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "./SheetChrome";
 import FilterChip from "./FilterChip";
 
 // The exercises on offer: the catalogue less the retired ones, which stay in
@@ -535,7 +536,8 @@ export default function ExercisePicker({
     >
       <View style={styles.pickerBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.pickerOverlay, { opacity: backdropOpacity }]} />
-        <Animated.View style={[styles.pickerRoot, { backgroundColor: t.bg, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.pickerRoot, sheetSurface(t.bg), { transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           {/* Drag handle */}
           <View {...panResponder.panHandlers} style={styles.pickerHandleArea}>
             <View style={styles.pickerHandle} />
@@ -552,9 +554,8 @@ export default function ExercisePicker({
                 {isChange && changing ? `REPLACING ${changing.toUpperCase()}` : subtitle}
               </Text>
             </View>
-            <TouchableOpacity onPress={dismiss} activeOpacity={0.7} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
-              <Ionicons name="close" size={22} color={t.tp} />
-            </TouchableOpacity>
+            {/* Its plain × is the glass X above now (SheetCloseButton, as
+                every pop-up's). */}
           </View>
 
           {/* Search. A filled, fully-rounded field rather than a bare row of text
@@ -672,7 +673,7 @@ export default function ExercisePicker({
           {/* Bottom bar — confirm picks OR create custom */}
           <View
             onLayout={e => setBottomBarH(e.nativeEvent.layout.height)}
-            style={[styles.customSection, { borderTopColor: t.div, paddingBottom: insets.bottom + 16 }]}
+            style={[styles.customSection, { borderTopColor: t.div, paddingBottom: sheetFootGap(insets.bottom) + 16 }]}
           >
             {pickedOrder.length > 0 ? (
               <View style={styles.confirmRow}>
@@ -739,6 +740,7 @@ export default function ExercisePicker({
               </Text>
             )}
           </View>
+          <SheetCloseButton onPress={dismiss} />
         </Animated.View>
       </View>
     </Modal>
@@ -749,9 +751,10 @@ export default function ExercisePicker({
 
 const styles = StyleSheet.create({
   pickerBackdrop:      { flex: 1, justifyContent: "flex-end" },
-  pickerOverlay:       { backgroundColor: "rgba(0,0,0,0.45)" },
+  // The dim and the grabber row with the X beside it: SheetChrome.
+  pickerOverlay:       { backgroundColor: SHEET_DIM },
   pickerRoot:          { height: "88%", borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
-  pickerHandleArea:    { paddingTop: 10, paddingBottom: 6, alignItems: "center" },
+  pickerHandleArea:    { ...SHEET_TOP_ROW },
   pickerHandle:        { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
   pickerHeader:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 },
   pickerTitle:         { fontFamily: FontFamily.bold, fontSize: 20, marginBottom: 2 },

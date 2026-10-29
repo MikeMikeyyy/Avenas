@@ -2,7 +2,10 @@
 // same four treatments the Trainer page's buttons use, so every sheet reads as
 // one stack of buttons rather than a column of cards with a pill under it.
 //
-//   default  control surface + soft shadow (a choice: a day, "Edit", "Custom Workout")
+//   default  control surface + soft shadow (a choice: a day, "Edit", "Custom Workout");
+//            `compact`, a list of them inside a card, the card's button
+//            (cardButton: a pale fill and a hairline, since white on the white
+//            card didn't show)
 //   primary  accent fill + accent glow (the sheet's main action)
 //   danger   red fill + centred halo (Delete)
 //   cancel   the app's slate button, near-black in light mode and off-white in
@@ -17,7 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import BounceButton from "./BounceButton";
 import { APP_DARK, APP_LIGHT, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT, FontFamily } from "../constants/theme";
-import { haloGlow, pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
+import { cardButton, haloGlow, pill, pillGlow, PILL_H_SM, PILL_H_XS, PILL_SHADOW } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import AppSwitch from "./AppSwitch";
 
@@ -40,7 +43,8 @@ interface Props {
   /** Dimmed and inert (a confirm with nothing to confirm yet). */
   disabled?: boolean;
   /** Shorter pill, smaller label: a list of them inside a card (the Progress
-   *  page's exercises) rather than a sheet's stack of actions. */
+   *  page's exercises) rather than a sheet's stack of actions, drawn as the
+   *  card's button (cardButton) when it's a default one. */
   compact?: boolean;
   /** Drawn after the label, e.g. the Progress page's "Swapped out" tag. */
   badge?: ReactNode;
@@ -66,6 +70,7 @@ export default function SheetPill({
     variant === "primary" ? { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }
     : variant === "danger" ? { backgroundColor: DANGER_BRIGHT, ...haloGlow(DANGER_BRIGHT, 0.5, 6, isDark) }
     : slate ? { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE, ...PILL_SHADOW }
+    : compact ? cardButton(t)
     : { backgroundColor: t.ctrl, ...PILL_SHADOW };
 
   return (
@@ -115,11 +120,15 @@ export default function SheetPill({
  * own at full size, off track SWITCH_TRACK_LIGHT in light mode, and live, so
  * touching it gets the same glass knob.
  */
-export function SheetToggle({ label, icon, value, onChange }: {
+export function SheetToggle({ label, icon, value, onChange, outline = true }: {
   label: string;
   icon?: (color: string) => ReactNode;
   value: boolean;
   onChange: (next: boolean) => void;
+  /** The grey / accent ring. Without it, off, it's a sheet button with a
+   *  switch in it: the exercise sheet's Timed Hold, among plain pills, where
+   *  the ring read as too thick (user request, 2026-10-29). */
+  outline?: boolean;
 }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -135,6 +144,7 @@ export function SheetToggle({ label, icon, value, onChange }: {
     >
       <View style={[
         s.pill, s.toggle,
+        outline ? s.outline : null,
         value
           ? { backgroundColor: `${ACCT}24`, borderColor: ACCT }
           : { backgroundColor: t.ctrl, borderColor: t.ts, ...PILL_SHADOW },
@@ -178,5 +188,6 @@ const s = StyleSheet.create({
   lineText:     { flexShrink: 1 },
   text:      { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.2 },
   sub:          { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  toggle:       { borderWidth: 1.5, gap: 10 },
+  toggle:       { gap: 10 },
+  outline:      { borderWidth: 1.5 },
 });

@@ -21,14 +21,15 @@
 // or a shadow, which would sit under it and show through: `solidStyle` (a
 // shadow, a glow) styles the solid button only.
 //
-// Its depth (user request, 2026-10-23: Bevel's and Apple's glass stood off the
-// page more, with more of a border): a bright rim round the edge with the top
-// lit and the bottom shaded inside it, drawn over the glass, and a soft shadow
-// under it, cast by the view the glass sits in, since the glass clips itself
-// (`overflow: hidden`) and would cut its own shadow off. React Native draws
-// that shadow only outside the shape, so none of it shows through the glass.
-// How strong each part is: GLASS_DEPTH (theme.ts) and GLASS_DEPTH_SHAPE
-// (buttons.ts).
+// The glass is iOS's alone, as the tab bar's is (user request, 2026-10-30:
+// ours didn't look like the tab bar or Apple's own buttons). Its shape is the
+// style's borderRadius, which expo-glass-effect hands to the glass itself
+// (UIKit's cornerConfiguration), so iOS draws its own edge highlight and
+// shadow round that shape. Never paint over it: a rim, inner shading and a
+// drop shadow of our own (added 2026-10-23 for more depth) read as a plastic
+// outline on top of the real edge. Never clip it either (`overflow: hidden`):
+// under a finger the interactive glass swells past its edge and lights where
+// it's touched, and a clip cut both off at the button's own outline.
 //
 // Chrome buttons were glass once before and went solid on 2026-09-02: they drew
 // as almost nothing over a flat page (expo-glass-effect 0.1 on SDK 54, before
@@ -43,8 +44,8 @@ import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
 
 import BounceButton from "./BounceButton";
-import { APP_DARK, APP_LIGHT, GLASS_DEPTH } from "../constants/theme";
-import { GLASS_DEPTH_SHAPE, PILL_H_XS } from "../constants/buttons";
+import { APP_DARK, APP_LIGHT } from "../constants/theme";
+import { PILL_H_XS } from "../constants/buttons";
 import { alertOffline, useOffline } from "../contexts/ConnectivityContext";
 import { useTheme } from "../contexts/ThemeContext";
 
@@ -55,16 +56,6 @@ export const GLASS = isGlassEffectAPIAvailable();
 /** How far what's on a button fades while it can't be used, as BounceButton's
  *  offline fade. */
 const DIM_OPACITY = 0.4;
-
-/** What sizes and places a surface, as against what lays out what's on it. On
- *  glass these go on the view that casts the shadow and the rest on the glass
- *  inside it, which fills it (as BounceButton splits a style). */
-const BOX_KEYS = new Set([
-  "position", "top", "right", "bottom", "left", "zIndex",
-  "margin", "marginTop", "marginBottom", "marginLeft", "marginRight", "marginHorizontal", "marginVertical",
-  "flex", "flexGrow", "flexShrink", "flexBasis", "alignSelf",
-  "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight",
-]);
 
 /** The surface alone: inside GlassButton, and for a control that only shows
  *  something (the Workout page's running clock, the timer's mode switch). */
@@ -81,45 +72,18 @@ export function GlassSurface({ tint, interactive = false, style, solidStyle, chi
 }) {
   const { isDark } = useTheme();
   if (GLASS) {
-    const flat = (StyleSheet.flatten(style) ?? {}) as Record<string, unknown>;
-    const box: Record<string, unknown> = {};
-    const inside: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(flat)) (BOX_KEYS.has(key) ? box : inside)[key] = value;
-    const radius = typeof flat.borderRadius === "number" ? flat.borderRadius : 0;
-    const depth = isDark ? GLASS_DEPTH.dark : GLASS_DEPTH.light;
-    const { rim, edge, edgeBlur, dropY, dropBlur } = GLASS_DEPTH_SHAPE;
+    // iOS's glass and nothing else: its shape is the style's borderRadius,
+    // which the glass takes natively (cornerConfiguration), not a clip.
     return (
-      <View
-        style={[
-          box as ViewStyle,
-          { borderRadius: radius, boxShadow: [{ offsetX: 0, offsetY: dropY, blurRadius: dropBlur, color: depth.drop }] },
-        ]}
+      <GlassView
+        glassEffectStyle="regular"
+        isInteractive={interactive}
+        tintColor={tint}
+        colorScheme={isDark ? "dark" : "light"}
+        style={style}
       >
-        <GlassView
-          glassEffectStyle="regular"
-          isInteractive={interactive}
-          tintColor={tint}
-          colorScheme={isDark ? "dark" : "light"}
-          style={[inside as ViewStyle, styles.fill, styles.clip]}
-        >
-          <View
-            pointerEvents="none"
-            style={[
-              StyleSheet.absoluteFill,
-              {
-                borderRadius: radius,
-                borderWidth: rim,
-                borderColor: depth.rim,
-                boxShadow: [
-                  { inset: true, offsetX: 0, offsetY: edge, blurRadius: edgeBlur, color: depth.lit },
-                  { inset: true, offsetX: 0, offsetY: -edge, blurRadius: edgeBlur, color: depth.shade },
-                ],
-              },
-            ]}
-          />
-          {children}
-        </GlassView>
-      </View>
+        {children}
+      </GlassView>
     );
   }
   const fill = tint ?? (isDark ? APP_DARK : APP_LIGHT).ctrl;
@@ -203,9 +167,6 @@ export default function GlassButton({
 }
 
 const styles = StyleSheet.create({
-  clip: { overflow: "hidden" },
-  // The glass fills the view that holds its size and casts its shadow.
-  fill: { flexGrow: 1 },
   circleContent: { flex: 1, alignItems: "center", justifyContent: "center" },
   pillContent: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
   dim: { opacity: DIM_OPACITY },

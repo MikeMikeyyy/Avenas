@@ -35,7 +35,7 @@ import * as Haptics from "expo-haptics";
 import ReuseIcon from "./icons/ReuseIcon";
 import UndoIcon from "./icons/UndoIcon";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
-import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { cardButton, CARD_BUTTON_BORDER, PILL_RADIUS } from "../constants/buttons";
 
 /** Both chip icons, one size: the pair are mirror images in the same 16×16
  *  box, so flipping between them can't change the chip's height or width. */
@@ -74,10 +74,10 @@ export function ReuseNoteChip({ value, onChange, prevNote, editable = true, isDa
   editable?: boolean;
   isDark: boolean;
 }) {
-  // The app's secondary-button look (the control surface, a soft shadow, full
-  // strength ink), so it reads as something to tap: grey text on a hairline
-  // outline looked like part of the greyed placeholder note beside it. Not
-  // accent green, which made an offer louder than the workout around it.
+  // A button inside the card (cardButton: a pale fill and a hairline) in full
+  // strength ink, so it reads as something to tap: grey text on a hairline
+  // outline alone looked like part of the greyed placeholder note beside it.
+  // Not accent green, which made an offer louder than the workout around it.
   const t = isDark ? APP_DARK : APP_LIGHT;
   const ink = t.tp;
 
@@ -97,7 +97,7 @@ export function ReuseNoteChip({ value, onChange, prevNote, editable = true, isDa
       accessibilityRole="button"
       accessibilityLabel={canReuse ? "Reuse last time's note" : "Undo reusing last time's note"}
     >
-      <View style={[styles.chip, { backgroundColor: t.ctrl }]}>
+      <View style={[styles.chip, cardButton(t)]}>
         {canReuse
           ? <ReuseIcon size={CHIP_ICON} color={ink} />
           : <UndoIcon size={CHIP_ICON} color={ink} />}
@@ -164,7 +164,8 @@ const styles = StyleSheet.create({
   // note wraps beneath the start of the text rather than squeezing the button.
   row:   { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   input: { flex: 1, fontFamily: FontFamily.regular, fontSize: 13, minHeight: 36, lineHeight: 20 },
-  chip:  { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: PILL_RADIUS, paddingHorizontal: 10, paddingVertical: 5, ...PILL_SHADOW },
+  // Its padding a point less for cardButton's hairline, so it keeps its size.
+  chip:  { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: PILL_RADIUS, paddingHorizontal: 10 - CARD_BUTTON_BORDER, paddingVertical: 5 - CARD_BUTTON_BORDER },
   chipText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   // "Undo" laid over the hidden "Reuse", pinned right within its width.
   chipOverlay: { position: "absolute", top: 0, right: 0 },

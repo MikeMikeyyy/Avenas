@@ -20,7 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import { ACCT, APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../../constants/theme";
-import { glowOpacity, pill, PILL_H_XS, PILL_SHADOW } from "../../constants/buttons";
+import { cardButton, glowOpacity, pill, PILL_H_XS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { AccountType } from "../../contexts/AccountTypeContext";
 import {
@@ -148,8 +148,8 @@ function NoticeCard({ notice, accountType, onResolved, onChanged }: {
                 style={[
                   styles.btn,
                   b.tone === "primary"
-                    ? { backgroundColor: ACCT, shadowColor: ACCT, shadowOpacity: glowOpacity(0.35, isDark) }
-                    : { backgroundColor: t.ctrl },
+                    ? { backgroundColor: ACCT, ...PILL_SHADOW, shadowColor: ACCT, shadowOpacity: glowOpacity(0.35, isDark) }
+                    : cardButton(t),
                   busy && styles.busy,
                 ]}
               >
@@ -195,7 +195,8 @@ const styles = StyleSheet.create({
   title:    { fontFamily: FontFamily.bold, fontSize: 15, flexShrink: 1 },
   body:     { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
   buttons:  { flexDirection: "row", gap: 10, marginTop: 6 },
-  btn:      { ...pill(PILL_H_XS), ...PILL_SHADOW },
+  // The green one glows; the rest are the card's buttons (cardButton).
+  btn:      { ...pill(PILL_H_XS) },
   btnText:  { fontFamily: FontFamily.bold, fontSize: 14 },
   busy:     { opacity: 0.5 },
 });

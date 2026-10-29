@@ -16,7 +16,7 @@ import BounceButton from "../BounceButton";
 import Avatar from "../Avatar";
 import GroupAvatar from "./GroupAvatar";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
-import { pillGlow, PILL_RADIUS, PILL_SHADOW } from "../../constants/buttons";
+import { cardButton, pillGlow, PILL_RADIUS } from "../../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_TITLE, CARD_TOP } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { GroupInvite } from "../../constants/groups";
@@ -62,7 +62,7 @@ export default function GroupInviteCard({ invite, onAccept, onDecline }: {
 
         <View style={styles.actions}>
           <BounceButton style={{ flex: 1 }} onPress={tap(onDecline)} accessibilityLabel={`Decline ${invite.name}`}>
-            <View style={[styles.btn, { backgroundColor: t.ctrl }]}>
+            <View style={[styles.btn, cardButton(t)]}>
               <Text style={[styles.btnText, { color: t.tp }]}>Decline</Text>
             </View>
           </BounceButton>
@@ -87,6 +87,7 @@ const styles = StyleSheet.create({
   fromInitials: { fontFamily: FontFamily.bold, fontSize: 10 },
   fromText: { fontFamily: FontFamily.regular, fontSize: 12, flex: 1 },
   actions:  { flexDirection: "row", gap: 10 },
-  btn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
+  // Join glows green; Decline is the card's button (cardButton).
+  btn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS },
   btnText:  { fontFamily: FontFamily.bold, fontSize: 14 },
 });

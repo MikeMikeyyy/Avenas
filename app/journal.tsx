@@ -36,6 +36,7 @@ import JournalWorkoutCard, { useJournalWorkoutInfo } from "../components/journal
 import JournalProgramsBlock from "../components/journal/JournalProgramsBlock";
 import SessionFilter, { RecentActivityHeading, SessionGroupHeading, useSessionFilter } from "../components/journal/SessionFilter";
 import SheetPill from "../components/SheetPill";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
 import SquarePenIcon from "../components/SquarePenIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
 import { glowOpacity } from "../constants/buttons";
@@ -150,7 +151,8 @@ function DeleteSheet({ visible, isDark, entryTitle, onConfirm, onClose, title = 
       <TouchableWithoutFeedback onPress={dismiss}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOpacity }]} />
       </TouchableWithoutFeedback>
-      <Animated.View style={[styles.deleteSheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 12, transform: [{ translateY: slideY }] }]}>
+      <Animated.View style={[styles.deleteSheet, sheetSurface(t.bg), { paddingBottom: sheetFootGap(insets.bottom) + 12, transform: [{ translateY: slideY }] }]}>
+        <SheetGlass />
         <View {...panResponder.panHandlers}>
           <View style={styles.handleArea}><View style={styles.handle} /></View>
         </View>
@@ -164,6 +166,7 @@ function DeleteSheet({ visible, isDark, entryTitle, onConfirm, onClose, title = 
           <SheetPill label="Delete" variant="danger" onPress={() => { onConfirm(); dismiss(); }} />
           <SheetPill label="Cancel" variant="cancel" onPress={dismiss} />
         </View>
+        <SheetCloseButton onPress={dismiss} />
       </Animated.View>
     </Modal>
   );
@@ -423,12 +426,14 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
         <View style={{ flex: 1, justifyContent: "flex-end" }}>
           <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOpacity }]} />
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={dismiss} />
-          <Animated.View style={[styles.pickerSheet, { backgroundColor: t.bg, paddingBottom: insets.bottom + 8, transform: [{ translateY: slideY }] }]}>
+          <Animated.View style={[styles.pickerSheet, sheetSurface(t.bg), { paddingBottom: sheetFootGap(insets.bottom) + 8, transform: [{ translateY: slideY }] }]}>
+            <SheetGlass />
             <View {...panResponder.panHandlers}>
               <View style={styles.handleArea}><View style={styles.handle} /></View>
             </View>
             {renderStep()}
             <View style={{ height: 8 }} />
+            <SheetCloseButton onPress={dismiss} />
           </Animated.View>
         </View>
       </KeyboardAvoidingView>
@@ -781,8 +786,9 @@ const styles = StyleSheet.create({
   entryDot:     { fontFamily: FontFamily.regular, fontSize: 12, color: DIV },
 
   // Bottom sheet shared
-  backdrop:    { backgroundColor: "rgba(0,0,0,0.45)" },
-  handleArea:  { alignItems: "center", paddingTop: 12, paddingBottom: 8 },
+  // The sheets' dim and grabber row with the X beside it: SheetChrome.
+  backdrop:    { backgroundColor: SHEET_DIM },
+  handleArea:  { ...SHEET_TOP_ROW },
   handle:      { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
 
   // Delete sheet

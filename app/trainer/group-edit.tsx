@@ -1,7 +1,11 @@
 // Create a group, or manage an existing one.
 //
 // One screen for both: with no `id` param it creates (name + pick members),
-// with an `id` it edits. A member who isn't the owner gets the same screen in
+// with an `id` it edits. People are lines in one card, as the group page lists
+// its members (user request and pick, 2026-10-30: a card each was too much):
+// the owner's members card ticks people to remove (red, Save asks first), and
+// an Add People card below it ticks connections to add (green), the group
+// page's add button landing here too. A member who isn't the owner gets the same screen in
 // read-only form — they can see who else is in the group but not change it,
 // which matches what the RLS actually allows (owner-only membership writes).
 //
@@ -43,8 +47,9 @@ import SearchField from "../../components/SearchField";
 import FavouriteStar from "../../components/FavouriteStar";
 import GroupMemberSheet from "../../components/trainer/GroupMemberSheet";
 import PeopleIcon from "../../components/icons/PeopleIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT, ON_FILL } from "../../constants/theme";
-import { darkGlow, glowOpacity, haloGlow, PILL_RADIUS } from "../../constants/buttons";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT, ON_FILL, dangerTextColor, roleColor, roleTextColor } from "../../constants/theme";
+import { darkGlow, haloGlow, PILL_RADIUS } from "../../constants/buttons";
+import { CARD_TITLE, SUMMARY_ROW } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
 import { useAuth } from "../../contexts/AuthContext";
@@ -53,12 +58,70 @@ import { getMyUid, isCloudContactId } from "../../lib/chat";
 import { AVATAR_PHOTO, pickSquarePhoto } from "../../lib/photoPicker";
 import { resolveTrainerRoster } from "../../utils/roster";
 import { loadBlockedIds } from "../../utils/moderation";
-import { loadFavouriteMemberIds, sortByFavourite, toggleFavouriteMember } from "../../utils/groupStore";
+import { groupMemberOrder, loadFavouriteMemberIds, toggleFavouriteMember } from "../../utils/groupStore";
 import { dropGroupPage, peekGroupPage } from "../../utils/groupPage";
 import type { Client } from "../../utils/trainerStore";
-import { GROUP_FULL_MESSAGE, GROUP_FULL_TITLE, GROUP_LIMIT_TITLE, MAX_GROUP_MEMBERS, canCoachGroup, groupLimitMessage, type GroupMember } from "../../constants/groups";
+import { GROUP_FULL_MESSAGE, GROUP_FULL_TITLE, GROUP_LIMIT_TITLE, MAX_GROUP_MEMBERS, ROLE_LABEL, canCoachGroup, groupLimitMessage, type GroupMember } from "../../constants/groups";
 import { alertMessage } from "../../utils/errors";
 import BackButton, { BACK_SIZE, BACK_TOP, BACK_LEFT } from "../../components/BackButton";
+
+/** A tag after a person's name: their role in the group, an unanswered invite,
+ *  NOT CONNECTED. */
+type RowTag = { label: string; fill: string; ink: string };
+
+/** One person's line in a card, as the group page draws its members: their
+ *  face, their name and its tags, and what ends the line (a tick, a chevron). */
+function PersonRow({ person, first, tags, faded, end, onPress, accessibilityLabel, accessibilityState }: {
+  person: { id: string; name: string; initials: string; photoUri?: string };
+  /** The card's first line has no hairline above it. */
+  first: boolean;
+  tags: RowTag[];
+  /** Greyed: a member ticked to be removed. */
+  faded?: boolean;
+  end?: React.ReactNode;
+  onPress?: () => void;
+  accessibilityLabel: string;
+  accessibilityState?: { checked?: boolean };
+}) {
+  const { isDark } = useTheme();
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={!onPress}
+      activeOpacity={0.7}
+      accessibilityRole={onPress ? "button" : "text"}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={accessibilityState}
+      style={[styles.row, !first && { borderTopWidth: 1, borderTopColor: t.div }]}
+    >
+      <Avatar uri={person.photoUri} initials={person.initials} size={36} colorKey={person.id} textStyle={styles.avatarText} />
+      <View style={styles.rowNameLine}>
+        <Text style={[styles.rowTitle, styles.rowName, { color: faded ? t.ts : t.tp }]} numberOfLines={1}>{person.name}</Text>
+        {tags.map(tag => (
+          <View key={tag.label} style={[styles.tag, { backgroundColor: tag.fill }]}>
+            <Text style={[styles.tagText, { color: tag.ink }]}>{tag.label}</Text>
+          </View>
+        ))}
+      </View>
+      {end}
+    </TouchableOpacity>
+  );
+}
+
+/** The round tick ending a line: green to add someone, red to remove them. */
+function Tick({ on, tone }: { on: boolean; tone: "add" | "remove" }) {
+  const { isDark } = useTheme();
+  const color = tone === "add" ? ACCT : DANGER_BRIGHT;
+  return (
+    <View style={[styles.check, on
+      ? { backgroundColor: color, borderColor: color, ...haloGlow(color, 0.5, 6, isDark) }
+      : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
+    ]}>
+      {on && <Ionicons name="checkmark" size={14} color={ON_FILL} />}
+    </View>
+  );
+}
 
 export default function GroupEditScreen() {
   const router = useRouter();
@@ -78,7 +141,12 @@ export default function GroupEditScreen() {
   const [name, setName] = useState("");
   /** The name as saved, for the delete prompt: the field may hold an edit. */
   const [savedName, setSavedName] = useState("");
+  /** Connections who aren't in the group: the ones that can be added. */
   const [candidates, setCandidates] = useState<Client[]>([]);
+  /** Any connections at all, in the group or not (the add card's empty line). */
+  const [hasConnections, setHasConnections] = useState(false);
+  /** Who's in the group once saved, the owner aside. A member ticked to be
+   *  removed is out of it; a connection ticked to be added is in. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [members, setMembers] = useState<GroupMember[]>([]);
   /** Members listed in the picker who are no longer connections. */
@@ -157,21 +225,20 @@ export default function GroupEditScreen() {
           setSelected(new Set(roster.filter(m => m.id !== uid).map(m => m.id)));
         }
 
-        // Everyone already in the group is listed too, connected or not.
+        // The members card lists everyone in the group, connected or not.
         // Removing a connection (from either side) or blocking someone leaves
         // their membership in place, and a picker built from connections alone
         // hid them: MEMBERS (2) over one row, and no way to take the other out.
-        // They can be unticked like anyone else, but not added back until you
-        // connect again, which is what their tag says.
+        // They can be ticked off like anyone else, but not added back until
+        // you connect again, which is what their tag says.
         const unconnected = roster.filter(m => m.id !== uid && !m.isOwner && !byId.has(m.id));
         setNotConnected(new Set(unconnected.map(m => m.id)));
-        // Alphabetical: the buckets arrive in their own orders, and a list that
-        // changes order depending on which one someone came from reads as
-        // random to the person scrolling it.
-        setCandidates([
-          ...byId.values(),
-          ...unconnected.map(m => ({ id: m.id, name: m.name, initials: m.initials, photoUri: m.photoUri })),
-        ].sort((a, b) => a.name.localeCompare(b.name)));
+        setHasConnections(byId.size > 0);
+        // Who can be added: your connections who aren't in it yet. Alphabetical:
+        // the buckets arrive in their own orders, and a list that changes order
+        // depending on which one someone came from reads as random.
+        const inGroup = new Set(roster.map(m => m.id));
+        setCandidates([...byId.values()].filter(c => !inGroup.has(c.id)).sort((a, b) => a.name.localeCompare(b.name)));
       } catch (err) {
         if (__DEV__) console.warn("[avenas] load group edit", err);
         if (!cancelled) Alert.alert("Couldn't load", "Check your connection and try again.");
@@ -184,9 +251,11 @@ export default function GroupEditScreen() {
 
   const toggle = useCallback((clientId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Room for one more? The owner counts, and so does everyone ticked here,
-    // invited or joined (0042). Unticking is always allowed, so a group already
-    // over the limit can be brought back under it.
+    // Puts someone in the group as saved, or takes them out: a connection
+    // ticked to be added, a member ticked to be removed (or either unticked).
+    // Room for one more? The owner counts, and so does everyone staying or
+    // added, invited or joined (0042). Taking someone out is always allowed,
+    // so a group already over the limit can be brought back under it.
     if (!selected.has(clientId) && selected.size + 1 >= MAX_GROUP_MEMBERS) {
       Alert.alert(GROUP_FULL_TITLE, GROUP_FULL_MESSAGE);
       return;
@@ -269,13 +338,13 @@ export default function GroupEditScreen() {
     else Keyboard.dismiss();
   }, [closeSearch]);
 
-  // The group page's order: starred people first, oldest star at the top, then
-  // the roster's own (owner, trainers, then by name), sorted after the search
-  // has filtered it.
+  // The group page's order: the owner at the top, then trainers, then everyone
+  // else, each starred first (groupMemberOrder), sorted after the search has
+  // filtered it.
   const visibleMembers = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matched = q ? members.filter(m => m.name.toLowerCase().includes(q)) : members;
-    return sortByFavourite(matched, favourites);
+    return groupMemberOrder(matched, favourites);
   }, [members, query, favourites]);
 
   // The keyboard goes first: a search left it up, and the sheet would open
@@ -300,6 +369,26 @@ export default function GroupEditScreen() {
   /** Owner or trainer here: the group page's test for "Open client page". The
    *  role decides, not the account type. */
   const iCoachGroup = canCoachGroup(members.find(m => m.id === myUid)?.role ?? "member");
+
+  // A member's tag, the group page's: my own says it's me, an unanswered invite
+  // says so, anyone else shows their role in the group.
+  const roleTag = (m: GroupMember): RowTag => {
+    const isMe = m.id === myUid;
+    const shown = isMe || m.accepted;
+    return {
+      label: isMe ? `YOU · ${ROLE_LABEL[m.role]}` : m.accepted ? ROLE_LABEL[m.role] : "INVITED",
+      fill: shown ? `${roleColor(m.role)}22` : t.div,
+      ink: shown ? roleTextColor(m.role, isDark) : t.ts,
+    };
+  };
+  const notConnectedTag: RowTag = { label: "NOT CONNECTED", fill: t.div, ink: t.ts };
+  // A connection who's a trainer, in the trainer role's colours, so it reads
+  // the same as a trainer in the members card above it.
+  const trainerTag: RowTag = { label: "TRAINER", fill: `${roleColor("trainer")}22`, ink: roleTextColor("trainer", isDark) };
+
+  /** Members ticked to be removed, and connections ticked to be added. */
+  const removing = members.filter(m => m.id !== myUid && !m.isOwner && !selected.has(m.id)).length;
+  const adding = candidates.filter(c => selected.has(c.id)).length;
 
   const trimmed = name.trim();
   const canSave = trimmed.length > 0 && !busy && !deleting;
@@ -487,10 +576,51 @@ export default function GroupEditScreen() {
                 />
               </NeuCard>
 
+              {/* Each person a line in one card, as the group page lists its
+                  members (user request, 2026-10-30: a card each was too much).
+                  The page scrolls them, however many there are. */}
+              {!isNew && (
+                <>
+                  <Text style={[styles.label, { color: t.ts, marginTop: 24 }]}>
+                    {`MEMBERS (${members.length})`}
+                  </Text>
+                  <NeuCard dark={isDark} radius={16}>
+                    {visibleMembers.map((m, i) => {
+                      // Mine has no tick: the owner can't leave their own group.
+                      if (m.id === myUid || m.isOwner) {
+                        return <PersonRow key={m.id} person={m} first={i === 0} tags={[roleTag(m)]} accessibilityLabel={`${m.name}, ${roleTag(m).label.toLowerCase()}`} />;
+                      }
+                      const leaving = !selected.has(m.id);
+                      return (
+                        <PersonRow
+                          key={m.id}
+                          person={m}
+                          first={i === 0}
+                          tags={notConnected.has(m.id) ? [roleTag(m), notConnectedTag] : [roleTag(m)]}
+                          faded={leaving}
+                          end={<Tick on={leaving} tone="remove" />}
+                          onPress={() => toggle(m.id)}
+                          accessibilityLabel={`${leaving ? "Keep" : "Remove"} ${m.name}`}
+                          accessibilityState={{ checked: leaving }}
+                        />
+                      );
+                    })}
+                  </NeuCard>
+                  <Text style={[styles.hint, { color: removing > 0 ? dangerTextColor(isDark) : t.ts }]}>
+                    {removing > 0
+                      ? `${removing === 1 ? "1 person" : `${removing} people`} will be removed when you save.`
+                      : "Tick anyone you want to remove."}
+                  </Text>
+                </>
+              )}
+
+              {/* The people who can be added: your connections who aren't in
+                  it yet, ticked to join it. On a new group, they're the whole
+                  list, under its MEMBERS count. */}
               <Text style={[styles.label, { color: t.ts, marginTop: 24 }]}>
-                {`MEMBERS (${selected.size})`}
+                {isNew ? `MEMBERS (${selected.size})` : adding > 0 ? `ADD PEOPLE (${adding})` : "ADD PEOPLE"}
               </Text>
-              {candidates.length === 0 ? (
+              {isNew && !hasConnections ? (
                 <NeuCard dark={isDark} radius={16}>
                   <View style={styles.emptyInner}>
                     <View style={[styles.emptyIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.1)" : "rgba(29,236,160,0.14)" }]}>
@@ -503,49 +633,29 @@ export default function GroupEditScreen() {
                   </View>
                 </NeuCard>
               ) : (
-                candidates.map(c => {
-                  const checked = selected.has(c.id);
-                  return (
-                    <TouchableOpacity
-                      key={c.id}
-                      activeOpacity={0.85}
-                      style={{ marginBottom: 10 }}
-                      onPress={() => toggle(c.id)}
-                      accessibilityRole="button"
-                      accessibilityState={{ checked }}
-                      accessibilityLabel={`${checked ? "Remove" : "Add"} ${c.name}`}
-                    >
-                      <NeuCard dark={isDark} radius={14}>
-                        <View style={styles.row}>
-                          <Avatar
-                            uri={c.photoUri}
-                            initials={c.initials}
-                            size={40}
-                            colorKey={c.id}
-                            textStyle={styles.avatarText}
-                          />
-                          <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
-                          {c.isTrainer && (
-                            <View style={[styles.ownerTag, { backgroundColor: `${ACCT}22` }]}>
-                              <Text style={[styles.ownerTagText, { color: ACCT }]}>TRAINER</Text>
-                            </View>
-                          )}
-                          {notConnected.has(c.id) && (
-                            <View style={[styles.ownerTag, { backgroundColor: t.div }]}>
-                              <Text style={[styles.ownerTagText, { color: t.ts }]}>NOT CONNECTED</Text>
-                            </View>
-                          )}
-                          <View style={[styles.check, checked
-                            ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
-                            : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
-                          ]}>
-                            {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
-                          </View>
-                        </View>
-                      </NeuCard>
-                    </TouchableOpacity>
-                  );
-                })
+                <NeuCard dark={isDark} radius={16}>
+                  {candidates.length === 0 ? (
+                    <Text style={[styles.emptyLine, { color: t.ts }]}>
+                      {hasConnections
+                        ? "Everyone you're connected with is in this group."
+                        : "Connect with someone by code or QR to add them."}
+                    </Text>
+                  ) : candidates.map((c, i) => {
+                    const joining = selected.has(c.id);
+                    return (
+                      <PersonRow
+                        key={c.id}
+                        person={c}
+                        first={i === 0}
+                        tags={c.isTrainer ? [trainerTag] : []}
+                        end={<Tick on={joining} tone="add" />}
+                        onPress={() => toggle(c.id)}
+                        accessibilityLabel={`${joining ? "Don't add" : "Add"} ${c.name}`}
+                        accessibilityState={{ checked: joining }}
+                      />
+                    );
+                  })}
+                </NeuCard>
               )}
 
               <BounceButton style={{ marginTop: 22 }} onPress={canSave ? onSave : undefined} accessibilityLabel={ctaLabel}>
@@ -593,44 +703,34 @@ export default function GroupEditScreen() {
               {visibleMembers.length === 0 && query.trim() ? (
                 <Text style={[styles.noMatch, { color: t.ts }]}>No members match “{query.trim()}”.</Text>
               ) : null}
-              {visibleMembers.map(m => {
-                // Everyone but me opens their sheet, the group page's: starring,
-                // and Report (group members see each other's names and photos
-                // without being connected, Apple Guideline 1.2).
-                const isMe = m.id === myUid;
-                return (
-                  <TouchableOpacity
-                    key={m.id}
-                    activeOpacity={0.85}
-                    style={{ marginBottom: 10 }}
-                    onPress={isMe ? undefined : () => openMember(m)}
-                    disabled={isMe}
-                    accessibilityRole={isMe ? "text" : "button"}
-                    accessibilityLabel={m.isOwner ? `${m.name}, trainer` : m.name}
-                  >
-                    <NeuCard dark={isDark} radius={14}>
-                      <View style={styles.row}>
-                        <Avatar
-                          uri={m.photoUri}
-                          initials={m.initials}
-                          size={40}
-                          colorKey={m.id}
-                          textStyle={styles.avatarText}
-                        />
-                        <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{m.name}</Text>
-                        {m.isOwner && (
-                          <View style={[styles.ownerTag, { backgroundColor: `${ACCT}22` }]}>
-                            <Text style={[styles.ownerTagText, { color: ACCT }]}>TRAINER</Text>
-                          </View>
+              {visibleMembers.length > 0 && (
+                <NeuCard dark={isDark} radius={16}>
+                  {visibleMembers.map((m, i) => {
+                    // Everyone but me opens their sheet, the group page's:
+                    // starring, and Report (group members see each other's names
+                    // and photos without being connected, Apple Guideline 1.2).
+                    const isMe = m.id === myUid;
+                    const tag = roleTag(m);
+                    return (
+                      <PersonRow
+                        key={m.id}
+                        person={m}
+                        first={i === 0}
+                        tags={[tag]}
+                        end={isMe ? null : (
+                          <>
+                            {/* Display only, once starred: starring is in their sheet. */}
+                            {favourites.has(m.id) ? <FavouriteStar size={15} /> : null}
+                            <Ionicons name="chevron-forward" size={16} color={t.ts} />
+                          </>
                         )}
-                        {/* Display only, once starred: starring is in their sheet. */}
-                        {!isMe && favourites.has(m.id) ? <FavouriteStar size={15} /> : null}
-                        {!isMe ? <Ionicons name="chevron-forward" size={16} color={t.ts} /> : null}
-                      </View>
-                    </NeuCard>
-                  </TouchableOpacity>
-                );
-              })}
+                        onPress={isMe ? undefined : () => openMember(m)}
+                        accessibilityLabel={`${m.name}, ${tag.label.toLowerCase()}`}
+                      />
+                    );
+                  })}
+                </NeuCard>
+              )}
             </>
           )}
         </ScrollView>
@@ -673,12 +773,19 @@ const styles = StyleSheet.create({
   cameraBadge:  { position: "absolute", bottom: 0, right: 0, width: 32, height: 32, borderRadius: 16, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   photoNote:    { fontFamily: FontFamily.regular, fontSize: 12 },
 
-  row:          { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  rowTitle:     { flex: 1, fontFamily: FontFamily.semibold, fontSize: 15 },
-  avatarText:   { fontFamily: FontFamily.bold, fontSize: 14 },
+  // A person's line: the group page's member row, in one card.
+  row:          { ...SUMMARY_ROW, paddingVertical: 12 },
+  rowNameLine:  { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 6 },
+  rowTitle:     { ...CARD_TITLE },
+  rowName:      { flexShrink: 1 },
+  avatarText:   { fontFamily: FontFamily.bold, fontSize: 13 },
   check:        { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-  ownerTag:     { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  ownerTagText: { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
+  tag:          { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  tagText:      { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
+  // Under the members card: what ticking does, or how many it will remove.
+  hint:         { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 8, marginLeft: 4 },
+  // The add card with nobody to add.
+  emptyLine:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", padding: 18 },
 
   emptyInner:   { padding: 24, alignItems: "center", gap: 10 },
   emptyIcon:    { width: 56, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },

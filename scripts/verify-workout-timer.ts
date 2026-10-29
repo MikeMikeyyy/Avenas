@@ -222,7 +222,7 @@ const buttons = (v: DialView) => [v.less, v.main, v.more, v.reset];
   eq(dial({ rest, now: T + s(45) }).fraction, 0.5, "dial: the rest's ring drains with it");
   eq(dial({ rest, countdown: running, now: T + s(10) }).source, "rest", "dial: a rest wins over your running countdown");
   const longer = dial({ rest: { active: true, endsAt: T + s(105), totalSec: 90 }, now: T });
-  eq([longer.time, longer.fraction, longer.litTicks], ["01:45", 1, 60], "dial: +15s past the rest's length shows the time, the ring stays full");
+  eq([longer.time, longer.fraction, longer.litTicks], ["01:45", 1, 46], "dial: +15s past the rest's length shows the time, the ring stays full, the ticks its minute");
   eq(dial({ rest: { active: true, endsAt: T - 200, totalSec: 90 }, now: T }).time, "00:00", "dial: a rest a moment past its end reads 00:00, never negative");
   eq(dial({ rest: { active: true, endsAt: T + s(30), totalSec: 0 }, now: T }).fraction, 0, "dial: a rest with no length draws no ring, not NaN");
 
@@ -279,6 +279,27 @@ const buttons = (v: DialView) => [v.less, v.main, v.more, v.reset];
   }
   eq(cdInLine, true, "ticks: on a one-minute countdown, lit to the second the time shows, all the way down");
   eq(dial({ countdown: cd, now: T + s(45) }).litTicks, 16, "ticks: 00:15 left, lit to the quarter");
+
+  // Longer than a minute, the ticks are a minute clock and the ring the whole
+  // time (user report, 2026-10-29: on a 5 minute timer they went round once in
+  // the 5 minutes, with the ring, so the two drew the same thing).
+  const five = startCountdown(newCountdown(300), T);
+  let fiveInLine = true;
+  for (let ms = 0; ms < 300_000; ms += 250) {
+    const v = dial({ countdown: five, now: T + ms });
+    const ss = Number(v.time.slice(-2));
+    if (v.litTicks !== (ss === 0 ? 60 : ss + 1)) { fiveInLine = false; break; }
+  }
+  eq(fiveInLine, true, "ticks: on a 5 minute countdown, round once a minute, lit to the seconds the time shows");
+  const fiveAt = (sec: number) => dial({ countdown: five, now: T + sec * 1000 });
+  eq([fiveAt(30).time, fiveAt(30).fraction, fiveAt(30).litTicks], ["04:30", 0.9, 31], "ticks: 04:30 left, the ring nearly full, the ticks at the half");
+  eq([fiveAt(60).time, fiveAt(60).litTicks], ["04:00", 60], "ticks: on the minute, a whole minute to go, all lit");
+  eq([fiveAt(61).time, fiveAt(61).litTicks], ["03:59", 60], "ticks: 03:59, the new minute starts full");
+  eq([fiveAt(299.5).time, fiveAt(299.5).litTicks], ["00:01", 2], "ticks: the last second, the top two");
+  eq(dial({ countdown: newCountdown(150) }).litTicks, 31, "ticks: ready at 02:30, lit to the half");
+  const longRest: RestState = { active: true, endsAt: T + s(180), totalSec: 180 };
+  const restAt = dial({ rest: longRest, now: T + s(45) });
+  eq([restAt.time, restAt.fraction, restAt.litTicks], ["02:15", 0.75, 16], "ticks: a 3 minute rest at 02:15, the ring three quarters, the ticks at the quarter");
 
   // The ring's run, which the dial plays on the UI thread.
   eq(swAt(5).ring, { kind: "sweep", zeroAt: T }, "ring: a running stopwatch goes round from when it read 0");

@@ -28,10 +28,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, PAUSED_ORANGE, SET_INPUT_DARK } from "../constants/theme";
-import { darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, NEU_BG, NEU_BG_DARK, ON_FILL, PAUSED_ORANGE, WARMUP_ORANGE, accentTextColor, tipFill } from "../constants/theme";
+import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H_CHIP, PILL_H_SM, PILL_RADIUS, setInputSurface } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
-import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WORKOUT_DAY_OVERRIDE_KEY, NEW_PROGRAM_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
+import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WARMUP_TIP_KEY, WORKOUT_DAY_OVERRIDE_KEY, NEW_PROGRAM_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
 import { activateProgram, type FinishedProgram } from "../utils/programLifecycle";
 import { marksAfterEdit } from "../utils/skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -39,12 +39,16 @@ import { awardProgramAchievement } from "../utils/achievementStore";
 import { batchKeyOf, loadGroupReviewPrograms, loadSentPrograms, loadSharedPrograms, updateSentProgram, updateSharedProgramBatch, type SentProgram, type SharedProgram } from "../utils/trainerStore";
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
-import DeleteCircleButton, { DELETE_CIRCLE_SIZE } from "../components/DeleteCircleButton";
 import BounceButton from "../components/BounceButton";
 import GlassButton from "../components/GlassButton";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
+import ExpandReveal, { REVEAL_HEIGHT_MS, useReveal } from "../components/ExpandReveal";
+import NumberBadge from "../components/NumberBadge";
+import ReorderExercisesSheet, { DragHandleIcon, ReorderExerciseList } from "../components/ReorderExercisesSheet";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetSurface } from "../components/SheetChrome";
+import { GuideBody, GuideDemo, GuideGotIt, GuideOverlay, GuideTitle } from "../components/GuideCard";
 import DumbbellIcon from "../components/DumbbellIcon";
 import PenIcon from "../components/PenIcon";
 import ExerciseImage from "../components/ExerciseImage";
@@ -101,14 +105,6 @@ function KeyboardDismissIcon({ color }: { color: string }) {
       <Path d="M2 2.5C2 1.67 2.67 1 3.5 1h19c.83 0 1.5.67 1.5 1.5v10c0 .83-.67 1.5-1.5 1.5h-19C2.67 14 2 13.33 2 12.5v-10z" stroke={color} strokeWidth="1.4"/>
       <Path d="M6 5.5h1.2M10 5.5h1.2M14 5.5h1.2M18 5.5h1.2M6 8.5h1.2M10 8.5h1.2M14 8.5h1.2M18 8.5h1.2M8 11.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
       <Path d="M13 16v4M10.5 18.5l2.5 2.5 2.5-2.5" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-    </Svg>
-  );
-}
-
-function DragHandleIcon({ color }: { color: string }) {
-  return (
-    <Svg width={16} height={12} viewBox="0 0 16 12" fill="none">
-      <Path d="M1 1.5h14M1 6h14M1 10.5h14" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
     </Svg>
   );
 }
@@ -182,9 +178,91 @@ function formatRest(secs: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
-// ─── Exercise Row ─────────────────────────────────────────────────────────────
+// ─── Warm-up tip ──────────────────────────────────────────────────────────────
 
-const WARMUP_ORANGE = "#ffbf0f";
+// A set's number badge, and its inset from the left of its row (the badge
+// column's padding). The warm-up tip's pointer lands on the badge's centre.
+const SET_BADGE_SIZE = 28;
+const SET_BADGE_INSET = 10;
+// The pointer is a small square turned 45°, centred on the tip's top edge;
+// REACH is how far its point stands above that edge (half its diagonal).
+const TIP_POINTER = 10;
+const TIP_POINTER_REACH = 8;
+// It unfolds this long after it mounts, so it opens in view rather than
+// arriving with the page or with the exercise it's under.
+const TIP_OPEN_DELAY_MS = 400;
+
+type WarmupTipPhase = "open" | "closing";
+
+/**
+ * The first-time tip that tapping a set's number switches it between a
+ * working set and a warm-up (user request, 2026-10-29). It sits under the
+ * first exercise's sets on the page, pointing up at their numbers, and
+ * unfolds a moment after it mounts. Once it's done with (Got it, or any set
+ * switched) the screen sets it "closing": it folds away, then unmounts.
+ */
+function WarmupTip({ open, isDark, onDone }: { open: boolean; isDark: boolean; onDone: () => void }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const fill = tipFill(isDark);
+  // The demo badges sit on the card's own colour, as the real ones do.
+  const card = isDark ? NEU_BG_DARK : NEU_BG;
+  const reveal = useReveal();
+  useEffect(() => {
+    if (!open) { reveal.setOpen(false); return; }
+    const timer = setTimeout(() => reveal.setOpen(true), TIP_OPEN_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [open, reveal]);
+
+  return (
+    <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open}>
+      <View style={styles.tipWrap}>
+        <View style={[styles.tipPointer, { backgroundColor: fill }]} />
+        <View style={[styles.tipBox, { backgroundColor: fill }]}>
+          <View style={styles.tipHead}>
+            <View style={styles.tipDemo} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              <View style={[styles.exSetBadge, { backgroundColor: card, borderColor: t.div }]}>
+                <Text style={[styles.exSetBadgeText, { color: t.tp }]}>1</Text>
+              </View>
+              <Ionicons name="swap-horizontal" size={16} color={t.ts} />
+              <View style={[styles.exSetBadge, { backgroundColor: card, borderColor: WARMUP_ORANGE }]}>
+                <Text style={[styles.exSetBadgeText, { color: WARMUP_ORANGE }]}>W</Text>
+              </View>
+            </View>
+            <Text style={[styles.tipTitle, { color: t.tp }]}>Warm-up sets</Text>
+          </View>
+          <View style={styles.tipFoot}>
+            <Text style={[styles.tipBody, { color: t.ts }]}>
+              Tap a set&apos;s number to make it a warm-up. Tap it again to make it a working set.
+            </Text>
+            <BounceButton onPress={onDone} accessibilityLabel="Got it" accessibilityRole="button">
+              <View style={[styles.tipBtn, cardButton(t)]}>
+                <Text style={[styles.tipBtnText, { color: accentTextColor(isDark) }]}>Got it</Text>
+              </View>
+            </BounceButton>
+          </View>
+        </View>
+      </View>
+    </ExpandReveal>
+  );
+}
+
+// ─── First-time guide pop-up ──────────────────────────────────────────────────
+
+/**
+ * A first-time guide of the builder's (tap-a-day, Add Exercise): the shared
+ * guide card (components/GuideCard.tsx: glass, the X counting as Got it) in a
+ * Modal of its own, which doesn't animate: the card grows in and its dim
+ * fades on a layer of its own, since glass draws wrongly under a fading parent.
+ */
+function GuidePopup({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <GuideOverlay onClose={onClose}>{children}</GuideOverlay>
+    </Modal>
+  );
+}
+
+// ─── Exercise Row ─────────────────────────────────────────────────────────────
 
 interface ExerciseRowProps {
   day: string;
@@ -205,6 +283,11 @@ interface ExerciseRowProps {
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   /** Lowercased exercise name → custom photo URI, for custom exercises. */
   customImageById: Record<string, string>;
+  /** The warm-up tip under this exercise's sets, open or folding away: the
+   *  first exercise on the page only, null on every other. */
+  warmupTip: WarmupTipPhase | null;
+  /** Ends the warm-up tip for good: its Got it, or any set switched. */
+  onWarmupTipDone: () => void;
 }
 
 /**
@@ -263,11 +346,13 @@ function WeightSetInput({
 // exercise's row, not every row in the day. All function props are stable, and
 // updateExerciseSets preserves the identity of untouched Exercise objects, so
 // the shallow compare bails for every row except the one being edited.
-const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExercises, isDark, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onStartCollapse, onOpenReorder, onEditExercise, onInputFocus, customImageById }: ExerciseRowProps) {
+const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExercises, isDark, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onStartCollapse, onOpenReorder, onEditExercise, onInputFocus, customImageById, warmupTip, onWarmupTipDone }: ExerciseRowProps) {
   const router = useRouter();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+  // The target boxes, as the Workout tab draws a set's boxes (setInputSurface).
+  const inputSurface = setInputSurface(t, isDark);
   const restSecs = exercise.restSeconds ?? 0;
   const sets = normaliseSets(exercise);
 
@@ -510,14 +595,23 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
 
       {/* Row 2: compact rest timer chip + Reps/Hold toggle */}
       <View style={[styles.exCompactRow, { borderTopColor: divider }]}>
-        <TouchableOpacity onPress={openRestPicker} activeOpacity={0.7} style={styles.exRestChipGroup}>
-          <Text style={[styles.exRestLabel, { color: t.ts }]}>Rest Timer</Text>
-          <View style={styles.exRestChip}>
-            <Ionicons name="timer-outline" size={14} color={restSecs > 0 ? ACCT : t.ts} />
-            <Text style={[styles.exRestChipText, { color: restSecs > 0 ? ACCT : t.ts }]}>{formatRest(restSecs)}</Text>
-            <Ionicons name="chevron-down" size={12} color={restSecs > 0 ? ACCT : t.ts} />
+        {/* A button in the card (cardButton) as tall as the Reps/Hold switch
+            beside it: the clock in a green circle, the time in the ink
+            (user pick, 2026-10-29). It was bare words with the time in green. */}
+        <BounceButton
+          onPress={openRestPicker}
+          accessibilityLabel={`Rest timer, ${restSecs > 0 ? formatRest(restSecs) : "off"}`}
+          accessibilityRole="button"
+        >
+          <View style={[styles.exRestBtn, cardButton(t)]}>
+            <View style={[styles.exRestIcon, { backgroundColor: restSecs > 0 ? ACCT : t.div }]}>
+              <Ionicons name="timer-outline" size={13} color={restSecs > 0 ? ON_FILL : t.ts} />
+            </View>
+            <Text style={[styles.exRestLabel, { color: t.ts }]}>Rest</Text>
+            <Text style={[styles.exRestValue, { color: restSecs > 0 ? t.tp : t.ts }]}>{formatRest(restSecs)}</Text>
+            <Ionicons name="chevron-down" size={12} color={t.ts} />
           </View>
-        </TouchableOpacity>
+        </BounceButton>
         <View
           style={[styles.exTogglePills, { backgroundColor: isDark ? "rgba(255,255,255,0.10)" : "rgba(118,118,128,0.12)" }]}
           onLayout={e => { modeTrackWidth.value = e.nativeEvent.layout.width - 6; }}
@@ -551,7 +645,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
       {/* Column headers */}
       <View style={[styles.exSetHeaderRow, { borderTopColor: divider }]}>
         <View style={styles.exSetBadgeCol}>
-          <Text style={[styles.exSetHeaderLabel, { color: t.ts, width: 28, textAlign: "center" }]}>Set</Text>
+          <Text style={[styles.exSetHeaderLabel, { color: t.ts, width: SET_BADGE_SIZE, textAlign: "center" }]}>Set</Text>
         </View>
         <View style={[styles.exSetValueCol, { flexDirection: "column", alignItems: "center", gap: 1 }]}>
           <Text style={[styles.exSetTargetLabel, { color: t.ts }]}>Target</Text>
@@ -598,6 +692,8 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   patchSet(idx, { type: isWarmup ? "working" : "warmup" });
+                  // Switching a set is what the warm-up tip teaches, so it's done with.
+                  onWarmupTipDone();
                 }}
                 style={[styles.exSetBadge, { borderColor: isWarmup ? WARMUP_ORANGE : divider }]}
                 activeOpacity={0.7}
@@ -608,7 +704,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
 
             {/* Weight column */}
             <View style={styles.exSetValueCol}>
-              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+              <View style={[styles.exSetInputBox, inputSurface]}>
                 <WeightSetInput
                   inputRef={r => { weightRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
@@ -633,7 +729,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
 
             {/* Rep column */}
             <View style={[styles.exSetValueCol, styles.exSetColRep]}>
-              <View style={[styles.exSetInputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+              <View style={[styles.exSetInputBox, inputSurface]}>
                 <TextInput
                   ref={r => { repsRefs.current[idx] = r; }}
                   style={[styles.exSetInputText, { color: t.tp }]}
@@ -655,7 +751,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
               <Reanimated.View style={[{ overflow: "hidden" }, rangeOuterStyle]}>
                 <Reanimated.View style={[{ flexDirection: "row", alignItems: "center", width: RANGE_EXTENSION_WIDTH, transformOrigin: "left" }, rangeInnerStyle]}>
                   <Text style={{ color: t.ts, fontSize: 13, fontFamily: FontFamily.semibold, marginHorizontal: 4 }}>–</Text>
-                  <View style={[styles.exSetInputBox, { backgroundColor: isDark ? SET_INPUT_DARK : t.bg, borderColor: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.07)" }]}>
+                  <View style={[styles.exSetInputBox, inputSurface]}>
                     <TextInput
                       ref={r => { repsMaxRefs.current[idx] = r; }}
                       style={[styles.exSetInputText, { color: t.tp }]}
@@ -680,13 +776,15 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
         );
       })}
 
+      {warmupTip && <WarmupTip open={warmupTip === "open"} isDark={isDark} onDone={onWarmupTipDone} />}
+
       {/* Add / Remove row */}
       <View style={[styles.exAddRemoveRow, { borderTopColor: divider }]}>
         <BounceButton
           onPress={startRemoveSet}
           style={{ opacity: sets.length <= 1 ? 0.35 : 1, flex: 1, marginRight: 6 }}
         >
-          <View style={[styles.exAddRemoveBtn, { backgroundColor: t.ctrl }]}>
+          <View style={[styles.exAddRemoveBtn, cardButton(t)]}>
             <Ionicons name="remove" size={14} color={t.ts} />
             <Text style={[styles.exAddRemoveText, { color: t.ts }]}>Remove Set</Text>
           </View>
@@ -701,10 +799,11 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           }}
           style={{ flex: 1, marginLeft: 6 }}
         >
-          {/* White with GREEN text, not a green fill: the summary FAB and the
-              add-exercise button on this screen are both solid green, and a
-              third would leave nothing reading as the primary action. */}
-          <View style={[styles.exAddRemoveBtn, { backgroundColor: t.ctrl }]}>
+          {/* The card's button with GREEN text, not a green fill: the summary
+              FAB and the add-exercise button on this screen are both solid
+              green, and a third would leave nothing reading as the primary
+              action. */}
+          <View style={[styles.exAddRemoveBtn, cardButton(t)]}>
             <Ionicons name="add" size={14} color={ACCT} />
             <Text style={[styles.exAddRemoveText, { color: ACCT }]}>Add Set</Text>
           </View>
@@ -720,7 +819,8 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
         <View style={styles.restBackdrop}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.restOverlay, { opacity: backdropOpacity }]} />
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeRestPicker} />
-          <Animated.View style={[styles.restSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+          <Animated.View style={[styles.restSheet, sheetSurface(t.bg), { transform: [{ translateY: slideY }] }]}>
+            <SheetGlass />
             <View {...restPanResponder.panHandlers} style={styles.restHandleArea}>
               <View style={[styles.restHandle, { backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
             </View>
@@ -731,6 +831,19 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
             <View style={styles.restPickerWrap}>
               <View pointerEvents="none" style={[styles.restSelTop, { borderColor: divider }]} />
               <View pointerEvents="none" style={[styles.restSelBottom, { borderColor: divider }]} />
+              {/* The wheel shows everywhere but the middle row, where the bold
+                  copy below shows instead. A mask, not a strip painted in the
+                  sheet's colour over it: the glass sheet has no one colour. */}
+              <MaskedView
+                style={styles.restWheel}
+                maskElement={
+                  <View style={styles.restWheel}>
+                    <View style={styles.restMaskShown} />
+                    <View style={styles.restMaskBand} />
+                    <View style={styles.restMaskShown} />
+                  </View>
+                }
+              >
               <Animated.ScrollView
                 showsVerticalScrollIndicator={false}
                 snapToInterval={REST_ITEM_H}
@@ -777,7 +890,8 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
                   );
                 })}
               </Animated.ScrollView>
-              <View pointerEvents="none" style={{ position: 'absolute', top: REST_ITEM_H * 2, left: 0, right: 0, height: REST_ITEM_H, overflow: 'hidden', backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg }}>
+              </MaskedView>
+              <View pointerEvents="none" style={{ position: 'absolute', top: REST_ITEM_H * 2, left: 0, right: 0, height: REST_ITEM_H, overflow: 'hidden' }}>
                 <Animated.View style={{ transform: [{ translateY: Animated.multiply(scrollAnim, -1) }] }}>
                   {REST_OPTIONS.map((item) => (
                     <View key={item} style={styles.restItem}>
@@ -820,6 +934,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
                 </View>
               </BounceButton>
             </View>
+            <SheetCloseButton onPress={closeRestPicker} />
           </Animated.View>
         </View>
       </Modal>
@@ -866,16 +981,18 @@ function StepIndicator({ step, isDark, canStep2, onStepPress }: {
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   // The green aurora glows behind this indicator, so light mode needs stronger
-  // colors than the usual pale grays / bright ACCT: a deeper green for text and
-  // the line, a translucent slate for inactive parts, and a frosted white rim
-  // on the dots to lift them off the tint (same rim as the Home orbs).
+  // colors than the usual pale grays / bright ACCT: a deeper green for the
+  // text, a translucent slate for inactive parts, and a frosted white rim on
+  // the dots to lift them off the tint (same rim as the Home orbs). The line,
+  // once on Workouts, is the page's ink, black on light (user request,
+  // 2026-10-29: in ACCT_DEEP it read mustardy, and ACCT_INK was too dark a green).
   const accent  = isDark ? ACCT : ACCT_DEEP;
   const divider = isDark ? "rgba(255,255,255,0.12)" : "rgba(45,55,72,0.18)";
   const muted   = isDark ? t.ts : "rgba(45,55,72,0.55)";
   const rim     = isDark ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.9)";
   return (
     <View style={styles.stepIndicatorWrap}>
-      <View style={[styles.stepLine, { backgroundColor: step === 2 ? accent : divider }]} />
+      <View style={[styles.stepLine, { backgroundColor: step === 2 ? t.tp : divider }]} />
       <View style={styles.stepIndicatorRow}>
         <BounceButton style={styles.stepItem} onPress={() => onStepPress(1)} accessibilityLabel="Go to setup" accessibilityRole="button">
           <View style={[styles.stepDot, {
@@ -1115,323 +1232,6 @@ function Step1({
   );
 }
 
-// ─── Draggable Exercise List ──────────────────────────────────────────────────
-
-interface DraggableExerciseListProps {
-  exercises: Exercise[];
-  day: string;
-  isDark: boolean;
-  t: typeof APP_LIGHT | typeof APP_DARK;
-  onReorderExercises: (day: string, exercises: Exercise[]) => void;
-  onDragStateChange: (dragging: boolean) => void;
-  onRemoveExercise: (day: string, id: string) => void;
-  onEditExercise: (day: string, id: string) => void;
-}
-
-function DraggableExerciseList({
-  exercises, day, isDark, t,
-  onReorderExercises, onDragStateChange, onRemoveExercise, onEditExercise,
-}: DraggableExerciseListProps) {
-  const [activeIdx, setActiveIdx] = useState<number | null>(null);
-  const activeIdxRef = useRef<number | null>(null);
-  const hoverIdxRef = useRef<number | null>(null);
-  const rowHeightRef = useRef(50);
-
-  // Keyed by exercise ID so offsets survive reorders without index mismatch.
-  // Using a Map means each exercise always owns its Animated.Value regardless of position changes.
-  const rowAnimsMap = useRef(new Map<string, Animated.Value>());
-  exercises.forEach(ex => {
-    if (!rowAnimsMap.current.has(ex.id)) rowAnimsMap.current.set(ex.id, new Animated.Value(0));
-  });
-
-  const exercisesRef = useRef(exercises);
-  exercisesRef.current = exercises;
-  const onReorderRef = useRef(onReorderExercises);
-  onReorderRef.current = onReorderExercises;
-  const onDragStateRef = useRef(onDragStateChange);
-  onDragStateRef.current = onDragStateChange;
-
-  // Unmounting mid-drag skips onPanResponderRelease/Terminate, so the parent's
-  // scroll lock would stay on with no gesture left to lift it — the sheet then
-  // looks frozen. Always hand the lock back on the way out.
-  useEffect(() => () => { onDragStateRef.current(false); }, []);
-
-  // After a reorder, React commits the new order to native then this fires before the frame
-  // paints — resetting all offsets to 0 is invisible because exercises are already at their
-  // correct rendered positions. Always reset on exercises change; no flag needed.
-  useLayoutEffect(() => {
-    rowAnimsMap.current.forEach(a => a.setValue(0));
-  }, [exercises]);
-
-  const panResponders = useMemo(() =>
-    exercises.map((ex, idx) =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponderCapture: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponderCapture: () => true,
-        // An enclosing ScrollView must not be able to take the gesture back: a
-        // steal ends the drag without a release, which is how the scroll lock
-        // used to get stuck on.
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: () => {
-          activeIdxRef.current = idx;
-          hoverIdxRef.current = idx;
-          rowAnimsMap.current.forEach(a => a.setValue(0));
-          setActiveIdx(idx);
-          onDragStateRef.current(true);
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        },
-        onPanResponderMove: (_, gs) => {
-          // Drive active row directly via its stable ID — synchronous, no React state needed
-          rowAnimsMap.current.get(ex.id)?.setValue(gs.dy);
-          const rh = rowHeightRef.current;
-          const exList = exercisesRef.current;
-          const newHover = Math.max(0, Math.min(exList.length - 1, Math.round(idx + gs.dy / rh)));
-          if (newHover !== hoverIdxRef.current) {
-            hoverIdxRef.current = newHover;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            // useNativeDriver: false runs on the JS thread where starting a new spring
-            // automatically cancels the previous one on the same value — no race conditions
-            exList.forEach((item, i) => {
-              if (i === idx) return;
-              let toVal = 0;
-              if (newHover > idx && i > idx && i <= newHover) toVal = -rh;
-              else if (newHover < idx && i < idx && i >= newHover) toVal = rh;
-              Animated.spring(rowAnimsMap.current.get(item.id)!, {
-                toValue: toVal,
-                useNativeDriver: false,
-                damping: 20,
-                stiffness: 280,
-              }).start();
-            });
-          }
-        },
-        onPanResponderRelease: () => {
-          const from = activeIdxRef.current!;
-          const to = hoverIdxRef.current ?? from;
-          if (to !== from) {
-            const arr = [...exercisesRef.current];
-            const [moved] = arr.splice(from, 1);
-            arr.splice(to, 0, moved);
-            onReorderRef.current(day, arr);
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            // Don't reset anims here — useLayoutEffect resets them after React commits
-            // the new order so the reset is invisible (no jump-back glitch)
-          } else {
-            rowAnimsMap.current.forEach(a => a.setValue(0));
-          }
-          activeIdxRef.current = null;
-          hoverIdxRef.current = null;
-          setActiveIdx(null);
-          onDragStateRef.current(false);
-        },
-        onPanResponderTerminate: () => {
-          rowAnimsMap.current.forEach(a => a.setValue(0));
-          activeIdxRef.current = null;
-          hoverIdxRef.current = null;
-          setActiveIdx(null);
-          onDragStateRef.current(false);
-        },
-      })
-    ),
-  [exercises, day]);
-
-  const divider = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
-
-  return (
-    <>
-      {exercises.map((ex, i) => {
-        const isActive = activeIdx === i;
-        const anim = rowAnimsMap.current.get(ex.id)!;
-        return (
-          <Animated.View
-            key={ex.id}
-            style={[
-              styles.daySummaryRow,
-              i < exercises.length - 1 && { borderBottomWidth: 1, borderBottomColor: isActive ? "transparent" : divider },
-              { transform: [{ translateY: anim }], zIndex: isActive ? 10 : 1 },
-              isActive && {
-                backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)",
-                borderRadius: 8,
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.2,
-                shadowRadius: 8,
-              },
-            ]}
-            onLayout={i === 0 ? (e) => { rowHeightRef.current = e.nativeEvent.layout.height; } : undefined}
-          >
-            <View {...panResponders[i].panHandlers} style={styles.dragHandleArea}>
-              <DragHandleIcon color={t.ts} />
-            </View>
-            <View style={[styles.daySummaryNumChip, { backgroundColor: ACCT + "18" }]}>
-              <Text style={[styles.daySummaryNum, { color: ACCT }]}>{i + 1}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.daySummaryNameBtn}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(day, ex.id); }}
-              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-            >
-              <Text style={[styles.daySummaryName, { color: t.tp }]} numberOfLines={1}>{ex.name}</Text>
-            </TouchableOpacity>
-            {/* The swap in plain sight (the name tap does the same, but nothing
-                said so): another exercise in this one's place, keeping its
-                sets, targets and rest. */}
-            <TouchableOpacity
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onEditExercise(day, ex.id); }}
-              activeOpacity={0.7}
-              hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-              style={[styles.daySummaryChangeBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}
-              accessibilityRole="button"
-              accessibilityLabel={`Change ${ex.name}`}
-            >
-              <Ionicons name="swap-horizontal" size={14} color={t.tp} />
-              <Text style={[styles.daySummaryChangeText, { color: t.tp }]}>Change</Text>
-            </TouchableOpacity>
-            <DeleteCircleButton
-              onPress={() =>
-                Alert.alert("Remove Exercise", `Remove "${ex.name}"?`, [
-                  { text: "Cancel", style: "cancel" },
-                  { text: "Remove", style: "destructive", onPress: () => onRemoveExercise(day, ex.id) },
-                ])
-              }
-              accessibilityLabel={`Remove ${ex.name}`}
-            />
-          </Animated.View>
-        );
-      })}
-    </>
-  );
-}
-
-// ─── Reorder Sheet ────────────────────────────────────────────────────────────
-
-interface ReorderSheetProps {
-  visible: boolean;
-  day: string;
-  exercises: Exercise[];
-  isDark: boolean;
-  t: typeof APP_LIGHT | typeof APP_DARK;
-  onReorderExercises: (day: string, exercises: Exercise[]) => void;
-  onRemoveExercise: (day: string, id: string) => void;
-  onEditExercise: (day: string, id: string) => void;
-  onClose: () => void;
-}
-
-function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, onRemoveExercise, onEditExercise, onClose }: ReorderSheetProps) {
-  const slideY = useRef(new Animated.Value(500)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
-  // The list scrolls (a day can hold more rows than fit), so it must not fight
-  // row drags — same trick as the Workout Summary sheet.
-  const [listScrollEnabled, setListScrollEnabled] = useState(true);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 0 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) {
-          slideY.setValue(g.dy);
-          backdropOpacity.setValue(Math.max(0, 1 - g.dy / 300));
-        }
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 120 || g.vy > 0.8) {
-          Animated.parallel([
-            Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
-            Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); onClose(); });
-        } else {
-          Animated.parallel([
-            Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
-            Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
-          ]).start();
-        }
-      },
-    })
-  ).current;
-
-  useEffect(() => {
-    if (visible) {
-      setListScrollEnabled(true);
-      slideY.setValue(500);
-      backdropOpacity.setValue(0);
-      Animated.parallel([
-        Animated.timing(slideY, { toValue: 0, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(backdropOpacity, { toValue: 1, duration: 320, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      ]).start();
-    }
-  }, [visible]);
-
-  // Slide the sheet away, THEN run cb. Anything that opens the exercise picker
-  // has to go through this: two RN Modals presented from the same screen at once
-  // is a dead end on iOS (UIKit refuses the second presentation while RN has
-  // already latched _isPresented, so the picker never opens again). See the
-  // single-modal note on NewProgramScreen.
-  const animateOut = useCallback((cb: () => void) => {
-    Animated.parallel([
-      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }),
-      Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(500); backdropOpacity.setValue(0); cb(); });
-  }, [slideY, backdropOpacity]);
-
-  const closeSheet = useCallback(() => animateOut(onClose), [animateOut, onClose]);
-
-  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
-
-  return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={closeSheet}>
-      <View style={styles.restBackdrop}>
-        <Animated.View style={[StyleSheet.absoluteFill, styles.restOverlay, { opacity: backdropOpacity }]} />
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
-        <Animated.View style={[styles.reorderSheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
-          <View {...panResponder.panHandlers} style={styles.restHandleArea}>
-            <View style={styles.reorderHandle} />
-          </View>
-          <View style={[styles.restHeader, { borderBottomColor: divider }]}>
-            <Text style={[styles.restTitle, { color: t.tp }]}>Reorder Exercises</Text>
-            <Text style={[styles.restSubtitle, { color: t.ts }]}>{dayLabel(day)}</Text>
-          </View>
-          {/* Scrollable + height-capped: without both, a day with a dozen
-              exercises grew the sheet past the top of the screen and its first
-              rows (and the drag handle) became unreachable. */}
-          <ScrollView
-            style={{ flexGrow: 0 }}
-            scrollEnabled={listScrollEnabled}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.reorderListWrap}
-          >
-            <DraggableExerciseList
-              exercises={exercises}
-              day={day}
-              isDark={isDark}
-              t={t}
-              onReorderExercises={onReorderExercises}
-              onDragStateChange={dragging => setListScrollEnabled(!dragging)}
-              onRemoveExercise={onRemoveExercise}
-              onEditExercise={(exDay, id) => animateOut(() => onEditExercise(exDay, id))}
-            />
-          </ScrollView>
-          <View style={styles.restDoneRow}>
-            <BounceButton
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); closeSheet(); }}
-              accessibilityLabel="Done"
-              accessibilityRole="button"
-            >
-              <View style={[styles.restDoneWrap, darkGlow(styles.restDoneWrap, isDark)]}>
-                <View style={styles.restDoneBtn}>
-                  <Text style={styles.restDone}>Done</Text>
-                </View>
-              </View>
-            </BounceButton>
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
-  );
-}
-
 // ─── Workout Summary sheet ────────────────────────────────────────────────────
 // Compact overview of the whole program, opened from the floating Summary
 // button on Step 2 (whose full page gets very long once exercises are added).
@@ -1439,9 +1239,10 @@ function ReorderSheet({ visible, day, exercises, isDark, t, onReorderExercises, 
 //   - days list: every cycle day (Training AND Rest) with exercise/set counts
 //     and the muscle groups it hits. Drag the handle to reorder the cycle —
 //     each day's exercises travel with it (see reorderCycleDays).
-//   - day detail: that day's exercises via the existing DraggableExerciseList
-//     (drag to reorder, tap to change, trash to remove), plus Go to Day (jump
-//     the long Step 2 page straight to it) and Add Exercise shortcuts.
+//   - day detail: that day's exercises in the shared ReorderExerciseList
+//     (components/ReorderExercisesSheet.tsx: drag to reorder, Change, delete),
+//     the reorder sheet's own rows, plus Go to Day (jump the long Step 2 page
+//     straight to it) and Add Exercise shortcuts.
 
 function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercises, isDark, t, onReorder, onDragStateChange, onOpenDay }: {
   cyclePattern: string[];
@@ -1473,7 +1274,8 @@ function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercis
   const onDragStateRef = useRef(onDragStateChange);
   onDragStateRef.current = onDragStateChange;
 
-  // See DraggableExerciseList: never leave the parent's scroll lock held.
+  // Unmounting mid-drag skips the release, so the parent's scroll lock would
+  // stay on with no gesture left to lift it: hand it back on the way out.
   useEffect(() => () => { onDragStateRef.current(false); }, []);
 
   useLayoutEffect(() => {
@@ -1699,7 +1501,8 @@ function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, 
       <View style={styles.restBackdrop}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.restOverlay, { opacity: backdropOpacity }]} />
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
-        <Animated.View style={[styles.summarySheet, { backgroundColor: isDark ? APP_DARK.bg : APP_LIGHT.bg, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.summarySheet, sheetSurface(t.bg), { transform: [{ translateY: slideY }] }]}>
+          <SheetGlass />
           <View {...panResponder.panHandlers} style={styles.restHandleArea}>
             <View style={styles.reorderHandle} />
           </View>
@@ -1750,15 +1553,14 @@ function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, 
             ) : detailExs.length === 0 ? (
               <Text style={[styles.daySummaryEmpty, { color: t.ts }]}>No exercises yet</Text>
             ) : (
-              <DraggableExerciseList
-                exercises={detailExs}
-                day={detailKey!}
-                isDark={isDark}
-                t={t}
-                onReorderExercises={onReorderExercises}
+              <ReorderExerciseList
+                items={detailExs}
+                keyOf={ex => ex.id}
+                nameOf={ex => ex.name}
+                onReorder={exs => onReorderExercises(detailKey!, exs)}
                 onDragStateChange={dragging => setListScrollEnabled(!dragging)}
-                onRemoveExercise={onRemoveExercise}
-                onEditExercise={(day, id) => animateOut(() => onEditExercise(day, id))}
+                onRemove={ex => onRemoveExercise(detailKey!, ex.id)}
+                onChange={ex => animateOut(() => onEditExercise(detailKey!, ex.id))}
               />
             )}
           </ScrollView>
@@ -1801,6 +1603,7 @@ function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, 
               </BounceButton>
             </View>
           )}
+          <SheetCloseButton onPress={closeSheet} />
         </Animated.View>
       </View>
     </Modal>
@@ -1825,6 +1628,10 @@ interface DayCardProps {
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
   onOpenReorder: (day: string) => void;
   onMeasureDay: (day: string, y: number) => void;
+  /** The warm-up tip, for this day's first exercise: null unless this day
+   *  holds the first exercise on the page. */
+  warmupTip: WarmupTipPhase | null;
+  onWarmupTipDone: () => void;
 }
 
 // One day's heading + full exercise list (always expanded — no collapsed/summary
@@ -1836,6 +1643,7 @@ const DayCard = memo(function DayCard({
   onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll,
   onRemoveExercise, onStartCollapse,
   onInputFocus, onOpenReorder, onMeasureDay,
+  warmupTip, onWarmupTipDone,
 }: DayCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
 
@@ -1860,9 +1668,7 @@ const DayCard = memo(function DayCard({
             <View style={[styles.dayAccentBar, { backgroundColor: ACCT }]} />
             <Text style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(day).toUpperCase()}</Text>
             {exercises.length > 0 && (
-              <NeuCard dark={isDark} radius={14} style={styles.dayExBadge} innerStyle={styles.dayExBadgeInner}>
-                <Text style={[styles.dayExBadgeText, { color: ACCT }]}>{exercises.length}</Text>
-              </NeuCard>
+              <NumberBadge n={exercises.length} isDark={isDark} size={28} />
             )}
           </View>
         </View>
@@ -1894,6 +1700,8 @@ const DayCard = memo(function DayCard({
                   onEditExercise={onEditExercise}
                   onInputFocus={onInputFocus}
                   customImageById={customImageById}
+                  warmupTip={i === 0 ? warmupTip : null}
+                  onWarmupTipDone={onWarmupTipDone}
                 />
               </NeuCard>
             );
@@ -1921,7 +1729,7 @@ const DayCard = memo(function DayCard({
 });
 
 function Step2({
-  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, isDark, collapsingIds, onStartCollapse, onInputFocus, customImageById, onMeasureDay, onOpenReorder,
+  workouts, onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets, onApplyRestToAll, onRemoveExercise, isDark, collapsingIds, onStartCollapse, onInputFocus, customImageById, onMeasureDay, onOpenReorder, warmupTip, onWarmupTipDone,
 }: {
   workouts: WorkoutMap;
   onOpenPicker: (day: string) => void;
@@ -1939,8 +1747,12 @@ function Step2({
   /** Opens the Reorder sheet, which the SCREEN owns — every modal on this
       screen is mounted from one place so two can never be presented at once. */
   onOpenReorder: (day: string) => void;
+  warmupTip: WarmupTipPhase | null;
+  onWarmupTipDone: () => void;
 }) {
   const days = Object.keys(workouts);
+  // The warm-up tip goes under the first exercise on the page.
+  const tipDay = warmupTip ? days.find(d => (workouts[d]?.length ?? 0) > 0) : undefined;
 
   return (
     <>
@@ -1962,6 +1774,8 @@ function Step2({
           onInputFocus={onInputFocus}
           onOpenReorder={onOpenReorder}
           onMeasureDay={onMeasureDay}
+          warmupTip={day === tipDay ? warmupTip : null}
+          onWarmupTipDone={onWarmupTipDone}
         />
       ))}
 
@@ -2114,10 +1928,12 @@ export default function NewProgramScreen() {
   const [reorderDay, setReorderDay] = useState<string | null>(null);
   // First-run coach mark teaching the tap-to-toggle Training/Rest interaction.
   const [showCycleCoach, setShowCycleCoach] = useState(false);
-  // First-run coach mark for Step 2 — two pages: (1) set badges toggle
-  // working/warmup, (2) the green Add Exercise button + multi-select.
+  // First-run coach mark for Step 2: the green Add Exercise button and its
+  // multi-select picker.
   const [showWorkoutsCoach, setShowWorkoutsCoach] = useState(false);
-  const [workoutsCoachPage, setWorkoutsCoachPage] = useState<1 | 2>(1);
+  // The warm-up tip (WarmupTip), under the first exercise's sets. "closing"
+  // keeps it mounted while it folds away.
+  const [warmupTip, setWarmupTip] = useState<WarmupTipPhase | null>(null);
 
   // Show the coach mark once, only when freshly creating a program (never in
   // edit/review/shared flows, where the user already knows the builder).
@@ -2162,6 +1978,35 @@ export default function NewProgramScreen() {
     setShowWorkoutsCoach(false);
     AsyncStorage.setItem(WORKOUTS_COACHMARK_KEY, "1")
       .catch(e => warnStorage("setItem", WORKOUTS_COACHMARK_KEY, e));
+  }, []);
+
+  // The warm-up tip shows in every mode (create, edit, review, shared edit:
+  // sets switch the same way in all of them), visit after visit, until it's
+  // done with. Its own key, so people who saw the old Step 2 coach mark, which
+  // taught this before any set was on screen, still get it once.
+  const warmupTipOpen = useRef(false);
+  const warmupTipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(WARMUP_TIP_KEY)
+      .then(seen => {
+        if (cancelled || seen) return;
+        warmupTipOpen.current = true;
+        setWarmupTip("open");
+      })
+      .catch(e => warnStorage("getItem", WARMUP_TIP_KEY, e));
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => () => { if (warmupTipTimer.current) clearTimeout(warmupTipTimer.current); }, []);
+
+  // Got it, or any set's number tapped: it folds away and never comes back.
+  const doneWithWarmupTip = useCallback(() => {
+    if (!warmupTipOpen.current) return;
+    warmupTipOpen.current = false;
+    setWarmupTip("closing");
+    warmupTipTimer.current = setTimeout(() => setWarmupTip(null), REVEAL_HEIGHT_MS + 40);
+    AsyncStorage.setItem(WARMUP_TIP_KEY, "1")
+      .catch(e => warnStorage("setItem", WARMUP_TIP_KEY, e));
   }, []);
 
   // Tracks whether the draft has been loaded — prevents auto-save overwriting it before load completes
@@ -3232,7 +3077,7 @@ export default function NewProgramScreen() {
                   }}
                   accessibilityRole="button"
                 >
-                  <View style={[styles.unitBannerBtn, { backgroundColor: t.ctrl }]}>
+                  <View style={[styles.unitBannerBtn, cardButton(t)]}>
                     <Text style={[styles.unitBannerBtnText, { color: t.tp }]}>
                       Enter in {unitLabel(inTheirs ? unitOf(ownIsKg) : otherUnit)}
                     </Text>
@@ -3257,6 +3102,8 @@ export default function NewProgramScreen() {
             customImageById={customImageById}
             onMeasureDay={onMeasureDay}
             onOpenReorder={openReorderForDay}
+            warmupTip={warmupTip}
+            onWarmupTipDone={doneWithWarmupTip}
           />
           </UnitLens>
           </>
@@ -3370,16 +3217,17 @@ export default function NewProgramScreen() {
       />
 
       {/* Per-day Reorder sheet. Lives here, not in Step 2, so that all three
-          modal surfaces are opened and closed from one place. */}
-      <ReorderSheet
+          modal surfaces are opened and closed from one place. Its Change runs
+          once the sheet has slid away, so the picker never presents over it. */}
+      <ReorderExercisesSheet
         visible={reorderDay !== null}
-        day={reorderDay ?? ""}
-        exercises={reorderDay ? (workouts[reorderDay] ?? NO_EXERCISES) : NO_EXERCISES}
-        isDark={isDark}
-        t={t}
-        onReorderExercises={reorderExercises}
-        onRemoveExercise={removeExercise}
-        onEditExercise={editExerciseInPicker}
+        subtitle={reorderDay ? dayLabel(reorderDay) : undefined}
+        items={reorderDay ? (workouts[reorderDay] ?? NO_EXERCISES) : NO_EXERCISES}
+        keyOf={ex => ex.id}
+        nameOf={ex => ex.name}
+        onReorder={exs => { if (reorderDay) reorderExercises(reorderDay, exs); }}
+        onChange={ex => { if (reorderDay) editExerciseInPicker(reorderDay, ex.id); }}
+        onRemove={ex => { if (reorderDay) removeExercise(reorderDay, ex.id); }}
         onClose={() => setReorderDay(null)}
       />
 
@@ -3422,17 +3270,14 @@ export default function NewProgramScreen() {
           switch between Training and Rest. Shown once (CYCLE_COACHMARK_KEY),
           only on Step 1 where the cycle pattern is visible. */}
       {showCycleCoach && step === 1 && !modalUp && (
-        <Modal visible transparent animationType="fade" onRequestClose={dismissCycleCoach}>
-          <View style={styles.coachBackdrop}>
-            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissCycleCoach} />
-            <NeuCard dark={isDark} radius={24} style={styles.coachCard} innerStyle={styles.coachCardInner}>
-              <Text style={[styles.coachTitle, { color: t.tp }]}>Set up your week</Text>
-              <Text style={[styles.coachBody, { color: t.ts }]}>
+        <GuidePopup onClose={dismissCycleCoach}>
+              <GuideTitle>Set up your week</GuideTitle>
+              <GuideBody>
                 Tap any day to switch it between Training and Rest. Name your training days and we build the schedule for you.
-              </Text>
+              </GuideBody>
 
               {/* Live demo of the two pill states */}
-              <View style={styles.coachDemoRow}>
+              <GuideDemo>
                 <View style={[styles.togglePill, { backgroundColor: ACCT }]}>
                   <DumbbellIcon size={13} color="#fff" />
                   <Text style={[styles.togglePillText, { color: "#fff" }]}>Training</Text>
@@ -3442,89 +3287,36 @@ export default function NewProgramScreen() {
                   <Ionicons name="moon-outline" size={13} color={t.ts} />
                   <Text style={[styles.togglePillText, { color: t.ts }]}>Rest</Text>
                 </View>
-              </View>
+              </GuideDemo>
 
-              <BounceButton onPress={dismissCycleCoach} accessibilityLabel="Got it" accessibilityRole="button">
-                <View style={[styles.coachBtnWrap, darkGlow(styles.coachBtnWrap, isDark)]}>
-                  <View style={styles.coachBtn}>
-                    <Text style={styles.coachBtnText}>Got it</Text>
-                  </View>
-                </View>
-              </BounceButton>
-            </NeuCard>
-          </View>
-        </Modal>
+              <GuideGotIt onPress={dismissCycleCoach} />
+        </GuidePopup>
       )}
 
-      {/* First-run coach mark for Step 2, two pages: (1) the set-number badge
-          toggles working/warmup, (2) the green Add Exercise button opens a
-          multi-select picker. Shown once (WORKOUTS_COACHMARK_KEY), only when
-          the Workouts step is visible. Backdrop tap dismisses either page. */}
+      {/* First-run coach mark for Step 2: the green Add Exercise button opens
+          a multi-select picker. Shown once (WORKOUTS_COACHMARK_KEY), only when
+          the Workouts step is visible. Backdrop tap dismisses it. It had a
+          first page on switching a set to a warm-up, which came up before any
+          set was on screen; the warm-up tip teaches that, under real sets. */}
       {showWorkoutsCoach && step === 2 && !modalUp && (
-        <Modal visible transparent animationType="fade" onRequestClose={dismissWorkoutsCoach}>
-          <View style={styles.coachBackdrop}>
-            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissWorkoutsCoach} />
-            <NeuCard dark={isDark} radius={24} style={styles.coachCard} innerStyle={styles.coachCardInner}>
-              {workoutsCoachPage === 1 ? (
-                <>
-                  <Text style={[styles.coachTitle, { color: t.tp }]}>Build your workouts</Text>
-                  <Text style={[styles.coachBody, { color: t.ts }]}>
-                    Fill in the weight and reps for every set. Tap a set&apos;s number to switch it between a working set and a warmup.
-                  </Text>
+        <GuidePopup onClose={dismissWorkoutsCoach}>
+              <GuideTitle>Add your exercises</GuideTitle>
+              <GuideBody>
+                Every training day has this button. Tap it to browse exercises, and select as many as you like. They are all added in one go.
+              </GuideBody>
 
-                  {/* Live demo of the two set-badge states */}
-                  <View style={styles.coachDemoRow}>
-                    <View style={[styles.exSetBadge, { borderColor: isDark ? "rgba(255,255,255,0.25)" : t.div }]}>
-                      <Text style={[styles.exSetBadgeText, { color: t.tp }]}>1</Text>
-                    </View>
-                    <Ionicons name="swap-horizontal" size={20} color={t.ts} />
-                    <View style={[styles.exSetBadge, { borderColor: WARMUP_ORANGE }]}>
-                      <Text style={[styles.exSetBadgeText, { color: WARMUP_ORANGE }]}>W</Text>
-                    </View>
-                    <Text style={[styles.coachDemoNote, { color: t.ts }]}>warmup</Text>
+              {/* Replica of the per-day Add Exercise button */}
+              <GuideDemo>
+                <View style={[styles.addExBtnWrap, darkGlow(styles.addExBtnWrap, isDark)]}>
+                  <View style={styles.addExBtn}>
+                    <Ionicons name="add" size={18} color="#fff" />
+                    <Text style={styles.addExText}>Add Exercise</Text>
                   </View>
+                </View>
+              </GuideDemo>
 
-                  <BounceButton
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWorkoutsCoachPage(2); }}
-                    accessibilityLabel="Next tip"
-                    accessibilityRole="button"
-                  >
-                    <View style={[styles.coachBtnWrap, darkGlow(styles.coachBtnWrap, isDark)]}>
-                      <View style={styles.coachBtn}>
-                        <Text style={styles.coachBtnText}>Next</Text>
-                      </View>
-                    </View>
-                  </BounceButton>
-                </>
-              ) : (
-                <>
-                  <Text style={[styles.coachTitle, { color: t.tp }]}>Add your exercises</Text>
-                  <Text style={[styles.coachBody, { color: t.ts }]}>
-                    Every training day has this button. Tap it to browse exercises, and select as many as you like. They are all added in one go.
-                  </Text>
-
-                  {/* Replica of the per-day Add Exercise button */}
-                  <View style={styles.coachDemoRow}>
-                    <View style={[styles.addExBtnWrap, darkGlow(styles.addExBtnWrap, isDark)]}>
-                      <View style={styles.addExBtn}>
-                        <Ionicons name="add" size={18} color="#fff" />
-                        <Text style={styles.addExText}>Add Exercise</Text>
-                      </View>
-                    </View>
-                  </View>
-
-                  <BounceButton onPress={dismissWorkoutsCoach} accessibilityLabel="Got it" accessibilityRole="button">
-                    <View style={[styles.coachBtnWrap, darkGlow(styles.coachBtnWrap, isDark)]}>
-                      <View style={styles.coachBtn}>
-                        <Text style={styles.coachBtnText}>Got it</Text>
-                      </View>
-                    </View>
-                  </BounceButton>
-                </>
-              )}
-            </NeuCard>
-          </View>
-        </Modal>
+              <GuideGotIt onPress={dismissWorkoutsCoach} />
+        </GuidePopup>
       )}
     </View>
   );
@@ -3541,7 +3333,8 @@ const styles = StyleSheet.create({
   unitBanner:       { marginBottom: 20 },
   unitBannerRow:    { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
   unitBannerText:   { flex: 1, fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 20 },
-  unitBannerBtn:    { ...pill(36), alignSelf: "flex-start", marginLeft: 46, marginBottom: 14, paddingHorizontal: 16, ...PILL_SHADOW },
+  // A button inside the banner's card (cardButton).
+  unitBannerBtn:    { ...pill(36), alignSelf: "flex-start", marginLeft: 46, marginBottom: 14, paddingHorizontal: 16 - CARD_BUTTON_BORDER },
   unitBannerBtnText: { fontFamily: FontFamily.semibold, fontSize: 14 },
 
   // Step indicator
@@ -3582,18 +3375,6 @@ const styles = StyleSheet.create({
   togglePill:       { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 6 },
   togglePillText:   { fontFamily: FontFamily.semibold, fontSize: 12 },
 
-  // First-run coach mark
-  coachBackdrop:    { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, backgroundColor: "rgba(0,0,0,0.45)" },
-  coachCard:        { width: "100%", maxWidth: 360 },
-  coachCardInner:   { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 20 },
-  coachTitle:       { fontFamily: FontFamily.bold, fontSize: 19, textAlign: "center" },
-  coachBody:        { fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 20, textAlign: "center", marginTop: 8 },
-  coachDemoRow:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 18, marginBottom: 22 },
-  coachDemoNote:    { fontFamily: FontFamily.regular, fontSize: 12 },
-  coachBtnWrap:     { borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
-  coachBtn:         { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 15, alignItems: "center" },
-  coachBtnText:     { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
-
   // Primary button
   primaryBtnWrap:   { borderRadius: PILL_RADIUS, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
   primaryBtn:       { ...pill(), backgroundColor: ACCT, gap: 8 },
@@ -3613,22 +3394,13 @@ const styles = StyleSheet.create({
   // Matches the workout page's "Start" pill (workoutTimerPill) and the back
   // button height: a 40px-tall pill. Fills the PIN_H (40) roll window exactly.
   pinnedDayChip:        { height: 40, paddingHorizontal: 14, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-  dayExBadge:           { width: 28, height: 28 },
-  dayExBadgeInner:      { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
-  dayExBadgeText:       { fontFamily: FontFamily.bold, fontSize: 13 },
   daySummaryCard:       { borderRadius: 16, marginBottom: 14 },
   daySummaryCardInner:  { paddingVertical: 4, paddingHorizontal: 0 },
   daySummaryEmpty:      { fontFamily: FontFamily.regular, fontSize: 13, fontStyle: "italic", paddingVertical: 14, paddingHorizontal: 16 },
-  daySummaryRow:        { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
   dragHandleArea:       { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },
   daySummaryNumChip:    { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   daySummaryActions:    { flexDirection: "row", alignItems: "center", gap: 14 },
   daySummaryNum:        { fontFamily: FontFamily.bold, fontSize: 13 },
-  daySummaryNameBtn:    { flex: 1, flexDirection: "row", alignItems: "center" },
-  daySummaryName:       { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
-  // As tall as the red delete beside it, so the pair lines up.
-  daySummaryChangeBtn:  { flexDirection: "row", alignItems: "center", gap: 4, height: DELETE_CIRCLE_SIZE, paddingHorizontal: 12, borderRadius: PILL_RADIUS },
-  daySummaryChangeText: { fontFamily: FontFamily.semibold, fontSize: 13 },
   workoutDayCard:   { borderRadius: 16 },
   exerciseCard:     { borderRadius: 16, marginBottom: 14 },
   emptyCard:        { borderRadius: 16, marginBottom: 14 },
@@ -3645,10 +3417,11 @@ const styles = StyleSheet.create({
   exNumLabel:       { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.8 },
   exName:           { fontFamily: FontFamily.bold, fontSize: 16, flexShrink: 1 },
   exCompactRow:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, paddingHorizontal: 9, borderTopWidth: 1 },
-  exRestChipGroup:  { flexDirection: "row", alignItems: "center", gap: 8 },
+  // The rest timer's button (cardButton), a point less padding for its hairline.
+  exRestBtn:        { ...pill(PILL_H_CHIP), gap: 6, paddingLeft: 6 - CARD_BUTTON_BORDER, paddingRight: 12 - CARD_BUTTON_BORDER },
+  exRestIcon:       { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   exRestLabel:      { fontFamily: FontFamily.semibold, fontSize: 13 },
-  exRestChip:       { flexDirection: "row", alignItems: "center", gap: 5 },
-  exRestChipText:   { fontFamily: FontFamily.semibold, fontSize: 13 },
+  exRestValue:      { fontFamily: FontFamily.bold, fontSize: 13 },
   exTogglePills:    { flexDirection: "row", borderRadius: 20, padding: 3 },
   exTogglePillPill: { position: "absolute", top: 3, left: 3, bottom: 3, borderRadius: 17, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 3 },
   exTogglePill:     { paddingHorizontal: 14, paddingVertical: 6, alignItems: "center" },
@@ -3659,26 +3432,42 @@ const styles = StyleSheet.create({
   exSetHeaderToggle:{ flexDirection: "row", alignItems: "center", justifyContent: "center" },
   exSetHeaderToggleSpacer: { width: 14 },
   exSetRow:         { flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 48, borderTopWidth: 1, paddingRight: 16 },
-  exSetBadgeCol:    { width: 54, alignItems: "flex-start", paddingLeft: 10 },
+  exSetBadgeCol:    { width: 54, alignItems: "flex-start", paddingLeft: SET_BADGE_INSET },
   exSetValueCol:    { width: 100, flexDirection: "row", alignItems: "center", justifyContent: "center" },
   exSetColRep:      { width: 128 },
   exSetUnitSpacer:  { width: 22 },
-  exSetBadge:       { width: 28, height: 28, borderRadius: 6, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  exSetBadge:       { width: SET_BADGE_SIZE, height: SET_BADGE_SIZE, borderRadius: 6, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   exSetBadgeText:   { fontFamily: FontFamily.semibold, fontSize: 15 },
   exSetInputBox:    { height: 32, width: 56, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   exSetInputText:   { fontFamily: FontFamily.semibold, fontSize: 14, textAlign: "center", width: "100%" },
   exSetUnit:        { fontFamily: FontFamily.semibold, fontSize: 13, marginLeft: 4 },
+  // The warm-up tip (WarmupTip), between the sets and Add / Remove Set. Its
+  // pointer is placed in points, on the set numbers' centre.
+  tipWrap:          { paddingTop: TIP_POINTER_REACH, paddingBottom: 12 },
+  tipPointer:       { position: "absolute", top: TIP_POINTER_REACH - TIP_POINTER / 2, left: SET_BADGE_INSET + SET_BADGE_SIZE / 2 - TIP_POINTER / 2, width: TIP_POINTER, height: TIP_POINTER, borderRadius: 2, transform: [{ rotate: "45deg" }] },
+  tipBox:           { borderRadius: 14, padding: 14, gap: 8 },
+  tipHead:          { flexDirection: "row", alignItems: "center", gap: 12 },
+  tipDemo:          { flexDirection: "row", alignItems: "center", gap: 6 },
+  tipTitle:         { flex: 1, fontFamily: FontFamily.bold, fontSize: 15 },
+  tipFoot:          { flexDirection: "row", alignItems: "flex-end", gap: 12 },
+  tipBody:          { flex: 1, fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 20 },
+  // A button inside the card (cardButton), a point less padding for its hairline.
+  tipBtn:           { ...pill(PILL_H_CHIP), paddingHorizontal: 14 - CARD_BUTTON_BORDER },
+  tipBtnText:       { fontFamily: FontFamily.semibold, fontSize: 13 },
   exAddRemoveRow:   { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8, paddingHorizontal: 9, borderTopWidth: 1 },
-  exAddRemoveBtn:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
+  // Buttons inside the exercise card (cardButton), a point less padding for
+  // its hairline.
+  exAddRemoveBtn:   { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 10 - CARD_BUTTON_BORDER, borderRadius: PILL_RADIUS },
   exAddRemoveText:  { fontFamily: FontFamily.semibold, fontSize: 13 },
   exNotesRow:       { borderTopWidth: 1, paddingVertical: 10, paddingLeft: 9 },
   exNotesInput:     { fontFamily: FontFamily.semibold, fontSize: 13, minHeight: 36, lineHeight: 20, paddingLeft: 0 },
 
   // Rest picker modal
   restBackdrop:     { flex: 1, justifyContent: "flex-end" },
-  restOverlay:      { backgroundColor: "rgba(0,0,0,0.45)" },
+  // The sheets' dim and grabber row with the X beside it: SheetChrome.
+  restOverlay:      { backgroundColor: SHEET_DIM },
   restSheet:        { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36 },
-  restHandleArea:   { paddingVertical: 12, alignItems: "center" },
+  restHandleArea:   { ...SHEET_TOP_ROW },
   restHandle:       { width: 40, height: 4, borderRadius: 2 },
   restHeader:       { alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1 },
   restDoneRow:      { alignItems: "center", paddingTop: 16, paddingBottom: 4 },
@@ -3687,19 +3476,23 @@ const styles = StyleSheet.create({
   restApplyAll:     { fontFamily: FontFamily.semibold, fontSize: 16 },
   restTitle:        { fontFamily: FontFamily.bold, fontSize: 16 },
   restSubtitle:     { fontFamily: FontFamily.regular, fontSize: 14, marginTop: 2 },
-  restDoneWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+  // A sheet's main button: SheetPill primary's glow, not the floating buttons'
+  // brighter halo (haloGlow 0.6/12), which read far too bright in a sheet.
+  restDoneWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
   restDoneBtn:      { borderRadius: 50, backgroundColor: ACCT, paddingVertical: 13, paddingHorizontal: 40 },
   restDone:         { fontFamily: FontFamily.semibold, fontSize: 16, color: "#FFFFFF" },
   restPickerWrap:   { height: REST_ITEM_H * 5, overflow: "hidden" },
+  // The wheel and its mask: shown above and below the middle row, not in it.
+  restWheel:        { flex: 1 },
+  restMaskShown:    { height: REST_ITEM_H * 2, backgroundColor: "black" },
+  restMaskBand:     { height: REST_ITEM_H },
   restSelTop:       { position: "absolute", top: REST_ITEM_H * 2, left: 24, right: 24, borderTopWidth: 1, zIndex: 1 },
   restSelBottom:    { position: "absolute", top: REST_ITEM_H * 3, left: 24, right: 24, borderTopWidth: 1, zIndex: 1 },
   restItem:         { height: REST_ITEM_H, alignItems: "center", justifyContent: "center" },
   restItemText:     { fontSize: 20 },
 
-  // Reorder sheet
-  reorderSheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36, maxHeight: "82%" },
+  // The Workout Summary sheet's handle
   reorderHandle:    { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
-  reorderListWrap:  { paddingHorizontal: 4, paddingTop: 8, paddingBottom: 4 },
 
   // Workout Summary sheet + floating button
   summarySheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 30, maxHeight: "82%" },

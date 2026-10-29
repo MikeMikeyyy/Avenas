@@ -13,18 +13,20 @@
 // snapshot reads correctly for a lb user without anything being converted on
 // disk.
 
-import { useCallback, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Fragment, useCallback, useState } from "react";
+import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import Animated, { LinearTransition } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { useRouter } from "expo-router";
 
 import NeuCard from "./NeuCard";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, WARMUP_ORANGE } from "../constants/theme";
 import { useUnit } from "../contexts/UnitContext";
 import { prescribedWeight, unitLabel } from "../utils/units";
 import { workoutKey } from "../utils/programDays";
 import { normaliseSets, type Exercise, type ProgramSet, type SavedProgram } from "../constants/programs";
+import { exerciseSummaryParams } from "../utils/customExerciseDetails";
 
 function fmtRest(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -33,17 +35,56 @@ function fmtRest(seconds: number): string {
   return s === 0 ? `${m}m` : `${m}m ${s}s`;
 }
 
-function setsSummary(set: ProgramSet): string {
+// A hold's target is in seconds.
+function repsText(set: ProgramSet, isHold: boolean): string | null {
+  const unit = isHold ? "s" : "reps";
   if (set.repMode === "range") {
     const lo = set.repsMin?.trim();
     const hi = set.repsMax?.trim();
-    if (lo && hi) return `${lo}–${hi} reps`;
-    if (lo) return `${lo}+ reps`;
-    if (hi) return `up to ${hi} reps`;
-    return "reps";
+    if (lo && hi) return `${lo}–${hi} ${unit}`;
+    if (lo) return `${lo}+ ${unit}`;
+    if (hi) return `up to ${hi} ${unit}`;
+    return null;
   }
   const reps = set.reps?.trim();
-  return reps ? `${reps} reps` : "reps";
+  if (!reps) return null;
+  return `${reps} ${reps === "1" && !isHold ? "rep" : unit}`;
+}
+
+/** A set's target in words ("60 kg · 8 reps", "8–12 reps", "30 s"), or null
+ *  when the builder left its weight and reps blank. */
+function targetText(set: ProgramSet, isHold: boolean, isKg: boolean): string | null {
+  const weight = set.weightKg?.trim();
+  // In the unit it was written in, for everyone.
+  const shown = weight ? prescribedWeight(weight, set.weightUnit, isKg) : null;
+  const parts = [shown && `${shown.text} ${unitLabel(shown.unit)}`, repsText(set, isHold)].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** "2 warm-up · 3 working sets" as one pill, each count after its own dot:
+ *  warm-ups in their orange, working sets in the accent, the marks the
+ *  timer's up-next card gives them. */
+function SetCountPill({ warmups, working, fill, ink }: { warmups: number; working: number; fill: string; ink: string }) {
+  const parts = [
+    { n: warmups, kind: "warm-up", dot: WARMUP_ORANGE },
+    { n: working, kind: "working", dot: ACCT },
+  ].filter(p => p.n > 0);
+  const setWord = (n: number) => (n === 1 ? "set" : "sets");
+  const spoken = parts.map(p => `${p.n} ${p.kind} ${setWord(p.n)}`).join(", ");
+  return (
+    <View style={[styles.metaPill, { backgroundColor: fill }]} accessible accessibilityLabel={spoken || "No sets"}>
+      {parts.length === 0 ? (
+        <Text style={[styles.metaPillText, { color: ink }]}>No sets</Text>
+      ) : parts.map((p, i) => (
+        <Fragment key={p.kind}>
+          <View style={[styles.countDot, { backgroundColor: p.dot }, i > 0 && { marginLeft: 4 }]} />
+          <Text style={[styles.metaPillText, { color: ink }]}>
+            {p.n} {p.kind}{i === parts.length - 1 ? ` ${setWord(p.n)}` : ""}
+          </Text>
+        </Fragment>
+      ))}
+    </View>
+  );
 }
 
 export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
@@ -55,6 +96,7 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
   afterCycle?: React.ReactNode;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const router = useRouter();
   const { isKg } = useUnit();
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set());
 
@@ -133,6 +175,27 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
                     const noteKey = `${idx}|${ei}`;
                     const noteExpanded = expandedNotes.has(noteKey);
                     const note = ex.programNotes?.trim();
+                    // Legacy exercises may have `sets` undefined and rely on
+                    // warmupSets/workingSets — use normaliseSets so the renderer
+                    // never crashes on stale data.
+                    const sets = normaliseSets(ex);
+                    const targets = sets.map(s => targetText(s, !!ex.isIsometric, isKg));
+                    const warmupCount = sets.filter(s => s.type === "warmup").length;
+                    // A kind of set gets rows only when one of them has a target:
+                    // the count pill already says how many there are, and a set
+                    // with nothing typed in it was a row of the badge and the
+                    // bare word "reps". Decided per kind, because warm-ups are
+                    // often left blank while the working sets carry the numbers.
+                    const listed = (type: ProgramSet["type"]) => sets.some((s, i) => s.type === type && targets[i]);
+                    const listWarmups = listed("warmup");
+                    const listWorking = listed("working");
+                    let workingNo = 0;
+                    const rows = sets.flatMap((set, i) => {
+                      const isWarmup = set.type === "warmup";
+                      const label = isWarmup ? "W" : String(++workingNo);
+                      if (isWarmup ? !listWarmups : !listWorking) return [];
+                      return [{ key: i, isWarmup, label, target: targets[i] }];
+                    });
                     return (
                       <Animated.View
                         key={ex.id ?? `${ei}-${ex.name}`}
@@ -140,78 +203,76 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
                         style={[styles.exerciseRow, ei > 0 && { borderTopWidth: 1, borderTopColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)" }]}
                       >
                         <View style={styles.exerciseTop}>
-                          <Text style={[styles.exerciseName, { color: t.tp }]} numberOfLines={2}>{ex.name}</Text>
+                          {/* The name opens the exercise's page, as on the
+                              Workout tab (user request, 2026-10-30), with its
+                              custom details carried, so a program you don't
+                              own still opens its author's exercise. */}
+                          <TouchableOpacity
+                            style={styles.exerciseNameBtn}
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              router.navigate({ pathname: "/exercise-summary", params: exerciseSummaryParams(ex) });
+                            }}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={`View ${ex.name} summary`}
+                          >
+                            <Text style={[styles.exerciseName, { color: t.tp }]} numberOfLines={2}>{ex.name}</Text>
+                          </TouchableOpacity>
                           {ex.isIsometric && (
                             <View style={[styles.tag, { backgroundColor: `${ACCT}22` }]}>
                               <Text style={[styles.tagText, { color: ACCT }]}>HOLD</Text>
                             </View>
                           )}
                         </View>
-                        {(ex.restSeconds || note) && (
+                        <View style={styles.exerciseBody}>
                           <View style={styles.metaPills}>
+                            <SetCountPill warmups={warmupCount} working={sets.length - warmupCount} fill={t.field} ink={t.ts} />
                             {ex.restSeconds ? (
-                              <View style={[styles.metaPill, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
+                              <View style={[styles.metaPill, { backgroundColor: t.field }]}>
                                 <Ionicons name="time-outline" size={11} color={t.ts} />
                                 <Text style={[styles.metaPillText, { color: t.ts }]}>{fmtRest(ex.restSeconds)} rest</Text>
                               </View>
                             ) : null}
-                            {note ? (
-                              <Pressable
-                                onPress={() => toggleNote(noteKey)}
-                                style={({ pressed }) => [
-                                  styles.exerciseNotesPress,
-                                  { backgroundColor: isDark
-                                      ? (pressed ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.06)")
-                                      : (pressed ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.04)") },
-                                ]}
-                                accessibilityRole="button"
-                                accessibilityLabel={noteExpanded ? "Collapse note" : "Expand note"}
-                              >
-                                <Ionicons name="document-text-outline" size={12} color={t.ts} style={{ marginTop: 1 }} />
-                                <Text style={[styles.exerciseNotes, { color: t.ts }]} numberOfLines={noteExpanded ? undefined : 2}>
-                                  {note}
-                                </Text>
-                                <Ionicons
-                                  name={noteExpanded ? "chevron-up" : "chevron-down"}
-                                  size={12}
-                                  color={t.ts}
-                                  style={{ marginTop: 2 }}
-                                />
-                              </Pressable>
-                            ) : null}
                           </View>
-                        )}
-                        <View style={styles.setsList}>
-                          {(() => {
-                            // Legacy exercises may have `sets` undefined and rely on
-                            // warmupSets/workingSets — use normaliseSets so the renderer
-                            // never crashes on stale data.
-                            const sets = normaliseSets(ex);
-                            if (sets.length === 0) {
-                              return <Text style={[styles.setText, { color: t.ts }]}>No sets defined.</Text>;
-                            }
-                            return sets.map((set, si) => {
-                              const isWarmup = set.type === "warmup";
-                              const weight = set.weightKg?.trim();
-                              // In the unit it was written in, for everyone.
-                              const shown = weight ? prescribedWeight(weight, set.weightUnit, isKg) : null;
-                              return (
-                                <View key={si} style={styles.setRow}>
-                                  <View style={[styles.setBadge, isWarmup
-                                    ? { backgroundColor: "rgba(255,191,15,0.18)" }
-                                    : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" },
-                                  ]}>
-                                    <Text style={[styles.setBadgeText, { color: isWarmup ? "#ffbf0f" : t.tp }]}>
-                                      {isWarmup ? "W" : String(si + 1)}
+                          {note ? (
+                            <Pressable
+                              onPress={() => toggleNote(noteKey)}
+                              style={({ pressed }) => [
+                                styles.exerciseNotesPress,
+                                { backgroundColor: pressed ? t.div : t.field },
+                              ]}
+                              accessibilityRole="button"
+                              accessibilityLabel={noteExpanded ? "Collapse note" : "Expand note"}
+                            >
+                              <Ionicons name="document-text-outline" size={12} color={t.ts} style={{ marginTop: 1 }} />
+                              <Text style={[styles.exerciseNotes, { color: t.ts }]} numberOfLines={noteExpanded ? undefined : 2}>
+                                {note}
+                              </Text>
+                              <Ionicons
+                                name={noteExpanded ? "chevron-up" : "chevron-down"}
+                                size={12}
+                                color={t.ts}
+                                style={{ marginTop: 2 }}
+                              />
+                            </Pressable>
+                          ) : null}
+                          {rows.length > 0 && (
+                            <View style={styles.setsList}>
+                              {rows.map(row => (
+                                <View key={row.key} style={styles.setRow}>
+                                  <View style={[styles.setBadge, { backgroundColor: row.isWarmup ? `${WARMUP_ORANGE}2E` : t.field }]}>
+                                    <Text style={[styles.setBadgeText, { color: row.isWarmup ? WARMUP_ORANGE : t.tp }]}>
+                                      {row.label}
                                     </Text>
                                   </View>
-                                  <Text style={[styles.setText, { color: t.tp }]} numberOfLines={1}>
-                                    {shown ? `${shown.text} ${unitLabel(shown.unit)} · ` : ""}{setsSummary(set)}
+                                  <Text style={[styles.setText, { color: row.target ? t.tp : t.ts }]} numberOfLines={1}>
+                                    {row.target ?? "No target"}
                                   </Text>
                                 </View>
-                              );
-                            });
-                          })()}
+                              ))}
+                            </View>
+                          )}
                         </View>
                       </Animated.View>
                     );
@@ -242,13 +303,16 @@ const styles = StyleSheet.create({
 
   exerciseRow: { paddingTop: 12, marginTop: 8 },
   exerciseTop: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
-  exerciseName: { fontFamily: FontFamily.semibold, fontSize: 14, flex: 1 },
+  exerciseNameBtn: { flex: 1 },
+  exerciseName: { fontFamily: FontFamily.semibold, fontSize: 14 },
   tag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
   tagText: { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
-  metaPills: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: 8 },
+  exerciseBody: { gap: 8 },
+  metaPills: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
   metaPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
   metaPillText: { fontFamily: FontFamily.semibold, fontSize: 11 },
-  exerciseNotesPress: { flex: 1, flexDirection: "row", alignItems: "flex-start", gap: 6, paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
+  countDot: { width: 6, height: 6, borderRadius: 3 },
+  exerciseNotesPress: { flexDirection: "row", alignItems: "flex-start", gap: 6, paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
   exerciseNotes: { fontFamily: FontFamily.regular, fontSize: 12, flex: 1 },
   setsList: { gap: 6 },
   setRow: { flexDirection: "row", alignItems: "center", gap: 10 },

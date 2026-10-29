@@ -37,7 +37,7 @@ import ProgramRow, { CycleStrip, RowActions, StatusPill, rowButtonStyles } from 
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "../../../../components/trainer/ReviewStatusPill";
 import GroupSendSheet, { type GroupSendMode } from "../../../../components/trainer/GroupSendSheet";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../../../constants/theme";
-import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
+import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
 import { scrollEndPadding } from "../../../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../../../hooks/useFloatingBars";
 import { useTheme } from "../../../../contexts/ThemeContext";
@@ -118,7 +118,7 @@ function ReviewRequestRow({ review, sender, from, first, open, onToggle, onOpen,
       meta={`${from} · ${fmtAgo(review.sentAtISO)}`}
       trailing={awaiting ? (
         <BounceButton onPress={onOpen} accessibilityLabel={`Review ${review.programName}`}>
-          <View style={[rowButtonStyles.pill, { backgroundColor: t.ctrl, ...PILL_SHADOW }]}>
+          <View style={[rowButtonStyles.pill, cardButton(t)]}>
             <Text style={[rowButtonStyles.text, { color: t.tp }]}>Review</Text>
           </View>
         </BounceButton>

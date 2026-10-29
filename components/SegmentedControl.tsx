@@ -12,6 +12,11 @@ interface Props<K extends string> {
   value: K;
   onChange: (k: K) => void;
   style?: StyleProp<ViewStyle>;
+  /** Segments that can't be picked just now: dimmed, and a tap does nothing. */
+  disabled?: readonly K[];
+  /** What VoiceOver reads for a segment: "Show <label>" unless given (the
+   *  Progress charts' metric). */
+  segmentLabel?: (label: string) => string;
 }
 
 // iOS-native segmented-control track: a translucent gray wash (reads correctly
@@ -51,9 +56,10 @@ function SegDivider({ gap, animIdx, segW, color }: {
 /**
  * iOS-style segmented control: gray pill track, white (light) / lifted-navy
  * (dark) thumb that slides to the selected segment on the UI thread, with hairline
- * dividers between segments. Used below the Progress charts to switch the metric.
+ * dividers between segments. Used below the Progress charts to switch the metric,
+ * and on each set in the exercise sheet (warm-up or working).
  */
-export default function SegmentedControl<K extends string>({ options, value, onChange, style }: Props<K>) {
+export default function SegmentedControl<K extends string>({ options, value, onChange, style, disabled, segmentLabel }: Props<K>) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const [trackW, setTrackW] = useState(0);
@@ -110,18 +116,20 @@ export default function SegmentedControl<K extends string>({ options, value, onC
       )}
       {options.map(opt => {
         const active = opt.key === value;
+        const off = !!disabled?.includes(opt.key);
         return (
           <Pressable
             key={opt.key}
             style={styles.segment}
+            disabled={off}
             onPress={() => {
               if (active) return;
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               onChange(opt.key);
             }}
             accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={`Show ${opt.label}`}
+            accessibilityState={{ selected: active, disabled: off }}
+            accessibilityLabel={segmentLabel ? segmentLabel(opt.label) : `Show ${opt.label}`}
           >
             <Text
               numberOfLines={1}
@@ -131,6 +139,7 @@ export default function SegmentedControl<K extends string>({ options, value, onC
                   // Dark text on the white thumb (both modes).
                   ? { color: APP_LIGHT.tp, fontFamily: FontFamily.bold }
                   : { color: t.ts, fontFamily: FontFamily.semibold },
+                off && styles.labelOff,
               ]}
             >
               {opt.label}
@@ -180,5 +189,8 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 13,
+  },
+  labelOff: {
+    opacity: 0.35,
   },
 });

@@ -187,8 +187,9 @@ export type DialView = {
   ring: RingMotion;
   /** Time's up: the ring full and glowing. */
   glow: boolean;
-  /** How many of the dial's 60 ticks are lit: from the top round to the one
-   *  the time shown points at. */
+  /** How many of the dial's 60 ticks are lit: a minute clock, from the top
+   *  round to the one the seconds of the time shown point at. The ring is
+   *  the whole time; the ticks are only the minute it's in. */
   litTicks: number;
   /** −15s and +15s: always there on Timer, a rest or your countdown (user
    *  decision, 2026-10-15), never on the stopwatch. */
@@ -230,13 +231,17 @@ export type DialArgs = {
 };
 
 const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
-// The ticks lit run from the top round to the one the time shown points at,
-// that one included, so at 00:15 on the stopwatch the tick at the quarter is
-// lit. Rounded, they lit one short of it until half a second past (user
-// report, 2026-10-15). The stopwatch shows whole seconds gone; a countdown
-// shows them counted up, and its ticks follow the ring's fraction the same way.
+// The ticks are a minute clock, apart from the ring (user report, 2026-10-29:
+// they followed the ring's fraction, so on a rest longer than a minute the two
+// drew the same thing). They're lit from the top round to the one the seconds
+// of the time shown point at, that one included, so at 00:15 on the stopwatch
+// the tick at the quarter is lit. Rounded, they lit one short of it until half
+// a second past (user report, 2026-10-15). The stopwatch shows whole seconds
+// gone, its ticks filling over each minute. A countdown shows them counted up,
+// its ticks draining over each minute and full again on the minute: 02:00
+// and 01:00 are a whole minute still to go, so they read 60 seconds, not 0.
 const sweepTicks = (elapsedMs: number) => (elapsedMs > 0 ? (Math.floor(elapsedMs / 1000) % 60) + 1 : 0);
-const drainTicks = (fraction: number) => (fraction > 0 ? Math.min(60, Math.ceil(fraction * 60 - 1e-9) + 1) : 0);
+const drainTicks = (shownSec: number) => (shownSec > 0 ? Math.min(60, ((shownSec - 1) % 60) + 2) : 0);
 /** How often the dial looks again for a rest that's reached its end, until
  *  the rest timer ends it (it checks twice a second). */
 const REST_END_POLL_MS = 100;
@@ -290,18 +295,19 @@ export function dialView(args: DialArgs): DialView {
 
   if (rest.active) {
     const leftMs = Math.max(0, (rest.endsAt ?? now) - now);
+    // Counted up, as the pop-up counts it (RestTimerContext).
+    const shownSec = Math.ceil(leftMs / 1000);
     const fraction = rest.totalSec > 0 ? clamp01(leftMs / (rest.totalSec * 1000)) : 0;
     return {
       ...base,
       source: "rest",
-      // Counted up, as the pop-up counts it (RestTimerContext).
-      time: formatClock(Math.ceil(leftMs / 1000)),
+      time: formatClock(shownSec),
       label: "Rest",
       fraction,
       ring: rest.totalSec > 0 && rest.endsAt !== null
         ? { kind: "drain", endsAt: rest.endsAt, totalMs: rest.totalSec * 1000 }
         : { kind: "still", fraction },
-      litTicks: drainTicks(fraction),
+      litTicks: drainTicks(shownSec),
       less: "on",
       more: "on",
       main: "skip",
@@ -331,7 +337,7 @@ export function dialView(args: DialArgs): DialView {
     ring: phase === "running" && countdown.endsAt !== null
       ? { kind: "drain", endsAt: countdown.endsAt, totalMs: countdown.durationSec * 1000 }
       : { kind: "still", fraction },
-    litTicks: drainTicks(fraction),
+    litTicks: drainTicks(leftSec),
     // Before it starts, ±15s set its time, as far as it goes either way.
     less: ready && countdown.durationSec <= MIN_COUNTDOWN_SEC ? "off" : "on",
     more: ready && countdown.durationSec >= MAX_COUNTDOWN_SEC ? "off" : "on",
