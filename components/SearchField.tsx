@@ -1,6 +1,7 @@
 // The search field a page opens over its list: the Journal's Programs page
 // (app/program-history.tsx), Messages (app/trainer/messages.tsx), a group's
-// members (app/trainer/group/[id]), both My Trainers pages (app/my-trainers.tsx,
+// members (app/trainer/group/[id], and its member list in
+// app/trainer/group-edit.tsx), both My Trainers pages (app/my-trainers.tsx,
 // app/trainer/coaches.tsx) and Connect's people (app/connect.tsx), the shared
 // ones in both the trainer's and the gym user's views.
 //

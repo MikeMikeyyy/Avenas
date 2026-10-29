@@ -3,16 +3,35 @@
 //
 // People look as they do on the Trainer tab (user request, 2026-10-23: the
 // sheet drew initials where the tab shows photos): each client's photo, and
-// under a group's name the faces of the clients a tap on it ticks.
+// under a group's name the faces of everyone a send to it reaches.
 //
-// Groups are a SHORTCUT, not a separate delivery channel: tapping one ticks
-// every member, and the send still goes out as one shared_programs row per
-// person (migration 0013, unchanged). They land in the recipients' libraries
-// exactly like an individual send, and the sender's "Programs Sent"
-// groups them into a single card via the existing batch key.
+// Everything above the buttons scrolls as one, in the sheet's own scroll, and
+// Send and Cancel are its pinned footer (user report, 2026-10-29). Only the
+// clients used to scroll, in a box of a fixed 320pt, and with the groups and
+// header above it the sheet outgrew the screen, its top out of reach.
+//
+// A group picked is a send TO THE GROUP, as its own page sends one (user
+// report, 2026-10-29): everyone in it but me, a fellow trainer and anyone I'm
+// not connected to included, each row tagged with the group so it shows on the
+// group's Programs page (utils/trainerLists.ts:shareEntriesFor builds the
+// rows). It was a shortcut that ticked the people in it who were my clients and
+// sent to them one by one, so nothing showed on the group's page and the rest
+// of the group got nothing. The caller offers only groups I may send to (mine,
+// and those I'm a trainer in).
+//
+// A person ticked one by one gets it straight to them, on their own Trainer
+// tab, never through a group, whatever groups are ticked too (user report,
+// 2026-10-29). Groups and people are ticked apart: nothing ticks itself. (A
+// client in a group ticked used to show ticked by it and take the group's
+// copy, which put the program on the group's page as well.)
+//
+// Nothing moves once the sheet is open, so a tap lands where it was aimed: the
+// note about weights in the other unit, which arrives a moment after it opens,
+// sits under the list. At the top it pushed every row down as you reached for
+// one, onto the group above it.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -31,12 +50,15 @@ import { fetchPeopleUnits } from "../../lib/clientTraining";
 import { isCloudContactId } from "../../lib/chat";
 import { unitLabel, unitOf, type WeightUnit } from "../../utils/units";
 import type { Client } from "../../utils/trainerStore";
+import type { RecipientChoice } from "../../utils/trainerLists";
 import type { MemberFace } from "../../constants/groups";
 
-/** A group offered as a one-tap way to tick all its members. */
+/** A group a program can be sent to. */
 export type RecipientGroup = {
   id: string;
   name: string;
+  /** Everyone a send to it reaches: its members and the invites still to be
+   *  answered, me left out. */
   memberIds: string[];
   photoUri?: string;
   /** Its roster's faces, as its Trainer tab card shows them (the hub's
@@ -44,18 +66,33 @@ export type RecipientGroup = {
   faces?: MemberFace[];
 };
 
+const NO_GROUPS: RecipientGroup[] = [];
+
 interface Props {
   visible: boolean;
   programName: string;
   clients: Client[];
-  /** Optional group shortcuts. Omit (or pass []) to hide the section. */
+  /** The groups I may send to. Omit (or pass []) to hide the section. */
   groups?: RecipientGroup[];
-  /** Called with the chosen recipient IDs, or "all" if every client was selected via the toggle. */
-  onConfirm: (recipients: string[] | "all") => void;
+  /** Every client, or the groups and the clients picked. */
+  onConfirm: (choice: RecipientChoice) => void;
   onClose: () => void;
 }
 
-export default function RecipientPickerSheet({ visible, programName, clients, groups = [], onConfirm, onClose }: Props) {
+/** A row's tick: the accent circle with its glow when on, an outline when off. */
+function CheckCircle({ checked }: { checked: boolean }) {
+  const { isDark } = useTheme();
+  return (
+    <View style={[styles.check, checked
+      ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
+      : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
+    ]}>
+      {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
+    </View>
+  );
+}
+
+export default function RecipientPickerSheet({ visible, programName, clients, groups = NO_GROUPS, onConfirm, onClose }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   // The Trainer tab's card under a group's faces, which rings each one so the
@@ -63,11 +100,13 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
   const cardSurface = isDark ? NEU_BG_DARK : NEU_BG;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pickedGroups, setPickedGroups] = useState<Set<string>>(new Set());
   const [sendToAll, setSendToAll] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setSelected(new Set());
+      setPickedGroups(new Set());
       setSendToAll(false);
     }
   }, [visible]);
@@ -107,63 +146,88 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSendToAll(prev => {
       const next = !prev;
-      if (next) setSelected(new Set());
-      return next;
-    });
-  };
-
-  // Only members who are still in the client roster can receive: a member who
-  // was removed as a connection is no longer a valid recipient server-side.
-  const clientIds = useMemo(() => new Set(clients.map(c => c.id)), [clients]);
-  const sendableMembers = useCallback(
-    (g: RecipientGroup) => g.memberIds.filter(id => clientIds.has(id)),
-    [clientIds],
-  );
-
-  // Ticking a group ticks its members; untick when they're all already on.
-  const toggleGroup = (g: RecipientGroup) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSendToAll(false);
-    const ids = sendableMembers(g);
-    if (ids.length === 0) return;
-    setSelected(prev => {
-      const next = new Set(prev);
-      const allOn = ids.every(id => next.has(id));
-      for (const id of ids) {
-        if (allOn) next.delete(id);
-        else next.add(id);
+      if (next) {
+        setSelected(new Set());
+        setPickedGroups(new Set());
       }
       return next;
     });
   };
 
-  const canSend = sendToAll || selected.size > 0;
+  const toggleGroup = (g: RecipientGroup) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSendToAll(false);
+    if (g.memberIds.length === 0) return;
+    setPickedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(g.id)) next.delete(g.id);
+      else next.add(g.id);
+      return next;
+    });
+  };
+
+  /** How many people the send reaches, each once (shareEntriesFor). */
+  const reach = useMemo(() => {
+    if (sendToAll) return clients.length;
+    const people = new Set(selected);
+    for (const g of groups) {
+      if (pickedGroups.has(g.id)) for (const id of g.memberIds) people.add(id);
+    }
+    return people.size;
+  }, [sendToAll, clients.length, selected, groups, pickedGroups]);
+
+  const canSend = reach > 0;
 
   const ctaLabel = useMemo(() => {
     if (!canSend) return "Choose recipients";
     if (sendToAll) return `Send to all ${clients.length}`;
-    return `Send to ${selected.size} client${selected.size === 1 ? "" : "s"}`;
-  }, [canSend, sendToAll, selected.size, clients.length]);
+    if (pickedGroups.size === 0) return `Send to ${reach} client${reach === 1 ? "" : "s"}`;
+    return `Send to ${reach} ${reach === 1 ? "person" : "people"}`;
+  }, [canSend, sendToAll, clients.length, pickedGroups.size, reach]);
 
   const handleConfirm = () => {
     if (!canSend) return;
-    onConfirm(sendToAll ? "all" : Array.from(selected));
+    onConfirm(sendToAll
+      ? { all: true, groupIds: [], clientIds: [] }
+      : {
+          all: false,
+          // In the order they're listed, so the first group someone's in is
+          // the one their copy comes through (if they weren't ticked themselves).
+          groupIds: groups.filter(g => pickedGroups.has(g.id)).map(g => g.id),
+          clientIds: [...selected],
+        });
   };
 
   return (
-    <SimpleSheet visible={visible} onClose={onClose}>
+    <SimpleSheet
+      visible={visible}
+      onClose={onClose}
+      footer={
+        <View style={styles.actions}>
+          <BounceButton onPress={canSend ? handleConfirm : undefined}>
+            <View style={[styles.send, darkGlow(styles.send, isDark), { opacity: canSend ? 1 : 0.4 }]}>
+              <Text style={styles.sendText}>{ctaLabel}</Text>
+            </View>
+          </BounceButton>
+          <SheetPill label="Cancel" variant="cancel" onPress={onClose} style={{ marginTop: 8 }} />
+        </View>
+      }
+    >
       <View style={styles.header}>
         <Text style={[styles.title, { color: t.tp }]}>Send "{programName}"</Text>
-        <Text style={[styles.subtitle, { color: t.ts }]}>Pick which clients should receive this program.</Text>
-        {otherUnitIds.size > 0 && (
-          <Text style={[styles.subtitle, { color: t.ts }]}>
-            Anyone marked <Text style={{ color: PAUSED_ORANGE, fontFamily: FontFamily.semibold }}>{`logs in ${unitLabel(otherUnit)}`}</Text> will see your weights in the unit you entered them in.
-          </Text>
-        )}
+        <Text style={[styles.subtitle, { color: t.ts }]}>
+          {groups.length > 0 ? "Pick a group, or clients one by one." : "Pick which clients should receive this program."}
+        </Text>
       </View>
 
       <View style={styles.allWrap}>
-        <TouchableOpacity activeOpacity={0.85} onPress={toggleAll}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={toggleAll}
+          accessibilityRole="button"
+          accessibilityState={{ checked: sendToAll }}
+          accessibilityLabel={`Send to all ${clients.length} clients`}
+        >
           <NeuCard dark={isDark} radius={14}>
             <View style={styles.row}>
               <View style={[styles.allIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
@@ -175,12 +239,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                   {clients.length} {clients.length === 1 ? "client" : "clients"}
                 </Text>
               </View>
-              <View style={[styles.check, sendToAll
-                ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
-                : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
-              ]}>
-                {sendToAll && <Ionicons name="checkmark" size={14} color="#fff" />}
-              </View>
+              <CheckCircle checked={sendToAll} />
             </View>
           </NeuCard>
         </TouchableOpacity>
@@ -189,30 +248,30 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
       {groups.length > 0 && (
         <>
           <Text style={[styles.section, { color: t.ts }]}>OR PICK A GROUP</Text>
+          <Text style={[styles.sectionHint, { color: t.ts }]}>{"Everyone in it receives it, and it shows on the group's page."}</Text>
           <View style={styles.groupList}>
             {groups.map(g => {
-              const ids = sendableMembers(g);
-              const checked = !sendToAll && ids.length > 0 && ids.every(id => selected.has(id));
-              // Who a tap ticks, as faces: the roster's, less anyone it can't
-              // go to (me, and members who aren't my clients). Only when they
-              // cover everyone it ticks, so the row never shows fewer people
-              // than it sends to; otherwise the count.
-              const sendable = new Set(ids);
-              const faces = g.faces?.filter(f => sendable.has(f.id)) ?? [];
-              const showFaces = faces.length > 0 && faces.length === ids.length;
+              const checked = !sendToAll && pickedGroups.has(g.id);
+              const off = sendToAll || g.memberIds.length === 0;
+              // Who a send to it reaches, as faces: the roster's, less me. Only
+              // when they cover everyone it reaches, so the row never shows
+              // fewer people than it sends to; otherwise the count.
+              const reaches = new Set(g.memberIds);
+              const faces = g.faces?.filter(f => reaches.has(f.id)) ?? [];
+              const showFaces = faces.length > 0 && faces.length === g.memberIds.length;
               return (
                 <TouchableOpacity
                   key={g.id}
                   activeOpacity={0.85}
                   style={{ marginBottom: 10 }}
                   onPress={() => toggleGroup(g)}
-                  disabled={sendToAll || ids.length === 0}
+                  disabled={off}
                   accessibilityRole="button"
-                  accessibilityState={{ checked }}
-                  accessibilityLabel={`${checked ? "Deselect" : "Select"} everyone in ${g.name}`}
+                  accessibilityState={{ checked, disabled: off }}
+                  accessibilityLabel={`${checked ? "Deselect" : "Select"} ${g.name}, ${g.memberIds.length} ${g.memberIds.length === 1 ? "person" : "people"}`}
                 >
                   <NeuCard dark={isDark} radius={14}>
-                    <View style={[styles.row, (sendToAll || ids.length === 0) && { opacity: 0.45 }]}>
+                    <View style={[styles.row, off && { opacity: 0.45 }]}>
                       <GroupAvatar uri={g.photoUri} size={34} isDark={isDark} colorKey={g.id} />
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
@@ -222,16 +281,11 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                           </View>
                         ) : (
                           <Text style={[styles.rowMeta, { color: t.ts }]}>
-                            {ids.length} {ids.length === 1 ? "client" : "clients"}
+                            {g.memberIds.length} {g.memberIds.length === 1 ? "person" : "people"}
                           </Text>
                         )}
                       </View>
-                      <View style={[styles.check, checked
-                        ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
-                        : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
-                      ]}>
-                        {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
-                      </View>
+                      <CheckCircle checked={checked} />
                     </View>
                   </NeuCard>
                 </TouchableOpacity>
@@ -242,15 +296,27 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
       )}
 
       <Text style={[styles.section, { color: t.ts }]}>OR PICK INDIVIDUALLY</Text>
+      {groups.length > 0 ? (
+        <Text style={[styles.sectionHint, { color: t.ts }]}>{"Straight to them, on their own Trainer tab, not through a group."}</Text>
+      ) : null}
 
-      <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+      <View style={styles.list}>
         {clients.length === 0 ? (
           <Text style={[styles.empty, { color: t.ts }]}>You don't have any clients yet.</Text>
         ) : (
           clients.map(c => {
             const checked = !sendToAll && selected.has(c.id);
             return (
-              <TouchableOpacity key={c.id} activeOpacity={0.85} style={{ marginBottom: 10 }} onPress={() => toggleClient(c.id)} disabled={sendToAll}>
+              <TouchableOpacity
+                key={c.id}
+                activeOpacity={0.85}
+                style={{ marginBottom: 10 }}
+                onPress={() => toggleClient(c.id)}
+                disabled={sendToAll}
+                accessibilityRole="button"
+                accessibilityState={{ checked, disabled: sendToAll }}
+                accessibilityLabel={`${checked ? "Deselect" : "Select"} ${c.name}`}
+              >
                 <NeuCard dark={isDark} radius={14}>
                   <View style={[styles.row, sendToAll && { opacity: 0.45 }]}>
                     <Avatar
@@ -276,28 +342,22 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
                       </View>
                       {c.note ? <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={1}>{c.note}</Text> : null}
                     </View>
-                    <View style={[styles.check, checked
-                      ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
-                      : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
-                    ]}>
-                      {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
-                    </View>
+                    <CheckCircle checked={checked} />
                   </View>
                 </NeuCard>
               </TouchableOpacity>
             );
           })
         )}
-      </ScrollView>
-
-      <View style={styles.actions}>
-        <BounceButton onPress={canSend ? handleConfirm : undefined}>
-          <View style={[styles.send, darkGlow(styles.send, isDark), { opacity: canSend ? 1 : 0.4 }]}>
-            <Text style={styles.sendText}>{ctaLabel}</Text>
-          </View>
-        </BounceButton>
-        <SheetPill label="Cancel" variant="cancel" onPress={onClose} style={{ marginTop: 8 }} />
       </View>
+
+      {/* Under the list: it arrives after the sheet opens, and up top it moved
+          every row down as a finger reached for one. */}
+      {otherUnitIds.size > 0 && (
+        <Text style={[styles.subtitle, styles.unitNote, { color: t.ts }]}>
+          Anyone marked <Text style={{ color: PAUSED_ORANGE, fontFamily: FontFamily.semibold }}>{`logs in ${unitLabel(otherUnit)}`}</Text> will see your weights in the unit you entered them in.
+        </Text>
+      )}
     </SimpleSheet>
   );
 }
@@ -306,8 +366,10 @@ const styles = StyleSheet.create({
   header:     { paddingHorizontal: 24, paddingBottom: 14, gap: 4 },
   title:      { fontFamily: FontFamily.bold, fontSize: 20 },
   subtitle:   { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
+  unitNote:   { paddingHorizontal: 24, paddingBottom: 8 },
   allWrap:    { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 14 },
   section:    { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", paddingHorizontal: 24, marginBottom: 10 },
+  sectionHint: { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, paddingHorizontal: 24, marginTop: -6, marginBottom: 10 },
   list:       { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
   groupList:  { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 4 },
   empty:      { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },

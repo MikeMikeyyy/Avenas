@@ -1,8 +1,13 @@
 // "My Trainers" (trainer side) — rendered inside the /trainer/coaches route.
-// Lets a trainer also be coached by other trainers. Mirrors the visual language
-// of MyPTHome's "My Trainer" + "From Your Trainer" blocks, but supports a list
-// of trainers and adds a one-tap "Send to clients" action on accepted programs
-// so the trainer can pass a mentor's program down to their own roster.
+// Lets a trainer also be coached by other trainers: the trainers they're
+// connected with, each card's menu sending one a program, messaging them, or
+// taking them on as a client too.
+//
+// The programs those trainers send are on the Programs page now
+// (app/trainer/programs.tsx, TO ACCEPT and ADDED), where an added one's Send
+// passes it on to clients (user decision, 2026-10-29). They were listed here,
+// under "From Your Trainers", the only place a trainer could see a program
+// sent to them, with nothing on the Trainer tab to say one had come.
 //
 // The list is DERIVED from real accepted connections whose counterpart holds a
 // trainer account (utils/roster.ts), merged with any local/mock entries — the
@@ -12,39 +17,31 @@
 // The search field over the list (SearchField, the faded one) finds a trainer
 // by name. It narrows the trainers only; the programs below stay as they are.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
-import { scheduleCloudPush } from "../../lib/syncManager";
 
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import Avatar from "../Avatar";
-import TrashIcon from "../TrashIcon";
 import SearchField from "../SearchField";
 import PeopleIcon from "../icons/PeopleIcon";
 import SendIcon from "../icons/SendIcon";
 import UserRoundMinusIcon from "../icons/UserRoundMinusIcon";
 import UserRoundPlusIcon from "../icons/UserRoundPlusIcon";
-import RecipientPickerSheet from "./RecipientPickerSheet";
 import ProgramPickerSheet from "./ProgramPickerSheet";
+import SendForReviewSheet from "./SendForReviewSheet";
 import SimpleSheet from "./SimpleSheet";
 import SheetPill from "../SheetPill";
 import { RemoveCircleButton, RemoveModeBar } from "./RemoveMode";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT } from "../../constants/theme";
-import { darkGlow, pill, PILL_H_SM, PILL_H_XS } from "../../constants/buttons";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { darkGlow, pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import {
-  acceptSharedProgram,
   appendSharedPrograms,
-  dismissKeyOf,
-  dismissSharedBatch,
-  loadSharedPrograms,
-  migrateCoachReceivedShares,
   type AssignedPT,
-  type Client,
   type SharedProgram,
 } from "../../utils/trainerStore";
 import { resolveTrainerRoster } from "../../utils/roster";
@@ -55,33 +52,19 @@ import { isActiveNow, presenceLabel } from "../../utils/presence";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import { alertMessage } from "../../utils/errors";
 
-function fmtAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
-
 interface Props {
-  /** The trainer's clients — needed to power the "Send to clients" RecipientPickerSheet
-   *  and to distinguish outgoing shares (clientId is a client) from incoming
-   *  shares from a coach (clientId is not a client). */
-  clients: Client[];
   /** Live "last active" for connected trainers (the page's useConnectionPresence).
    *  Trainers without a real connection (legacy/mock) aren't in it and show no
    *  presence row. */
   presenceById: Map<string, string | null>;
 }
 
-export default function MyCoachesSection({ clients, presenceById }: Props) {
+export default function MyCoachesSection({ presenceById }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
 
   const [trainers, setTrainers] = useState<AssignedPT[]>([]);
-  const [received, setReceived] = useState<SharedProgram[]>([]);
-  const [passDownTarget, setPassDownTarget] = useState<SavedProgram | null>(null);
   /** Which trainers are also my clients — drives the toggle's wording. */
   const [trainerClientIds, setTrainerClientIds] = useState<Set<string>>(new Set());
   /** The trainer whose action sheet is open (null = closed). */
@@ -90,18 +73,16 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
   const [removing, setRemoving] = useState(false);
   /** Set while picking which program to send to `sendTo`. */
   const [sendTo, setSendTo] = useState<AssignedPT | null>(null);
+  /** Set while picking which program to ask `reviewWith` to review. */
+  const [reviewWith, setReviewWith] = useState<AssignedPT | null>(null);
   const [myPrograms, setMyPrograms] = useState<SavedProgram[]>([]);
 
-  // "None" is only true once we've looked. Both lists drew their empty states
-  // ("No trainers yet") during the load, to people who have trainers.
+  // "None" is only true once we've looked. The list drew its empty state ("No
+  // trainers yet") during the load, to people who have trainers.
   const [trainersLoaded, setTrainersLoaded] = useState(false);
-  const [receivedLoaded, setReceivedLoaded] = useState(false);
   const [search, setSearch] = useState("");
 
   const reload = useCallback(async () => {
-    // The trainer list resolves on its own. It used to wait for the incoming
-    // shares too (another network call) and for a share migration before that,
-    // neither of which it needs.
     const trainersTask = resolveTrainerRoster()
       .then(roster => {
         setTrainers(roster.trainers);
@@ -112,25 +93,11 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
       .catch(err => { if (__DEV__) console.warn("[avenas] resolve trainer roster", err); })
       .finally(() => setTrainersLoaded(true));
 
-    const sharesTask = (async () => {
-      try {
-        // Backfill the direction flag on any legacy incoming shares before reading.
-        await migrateCoachReceivedShares();
-        const [shares, progs] = await Promise.all([
-          loadSharedPrograms(),
-          getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-        ]);
-        setMyPrograms(Array.isArray(progs) ? progs : []);
-        // Incoming = a program another trainer sent ME (receivedFromCoachId).
-        setReceived(shares.filter(s => !!s.receivedFromCoachId));
-      } catch (err) {
-        if (__DEV__) console.warn("[avenas] load coach shares", err);
-      } finally {
-        setReceivedLoaded(true);
-      }
-    })();
+    // My programs, for a card's "Send a program".
+    const programsTask = getJSON<SavedProgram[]>(PROGRAMS_KEY, [])
+      .then(progs => setMyPrograms(Array.isArray(progs) ? progs : []));
 
-    await Promise.all([trainersTask, sharesTask]);
+    await Promise.all([trainersTask, programsTask]);
   }, []);
 
   // useFocusEffect (not useEffect) — this route stays mounted while the user
@@ -180,6 +147,17 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
       return;
     }
     setSendTo(trainer);
+  }, [myPrograms]);
+
+  /** Ask this trainer to review one of my programs, as a gym user asks theirs
+   *  (SendForReviewSheet, the same sheet). It comes back on my Programs page. */
+  const openSendForReview = useCallback((trainer: AssignedPT) => {
+    setMenuFor(null);
+    if (myPrograms.length === 0) {
+      Alert.alert("No programs", "Build a program before sending one for review.");
+      return;
+    }
+    setReviewWith(trainer);
   }, [myPrograms]);
 
   // Send one program to one trainer. Same cloud path PTHome's send uses, so it
@@ -265,120 +243,13 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
     setRemoving(true);
   }, []);
 
-  // Accepts in flight: a second tap while the first is on its way would
-  // otherwise say "added" twice (the store adds it once either way).
-  const accepting = useRef(new Set<string>());
-
-  const handleAccept = useCallback(async (share: SharedProgram) => {
-    if (share.acceptedAtISO || accepting.current.has(share.id)) return;
-    accepting.current.add(share.id);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    let importedId: string | null;
-    try {
-      importedId = await acceptSharedProgram(share.id);
-    } catch (e) {
-      // Deleted or archived since the card was drawn: the reload takes it away.
-      Alert.alert("Couldn't add program", alertMessage(e, "Check your connection and try again."));
-      await reload();
-      return;
-    } finally {
-      accepting.current.delete(share.id);
-    }
-    scheduleCloudPush(); // the accept materialised/updated @avenas/programs (a synced key)
-    const acceptedAt = new Date().toISOString();
-    setReceived(prev => prev.map(r => r.id === share.id
-      ? { ...r, acceptedAtISO: acceptedAt, acceptedProgramId: importedId ?? undefined }
-      : r
-    ));
-    Alert.alert("Program Added", `"${share.programName}" was added to your programs.`);
-  }, [reload]);
-
-  const handleOpenPassDown = useCallback(async (share: SharedProgram) => {
-    if (!share.acceptedProgramId) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (clients.length === 0) {
-      Alert.alert("No clients", "Add a client before passing a program down.");
-      return;
-    }
-    // Look up the materialised local program so the recipients receive a
-    // current snapshot (in case the user edited it after accepting).
-    const programs = await getJSON<SavedProgram[]>(PROGRAMS_KEY, []);
-    const local = programs.find(p => p.id === share.acceptedProgramId);
-    if (!local) {
-      Alert.alert("Program not found", "The accepted program no longer exists in your library.");
-      return;
-    }
-    setPassDownTarget(local);
-  }, [clients]);
-
-  const handleRemove = useCallback((share: SharedProgram) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const accepted = !!share.acceptedAtISO;
-    Alert.alert(
-      "Remove Program",
-      accepted
-        ? `Remove "${share.programName}" from your trainers list? Your accepted copy stays in your library.`
-        : `Remove "${share.programName}"? It comes back if your trainer sends it again or updates it.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          // A hide on this device, the same as removing a program from a gym
-          // user's trainer page (DISMISSED_SHARES_KEY). This called
-          // removeSharedProgram, which for a recipient stamps the row "deleted"
-          // and clears its acceptance: that's the "you deleted your copy"
-          // signal the SENDER sees as "Removed", and the list here doesn't
-          // filter on it, so the program came straight back — minus its tick.
-          onPress: async () => {
-            // Hides this version: a Send Update brings it back (dismissKeyOf).
-            await dismissSharedBatch(dismissKeyOf(share));
-            await reload();
-          },
-        },
-      ],
-    );
-  }, [reload]);
-
-  const handleConfirmPassDown = useCallback(async (recipients: string[] | "all") => {
-    if (!passDownTarget) return;
-    const now = new Date().toISOString();
-    const base = `share_${Date.now()}`;
-    // Expand "all" to explicit ids up front (same as PTHome's send flow): a
-    // literal "all" entry can only live in the LOCAL blob, so real connected
-    // clients would never receive it through the cloud path.
-    const targets = recipients === "all" ? clients.map(c => c.id) : recipients;
-    const entries: SharedProgram[] = targets.map((cid, i) => ({
-      id: `${base}_${i}`,
-      clientId: cid,
-      programId: passDownTarget.id,
-      programName: passDownTarget.name,
-      sentAtISO: now,
-      programSnapshot: passDownTarget,
-    }));
-    try {
-      await appendSharedPrograms(entries);
-    } catch (e) {
-      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
-      return;
-    }
-    const count = recipients === "all" ? clients.length : recipients.length;
-    Alert.alert("Program Sent", `"${passDownTarget.name}" was sent to ${count} client${count === 1 ? "" : "s"}.`);
-    setPassDownTarget(null);
-  }, [passDownTarget, clients]);
-
-  const trainerNameFor = (share: SharedProgram): string => {
-    const trainer = trainers.find(c => c.id === share.receivedFromCoachId);
-    return trainer?.name ?? "your trainer";
-  };
-
   const q = search.trim().toLowerCase();
   const shownTrainers = q ? trainers.filter(c => c.name.toLowerCase().includes(q)) : trainers;
 
   return (
     <View style={styles.wrap}>
       <Text style={[styles.sub, { color: t.ts }]}>
-        Trainers you receive programs from. Accept one and pass it on to your clients.
+        {"Trainers you're connected with. Programs they send you are on your Programs page, where you can pass them on to your clients."}
       </Text>
 
       {!trainersLoaded ? null : trainers.length === 0 ? (
@@ -467,116 +338,6 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
         </>
       )}
 
-      {/* Also when My Trainers is empty but a program came in: a trainer I've
-          filed as a client only can still send me one. */}
-      {(trainers.length > 0 || received.length > 0) && (
-        <>
-          <View style={styles.sectionHeadingRow}>
-            <Text style={[styles.sectionHeading, { color: t.tp }]}>From Your Trainers</Text>
-          </View>
-          {!receivedLoaded ? null : received.length === 0 ? (
-            <NeuCard dark={isDark} radius={16}>
-              <Text style={[styles.smallEmpty, { color: t.ts }]}>No programs received from your trainers yet.</Text>
-            </NeuCard>
-          ) : (
-            <View>
-              {received.map(r => {
-                const accepted = !!r.acceptedAtISO;
-                const cycle = r.programSnapshot?.cyclePattern ?? [];
-                return (
-                  <TouchableOpacity
-                    key={r.id}
-                    activeOpacity={0.85}
-                    onPress={() => router.navigate({ pathname: "/program-view", params: { sharedId: r.id } })}
-                    accessibilityRole="button"
-                    accessibilityLabel={`View ${r.programName}`}
-                    style={{ marginBottom: 10 }}
-                  >
-                    <NeuCard dark={isDark} radius={16}>
-                      <View style={styles.receivedInner}>
-                        <View style={styles.receivedTop}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{r.programName}</Text>
-                            <Text style={[styles.itemMeta, { color: t.ts }]}>
-                              From {trainerNameFor(r)} · {fmtAgo(r.sentAtISO)}
-                            </Text>
-                          </View>
-                          {accepted && (
-                            <View style={[styles.acceptedPill, { backgroundColor: `${ACCT}22` }]}>
-                              <Ionicons name="checkmark" size={12} color={ACCT} />
-                              <Text style={[styles.acceptedPillText, { color: ACCT }]}>Accepted</Text>
-                            </View>
-                          )}
-                        </View>
-                        {cycle.length > 0 && (
-                          <View style={styles.cycleGrid}>
-                            {cycle.map((day, i) => {
-                              const isTraining = day !== "Rest" && day !== "";
-                              return (
-                                <View
-                                  key={i}
-                                  style={[
-                                    styles.cycleChip,
-                                    isTraining
-                                      ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                                      : { backgroundColor: t.div },
-                                  ]}
-                                >
-                                  <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                                    {day || "Rest"}
-                                  </Text>
-                                </View>
-                              );
-                            })}
-                          </View>
-                        )}
-                        {accepted ? (
-                          <View style={styles.actionRow}>
-                            <BounceButton style={{ flex: 1 }} onPress={() => handleOpenPassDown(r)} needsConnection accessibilityLabel={`Send ${r.programName} to your clients`}>
-                              <View style={[styles.passBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.passBtn, isDark)]}>
-                                <SendIcon size={16} color="#fff" />
-                                <Text style={styles.passBtnText}>Send to my clients</Text>
-                              </View>
-                            </BounceButton>
-                            <BounceButton onPress={() => handleRemove(r)} accessibilityLabel={`Remove ${r.programName}`}>
-                              <NeuCard dark={isDark} radius={12} innerStyle={styles.removeIconBtnInner}>
-                                <TrashIcon size={16} color={DANGER_BRIGHT} />
-                              </NeuCard>
-                            </BounceButton>
-                          </View>
-                        ) : (
-                          <View style={styles.actionRow}>
-                            <BounceButton style={{ flex: 1 }} onPress={() => handleAccept(r)} needsConnection accessibilityLabel={`Accept ${r.programName}`}>
-                              <View style={[styles.acceptBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.acceptBtn, isDark)]}>
-                                <Ionicons name="checkmark" size={16} color="#fff" />
-                                <Text style={styles.acceptBtnText}>Accept</Text>
-                              </View>
-                            </BounceButton>
-                            <BounceButton style={{ flex: 1 }} onPress={() => handleRemove(r)} accessibilityLabel={`Remove ${r.programName}`}>
-                              <View style={[styles.removeBtn, { borderColor: DANGER_BRIGHT }]}>
-                                <Text style={[styles.removeBtnText, { color: DANGER_BRIGHT }]}>Remove</Text>
-                              </View>
-                            </BounceButton>
-                          </View>
-                        )}
-                      </View>
-                    </NeuCard>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-        </>
-      )}
-
-      <RecipientPickerSheet
-        visible={!!passDownTarget}
-        programName={passDownTarget?.name ?? ""}
-        clients={clients}
-        onConfirm={handleConfirmPassDown}
-        onClose={() => setPassDownTarget(null)}
-      />
-
       {/* Tapping a trainer's card. Sending a program works whether or not they
           are also your client — the connection is what allows it, not the
           filing. */}
@@ -587,6 +348,11 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
             label="Send a program"
             icon={c => <SendIcon size={18} color={c} />}
             onPress={() => menuFor && openSendProgram(menuFor)}
+          />
+          <SheetPill
+            label="Send for review"
+            icon={c => <Ionicons name="clipboard-outline" size={18} color={c} />}
+            onPress={() => menuFor && openSendForReview(menuFor)}
           />
           <SheetPill
             label="Message"
@@ -623,9 +389,20 @@ export default function MyCoachesSection({ clients, presenceById }: Props) {
         onPick={handleSendProgram}
         onClose={() => setSendTo(null)}
       />
+
+      {/* What I've sent for review shows on my Programs page, which re-reads
+          on its way in, so nothing here needs the new list. */}
+      <SendForReviewSheet
+        visible={reviewWith !== null}
+        trainer={reviewWith}
+        onClose={() => setReviewWith(null)}
+        onSent={NO_OP}
+      />
     </View>
   );
 }
+
+const NO_OP = () => {};
 
 const styles = StyleSheet.create({
   wrap:         { marginBottom: 8 },
@@ -633,8 +410,6 @@ const styles = StyleSheet.create({
   search:       { marginTop: 12 },
   // Messages' "No people match", value for value.
   noMatch:      { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
-  sectionHeadingRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 22, marginBottom: 10 },
-  sectionHeading: { fontFamily: FontFamily.bold, fontSize: 16 },
 
   emptyInner:   { padding: 24, alignItems: "center", gap: 10 },
   emptyIcon:    { width: 56, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
@@ -659,28 +434,4 @@ const styles = StyleSheet.create({
   presenceRow:  { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   presenceDot:  { width: 6, height: 6, borderRadius: 3 },
   presenceText: { fontFamily: FontFamily.regular, fontSize: 12 },
-
-
-  receivedInner:{ padding: 14, gap: 10 },
-  receivedTop:  { flexDirection: "row", alignItems: "center", gap: 12 },
-  itemName:     { fontFamily: FontFamily.semibold, fontSize: 14 },
-  itemMeta:     { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  acceptedPill: { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  acceptedPillText: { fontFamily: FontFamily.semibold, fontSize: 11 },
-
-  actionRow:    { flexDirection: "row", alignItems: "center", gap: 8 },
-  acceptBtn:    { ...pill(PILL_H_XS), gap: 6, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
-  acceptBtnText:{ fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
-  removeBtn:    { ...pill(PILL_H_XS), borderWidth: 1.5 },
-  removeBtnText:{ fontFamily: FontFamily.bold, fontSize: 13 },
-  removeIconBtnInner: { alignItems: "center", justifyContent: "center", paddingVertical: 12, paddingHorizontal: 20, minHeight: 44 },
-
-  passBtn:      { ...pill(PILL_H_SM), gap: 8, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.4, shadowRadius: 8 },
-  passBtnText:  { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
-
-  cycleGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 4 },
-  cycleChip:    { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
-  cycleChipText:{ fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
-
-  smallEmpty:   { fontFamily: FontFamily.regular, fontSize: 13, padding: 18, textAlign: "center" },
 });

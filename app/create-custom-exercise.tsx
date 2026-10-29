@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { pickFromLibrary } from "../lib/photoPicker";
+import { EXERCISE_PHOTO, pickFromLibrary, pickSquarePhoto } from "../lib/photoPicker";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
@@ -150,18 +150,14 @@ export default function CreateCustomExerciseScreen() {
   }, []);
 
   // Both through lib/photoPicker, which every photo pick in the app shares (no
-  // permission prompt first, one picker at a time).
+  // permission prompt first, one picker at a time); the photo framed on its
+  // Move and Scale.
   const pickImage = async () => {
     try {
-      const asset = await pickFromLibrary({
-        mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.7,
-      });
-      if (asset) {
+      const photo = await pickSquarePhoto(EXERCISE_PHOTO);
+      if (photo) {
         const dest = `${FileSystem.documentDirectory}exercise_icon_${Date.now()}.jpg`;
-        await FileSystem.copyAsync({ from: asset.uri, to: dest });
+        await FileSystem.copyAsync({ from: photo.uri, to: dest });
         setImageUri(dest);
       }
     } catch (e) {

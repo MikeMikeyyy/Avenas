@@ -3,7 +3,7 @@
 // builder are a draft until then (migration 0034): Send Back, and Send Update
 // after it, are what hand the client that version with an Accept on it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -25,7 +25,10 @@ import ProgramSummarySheet from "../../../components/ProgramSummarySheet";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
 import { darkGlow, PILL_RADIUS } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
+import { useAuth } from "../../../contexts/AuthContext";
 import { loadGroupReviewPrograms, loadSentPrograms, returnReview, type SentProgram } from "../../../utils/trainerStore";
+import { peekPTHub } from "../../../utils/trainerHub";
+import { firstName } from "../../../utils/trainerLists";
 import { alertMessage } from "../../../utils/errors";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../../../components/BackButton";
 
@@ -50,6 +53,8 @@ export default function ReviewScreen() {
   // How far up the workout bar reaches, so the page scrolls clear of it.
   const barsReach = useFloatingBarsReach();
   const offline = useOffline();
+  // The account the Trainer tab's saved copy belongs to (utils/pageSnapshot.ts).
+  const { userId } = useAuth();
 
   const [entry, setEntry] = useState<SentProgram | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -103,13 +108,32 @@ export default function ReviewScreen() {
     confirmReturn("Send Back", "Are you sure all changes have been made?");
   }, [confirmReturn]);
 
+  /**
+   * Who it goes back to, in words. A group review came from a member of the
+   * group, who may be nobody's client ("Send Back to Client" was wrong for
+   * them). A 1:1 one is from a client, or from a fellow trainer coached by me
+   * who asked from their My Trainers (user decision, 2026-10-29): named, when
+   * they aren't my client too. Read off the Trainer tab's saved copy.
+   */
+  const asker = useMemo(() => {
+    if (entry?.groupId) return { the: "the member", The: "The member", To: "Member" };
+    const hub = peekPTHub(userId ?? "");
+    const isClient = !!entry?.senderId && !!hub?.clients.some(c => c.id === entry.senderId);
+    const trainer = !isClient && entry?.senderId ? hub?.trainers?.find(tr => tr.id === entry.senderId) : undefined;
+    if (trainer) {
+      const name = firstName(trainer.name);
+      return { the: name, The: name, To: name };
+    }
+    return { the: "the client", The: "The client", To: "Client" };
+  }, [entry, userId]);
+
   const handleSendUpdate = useCallback(() => {
     if (!entry) return;
     confirmReturn(
       "Send Update",
-      `Send the latest edits to the ${entry.groupId ? "member" : "client"}? They'll get a tick to accept the new version into their programs.`,
+      `Send the latest edits to ${asker.the}? They'll get a tick to accept the new version into their programs.`,
     );
-  }, [entry, confirmReturn]);
+  }, [entry, confirmReturn, asker]);
 
   if (!loaded) {
     return <View style={{ flex: 1, backgroundColor: t.bg }} />;
@@ -130,10 +154,6 @@ export default function ReviewScreen() {
 
   const snap = entry.programSnapshot;
   const isReturned = entry.status === "returned";
-  // Who it goes back to. A group review came from a member of the group, who
-  // may be nobody's client — "Send Back to Client" was wrong for them.
-  const who = entry.groupId ? "member" : "client";
-  const Who = entry.groupId ? "Member" : "Client";
   // Trainer made edits in the program builder AFTER the last Send Back —
   // surface a "Send Update to Client" CTA so they can push the new version.
   // A cloud review knows exactly (it has a draft); a local one compares times.
@@ -143,8 +163,8 @@ export default function ReviewScreen() {
   ));
   // Where the version they were sent stands: still theirs to accept, or taken.
   const returnedLine = entry.appliedAtISO
-    ? `Sent back. The ${who} has accepted your changes.`
-    : `Sent back. Waiting for the ${who} to accept it.`;
+    ? `Sent back. ${asker.The} has accepted your changes.`
+    : `Sent back. Waiting for ${asker.the} to accept it.`;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
@@ -184,10 +204,10 @@ export default function ReviewScreen() {
               to go back?", and that button belongs next to the name of the
               thing you're deciding about. */}
           {!isReturned ? (
-            <BounceButton style={{ marginTop: 14 }} onPress={handleSendBack} needsConnection accessibilityLabel={`Send back to the ${who}`}>
+            <BounceButton style={{ marginTop: 14 }} onPress={handleSendBack} needsConnection accessibilityLabel={`Send back to ${asker.the}`}>
               <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                 <Ionicons name="paper-plane-outline" size={16} color="#fff" />
-                <Text style={styles.sendBtnText}>{`Send Back to ${Who}`}</Text>
+                <Text style={styles.sendBtnText}>{`Send Back to ${asker.To}`}</Text>
               </View>
             </BounceButton>
           ) : hasUnsentEdits ? (
@@ -196,10 +216,10 @@ export default function ReviewScreen() {
                 <Ionicons name="checkmark-circle" size={18} color={ACCT} />
                 <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
               </View>
-              <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} needsConnection accessibilityLabel={`Send your latest edits to the ${who}`}>
+              <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} needsConnection accessibilityLabel={`Send your latest edits to ${asker.the}`}>
                 <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                   <Ionicons name="paper-plane-outline" size={16} color="#fff" />
-                  <Text style={styles.sendBtnText}>{`Send Update to ${Who}`}</Text>
+                  <Text style={styles.sendBtnText}>{`Send Update to ${asker.To}`}</Text>
                 </View>
               </BounceButton>
             </>

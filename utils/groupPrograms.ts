@@ -113,11 +113,14 @@ export function groupProgramLists({ groupShares, groupReviews, iCoachGroup, myUi
 
 /** What the Programs tile on the group's page says, and in which colour:
  *  `tone` "waiting" (orange: reviews waiting on a coach), "new" (periwinkle:
- *  something for me to accept) or "quiet" (grey). */
-export function groupProgramsTile(lists: GroupProgramLists, iCoachGroup: boolean): { line: string; tone: "waiting" | "new" | "quiet" } {
+ *  something for me to accept), "alert" (red: a request of mine a coach
+ *  removed without a review) or "quiet" (grey). */
+export function groupProgramsTile(lists: GroupProgramLists, iCoachGroup: boolean): { line: string; tone: "waiting" | "new" | "alert" | "quiet" } {
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   if (iCoachGroup && lists.toReview.length > 0) return { line: `${lists.toReview.length} to review`, tone: "waiting" };
   if (lists.toAccept.length > 0) return { line: `${plural(lists.toAccept.length, "new program")}`, tone: "new" };
+  const notReviewed = lists.sentForReview.filter(r => reviewStage(r) === "removed").length;
+  if (notReviewed > 0) return { line: `${notReviewed} not reviewed`, tone: "alert" };
   const awaiting = lists.sentForReview.filter(r => reviewStage(r) === "awaiting").length;
   if (!iCoachGroup && awaiting > 0) return { line: `${awaiting} awaiting review`, tone: "quiet" };
   const total = iCoachGroup ? lists.sent.length : lists.added.length;

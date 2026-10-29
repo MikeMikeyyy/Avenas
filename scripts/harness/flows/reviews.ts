@@ -4,13 +4,16 @@
 // sends updates), archives, restores or deletes it; Cara withdraws it while
 // it waits, accepts what came back, removes that card, deletes / archives /
 // restores her own program, which accepting writes over, and restores her
-// backup onto a new phone.
+// backup onto a new phone. One a trainer archives or deletes before sending it
+// back reads "Not reviewed" to her, on her Sent for Review page and on the
+// group's page, until she clears it (a restore takes it back to waiting).
 
 import { on } from "../app";
 import { OK, pressed, REFUSED, type Action, type Flow, type View } from "../explore";
 import { restoreOntoNewPhone } from "../restore";
 import { CARA, CARA_OWN, CODY, COLE, GROUP, resetWorld, TARA, type Person } from "../world";
 import type { SentProgram } from "../../../utils/trainerStore";
+import { reviewStage } from "../../../utils/trainerLists";
 import { groupAlertCounts } from "../../../utils/groupAlerts";
 import { archiveProgram, restoreProgram } from "../../../utils/programArchive";
 import { getJSON, setJSON } from "../../../utils/storage";
@@ -57,12 +60,16 @@ const status = (m: Model) => (m.returns > 0 ? "returned" : "sent");
 const listed = (m: Model) => m.exists && !m.closed && !m.archived;
 const inArchive = (m: Model) => m.exists && m.archived && !m.closed;
 const returnedCard = (m: Model) => m.exists && m.returns > 0 && m.removedAt !== m.returns;
+/** To Cara: a trainer archived or deleted it without ever sending it back,
+ *  "Not reviewed" (a restore from the archive takes it back to waiting). */
+const notReviewed = (m: Model) => m.exists && m.returns === 0 && (m.closed || m.archived);
 
 function expected(m: Model): View {
   const trainerCard = listed(m) ? { status: status(m), applied: m.applied, unsentEdits: m.draft !== null } : null;
   const archived = inArchive(m) ? { status: status(m) } : null;
   const v: View = {
-    caraWaiting: m.exists && m.returns === 0,
+    caraWaiting: m.exists && m.returns === 0 && !notReviewed(m),
+    caraNotReviewed: notReviewed(m),
     caraReturned: returnedCard(m) ? { applied: m.applied } : null,
     caraProgram: m.program === "none" ? null : { count: 1, archived: m.program === "archived", version: m.programVersion },
   };
@@ -71,8 +78,10 @@ function expected(m: Model): View {
   } else {
     const card = trainerCard;
     Object.assign(v, {
-      caraGroupPage: m.exists && (m.returns > 0 ? m.removedAt !== m.returns : !m.closed)
-        ? { returned: m.returns > 0, applied: m.applied } : null,
+      // Her own request stays on the group's page until she removes it: one a
+      // coach cleared without a review says so, rather than vanishing.
+      caraGroupPage: m.exists && (m.returns > 0 ? m.removedAt !== m.returns : true)
+        ? { returned: m.returns > 0, applied: m.applied, notReviewed: notReviewed(m) } : null,
       // Tara owns the group, so the row is addressed to her: it must still
       // stay out of her 1:1 inbox.
       taraInbox: null,
@@ -94,10 +103,12 @@ async function observe(kind: Kind): Promise<View> {
   await on(CARA, async () => {
     const [sent, dismissed] = await Promise.all([CARA.app.loadSentPrograms(), CARA.app.loadDismissedShareKeys()]);
     const mine = sent.find(isIt);
-    // A gym user's program pages: waiting on Sent for Review; come back on the
-    // From page until its changes are taken, then on Sent for Review as
+    // A gym user's program pages: waiting on Sent for Review (or Not reviewed
+    // there, once a trainer removed it without sending it back); come back on
+    // the From page until its changes are taken, then on Sent for Review as
     // Accepted (utils/trainerLists.ts fromTrainerLists / sentForReviewList).
-    v.caraWaiting = !!mine && mine.status !== "returned";
+    v.caraWaiting = !!mine && reviewStage(mine) === "awaiting";
+    v.caraNotReviewed = !!mine && reviewStage(mine) === "removed";
     v.caraReturned = mine && mine.status === "returned" && !CARA.app.isReturnedDismissed(mine, dismissed)
       ? { applied: !!mine.appliedAtISO } : null;
     const programs = (await getJSON<SavedProgram[]>(PROGRAMS_KEY, [])).filter(p => p.name === CARA_PLAN.name);
@@ -108,7 +119,9 @@ async function observe(kind: Kind): Promise<View> {
     };
     if (kind === "group") {
       const own = (await CARA.app.loadGroupReviewPrograms(GROUP)).find(s => isIt(s) && s.senderId === CARA.uid);
-      v.caraGroupPage = own ? { returned: own.status === "returned", applied: !!own.appliedAtISO } : null;
+      v.caraGroupPage = own
+        ? { returned: own.status === "returned", applied: !!own.appliedAtISO, notReviewed: reviewStage(own) === "removed" }
+        : null;
     }
   });
   await on(TARA, async () => {
@@ -387,6 +400,10 @@ export function reviewFlow(kind: Kind): Flow<Model> {
           t("Tara edits it in the builder"), t("Tara sends it back"), "Cara accepts the changes"],
         // A card removed on the old phone is back on the new one.
         [t("Tara sends it back"), "Cara removes the card", "Cara restores onto a new phone", "Cara accepts the changes"],
+        // Removed without a review: Not reviewed to Cara when it's archived,
+        // waiting again once it's restored, Not reviewed for good once deleted,
+        // and gone when she clears it (user request, 2026-10-29).
+        [t("Tara archives it"), t("Tara restores it"), t("Tara deletes it"), "Cara withdraws it (Sent to Trainer)"],
         ...(kind === "group" ? [
           [t("Cole edits it in the builder", "Cole"), t("Tara sends it back"), t("Cole archives it", "Cole"),
             "Cara accepts the changes", t("Tara restores it"), t("Cole deletes it", "Cole")],

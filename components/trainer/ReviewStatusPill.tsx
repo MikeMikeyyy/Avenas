@@ -8,6 +8,9 @@
 //   Returned         green tint: sent back, waiting on the person who asked.
 //   Accepted         solid green with a tick: they took the changes. Nothing
 //                    is left to do, which is what makes Remove the next step.
+//   Not reviewed     red tint, to the person who asked only: a trainer removed
+//                    it (archived or deleted) without sending it back (user
+//                    request, 2026-10-29: it read "Awaiting review" for good).
 //
 // "Returned" used to be the last state, so a review read the same whether the
 // person had accepted the changes or never looked, and a trainer couldn't tell
@@ -16,8 +19,9 @@
 import { StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
-import { ACCT, AWAITING_ORANGE } from "../../constants/theme";
+import { ACCT, AWAITING_ORANGE, DANGER, dangerTextColor } from "../../constants/theme";
 import { CARD_PILL, CARD_PILL_TEXT } from "../../constants/cards";
+import { useTheme } from "../../contexts/ThemeContext";
 import type { SentProgram } from "../../utils/trainerStore";
 import { reviewStage, type ReviewStage } from "../../utils/trainerLists";
 
@@ -30,27 +34,37 @@ export const REVIEW_STAGE_LABEL: Record<ReviewStage, string> = {
   awaiting: "Awaiting review",
   returned: "Returned",
   accepted: "Accepted",
+  removed: "Not reviewed",
 };
 
 /** The second sentence of a trainer's "Remove Program" prompt: what removing
  *  it leaves the person who asked with. Shared by the trainer hub and the group
- *  page, since a coach can remove the same review from either. */
+ *  page, since a coach can remove the same review from either. Archive and
+ *  Delete alike: either way it reads "Not reviewed" to them (a restore takes
+ *  it back to waiting). */
 export function removeReviewNote(r: SentProgram): string {
   switch (reviewStage(r)) {
-    case "awaiting": return "You haven't sent it back yet, so they'll still be waiting on a review.";
+    case "awaiting": return "You haven't sent it back yet, so they'll see it wasn't reviewed.";
     case "returned": return "They keep what you sent back and can still accept it.";
     case "accepted": return "They've already accepted your changes.";
+    // Only the person who asked ever reads this stage; no trainer's list holds it.
+    case "removed": return "They can already see it wasn't reviewed.";
   }
 }
 
 export default function ReviewStatusPill({ review }: { review: SentProgram }) {
+  const { isDark } = useTheme();
   const stage = reviewStage(review);
-  const tint = stage === "awaiting" ? AWAITING_ORANGE : ACCT;
+  const removed = stage === "removed";
+  const tint = stage === "awaiting" ? AWAITING_ORANGE : removed ? DANGER : ACCT;
   const solid = stage === "accepted";
+  // Not reviewed is the one they have to notice: red words, the ink a light
+  // card can carry.
+  const ink = solid ? "#fff" : removed ? dangerTextColor(isDark) : tint;
   return (
     <View style={[styles.pill, { backgroundColor: solid ? tint : `${tint}22` }]}>
       {solid && <Ionicons name="checkmark" size={12} color="#fff" />}
-      <Text style={[styles.text, { color: solid ? "#fff" : tint }]}>{REVIEW_STAGE_LABEL[stage]}</Text>
+      <Text style={[styles.text, { color: ink }]}>{REVIEW_STAGE_LABEL[stage]}</Text>
     </View>
   );
 }

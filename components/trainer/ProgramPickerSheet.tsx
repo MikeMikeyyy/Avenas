@@ -28,8 +28,18 @@ export default function ProgramPickerSheet({ visible, title, subtitle, programs:
   // the five callers, so none of them can forget.
   const programs = useMemo(() => unarchivedPrograms(all), [all]);
 
+  // Cancel is the sheet's footer, so it stays in reach should the sheet ever
+  // be as tall as the screen allows (components/trainer/SimpleSheet.tsx).
   return (
-    <SimpleSheet visible={visible} onClose={onClose}>
+    <SimpleSheet
+      visible={visible}
+      onClose={onClose}
+      footer={
+        <View style={{ paddingHorizontal: 20, paddingTop: 8 }}>
+          <SheetPill label="Cancel" variant="cancel" onPress={onClose} />
+        </View>
+      }
+    >
       <View style={styles.header}>
         <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
         {subtitle ? <Text style={[styles.subtitle, { color: t.ts }]}>{subtitle}</Text> : null}
@@ -74,9 +84,6 @@ export default function ProgramPickerSheet({ visible, title, subtitle, programs:
           ))
         )}
       </ScrollView>
-      <View style={{ paddingHorizontal: 20, paddingTop: 8 }}>
-        <SheetPill label="Cancel" variant="cancel" onPress={onClose} />
-      </View>
     </SimpleSheet>
   );
 }

@@ -19,7 +19,7 @@ import type {
   GroupReadRow,
   GroupRow,
 } from "./database.types";
-import type { Group, GroupInvite, GroupMember, GroupMessage } from "../constants/groups";
+import type { Group, GroupInvite, GroupMember, GroupMessage, GroupRole } from "../constants/groups";
 
 /** Every group the signed-in account belongs to (owned or joined), with its
  *  member count. Newest first. */
@@ -171,19 +171,29 @@ export async function setGroupMemberRole(
   if (error) throw new Error(error.message);
 }
 
-/** groupId → member ids, for every group the caller belongs to. One round trip
- *  (RLS already scopes group_members to my groups), which is what makes it cheap
- *  enough to feed the program-send recipient picker. Excludes the caller, since
- *  a trainer never sends a program to themselves. */
-export async function fetchAllGroupMemberships(uid: string): Promise<Record<string, string[]>> {
-  const { data, error } = await supabase.from("group_members").select("group_id, user_id");
+/** groupId → member ids, for every group the caller belongs to, and the
+ *  caller's own role in each. One round trip (RLS already scopes group_members
+ *  to my groups), which is what makes it cheap enough to feed the program-send
+ *  recipient picker. The members leave out the caller, since a trainer never
+ *  sends a program to themselves, and take in invites still to be answered, as
+ *  a send from the group's page does. The role says which groups the picker may
+ *  send to: one I own (`Group.isOwner`), or one whose owner made me a trainer. */
+export async function fetchAllGroupMemberships(uid: string): Promise<{
+  members: Record<string, string[]>;
+  myRoles: Record<string, Exclude<GroupRole, "owner">>;
+}> {
+  const { data, error } = await supabase.from("group_members").select("group_id, user_id, role");
   if (error) throw new Error(`load group members: ${error.message}`);
-  const out: Record<string, string[]> = {};
-  for (const r of (data as { group_id: string; user_id: string }[] | null) ?? []) {
-    if (r.user_id === uid) continue;
-    (out[r.group_id] ??= []).push(r.user_id);
+  const members: Record<string, string[]> = {};
+  const myRoles: Record<string, Exclude<GroupRole, "owner">> = {};
+  for (const r of (data as { group_id: string; user_id: string; role: string | null }[] | null) ?? []) {
+    if (r.user_id === uid) {
+      myRoles[r.group_id] = r.role === "trainer" ? "trainer" : "member";
+      continue;
+    }
+    (members[r.group_id] ??= []).push(r.user_id);
   }
-  return out;
+  return { members, myRoles };
 }
 
 /** Create a group and seed its members in one atomic call. Returns the new id. */

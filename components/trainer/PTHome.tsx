@@ -166,9 +166,13 @@ export default function PTHome() {
     [clients, favouriteMemberIds],
   );
 
+  // My own review requests count too: one sent back is new, one removed
+  // without a review is said in red.
+  const myRequests = hub?.myRequests;
+  const dismissedKeys = hub?.dismissedKeys;
   const programs = useMemo(
-    () => programsSummary(reviews, groupReviews, sharedOut),
-    [reviews, groupReviews, sharedOut],
+    () => programsSummary(reviews, groupReviews, sharedOut, myRequests ?? [], new Set(dismissedKeys ?? [])),
+    [reviews, groupReviews, sharedOut, myRequests, dismissedKeys],
   );
 
   // The group limits are checked against this list before anything is sent, so
@@ -321,6 +325,8 @@ export default function PTHome() {
         />
 
         <ProgramsCard
+          newPrograms={programs.newPrograms}
+          notReviewed={programs.notReviewed}
           toReview={programs.toReview}
           sent={programs.sent}
           onPress={() => router.navigate("/trainer/programs")}

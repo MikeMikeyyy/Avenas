@@ -282,10 +282,19 @@ export type SentProgram = {
    *  asked, not the coaches' to-do item. */
   completedAtISO?: string;
   /** The trainer (or, for a group review, a trainer of the group) archived it
-   *  off Programs Received (migration 0037). The person who asked never sees
-   *  this: it leaves the trainers' lists only, and the loads that serve the
-   *  person who asked ignore it. */
+   *  off Programs Received (migration 0037). It leaves the trainers' lists
+   *  only; the person who asked sees it as removedUnreviewedAtISO. */
   archivedAtISO?: string;
+  /**
+   * To the person who asked: a trainer took it off their list without sending
+   * it back, and when (user request, 2026-10-29: they were left reading
+   * "Awaiting review" for good). A 1:1 one deleted (deleted_by_recipient_at),
+   * a group one cleared from the group's queue (completed_at), or either
+   * archived (archived_at), so a restore from the archive takes it back to
+   * waiting. Set only on the asker's own view (rowToSent), so no trainer's list
+   * ever reads it. Absent once it's been sent back: they have their review.
+   */
+  removedUnreviewedAtISO?: string;
 };
 
 export const clientDataKey = (clientId: string) => `${CLIENT_DATA_PREFIX}${clientId}`;
@@ -456,6 +465,11 @@ function rowToSent(row: SharedProgramRow, uid: string): SentProgram {
     recipientId: row.recipient_id,
     completedAtISO: row.completed_at ?? undefined,
     archivedAtISO: row.archived_at ?? undefined,
+    // The asker's view only: deleted (or cleared from the group's queue)
+    // outranks archived, which a restore can still undo.
+    removedUnreviewedAtISO: mine && !row.returned_at
+      ? row.deleted_by_recipient_at ?? row.completed_at ?? row.archived_at ?? undefined
+      : undefined,
   };
 }
 
@@ -1270,6 +1284,25 @@ export async function loadSentPrograms(): Promise<SentProgram[]> {
 }
 
 /**
+ * The reviews a TRAINER has asked for: of a group (as a plain member of it, or
+ * a trainer of it asking the rest), of one of their own trainers, or from
+ * before they switched to a trainer account, newest first. For their Programs
+ * page (user report, 2026-10-29): loadSentPrograms is a trainer's inbox, so
+ * their own requests were on a group's page at best, and one sent back, or
+ * removed without a review, said so nowhere on their Trainer tab. A gym user's
+ * own requests are their loadSentPrograms. Cloud rows only; null when the
+ * server couldn't be asked, so the page keeps the list it last had.
+ */
+export async function loadMyReviewRequests(): Promise<SentProgram[] | null> {
+  const cloud = await fetchCloudRowsSafe();
+  if (!cloud) return null;
+  return cloud.rows
+    .filter(r => r.kind === "review" && r.sender_id === cloud.uid)
+    .map(r => rowToSent(r, cloud.uid))
+    .sort((a, b) => (a.sentAtISO < b.sentAtISO ? 1 : a.sentAtISO > b.sentAtISO ? -1 : 0));
+}
+
+/**
  * One group's review queue, from the group's point of view rather than mine.
  *
  * A group review is a single row addressed to the group's owner, so
@@ -1284,12 +1317,14 @@ export async function loadSentPrograms(): Promise<SentProgram[]> {
  * lookups and the program view all agree), even after a coach clears it from
  * the queue. For a trainer who asked a group they're a plain member of, this
  * is the only place it ever shows, and a coach's Remove used to take it away
- * before they'd accepted it. One never sent back leaves with the queue:
- * there's nothing on it to act on.
+ * before they'd accepted it. One never sent back stays too, as Not reviewed
+ * (removedUnreviewedAtISO), until I remove it (user request, 2026-10-29): it
+ * used to leave with the queue, so it simply vanished from the person who'd
+ * asked, with nothing to say a trainer had removed it.
  *
  * Someone else's review a trainer ARCHIVED is out of the queue too (it's in the
- * group's archive, loadGroupArchive). My own request never is: archiving is the
- * trainers tidying their list, and the person who asked doesn't see it.
+ * group's archive, loadGroupArchive). My own request never is: to me it reads
+ * Not reviewed, until a trainer restores it.
  */
 export async function loadGroupReviewPrograms(groupId: string): Promise<SentProgram[]> {
   const uid = await getMyUid().catch(() => null);
@@ -1307,10 +1342,10 @@ export async function loadGroupReviewPrograms(groupId: string): Promise<SentProg
     .filter(r => r.kind === "review")
     .map(r => rowToSent(r, uid))
     .filter(s => {
-      if (s.senderId === uid && s.status === "returned") return !isReturnedDismissed(s, dismissed);
+      if (s.senderId === uid) return s.status !== "returned" || !isReturnedDismissed(s, dismissed);
       if (s.completedAtISO) return false;
-      if (s.senderId && s.senderId !== uid && blocked.has(s.senderId)) return false;
-      return s.senderId === uid || !s.archivedAtISO;
+      if (s.senderId && blocked.has(s.senderId)) return false;
+      return !s.archivedAtISO;
     });
 }
 
@@ -1425,7 +1460,8 @@ export async function setSendBatchArchived(batchKey: string, archived: boolean, 
 /**
  * Archive a review off Programs Received, or restore it. A group review goes
  * for every trainer of the group, as Remove does; a 1:1 one is mine alone.
- * Either way the person who asked sees no change. THROWS when it didn't happen.
+ * Either way, one not sent back reads Not reviewed to the person who asked
+ * until it's restored (removedUnreviewedAtISO). THROWS when it didn't happen.
  */
 export async function setReviewArchived(id: string, archived: boolean): Promise<void> {
   if (isCloudShareId(id)) {

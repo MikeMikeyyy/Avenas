@@ -1,12 +1,12 @@
 // "My Trainers" (trainer side) — standalone page reached from the My Trainers
-// pill on PTHome. Lets a trainer connect to senior trainers/mentors, accept
-// programs they share, and pass those programs down to their own clients in one
-// tap. The connect button at the top right (the person with a plus, with a count
-// of the requests waiting) connects someone, as Connect does from anywhere;
-// "Remove a trainer" is at the foot of the list (user decision, 2026-10-21, as
-// the gym user's page has it; it was a "+" opening an Add / Remove alert).
+// pill on PTHome. Lets a trainer connect to senior trainers/mentors and send
+// them programs; what they send back is on the Programs page, where it's
+// accepted and passed on (user decision, 2026-10-29). The connect button at the
+// top right (the person with a plus, with a count of the requests waiting)
+// connects someone, as Connect does from anywhere; "Remove a trainer" is at the
+// foot of the list (user decision, 2026-10-21, as the gym user's page has it;
+// it was a "+" opening an Add / Remove alert).
 
-import { useCallback, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "../../components/MaskedView";
@@ -14,7 +14,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
-import { useRouter, useFocusEffect } from "expo-router";
+import { useRouter } from "expo-router";
 
 import FadeScreen from "../../components/FadeScreen";
 import GlassButton from "../../components/GlassButton";
@@ -26,8 +26,6 @@ import MyCoachesSection from "../../components/trainer/MyCoachesSection";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useConnectionPresence } from "../../hooks/useConnectionPresence";
-import { resolveTrainerRoster } from "../../utils/roster";
-import type { Client } from "../../utils/trainerStore";
 import BackButton, { BACK_LEFT, BACK_SIZE, BACK_TOP } from "../../components/BackButton";
 
 export default function CoachesScreen() {
@@ -40,19 +38,6 @@ export default function CoachesScreen() {
   // Read here and handed down, so the page polls connections once: the
   // connect button's count, and each trainer's presence line.
   const { presenceById, pendingIncoming } = useConnectionPresence();
-
-  const [clients, setClients] = useState<Client[]>([]);
-
-  useFocusEffect(useCallback(() => {
-    let cancelled = false;
-    (async () => {
-      // Resolver, not loadClients(): "Send to my clients" must target the same
-      // roster PTHome shows, which is derived from live connections.
-      const { clients: cs } = await resolveTrainerRoster();
-      if (!cancelled) setClients(cs);
-    })();
-    return () => { cancelled = true; };
-  }, []));
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -105,7 +90,7 @@ export default function CoachesScreen() {
 
         <OfflineBanner />
 
-        <MyCoachesSection clients={clients} presenceById={presenceById} />
+        <MyCoachesSection presenceById={presenceById} />
       </ScrollView>
 
       <KeyboardDismissButton />

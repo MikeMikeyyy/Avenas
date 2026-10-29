@@ -30,13 +30,11 @@ import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../components/FadeScreen";
 import NeuCard from "../../components/NeuCard";
-import BounceButton from "../../components/BounceButton";
 import BackButton, { BACK_SIZE, BACK_TOP } from "../../components/BackButton";
 import OfflineBanner from "../../components/OfflineBanner";
 import NotebookIcon from "../../components/icons/NotebookIcon";
-import ProgramRow, { CycleStrip, RowActions, rowButtonStyles } from "../../components/trainer/ProgramRow";
+import ProgramRow, { AcceptButton, CycleStrip, RowActions } from "../../components/trainer/ProgramRow";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, compareBlue } from "../../constants/theme";
-import { pillGlow } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { scheduleCloudPush } from "../../lib/syncManager";
@@ -61,19 +59,6 @@ function fmtAgo(iso: string): string {
   if (days === 1) return "yesterday";
   if (days < 7) return `${days}d ago`;
   return `${Math.floor(days / 7)}w ago`;
-}
-
-/** The green Accept on a row that's waiting on me: white words, as the app's
- *  other green buttons (user decision, 2026-10-21). */
-function AcceptButton({ onPress, accessibilityLabel }: { onPress: () => void; accessibilityLabel: string }) {
-  const { isDark } = useTheme();
-  return (
-    <BounceButton onPress={onPress} needsConnection accessibilityLabel={accessibilityLabel}>
-      <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
-        <Text style={rowButtonStyles.text}>Accept</Text>
-      </View>
-    </BounceButton>
-  );
 }
 
 export default function ReceivedProgramsScreen() {

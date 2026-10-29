@@ -22,6 +22,7 @@ import WorkoutActiveBar from "../components/WorkoutActiveBar";
 import UnfinishedWorkoutWatcher from "../components/UnfinishedWorkoutWatcher";
 import RestTimerBanner from "../components/RestTimerBanner";
 import ForceUpdateGate from "../components/ForceUpdateGate";
+import { PhotoFramerHost } from "../components/PhotoFramer";
 import { flushCloudPush, pushOwedBackup } from "../lib/syncManager";
 import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
@@ -224,6 +225,9 @@ function AppShell() {
                       was saved to the Journal unfinished, and reminds on the
                       way out. Draws nothing. */}
                   <UnfinishedWorkoutWatcher />
+                  {/* Move and Scale for a picked photo, over everything,
+                      the bars included (lib/photoPicker.ts:pickSquarePhoto). */}
+                  <PhotoFramerHost />
                 </View>
               </NavThemeProvider>
             </ForceUpdateGate>

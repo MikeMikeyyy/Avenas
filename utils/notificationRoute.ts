@@ -10,6 +10,12 @@
 // lands on their page. A gym user's tab has no Messages button, so a message
 // from a trainer who isn't on it would otherwise leave you in a chat with no
 // way back to them.
+//
+// A trainer's program notification opens their Programs page over the tab.
+// Every one the database sends to the Trainer tab is about a program (a
+// program or a review sent to me, or one sent back: 0013, 0034, 0040), and for
+// a trainer those are on that page (user decision, 2026-10-29); on the tab,
+// one sent to them was nowhere to be seen.
 
 import type { Href } from "expo-router";
 import type { AccountType } from "../contexts/AccountTypeContext";
@@ -17,6 +23,8 @@ import { resolveMyTrainers } from "./roster";
 import { featureTrainer, hydrateTrainerHub, peekGymHub } from "./trainerHub";
 
 const CHAT_URL = /^\/trainer\/chat\/([^/?#]+)$/;
+/** Where the database sends every program notification. */
+const PROGRAMS_PUSH_URL = "/trainer-hub";
 
 /** Who a message notification is from (its url is `/trainer/chat/<sender>`),
  *  or null for any other notification. */
@@ -35,6 +43,7 @@ export function chatSenderOf(url: string): string | null {
  * they are, so the tab is on them when you get back to it.
  */
 export async function notificationSteps(url: string, accountType: AccountType, owner: string): Promise<Href[]> {
+  if (accountType === "pt" && url === PROGRAMS_PUSH_URL) return [PROGRAMS_PUSH_URL, "/trainer/programs"];
   const sender = chatSenderOf(url);
   if (!sender || accountType !== "gym_user") return [url as Href];
 

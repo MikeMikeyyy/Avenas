@@ -34,6 +34,7 @@ import {
   loadClients,
   loadDismissedShareKeys,
   loadMyGroupReviews,
+  loadMyReviewRequests,
   loadSentPrograms,
   loadSharedPrograms,
   migrateBroadcastShares,
@@ -66,12 +67,24 @@ const HUB_KEYS: Record<HubKind, string> = { pt: PT_HUB_SNAPSHOT_KEY, gym: GYM_HU
 export type PTHubData = {
   /** People this trainer coaches: live connections over the local roster. */
   clients: Client[];
+  /** The trainers coaching them (My Trainers), so a program one of them sent
+   *  says who it's from on the Programs page. Absent on a copy saved before it
+   *  existed. */
+  trainers?: AssignedPT[];
   /** 1:1 reviews addressed to me. */
   reviews: SentProgram[];
   /** Open reviews posted to a group I coach. Same shape, different route in:
    *  they're addressed to the group's owner, so they reach me through the group
    *  policy rather than through my own inbox. */
   groupReviews: SentProgram[];
+  /** Reviews I've asked for myself (loadMyReviewRequests): sent back, in TO
+   *  ACCEPT; the rest in SENT FOR REVIEW. Absent on a copy saved before it
+   *  existed. */
+  myRequests?: SentProgram[];
+  /** What I've removed from my lists (DISMISSED_SHARES_KEY): the shares are
+   *  filtered at the load layer, my own reviews sent back aren't. Absent on an
+   *  older copy. */
+  dismissedKeys?: string[];
   /** Every share row I can see, both directions. */
   sharedOut: SharedProgram[];
   /** clientId → the name of their active program. */
@@ -83,6 +96,10 @@ export type PTHubData = {
   /** groupId → its other members' ids, so the send flow can offer "everyone in
    *  this group" without a second load. */
   groupMemberships: Record<string, string[]>;
+  /** The groups I may send a program to: mine, and those whose owner made me a
+   *  trainer (the database's can_coach_in_group). The send sheet offers only
+   *  these. Absent on a copy saved before it existed: the ones I own stand in. */
+  coachedGroupIds?: string[];
   /** groupId → unread messages in its thread, one half of a group's badge. */
   unreadByGroup: Record<string, number>;
   /** groupId → the faces on its card (loadGroupFaces). Absent on a copy saved
@@ -103,13 +120,17 @@ export type PTHubData = {
 
 export const EMPTY_PT_HUB: PTHubData = {
   clients: [],
+  trainers: [],
   reviews: [],
   groupReviews: [],
+  myRequests: [],
+  dismissedKeys: [],
   sharedOut: [],
   activeProgramByClient: {},
   groups: [],
   groupInvites: [],
   groupMemberships: {},
+  coachedGroupIds: [],
   unreadByGroup: {},
   groupFaces: {},
   favouriteGroupIds: [],
@@ -131,24 +152,28 @@ const loadNotices = (): Promise<ConnectionNotice[] | null> =>
 async function loadCoachGroups(prevFaces: Record<string, MemberFace[]>): Promise<{
   rows: GroupChatRow[];
   memberships: Record<string, string[]>;
+  coached: string[];
   invites: GroupInvite[];
   faces: Record<string, MemberFace[]>;
 } | null> {
   try {
     const uid = await getMyUid();
-    if (!uid) return { rows: [], memberships: {}, invites: [], faces: {} };
+    if (!uid) return { rows: [], memberships: {}, coached: [], invites: [], faces: {} };
     // A trainer gets invited to other trainers' groups the same way a gym user
     // does, so the invite list belongs on both hubs. loadGroupRows rather than
     // fetchMyGroups: it's the same groups with each thread's unread count
     // worked out, which is half of what the badge on a group card counts.
     const rowsP = loadGroupRows();
-    const [rows, memberships, invites, faces] = await Promise.all([
+    const [rows, { members, myRoles }, invites, faces] = await Promise.all([
       rowsP,
       fetchAllGroupMemberships(uid),
       fetchMyGroupInvites(),
       rowsP.then(rs => loadGroupFaces(rs.map(r => r.group.id), prevFaces)),
     ]);
-    return { rows, memberships, invites, faces };
+    const coached = rows
+      .filter(r => r.group.isOwner || myRoles[r.group.id] === "trainer")
+      .map(r => r.group.id);
+    return { rows, memberships: members, coached, invites, faces };
   } catch (e) {
     warn("load groups", e);
     return null;
@@ -185,12 +210,14 @@ async function loadPTHub(owner: string): Promise<PTHubData> {
   const seeded = await seedMockClientsIfNeeded();
 
   // Live connections joined with the local roster, bucketed by the
-  // counterpart's account type — a connected TRAINER belongs on the My
-  // Trainers page, not in here. Blocked ids and stale local snapshots of
-  // severed connections are filtered inside the resolver; offline it degrades
-  // to the local roster. Each client's active program needs the ids, which
-  // makes it the one read that waits on another.
-  const clientsP = resolveTrainerRoster().then(r => r.clients);
+  // counterpart's account type and by how I've filed each trainer: clients
+  // here, the trainers coaching me on My Trainers (kept too, so their programs
+  // say who they're from). Blocked ids and stale local snapshots of severed
+  // connections are filtered inside the resolver; offline it degrades to the
+  // local roster. Each client's active program needs the ids, which makes it
+  // the one read that waits on another.
+  const rosterP = resolveTrainerRoster();
+  const clientsP = rosterP.then(r => r.clients);
   const activeP = clientsP.then(cs => loadClientActivePrograms(cs.map(c => c.id)));
   // The share migrations rewrite the local list loadSharedPrograms reads, so
   // they run ahead of it (all on-device, no network).
@@ -200,12 +227,14 @@ async function loadPTHub(owner: string): Promise<PTHubData> {
     return loadSharedPrograms();
   })();
 
-  const [clients, activeProgramByClient, reviews, groupReviews, sharedOut, coachGroups, favGroups, favMembers, myUid, notices] =
+  const [{ clients, trainers }, activeProgramByClient, reviews, groupReviews, myRequests, dismissed, sharedOut, coachGroups, favGroups, favMembers, myUid, notices] =
     await Promise.all([
-      clientsP,
+      rosterP,
       activeP,
       loadSentPrograms(),
       loadMyGroupReviews(),
+      loadMyReviewRequests(),
+      loadDismissedShareKeys(),
       sharedP,
       loadCoachGroups(prev?.groupFaces ?? {}),
       loadFavouriteGroupIds(),
@@ -216,13 +245,17 @@ async function loadPTHub(owner: string): Promise<PTHubData> {
 
   return {
     clients,
+    trainers,
     reviews,
     groupReviews,
+    myRequests: myRequests ?? prev?.myRequests ?? [],
+    dismissedKeys: [...dismissed],
     sharedOut,
     activeProgramByClient,
     groups: coachGroups ? sortByFavourite(coachGroups.rows.map(r => r.group), favGroups) : prev?.groups ?? [],
     groupInvites: coachGroups ? coachGroups.invites : prev?.groupInvites ?? [],
     groupMemberships: coachGroups ? coachGroups.memberships : prev?.groupMemberships ?? {},
+    coachedGroupIds: coachGroups ? coachGroups.coached : prev?.coachedGroupIds,
     unreadByGroup: coachGroups
       ? Object.fromEntries(coachGroups.rows.map(r => [r.group.id, r.unreadCount]))
       : prev?.unreadByGroup ?? {},
@@ -462,6 +495,7 @@ const ptForDisk = (d: PTHubData): PTHubData => ({
   ...d,
   reviews: d.reviews.map(cycleOnly),
   groupReviews: d.groupReviews.map(cycleOnly),
+  myRequests: d.myRequests?.map(cycleOnly),
   sharedOut: d.sharedOut.map(cycleOnly),
 });
 

@@ -1,10 +1,13 @@
 // components/trainer/SendForReviewSheet.tsx
 //
-// A gym user sending one of their programs to their trainer for review: pick
-// it, and it goes. One sheet for the two places that send (the trainer card on
-// the Trainer tab, and the Sent for Review page), so they can't send
-// differently. It reads the person's own programs itself each time its screen
-// comes into view, so a program made a moment ago is there to pick.
+// Sending one of your programs to one of your trainers for review: pick it,
+// and it goes. One sheet for the places that send, so they can't send
+// differently: a gym user's trainer card on the Trainer tab and their Sent for
+// Review page, and a trainer's card menu on their own My Trainers page (user
+// decision, 2026-10-29: a trainer could send their trainer a program but not
+// ask them to review one). It reads the person's own programs itself each
+// time its screen comes into view, so a program made a moment ago is there to
+// pick.
 
 import { useCallback, useRef, useState } from "react";
 import { Alert } from "react-native";
@@ -70,7 +73,7 @@ export default function SendForReviewSheet({ visible, trainer, onClose, onSent }
     const fresh = await loadSentPrograms();
     const landed = fresh.some(s => sentKeyOf(s) === sentKeyOf(entry));
     onSent(landed ? fresh : [entry, ...fresh]);
-    Alert.alert("Sent", `"${program.name}" was sent to ${trainer.name}.`);
+    Alert.alert("Sent for Review", `"${program.name}" was sent to ${trainer.name} for review.`);
   }, [trainer, onSent]);
 
   return (

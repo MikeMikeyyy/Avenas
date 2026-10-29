@@ -25,7 +25,7 @@ import { ACCT, APP_DARK, APP_LIGHT, BTN_SLATE, BTN_SLATE_DARK, DANGER, FontFamil
 import { clearCoachingData, updateContactEmail, updateEmail, updateProfileName, uploadAvatar, updateAvatarUrl } from "../lib/cloud";
 import { changeAccountType } from "../lib/connectionRoles";
 import { isApplePrivateEmail } from "../lib/auth";
-import { pickFromLibrary, SQUARE_PHOTO } from "../lib/photoPicker";
+import { AVATAR_PHOTO, pickSquarePhoto } from "../lib/photoPicker";
 import { alertMessage } from "../utils/errors";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -190,16 +190,17 @@ export default function ProfileScreen() {
 
   // Pick from the library and STAGE it as a preview. The upload + persist happen
   // in onSave, so the photo only sticks once the user taps Save changes.
-  // Through lib/photoPicker, which every photo pick in the app shares.
+  // Through lib/photoPicker, which every photo pick in the app shares, framed
+  // on its Move and Scale.
   const pickPhoto = async (afterAlert = false) => {
     if (busy) return;
     try {
-      const asset = await pickFromLibrary(SQUARE_PHOTO, { afterAlert });
-      if (!asset) return;
+      const photo = await pickSquarePhoto(AVATAR_PHOTO, { afterAlert });
+      if (!photo) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      setPhotoChange({ type: "set", uri: asset.uri, mimeType: asset.mimeType });
+      setPhotoChange({ type: "set", uri: photo.uri, mimeType: photo.mimeType });
     } catch (e) {
-      Alert.alert("Couldn't open your photos", alertMessage(e, "Please try again."));
+      Alert.alert("Couldn't add photo", alertMessage(e, "Please try again."));
     }
   };
 

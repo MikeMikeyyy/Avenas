@@ -1,9 +1,9 @@
 // Read-only viewer for a SharedProgram's snapshot — walks each non-rest day
 // in the cycle and lists its exercises + sets. Reached by tapping a shared-
-// program card on either PTHome ("Programs Sent") or the My Coaches
-// page ("From Your Coaches"). Action buttons (Edit / Delete / Accept / Send
-// to clients) are surfaced contextually based on whether the share is the
-// trainer's own outgoing share or one received from a coach.
+// program card on a Programs page (what a trainer sent, or what was sent to
+// them or to a gym user) or a group's. Action buttons (Edit / Delete / Accept /
+// Send to clients) are surfaced contextually based on whether the share is the
+// trainer's own outgoing share or one sent to them.
 //
 // Also a trainer's window onto one of a CLIENT's own programs, from the client
 // page's Programs tab (?clientId=&programId=): the same header card, day
@@ -35,7 +35,7 @@ import SquarePenIcon from "../components/SquarePenIcon";
 import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT } from "../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER, DANGER_BRIGHT, dangerTextColor } from "../constants/theme";
 import { darkGlow, pill, PILL_H_SM } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { alertOffline, useOffline } from "../contexts/ConnectivityContext";
@@ -48,9 +48,9 @@ import {
   appendSharedPrograms,
   applyReturnedProgram,
   batchKeyOf,
-  loadClients,
   loadGroupReviewPrograms,
   loadGroupSharedPrograms,
+  loadMyReviewRequests,
   loadCachedClientData,
   loadSentPrograms,
   loadSharedPrograms,
@@ -62,6 +62,8 @@ import {
   type SharedProgram,
 } from "../utils/trainerStore";
 import { getJSON } from "../utils/storage";
+import { resolveTrainerRoster } from "../utils/roster";
+import { sentToSummary, shareEntriesFor, type RecipientChoice } from "../utils/trainerLists";
 import { archiveShareChoice, removeShareConfirm } from "../utils/removeShare";
 import { askArchiveOrDelete } from "../utils/archiveChoice";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
@@ -118,8 +120,16 @@ export default function ProgramViewScreen() {
     }
     const [shares, sents, cs, uid] = await Promise.all([
       loadSharedPrograms(),
-      sentId && groupId ? loadGroupReviewPrograms(groupId) : loadSentPrograms(),
-      loadClients(),
+      sentId && groupId
+        ? loadGroupReviewPrograms(groupId)
+        // A trainer's loadSentPrograms is their inbox: a review they asked for
+        // themselves (of one of their trainers) is among their requests.
+        : Promise.all([loadSentPrograms(), sentId && accountType === "pt" ? loadMyReviewRequests() : Promise.resolve(null)])
+          .then(([inbox, mine]) => [...inbox, ...(mine ?? [])]),
+      // A trainer's clients, for Send to my clients: the live roster the
+      // Trainer tab shows. It was the phone's own list (loadClients), which
+      // holds only local entries, so no real client could be sent to from here.
+      accountType === "pt" ? resolveTrainerRoster().then(r => r.clients) : Promise.resolve<Client[]>([]),
       // Who I am, so "did I send this" is a comparison rather than a guess.
       getMyUid().catch(() => null),
     ]);
@@ -128,7 +138,7 @@ export default function ProgramViewScreen() {
     setSent(sentId ? sents.find(s => s.id === sentId) ?? null : null);
     setClients(cs);
     setLoaded(true);
-  }, [sharedId, sentId, groupId, clientId, programId]);
+  }, [sharedId, sentId, groupId, clientId, programId, accountType]);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -363,32 +373,31 @@ export default function ProgramViewScreen() {
     setPassDownTarget(local);
   }, [share, clients]);
 
-  const handleConfirmPassDown = useCallback(async (recipients: string[] | "all") => {
+  // One row per client, "all" included: a single "all" entry only ever lived on
+  // this phone (appendSharedPrograms sends only real accounts' rows), so Send
+  // to all clients from here said "Program Sent" and reached nobody. And a
+  // send that fails says so, as every other send does.
+  const handleConfirmPassDown = useCallback(async (choice: RecipientChoice) => {
     if (!passDownTarget) return;
-    const now = new Date().toISOString();
-    const base = `share_${Date.now()}`;
-    const entries: SharedProgram[] = recipients === "all"
-      ? [{
-          id: base,
-          clientId: "all",
-          programId: passDownTarget.id,
-          programName: passDownTarget.name,
-          sentAtISO: now,
-          programSnapshot: passDownTarget,
-        }]
-      : recipients.map((cid, i) => ({
-          id: `${base}_${i}`,
-          clientId: cid,
-          programId: passDownTarget.id,
-          programName: passDownTarget.name,
-          sentAtISO: now,
-          programSnapshot: passDownTarget,
-        }));
-    await appendSharedPrograms(entries);
-    const count = recipients === "all" ? clients.length : recipients.length;
-    Alert.alert("Program Sent", `"${passDownTarget.name}" was sent to ${count} client${count === 1 ? "" : "s"}.`);
+    const entries = shareEntriesFor(
+      passDownTarget,
+      choice,
+      { clientIds: clients.map(c => c.id), groupMembers: {}, myUid },
+      Date.now(),
+    );
+    if (entries.length === 0) {
+      Alert.alert("No recipients", "Add a client before sending a program.");
+      return;
+    }
+    try {
+      await appendSharedPrograms(entries);
+    } catch (e) {
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
+      return;
+    }
+    Alert.alert("Program Sent", `"${passDownTarget.name}" was sent to ${sentToSummary([], entries.length)}.`);
     setPassDownTarget(null);
-  }, [passDownTarget, clients]);
+  }, [passDownTarget, clients, myUid]);
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
@@ -508,6 +517,14 @@ export default function ProgramViewScreen() {
                           <Text style={styles.primaryBtnText}>Open in My Programs</Text>
                         </View>
                       </BounceButton>
+                    ) : sent?.removedUnreviewedAtISO ? (
+                      // A trainer took it off their list without sending it
+                      // back: said here as on Sent for Review (user request,
+                      // 2026-10-29), rather than "Awaiting" for good.
+                      <View style={[styles.statusInfo, { backgroundColor: `${DANGER}1A` }]}>
+                        <Ionicons name="close-circle-outline" size={16} color={dangerTextColor(isDark)} />
+                        <Text style={[styles.statusInfoText, { color: dangerTextColor(isDark) }]}>Removed by the trainer without a review</Text>
+                      </View>
                     ) : (
                       <View style={[styles.statusInfo, { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
                         <Ionicons name="time-outline" size={16} color={t.ts} />

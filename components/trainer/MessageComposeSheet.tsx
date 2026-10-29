@@ -81,7 +81,33 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
   };
 
   return (
-    <SimpleSheet visible={visible} onClose={onClose}>
+    <SimpleSheet
+      visible={visible}
+      onClose={onClose}
+      // The input bar is the sheet's pinned footer, so it stays just above the
+      // keyboard however much the rest has to shrink to fit over it (on a
+      // small phone, the people above scroll), and the drag handle stays on
+      // the screen (slide-down to dismiss still works). Send sits inline.
+      footer={
+        <View style={styles.inputBar}>
+          <View style={[styles.composeBox, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "#ffffff", borderColor: t.div }]}>
+            <TextInput
+              style={[styles.composeInput, { color: t.tp }]}
+              value={text}
+              onChangeText={setText}
+              placeholder="Write a message…"
+              placeholderTextColor={t.ts}
+              multiline
+            />
+          </View>
+          <TouchableOpacity onPress={handleSend} disabled={!canSend} activeOpacity={0.8} accessibilityLabel={ctaLabel} accessibilityRole="button">
+            <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }, darkGlow(styles.sendBtn, isDark)]}>
+              <SendIcon size={18} color="#fff" />
+            </View>
+          </TouchableOpacity>
+        </View>
+      }
+    >
       <View style={styles.header}>
         <Text style={[styles.title, { color: t.tp }]}>New message</Text>
       </View>
@@ -146,26 +172,6 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
           })
         )}
       </ScrollView>
-
-      {/* Input bar — send sits inline so it stays just above the keyboard and the
-          sheet's drag handle remains visible (slide-down to dismiss still works). */}
-      <View style={styles.inputBar}>
-        <View style={[styles.composeBox, { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "#ffffff", borderColor: t.div }]}>
-          <TextInput
-            style={[styles.composeInput, { color: t.tp }]}
-            value={text}
-            onChangeText={setText}
-            placeholder="Write a message…"
-            placeholderTextColor={t.ts}
-            multiline
-          />
-        </View>
-        <TouchableOpacity onPress={handleSend} disabled={!canSend} activeOpacity={0.8} accessibilityLabel={ctaLabel} accessibilityRole="button">
-          <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }, darkGlow(styles.sendBtn, isDark)]}>
-            <SendIcon size={18} color="#fff" />
-          </View>
-        </TouchableOpacity>
-      </View>
     </SimpleSheet>
   );
 }

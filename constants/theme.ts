@@ -132,6 +132,16 @@ export const DANGER = "#E5484D";
 // There were three reds for this before (#FF4D4F, #E53935, #ef4444).
 export const DANGER_BRIGHT = "#FF4D4F";
 
+// DANGER as words on a light card, where DANGER itself is too pale for small
+// text (a review's "Not reviewed" pill, a tile's line): 5.9:1 on a white card,
+// 4.9:1 on DANGER's own pale tint.
+export const DANGER_INK = "#B8323A";
+
+/** The warning red for text: DANGER_INK on a light card, DANGER on a dark one. */
+export function dangerTextColor(isDark: boolean): string {
+  return isDark ? DANGER : DANGER_INK;
+}
+
 // ─── Favourites ───────────────────────────────────────────────────────────────
 // The star on a pinned group. A true yellow gold — the old #FFC24B carried
 // enough blue to read dull and muddy next to the brand green. Still distinct

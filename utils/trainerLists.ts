@@ -8,7 +8,10 @@
 //     moment, to one person, several, or a group);
 //   * what's been sent to them for review, 1:1 and from groups they coach,
 //     newest first, and where each stands;
-//   * the Programs card's two numbers: reviews waiting, programs sent.
+//   * programs sent to them (TO ACCEPT, ADDED);
+//   * the Programs card's three numbers: new programs, reviews waiting,
+//     programs sent;
+//   * the rows a send writes, for whatever the send sheet picked.
 //
 // And the same for a gym user's Trainer tab (components/trainer/MyPTHome.tsx):
 // what its Programs and Sent for Review pages list, the two tiles' numbers and
@@ -97,11 +100,13 @@ export function isReturnedDismissed(s: SentProgram, dismissed: Set<string>): boo
   return dismissed.has(returnedKeyOf(s)) || dismissed.has(sentKeyOf(s));
 }
 
-export type ReviewStage = "awaiting" | "returned" | "accepted";
+export type ReviewStage = "awaiting" | "returned" | "accepted" | "removed";
 
-/** Where a review stands: waiting on a trainer, sent back, or taken up. */
+/** Where a review stands: waiting on a trainer, sent back, or taken up. Or,
+ *  to the person who asked only, taken off the trainer's list without being
+ *  sent back (removedUnreviewedAtISO: "Not reviewed"). */
 export function reviewStage(r: SentProgram): ReviewStage {
-  if (r.status !== "returned") return "awaiting";
+  if (r.status !== "returned") return r.removedUnreviewedAtISO ? "removed" : "awaiting";
   return r.appliedAtISO ? "accepted" : "returned";
 }
 
@@ -122,7 +127,8 @@ export type SendBatch = {
 
 /**
  * Everything this trainer has sent, one entry per send, newest first. A
- * program a coach sent ME isn't mine to list here: it's on My Trainers.
+ * program someone sent ME isn't mine to list here: it's in TO ACCEPT or ADDED
+ * (trainerReceivedLists).
  */
 export function sendBatches(sharedOut: SharedProgram[]): SendBatch[] {
   const byKey = new Map<string, SharedProgram[]>();
@@ -163,17 +169,134 @@ export function receivedReviews(reviews: SentProgram[], groupReviews: SentProgra
   );
 }
 
-/** The Programs card's two numbers: reviews still waiting on this trainer,
- *  and programs they've sent (one per send). */
+/**
+ * Programs sent to this trainer, for their Programs page (user decision,
+ * 2026-10-29): TO ACCEPT, the ones not taken yet (newest first; one accepted
+ * once and deleted from My Programs since is here too, and Accept adds it
+ * back), and ADDED, the ones taken. From anyone, 1:1 or through a group, one
+ * per send. They used to be only at the foot of My Trainers, with nothing
+ * anywhere to say one had come, so a program sent to a trainer seemed never to
+ * arrive. The load layer has already left out the ones I've removed.
+ */
+export function trainerReceivedLists(sharedOut: SharedProgram[]): { waiting: SharedProgram[]; added: SharedProgram[] } {
+  const seen = new Set<string>();
+  const mine: SharedProgram[] = [];
+  for (const s of sharedOut) {
+    if (!s.receivedFromCoachId) continue;
+    const k = batchKeyOf(s);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    mine.push(s);
+  }
+  mine.sort((a, b) => newestFirst(a.sentAtISO, b.sentAtISO));
+  return { waiting: mine.filter(s => !s.acceptedAtISO), added: mine.filter(s => !!s.acceptedAtISO) };
+}
+
+/**
+ * A trainer's Programs page, the parts about programs coming TO them, as a gym
+ * user's two pages list them (fromTrainerLists, sentForReviewList): TO ACCEPT,
+ * their own requests sent back first, then programs sent to them not taken
+ * yet; ADDED; and SENT FOR REVIEW, their own requests still waiting, removed
+ * without a review, or taken up (user report, 2026-10-29: a trainer's own
+ * requests were on a group's page at best, and nothing on their Trainer tab
+ * said one had come back).
+ */
+export function trainerProgramLists(
+  sharedOut: SharedProgram[],
+  myRequests: SentProgram[],
+  dismissed: Set<string>,
+): { toAccept: FromTrainerItem[]; added: SharedProgram[]; sentForReview: SentProgram[] } {
+  const received = trainerReceivedLists(sharedOut);
+  const from = fromTrainerLists([...received.waiting, ...received.added], myRequests, dismissed);
+  return { toAccept: from.waiting, added: from.added, sentForReview: sentForReviewList(myRequests, dismissed) };
+}
+
+/** The Programs card's numbers: what's new to this trainer (programs sent to
+ *  them not taken yet, and their own requests sent back), their requests
+ *  removed without a review, reviews still waiting on them, and programs
+ *  they've sent (one per send). A program taken once and deleted since isn't
+ *  new: nothing new came, as on a gym user's tile. */
 export function programsSummary(
   reviews: SentProgram[],
   groupReviews: SentProgram[],
   sharedOut: SharedProgram[],
-): { toReview: number; sent: number } {
+  myRequests: SentProgram[] = [],
+  dismissed: Set<string> = new Set(),
+): { newPrograms: number; notReviewed: number; toReview: number; sent: number } {
+  const mine = trainerProgramLists(sharedOut, myRequests, dismissed);
   return {
+    newPrograms: mine.toAccept.filter(i => i.kind === "review" || !i.share.deletedByRecipientAtISO).length,
+    notReviewed: mine.sentForReview.filter(r => reviewStage(r) === "removed").length,
     toReview: receivedReviews(reviews, groupReviews).filter(r => reviewStage(r) === "awaiting").length,
     sent: sendBatches(sharedOut).length,
   };
+}
+
+// ─── Sending ─────────────────────────────────────────────────────────────────
+
+/** Who a send goes to, as the send sheet (components/trainer/RecipientPickerSheet.tsx)
+ *  answers it: every client, or the groups and the clients picked. */
+export type RecipientChoice = { all: boolean; groupIds: string[]; clientIds: string[] };
+
+/**
+ * The rows a send writes (appendSharedPrograms), one per person.
+ *
+ *   * every client: one each, as a send to people picked one by one;
+ *   * clients picked one by one: one each, straight to them, so it's on their
+ *     own Trainer tab and on no group's page, whatever groups are picked too
+ *     (user report, 2026-10-29: someone picked one by one who was also in a
+ *     group picked got the group's copy, which put it on the group's page);
+ *   * a group: everyone else in it but me (invites still to be answered too),
+ *     tagged with the group, as the group's own page sends it, so it shows on
+ *     the group's Programs page and reaches a fellow trainer or anyone else in
+ *     it who isn't my client (user report, 2026-10-29: a group picked here
+ *     ticked only the people in it who were my clients and sent to them one by
+ *     one).
+ *
+ * Everyone gets it once: someone picked one by one gets it straight even when a
+ * group picked has them, and someone in two of the groups gets the first's.
+ * Each group's rows, and the one-by-one rows, are a send of their own (their
+ * own sent time, so their own batch key), so the Programs page lists each
+ * where it went, as if sent from there.
+ */
+export function shareEntriesFor(
+  program: SavedProgram,
+  choice: RecipientChoice,
+  people: { clientIds: string[]; groupMembers: Record<string, string[]>; myUid: string | null },
+  nowMs: number,
+): SharedProgram[] {
+  const entries: SharedProgram[] = [];
+  const covered = new Set<string>(people.myUid ? [people.myUid] : []);
+  const add = (clientId: string, sentAtMs: number, groupId?: string) => {
+    if (covered.has(clientId)) return;
+    covered.add(clientId);
+    entries.push({
+      id: `share_${nowMs}_${entries.length}`,
+      clientId,
+      programId: program.id,
+      programName: program.name,
+      sentAtISO: new Date(sentAtMs).toISOString(),
+      programSnapshot: program,
+      ...(groupId ? { groupId } : {}),
+    });
+  };
+  if (choice.all) {
+    for (const id of people.clientIds) add(id, nowMs);
+    return entries;
+  }
+  // The ones picked one by one first: theirs is straight to them.
+  for (const id of choice.clientIds) add(id, nowMs);
+  choice.groupIds.forEach((groupId, i) => {
+    for (const id of people.groupMembers[groupId] ?? []) add(id, nowMs + i + 1, groupId);
+  });
+  return entries;
+}
+
+/** Where a send went, for "Program Sent": "Mon Strength and 2 clients". */
+export function sentToSummary(groupNames: string[], clientCount: number): string {
+  const parts = [...groupNames, ...(clientCount > 0 ? [`${clientCount} client${clientCount === 1 ? "" : "s"}`] : [])];
+  if (parts.length <= 1) return parts[0] ?? "no one";
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
 // ─── A gym user's Trainer tab ────────────────────────────────────────────────
@@ -222,29 +345,34 @@ export function fromTrainerLists(
 
 /**
  * What the Sent for Review page lists (app/trainer/sent-reviews.tsx): my
- * requests still waiting on a trainer, newest first, then the ones I've taken
- * the changes from ("Accepted"), most recently taken first. One sent back that
- * I haven't taken up is on the Programs page, since it's waiting on me now
- * rather than on them; one I've removed is on neither.
+ * requests still waiting on a trainer, newest first; then the ones a trainer
+ * removed without sending back ("Not reviewed"), most recently removed first;
+ * then the ones I've taken the changes from ("Accepted"), most recently taken
+ * first. One sent back that I haven't taken up is on the Programs page, since
+ * it's waiting on me now rather than on them; one I've removed is on neither.
  */
 export function sentForReviewList(sent: SentProgram[], dismissed: Set<string>): SentProgram[] {
   const waiting = sent
     .filter(s => reviewStage(s) === "awaiting")
     .sort((a, b) => newestFirst(a.sentAtISO, b.sentAtISO));
+  const notReviewed = sent
+    .filter(s => reviewStage(s) === "removed")
+    .sort((a, b) => newestFirst(a.removedUnreviewedAtISO ?? "", b.removedUnreviewedAtISO ?? ""));
   const accepted = sent
     .filter(s => reviewStage(s) === "accepted" && !isReturnedDismissed(s, dismissed))
     .sort((a, b) => newestFirst(a.appliedAtISO ?? "", b.appliedAtISO ?? ""));
-  return [...waiting, ...accepted];
+  return [...waiting, ...notReviewed, ...accepted];
 }
 
 /** The numbers on a gym user's two tiles: what's new from their trainers and
- *  everything on that page, what's still waiting on a trainer and everything
- *  on the Sent for Review page. */
+ *  everything on that page; and on the Sent for Review page, what's still
+ *  waiting on a trainer, what one removed without a review, what's been taken
+ *  up, and everything. */
 export function gymTileCounts(
   received: SharedProgram[],
   sent: SentProgram[],
   dismissed: Set<string>,
-): { newPrograms: number; fromTotal: number; awaiting: number; sentTotal: number } {
+): { newPrograms: number; fromTotal: number; awaiting: number; notReviewed: number; accepted: number; sentTotal: number } {
   const from = fromTrainerLists(received, sent, dismissed);
   const asked = sentForReviewList(sent, dismissed);
   return {
@@ -253,6 +381,8 @@ export function gymTileCounts(
     newPrograms: from.waiting.filter(i => i.kind === "review" || !i.share.deletedByRecipientAtISO).length,
     fromTotal: from.waiting.length + from.added.length,
     awaiting: asked.filter(s => reviewStage(s) === "awaiting").length,
+    notReviewed: asked.filter(s => reviewStage(s) === "removed").length,
+    accepted: asked.filter(s => reviewStage(s) === "accepted").length,
     sentTotal: asked.length,
   };
 }

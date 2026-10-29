@@ -57,6 +57,7 @@ import {
   compareBlue,
   compareBlueText,
   replacedTextColor,
+  dangerTextColor,
 } from "../../constants/theme";
 import { darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../constants/buttons";
 import { CARD_META, CARD_TITLE, SUMMARY_ROW } from "../../constants/cards";
@@ -280,9 +281,14 @@ export default function MyPTHome() {
   const programsMeta = tiles.newPrograms > 0
     ? plural(tiles.newPrograms, "new program")
     : tiles.fromTotal > 0 ? fromLine(trainers.length, pt ?? null) : "Nothing yet";
-  const sentMeta = tiles.awaiting > 0
-    ? `${tiles.awaiting} awaiting review`
-    : tiles.sentTotal > 0 ? `${tiles.sentTotal} accepted` : "Nothing sent yet";
+  // One a trainer removed without a review comes first, in red: it's the news
+  // (user request, 2026-10-29), where one still waiting is the usual state.
+  const sentMeta = tiles.notReviewed > 0
+    ? `${tiles.notReviewed} not reviewed`
+    : tiles.awaiting > 0
+      ? `${tiles.awaiting} awaiting review`
+      : tiles.accepted > 0 ? `${tiles.accepted} accepted` : "Nothing sent yet";
+  const sentInk = tiles.notReviewed > 0 ? dangerTextColor(isDark) : tiles.awaiting > 0 ? replacedTextColor(isDark) : t.ts;
   // Programs in the periwinkle of Compare; Sent for Review in the orange that
   // "Awaiting review" is everywhere. Marks in the colour, words in its ink.
   const programsMark = compareBlue(isDark);
@@ -437,7 +443,7 @@ export default function MyPTHome() {
               mark={sentMark}
               title="Sent for Review"
               meta={sentMeta}
-              metaColor={tiles.awaiting > 0 ? replacedTextColor(isDark) : t.ts}
+              metaColor={sentInk}
               onPress={() => router.navigate("/trainer/sent-reviews")}
               accessibilityLabel={`Sent for Review, ${sentMeta}`}
             />

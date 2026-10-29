@@ -6,7 +6,12 @@
 //     one newest-first list;
 //   * what a trainer has sent, one entry per send, a coach's program to them
 //     left out;
-//   * the Programs card's numbers: reviews still waiting, programs sent.
+//   * programs sent to a trainer: TO ACCEPT and ADDED, one per send;
+//   * the Programs card's numbers: new programs, reviews still waiting,
+//     programs sent;
+//   * the rows a send writes for what the send sheet picked: every client, a
+//     group (everyone in it, tagged with it), clients one by one (straight to
+//     them, even when a group picked has them), everyone once.
 //
 // And a gym user's Trainer tab:
 //
@@ -19,6 +24,7 @@
 // Run:  npx tsx scripts/verify-trainer-lists.ts
 
 import type { Client, SentProgram, SharedProgram } from "../utils/trainerStore";
+import type { SavedProgram } from "../constants/programs";
 import {
   batchKeyOf,
   firstName,
@@ -35,7 +41,12 @@ import {
   sendBatches,
   sentForReviewList,
   sentKeyOf,
+  sentToSummary,
+  shareEntriesFor,
   sortByFavourite,
+  trainerProgramLists,
+  trainerReceivedLists,
+  type RecipientChoice,
 } from "../utils/trainerLists";
 import { groupBatches, groupProgramLists, groupProgramsTile } from "../utils/groupPrograms";
 
@@ -107,9 +118,56 @@ eq(shares.map(s => s.id), ["s1", "s2", "s3", "s4"], "sends: the list it was give
 
 // ─── The Programs card ───────────────────────────────────────────────────────
 const groupWaiting = review("g", "2026-10-04T00:00:00.000Z", { groupId: "g1" });
-eq(programsSummary([oldest, middle], [groupWaiting], shares), { toReview: 2, sent: 2 },
-  "card: the reviews still waiting (1:1 and group, never one sent back), and the sends");
-eq(programsSummary([], [], []), { toReview: 0, sent: 0 }, "card: nothing yet");
+eq(programsSummary([oldest, middle], [groupWaiting], shares), { newPrograms: 1, notReviewed: 0, toReview: 2, sent: 2 },
+  "card: a coach's program to me not taken yet, the reviews still waiting (1:1 and group, never one sent back), and the sends");
+eq(programsSummary([], [], []), { newPrograms: 0, notReviewed: 0, toReview: 0, sent: 0 }, "card: nothing yet");
+
+// ─── Programs sent to a trainer (TO ACCEPT, ADDED) ───────────────────────────
+const fromCoach = (id: string, sentAtISO: string, extra: Partial<SharedProgram> = {}): SharedProgram =>
+  share(id, `p_${id}`, sentAtISO, { receivedFromCoachId: "coach_1", senderId: "coach_1", ...extra });
+const inOld = fromCoach("in1", "2026-10-03T00:00:00.000Z");
+const inNew = fromCoach("in2", "2026-10-09T00:00:00.000Z");
+const inTaken = fromCoach("in3", "2026-10-05T00:00:00.000Z", { acceptedAtISO: "2026-10-06T00:00:00.000Z" });
+const inDeletedCopy = fromCoach("in4", "2026-10-07T00:00:00.000Z", { deletedByRecipientAtISO: "2026-10-08T00:00:00.000Z" });
+const inGroup = fromCoach("in5", "2026-10-04T00:00:00.000Z", { groupId: "g1" });
+const myOwnSend = share("out1", "pMine", "2026-10-10T00:00:00.000Z");
+const trainerIn = trainerReceivedLists([inOld, myOwnSend, inTaken, inNew, inDeletedCopy, inGroup, { ...inGroup, id: "in5b" }]);
+eq(trainerIn.waiting.map(s => s.id), ["in2", "in4", "in5", "in1"],
+  "trainer inbox: sent to me and not taken (a copy deleted since too), newest first, one per send, through a group or not; my own send left out");
+eq(trainerIn.added.map(s => s.id), ["in3"], "trainer inbox: the ones I've taken");
+eq(programsSummary([], [], [inOld, inNew, inTaken, inDeletedCopy, myOwnSend]), { newPrograms: 2, notReviewed: 0, toReview: 0, sent: 1 },
+  "card: new leaves out one taken and one whose copy I deleted (nothing new came)");
+
+// ─── A send's rows ───────────────────────────────────────────────────────────
+{
+  const program = { id: "prog", name: "Block" } as SavedProgram;
+  const NOW = Date.parse("2026-10-29T10:00:00.000Z");
+  const at = (ms: number) => new Date(NOW + ms).toISOString();
+  // Three clients; group A has a client, a fellow trainer and someone I'm not
+  // connected to; group B has that trainer and another client.
+  const people = { clientIds: ["c1", "c2", "c3"], groupMembers: { gA: ["c1", "t9", "x7"], gB: ["t9", "c2"] }, myUid: "me" };
+  const rowsOf = (choice: RecipientChoice, who = people) =>
+    shareEntriesFor(program, choice, who, NOW).map(e => [e.clientId, e.groupId ?? null, e.sentAtISO]);
+
+  eq(rowsOf({ all: true, groupIds: [], clientIds: [] }), [["c1", null, at(0)], ["c2", null, at(0)], ["c3", null, at(0)]],
+    "send: every client, one each, as people picked one by one");
+  eq(rowsOf({ all: false, groupIds: ["gA"], clientIds: [] }), [["c1", "gA", at(1)], ["t9", "gA", at(1)], ["x7", "gA", at(1)]],
+    "send: a group reaches everyone in it, clients or not, each row tagged with it");
+  eq(rowsOf({ all: false, groupIds: ["gA", "gB"], clientIds: ["c1", "c3"] }),
+    [["c1", null, at(0)], ["c3", null, at(0)], ["t9", "gA", at(1)], ["x7", "gA", at(1)], ["c2", "gB", at(2)]],
+    "send: everyone once: picked one by one, straight to them even in a group picked; in two groups, the first's");
+  eq(rowsOf({ all: false, groupIds: [], clientIds: ["c1"] }), [["c1", null, at(0)]],
+    "send: one person picked is a send to them alone, whatever groups they're in");
+  eq(rowsOf({ all: false, groupIds: ["gA"], clientIds: [] }, { ...people, groupMembers: { gA: ["me", "c1"], gB: [] } }).map(r => r[0]), ["c1"],
+    "send: never to me");
+  eq(new Set(shareEntriesFor(program, { all: false, groupIds: ["gA", "gB"], clientIds: ["c3"] }, people, NOW).map(batchKeyOf)).size, 3,
+    "send: each group's rows and the one-by-one rows are a send each, so each is listed where it went");
+  eq(rowsOf({ all: false, groupIds: [], clientIds: [] }), [], "send: nothing picked, no rows");
+  eq(sentToSummary(["Mon Strength"], 2), "Mon Strength and 2 clients", "sent to: a group and clients");
+  eq(sentToSummary(["A", "B"], 1), "A, B and 1 client", "sent to: two groups and a client");
+  eq(sentToSummary([], 3), "3 clients", "sent to: clients only");
+  eq(sentToSummary(["A"], 0), "A", "sent to: one group");
+}
 
 // ─── A gym user's Programs and Sent for Review pages ─────────────────────────
 const D = (day: number) => `2026-10-${String(day).padStart(2, "0")}T00:00:00.000Z`;
@@ -139,9 +197,20 @@ eq(from.waiting.map(i => (i.kind === "review" ? i.review.id : i.share.id)), ["b2
 eq(from.added.map(s => s.id), ["g3"], "from: the programs I've accepted");
 eq(sentForReviewList(mySent, removed).map(s => s.id), ["w2", "w1", "b3"],
   "sent: still waiting, newest first, then the ones I took the changes from; removed ones left out");
-eq(gymTileCounts(myReceived, mySent, removed), { newPrograms: 4, fromTotal: 6, awaiting: 2, sentTotal: 3 },
+eq(gymTileCounts(myReceived, mySent, removed), { newPrograms: 4, fromTotal: 6, awaiting: 2, notReviewed: 0, accepted: 1, sentTotal: 3 },
   "tiles: new leaves out a copy I deleted (nothing new came), totals are what each page lists");
-eq(gymTileCounts([], [], new Set()), { newPrograms: 0, fromTotal: 0, awaiting: 0, sentTotal: 0 }, "tiles: nothing yet");
+eq(gymTileCounts([], [], new Set()), { newPrograms: 0, fromTotal: 0, awaiting: 0, notReviewed: 0, accepted: 0, sentTotal: 0 }, "tiles: nothing yet");
+
+// A request a trainer took off their list without sending it back: Not reviewed.
+const dropped = review("x1", D(4), { removedUnreviewedAtISO: D(6) });
+const droppedLater = review("x2", D(3), { removedUnreviewedAtISO: D(8) });
+eq(reviewStage(dropped), "removed", "not reviewed: off the trainer's list, never sent back");
+eq(reviewStage(askedNew), "awaiting", "not reviewed: one still on their list is still waiting");
+eq(sentForReviewList([askedOld, dropped, backTaken, askedNew, droppedLater], new Set()).map(s => s.id), ["w2", "w1", "x2", "x1", "b3"],
+  "sent: still waiting, then not reviewed (the latest removed first), then accepted");
+eq(gymTileCounts([], [askedOld, dropped, backTaken], new Set()), { newPrograms: 0, fromTotal: 0, awaiting: 1, notReviewed: 1, accepted: 1, sentTotal: 3 },
+  "tiles: not reviewed counted on its own, neither waiting nor accepted");
+eq(fromTrainerLists([], [dropped], new Set()).waiting, [], "from: one not reviewed isn't on the Programs page");
 eq(myReceived.map(s => s.id), ["g2", "g3", "g1", "g4"], "from: the lists it was given are left alone");
 
 // ─── Names and the My Trainers pill ──────────────────────────────────────────
@@ -204,6 +273,34 @@ eq(myTrainersBadge({}, [], null, 0), 0, "pill: nothing waiting");
   eq(groupProgramsTile(sentOnly, true), { line: "1 sent", tone: "quiet" }, "group tile, coach: what's been sent, quietly");
   eq(groupBatches(shares, true, "me").map(b => [b.programName, b.entries.length, b.acceptedCount]),
     [["summer", 2, 1], ["mobility", 1, 1], ["old", 1, 0]], "group sends: one per send, with how many have taken it");
+}
+
+// A trainer's own requests on their Programs page: one sent back leads TO
+// ACCEPT and counts as new; the rest are under SENT FOR REVIEW; one removed
+// without a review is counted in red.
+{
+  const toMeShare = share("tm1", "pT", D(3), { receivedFromCoachId: "coach_1", senderId: "coach_1" });
+  const myBack = review("mb", D(2), { status: "returned", returnedAtISO: D(6), senderId: "me" });
+  const myWaiting = review("mw", D(7), { senderId: "me" });
+  const myDropped = review("md", D(4), { senderId: "me", removedUnreviewedAtISO: D(8) });
+  const myTaken = review("mt", D(1), { status: "returned", returnedAtISO: D(2), appliedAtISO: D(3), senderId: "me" });
+  const requests = [myBack, myWaiting, myDropped, myTaken];
+  const lists = trainerProgramLists([toMeShare], requests, new Set());
+  eq(lists.toAccept.map(i => (i.kind === "review" ? i.review.id : i.share.id)), ["mb", "tm1"],
+    "trainer's page: my request sent back first in TO ACCEPT, then a program sent to me");
+  eq(lists.sentForReview.map(r => r.id), ["mw", "md", "mt"], "trainer's page: SENT FOR REVIEW is waiting, not reviewed, taken");
+  eq(programsSummary([], [], [toMeShare], requests, new Set()), { newPrograms: 2, notReviewed: 1, toReview: 0, sent: 0 },
+    "card: my request sent back is new too; one removed without a review counted in red");
+  eq(trainerProgramLists([], [myBack], new Set([returnedKeyOf(myBack)])).toAccept, [],
+    "trainer's page: one sent back that I removed from the list stays off it");
+}
+
+// My request to a group a coach removed without a review stays with me, in red.
+{
+  const mineDropped = review("gx", D(5), { groupId: "g", senderId: "me", removedUnreviewedAtISO: D(6) });
+  const lists = groupProgramLists({ groupShares: [], groupReviews: [mineDropped], iCoachGroup: false, myUid: "me" });
+  eq(lists.sentForReview.map(r => r.id), ["gx"], "group, member: my request a coach removed stays under Sent for Review");
+  eq(groupProgramsTile(lists, false), { line: "1 not reviewed", tone: "alert" }, "group tile, member: removed without a review, in red");
 }
 
 console.log(`${passed} passed, ${failed} failed`);

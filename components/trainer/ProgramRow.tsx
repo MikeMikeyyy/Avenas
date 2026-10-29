@@ -56,10 +56,25 @@ export function CycleStrip({ cycle }: { cycle: string[] }) {
   );
 }
 
+/** The green Accept on a row that's waiting on me, its own button: white
+ *  words, as the app's other green buttons (user decision, 2026-10-21). On a
+ *  gym user's Programs page and a trainer's. */
+export function AcceptButton({ onPress, accessibilityLabel }: { onPress: () => void; accessibilityLabel: string }) {
+  const { isDark } = useTheme();
+  return (
+    <BounceButton onPress={onPress} needsConnection accessibilityLabel={accessibilityLabel}>
+      <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
+        <Text style={rowButtonStyles.text}>Accept</Text>
+      </View>
+    </BounceButton>
+  );
+}
+
 /** The pair a row shows once it's open: a white button and the red Remove,
- *  the same width, as the cards before them had. `accept` puts a green Accept
- *  between them, for a row whose own button isn't Accept (a group's program
- *  sent to a trainer of it, opened from its Programs page). */
+ *  the same width, as the cards before them had. `accept` puts a green button
+ *  between them: Accept, for a row whose own button isn't Accept (a group's
+ *  program sent to a trainer of it, opened from its Programs page), or its
+ *  `label` (Send, on a trainer's program from someone else, to pass it on). */
 export function RowActions({ label, onOpen, onRemove, accessibilityLabel, removeLabel, removeNeedsConnection = true, accept }: {
   label: string;
   onOpen: () => void;
@@ -68,7 +83,7 @@ export function RowActions({ label, onOpen, onRemove, accessibilityLabel, remove
   removeLabel: string;
   /** False when Remove only hides it on this phone, which needs no signal. */
   removeNeedsConnection?: boolean;
-  accept?: { onPress: () => void; accessibilityLabel: string };
+  accept?: { onPress: () => void; accessibilityLabel: string; label?: string };
 }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -82,7 +97,7 @@ export function RowActions({ label, onOpen, onRemove, accessibilityLabel, remove
       {accept ? (
         <BounceButton style={{ flex: 1 }} onPress={accept.onPress} needsConnection accessibilityLabel={accept.accessibilityLabel}>
           <View style={[styles.actionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
-            <Text style={[styles.actionText, { color: "#fff" }]}>Accept</Text>
+            <Text style={[styles.actionText, { color: "#fff" }]}>{accept.label ?? "Accept"}</Text>
           </View>
         </BounceButton>
       ) : null}

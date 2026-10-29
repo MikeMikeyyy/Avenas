@@ -62,6 +62,7 @@ import {
   loadGroupReviewPrograms,
   loadGroupSharedPrograms,
   removeGroupSharedProgramBatch,
+  removeSentProgram,
   returnedKeyOf,
   setGroupReviewDone,
   setReviewArchived,
@@ -228,8 +229,11 @@ function BatchRow({ batch, kind, myUid, iCoachGroup, from, nameFor, first, open,
   );
 }
 
-/** My own request: back with changes (the green Accept), still waiting, or
- *  taken up. Nothing to do on one still waiting but see its cycle. */
+/** My own request: back with changes (the green Accept), still waiting, taken
+ *  up, or removed by a coach without being sent back (Not reviewed, in red,
+ *  with when; user request, 2026-10-29: it used to vanish from here). Nothing
+ *  to do on one still waiting but see its cycle; Remove on one not reviewed
+ *  clears it. */
 function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemove }: {
   review: SentProgram;
   first: boolean;
@@ -242,6 +246,7 @@ function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemov
   const { isDark } = useTheme();
   const stage = reviewStage(review);
   const back = stage === "returned";
+  const removed = stage === "removed";
   return (
     <ProgramRow
       first={first}
@@ -249,7 +254,9 @@ function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemov
       onToggle={onToggle}
       accessibilityLabel={`${review.programName}, ${back ? "back from review, to accept" : REVIEW_STAGE_LABEL[stage].toLowerCase()}`}
       title={review.programName}
-      meta={back ? `Back from review · ${fmtAgo(review.returnedAtISO ?? review.sentAtISO)}` : `Sent ${fmtAgo(review.sentAtISO)}`}
+      meta={back ? `Back from review · ${fmtAgo(review.returnedAtISO ?? review.sentAtISO)}`
+        : removed ? `Removed without a review · ${fmtAgo(review.removedUnreviewedAtISO ?? review.sentAtISO)}`
+        : `Sent ${fmtAgo(review.sentAtISO)}`}
       trailing={back ? (
         <BounceButton onPress={onAccept} needsConnection accessibilityLabel={`Accept the trainer's changes to ${review.programName}`}>
           <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
@@ -266,7 +273,9 @@ function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemov
           label={back ? "See Changes" : "View"}
           onOpen={onView}
           onRemove={onRemove}
-          removeNeedsConnection={false}
+          // Clearing one not reviewed deletes it (the server's); the others
+          // are a hide on this phone.
+          removeNeedsConnection={removed}
           accessibilityLabel={back ? `See the changes to ${review.programName}` : `View ${review.programName}`}
           removeLabel={`Remove ${review.programName} from your list`}
         />
@@ -556,6 +565,32 @@ export default function GroupProgramsScreen() {
     );
   }, []);
 
+  /** Clear my request a coach removed without a review. It's already off their
+   *  list, so this deletes it (removeSentProgram, as withdrawing one still
+   *  waiting does); my own program stays. */
+  const handleClearNotReviewed = useCallback((entry: SentProgram) => {
+    Alert.alert(
+      "Remove Program",
+      `Remove "${entry.programName}" from this list? Your own copy stays in your programs.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await removeSentProgram(entry.id);
+            } catch (e) {
+              Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+              return;
+            }
+            setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
+          },
+        },
+      ],
+    );
+  }, []);
+
   const batchRow = (b: GroupBatch, kind: "accept" | "sent" | "added", i: number) => (
     <BatchRow
       key={b.key}
@@ -583,7 +618,7 @@ export default function GroupProgramsScreen() {
       onToggle={() => toggleRow(`m:${r.id}`)}
       onAccept={() => handleAcceptReturned(r)}
       onView={() => viewReturned(r)}
-      onRemove={() => handleRemoveReturned(r)}
+      onRemove={() => (reviewStage(r) === "removed" ? handleClearNotReviewed(r) : handleRemoveReturned(r))}
     />
   );
   const reviewRow = (r: SentProgram, i: number) => (

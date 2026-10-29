@@ -8,7 +8,13 @@
 // messages") and Programs (orange while reviews wait on a coach, periwinkle
 // with something to accept); the green send button, "Send a Program" for the
 // group's trainers and "Send a Program for Review" for everyone else; then
-// Members, one line each in one card, with search and (the owner's) add.
+// Members, one line each in one card, with search and (the owner's) add. A
+// member's row opens their sheet (components/trainer/GroupMemberSheet.tsx,
+// which the member list in group-edit.tsx shares), Report included.
+//
+// The ⋯ menu's "Manage group" (the owner's) opens group-edit.tsx, where the
+// name, photo and members are changed and the group is deleted (user request,
+// 2026-10-29: it said "Manage members", and Delete sat in this menu).
 //
 // The group's programs are their own page now (./programs.tsx), where its
 // archive is too. They were sections down this page, under the banner and
@@ -39,6 +45,7 @@ import OfflineBanner from "../../../../components/OfflineBanner";
 import Avatar from "../../../../components/Avatar";
 import GroupAvatar from "../../../../components/trainer/GroupAvatar";
 import SimpleSheet from "../../../../components/trainer/SimpleSheet";
+import GroupMemberSheet from "../../../../components/trainer/GroupMemberSheet";
 import HubTile from "../../../../components/trainer/HubTile";
 import GroupSendSheet, { type GroupSendMode } from "../../../../components/trainer/GroupSendSheet";
 import KeyboardDismissButton from "../../../../components/KeyboardDismissButton";
@@ -47,7 +54,6 @@ import NotebookIcon from "../../../../components/icons/NotebookIcon";
 import UserPlusIcon from "../../../../components/icons/UserPlusIcon";
 import SendIcon from "../../../../components/icons/SendIcon";
 import PeopleIcon from "../../../../components/icons/PeopleIcon";
-import UserRoundMinusIcon from "../../../../components/icons/UserRoundMinusIcon";
 import FavouriteStar, { useFavouriteGold } from "../../../../components/FavouriteStar";
 import SheetPill from "../../../../components/SheetPill";
 import SearchField from "../../../../components/SearchField";
@@ -65,6 +71,7 @@ import {
   chatOrchidText,
   compareBlue,
   compareBlueText,
+  dangerTextColor,
   replacedTextColor,
   roleTextColor,
 } from "../../../../constants/theme";
@@ -75,10 +82,10 @@ import { useFloatingBarsReach } from "../../../../hooks/useFloatingBars";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
 import { useAuth } from "../../../../contexts/AuthContext";
-import { deleteGroup, fetchGroupMemberStatus, fetchGroupMembers, leaveGroup, setGroupMemberRole, setGroupMembers, subscribeToGroup } from "../../../../lib/groups";
+import { fetchGroupMemberStatus, fetchGroupMembers, leaveGroup, setGroupMemberRole, setGroupMembers, subscribeToGroup } from "../../../../lib/groups";
 import { isActiveNow, presenceLabel, PRESENCE_REFRESH_MS } from "../../../../utils/presence";
 import { getMyUid } from "../../../../lib/chat";
-import { loadGroupUnread, sortByFavourite, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
+import { loadFavouriteMemberIds, loadGroupUnread, sortByFavourite, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
 import { loadGroupReviewPrograms, loadGroupSharedPrograms } from "../../../../utils/trainerStore";
 import {
   dropGroupPage,
@@ -236,11 +243,21 @@ export default function GroupPageScreen() {
    * on the way back at once; then the load, in one render when it lands. The
    * cancel flag stops a load that outlives the visit from writing to the page;
    * a loaded result is saved regardless (loadGroupPage).
+   *
+   * Stars are this phone's alone and change on other pages while this one
+   * waits underneath (the member list, a client's page), so they're read
+   * straight off the device too, rather than waiting on the load (which never
+   * lands offline). Only a change touches the page.
    */
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     const saved = peekGroupPage(owner, groupId);
     if (saved) setPage(saved);
+    void loadFavouriteMemberIds().then(ids => {
+      if (cancelled) return;
+      const next = [...ids];
+      setPage(p => (p && next.join() !== p.favouriteMemberIds.join() ? { ...p, favouriteMemberIds: next } : p));
+    });
     void loadGroupPage(owner, groupId).then(result => { if (!cancelled) applyLoad(result); });
     void loadMyPrograms().then(progs => { if (!cancelled) setMyPrograms(progs); });
     return () => { cancelled = true; };
@@ -397,15 +414,23 @@ export default function GroupPageScreen() {
     }
   }, [searchOpen, kbHeight]);
 
+  // The keyboard goes first: a search left it up, and the sheet (its report
+  // reasons most of all) would open above it, half off the top of the screen.
   const openMemberMenu = useCallback((m: GroupMember) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Keyboard.dismiss();
     setMemberMenu(m);
   }, []);
 
+  /** Their client page, from their sheet: only ever offered for my client. */
+  const openClientPage = useCallback((m: GroupMember) => {
+    router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } });
+  }, [router]);
+
   // Promote to trainer, or demote back. Owner-only, and the RPC enforces that
-  // server-side too rather than trusting this screen.
+  // server-side too rather than trusting this screen. The member's sheet has
+  // closed by now, as it does before every action.
   const toggleRole = useCallback(async (m: GroupMember) => {
-    setMemberMenu(null);
     const next = m.role === "trainer" ? "member" : "trainer";
     try {
       await setGroupMemberRole(groupId, m.id, next);
@@ -427,7 +452,6 @@ export default function GroupPageScreen() {
   // page's copy could still list someone who has since left, and passing them
   // would invite them straight back.
   const removeMember = useCallback((m: GroupMember) => {
-    setMemberMenu(null);
     Alert.alert(
       m.accepted ? `Remove ${m.name}?` : `Cancel ${m.name}'s invite?`,
       m.accepted
@@ -531,32 +555,14 @@ export default function GroupPageScreen() {
     );
   };
 
-  const onDelete = () => {
-    setMenuOpen(false);
-    Alert.alert(
-      `Delete ${displayName}?`,
-      "The group and its messages are removed for everyone. Programs you've already sent stay in your clients' libraries.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Delete", style: "destructive", onPress: async () => {
-          try {
-            await deleteGroup(groupId);
-            dropGroupPage(groupId);
-            router.back();
-          } catch (e) {
-            Alert.alert("Couldn't delete group", alertMessage(e, "Check your connection and try again."));
-          }
-        } },
-      ],
-    );
-  };
-
   // The Programs tile's colour: orange while reviews wait on a coach,
   // periwinkle otherwise (a gym user's Programs tile's), its words the same
-  // colour's ink when there's something new and grey when not.
+  // colour's ink when there's something new, red when a request of mine was
+  // removed without a review, and grey when there's nothing.
   const programsMark = programsTile.tone === "waiting" ? AWAITING_ORANGE : compareBlue(isDark);
   const programsInk = programsTile.tone === "waiting" ? replacedTextColor(isDark)
-    : programsTile.tone === "new" ? compareBlueText(isDark) : t.ts;
+    : programsTile.tone === "new" ? compareBlueText(isDark)
+    : programsTile.tone === "alert" ? dangerTextColor(isDark) : t.ts;
   const chatLine = unread > 0 ? plural(unread, "new message") : "Message everyone";
 
   return (
@@ -788,73 +794,35 @@ export default function GroupPageScreen() {
             onPress={onToggleFavourite}
             accessibilityState={{ selected: isFavourite }}
           />
+          {/* The owner's page edits the name, photo and who's in the group,
+              and deletes it; anyone else's lists the members. */}
           <SheetPill
-            label={group?.isOwner ? "Manage members" : "View members"}
-            icon={c => <Ionicons name="people-outline" size={18} color={c} />}
+            label={group?.isOwner ? "Manage group" : "View members"}
+            icon={c => <Ionicons name={group?.isOwner ? "create-outline" : "people-outline"} size={18} color={c} />}
             onPress={openManage}
           />
-          {group?.isOwner ? (
-            <SheetPill label="Delete group" variant="danger" icon={c => <Ionicons name="trash-outline" size={18} color={c} />} onPress={onDelete} />
-          ) : (
+          {!group?.isOwner && (
             <SheetPill label="Leave group" variant="danger" icon={c => <Ionicons name="exit-outline" size={18} color={c} />} onPress={onLeave} />
           )}
         </View>
       </SimpleSheet>
 
-      {/* Per-member sheet, open to anyone: favouriting is here, so it can't be
-          owner-only. Each row below is gated by what you may actually do:
-          starring is yours alone and always available, the client page is a
-          coaching surface, and the role is the owner's to change. */}
-      <SimpleSheet visible={memberMenu !== null} onClose={() => setMemberMenu(null)}>
-        <Text style={[styles.menuName, { color: t.tp }]} numberOfLines={1}>{memberMenu?.name || "Member"}</Text>
-        <View style={styles.menu}>
-          {(() => {
-            const starred = !!memberMenu && favouriteMembers.has(memberMenu.id);
-            return (
-              <SheetPill
-                label={starred ? "Remove from favourites" : "Add to favourites"}
-                tint={starred ? favouriteGold : undefined}
-                icon={() => <FavouriteStar size={20} filled={starred} inactiveColor={t.tp} />}
-                onPress={() => {
-                  const m = memberMenu;
-                  setMemberMenu(null);
-                  if (m) void onToggleMemberFavourite(m.id);
-                }}
-                accessibilityState={{ selected: starred }}
-              />
-            );
-          })()}
-          {/* Only for someone who IS my client: the client page opens a person
-              from my own roster, so for anyone else it said "Client not found". */}
-          {iCoachGroup && accountType === "pt" && !!memberMenu && clients.some(c => c.id === memberMenu.id) && (
-            <SheetPill
-              label="Open client page"
-              icon={c => <Ionicons name="person-outline" size={18} color={c} />}
-              onPress={() => {
-                const m = memberMenu;
-                setMemberMenu(null);
-                if (m) router.navigate({ pathname: "/trainer/client/[id]", params: { id: m.id } });
-              }}
-            />
-          )}
-          {group?.isOwner && (
-            <SheetPill
-              label={memberMenu?.role === "trainer" ? "Make a member" : "Make a trainer"}
-              tint={memberMenu?.role === "trainer" ? undefined : ROLE_TRAINER}
-              icon={c => <Ionicons name={memberMenu?.role === "trainer" ? "arrow-down-circle-outline" : "shield-checkmark-outline"} size={18} color={c} />}
-              onPress={() => memberMenu && toggleRole(memberMenu)}
-            />
-          )}
-          {group?.isOwner && (
-            <SheetPill
-              label={memberMenu?.accepted === false ? "Cancel invite" : "Remove from group"}
-              variant="danger"
-              icon={c => <UserRoundMinusIcon size={18} color={c} />}
-              onPress={() => memberMenu && removeMember(memberMenu)}
-            />
-          )}
-        </View>
-      </SimpleSheet>
+      {/* Per-member sheet, open to anyone: favouriting and Report are there,
+          so it can't be owner-only. The client page is a coaching surface, for
+          my own clients; the role and removal are the owner's. */}
+      <GroupMemberSheet
+        member={memberMenu}
+        onClose={() => setMemberMenu(null)}
+        starred={!!memberMenu && favouriteMembers.has(memberMenu.id)}
+        onToggleFavourite={m => void onToggleMemberFavourite(m.id)}
+        onOpenClientPage={
+          iCoachGroup && accountType === "pt" && !!memberMenu && clients.some(c => c.id === memberMenu.id)
+            ? openClientPage
+            : undefined
+        }
+        onToggleRole={group?.isOwner ? toggleRole : undefined}
+        onRemove={group?.isOwner ? removeMember : undefined}
+      />
 
       <GroupSendSheet
         mode={picker}

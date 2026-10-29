@@ -5,15 +5,19 @@
 // Trainer Page canvas, "Tap Sent for Review"): Send a Program for Review at the
 // top, then what they've asked for, each row saying where it stands. Still
 // waiting on a trainer reads "Awaiting review", in the trainer's own orange
-// (ReviewStatusPill, so both ends of a review say the same thing); one they've
-// taken the changes from reads "Accepted". One sent back and not taken up yet
-// is on the From page instead, since it's waiting on them now.
+// (ReviewStatusPill, so both ends of a review say the same thing); one a
+// trainer removed without sending it back reads "Not reviewed", in red, with
+// who removed it and when (user request, 2026-10-29: it read "Awaiting review"
+// for good); one they've taken the changes from reads "Accepted". One sent back
+// and not taken up yet is on the From page instead, since it's waiting on them
+// now.
 //
 // Each row opens in place, as on the trainer's Programs page
 // (components/trainer/ProgramRow.tsx): its cycle, with View and Remove. Remove
 // on one still waiting takes it back from the trainer (they won't see it any
-// more; your own copy stays). On one accepted it only tidies this list, on this
-// phone, and the changes stay in your programs.
+// more; your own copy stays); on one not reviewed it clears it for good. On one
+// accepted it only tidies this list, on this phone, and the changes stay in
+// your programs.
 //
 // It reads and saves the same page copy as the Trainer tab (utils/trainerHub.ts).
 
@@ -35,7 +39,7 @@ import BackButton, { BACK_SIZE, BACK_TOP } from "../../components/BackButton";
 import OfflineBanner from "../../components/OfflineBanner";
 import SendIcon from "../../components/icons/SendIcon";
 import ProgramRow, { CycleStrip, RowActions } from "../../components/trainer/ProgramRow";
-import ReviewStatusPill from "../../components/trainer/ReviewStatusPill";
+import ReviewStatusPill, { REVIEW_STAGE_LABEL } from "../../components/trainer/ReviewStatusPill";
 import SendForReviewSheet from "../../components/trainer/SendForReviewSheet";
 import { ACCT, APP_DARK, APP_LIGHT, AWAITING_ORANGE, FontFamily } from "../../constants/theme";
 import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
@@ -104,19 +108,29 @@ export default function SentForReviewScreen() {
   /** The line under a request: who has it and since when, or when I took the
    *  changes. A group's name is looked up live, so a rename carries. */
   const metaOf = useCallback((s: SentProgram) => {
-    if (reviewStage(s) === "accepted") return `Changes added ${fmtAgo(s.appliedAtISO ?? s.returnedAtISO ?? s.sentAtISO)}`;
+    const stage = reviewStage(s);
+    if (stage === "accepted") return `Changes added ${fmtAgo(s.appliedAtISO ?? s.returnedAtISO ?? s.sentAtISO)}`;
+    const group = s.groupId ? groups.find(g => g.group.id === s.groupId)?.group.name ?? "a group" : undefined;
+    const to = !s.groupId && s.recipientId ? trainers.find(tr => tr.id === s.recipientId)?.name : undefined;
+    if (stage === "removed") {
+      const when = fmtAgo(s.removedUnreviewedAtISO ?? s.sentAtISO);
+      if (group) return `Removed from ${group} without a review · ${when}`;
+      return to ? `${firstName(to)} removed it without reviewing · ${when}` : `Removed without a review · ${when}`;
+    }
     const when = fmtAgo(s.sentAtISO);
-    if (s.groupId) return `Sent to ${groups.find(g => g.group.id === s.groupId)?.group.name ?? "a group"} ${when}`;
-    const to = s.recipientId ? trainers.find(tr => tr.id === s.recipientId)?.name : undefined;
+    if (group) return `Sent to ${group} ${when}`;
     return to ? `Sent to ${firstName(to)} ${when}` : `Sent ${when}`;
   }, [groups, trainers]);
 
   // Worded to match the button that opens it ("Remove"), and saying plainly
   // that your own copy is safe, since that's the worry a red button raises.
+  // One not reviewed is already off the trainer's list: this clears it here.
   const handleUnsend = useCallback((entry: SentProgram) => {
     Alert.alert(
       "Remove Program",
-      `Remove "${entry.programName}" from your trainer? They won't see it any more. Your own copy stays in your programs.`,
+      reviewStage(entry) === "removed"
+        ? `Remove "${entry.programName}" from this list? Your own copy stays in your programs.`
+        : `Remove "${entry.programName}" from your trainer? They won't see it any more. Your own copy stays in your programs.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -204,14 +218,15 @@ export default function SentForReviewScreen() {
         {list.length > 0 ? (
           <NeuCard dark={isDark} radius={16} style={{ marginTop: 24 }}>
             {list.map((s, i) => {
-              const accepted = reviewStage(s) === "accepted";
+              const stage = reviewStage(s);
+              const accepted = stage === "accepted";
               return (
                 <ProgramRow
                   key={s.id}
                   first={i === 0}
                   open={openRows.has(s.id)}
                   onToggle={() => toggleRow(s.id)}
-                  accessibilityLabel={`${s.programName}, ${accepted ? "accepted" : "awaiting review"}`}
+                  accessibilityLabel={`${s.programName}, ${REVIEW_STAGE_LABEL[stage].toLowerCase()}, ${metaOf(s)}`}
                   title={s.programName}
                   meta={metaOf(s)}
                   trailing={<ReviewStatusPill review={s} />}
@@ -228,7 +243,7 @@ export default function SentForReviewScreen() {
                     )}
                     onRemove={() => (accepted ? handleRemoveAccepted(s) : handleUnsend(s))}
                     accessibilityLabel={accepted ? `Open ${s.programName} in your programs` : `View ${s.programName}`}
-                    removeLabel={accepted ? `Remove ${s.programName} from this list` : `Take ${s.programName} back from your trainer`}
+                    removeLabel={accepted || stage === "removed" ? `Remove ${s.programName} from this list` : `Take ${s.programName} back from your trainer`}
                     removeNeedsConnection={!accepted}
                   />
                 </ProgramRow>
