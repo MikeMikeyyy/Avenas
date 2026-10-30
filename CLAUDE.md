@@ -13,7 +13,7 @@ iOS-first React Native + Expo (SDK 58, RN 0.88, React 19.3, New Architecture), T
 ## Hard rules
 
 - **StyleSheet only** (no Tailwind / styled-components). **Lists:** `FlashList`. **Images:** `expo-image`. **Secrets:** `expo-secure-store`.
-- **Packages:** `npx expo install <pkg> -- --legacy-peer-deps`, never `npm install`.
+- **Packages:** `npx expo install <pkg> -- --legacy-peer-deps`, never `npm install`. Then `npx expo install --check` must pass: a package from a newer SDK patch than `expo` links a precompiled iOS binary built for a newer `expo-modules-core`, and the built app crashes at launch while Expo Go runs fine (build 54).
 - **Never import `@react-navigation/*`** (fails the bundle). `useFocusEffect` etc. come from `expo-router`.
 - `StyleSheet.absoluteFill`, never `absoluteFillObject` (removed in RN 0.86).
 - **Refs to RN components take instance types** (RN 0.88's strict API): `useRef<TextInputInstance>`, `ScrollViewInstance`, `ViewInstance`, never `useRef<TextInput>`. `MaskedView` comes from `components/MaskedView.tsx`, never the package (its types predate RN 0.88).
