@@ -4,15 +4,15 @@ import {
   Text,
   StyleSheet,
   Keyboard,
-  ScrollView,
   TextInput,
   type TextInputInstance,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { scrollEndPadding } from "../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -172,7 +172,10 @@ export default function ProgramHistoryScreen() {
         <Ionicons name={searchOpen ? "close" : "search"} size={searchOpen ? 22 : 19} color={t.tp} />
       </GlassButton>
 
-      <ScrollView
+      {/* Searching, the keyboard's height goes under the page, so every
+          program scrolls clear of it (user request, 2026-10-30). */}
+      <KeyboardAwareScrollView
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         showsVerticalScrollIndicator={false}
         // The keyboard would otherwise eat the first tap on the clear button and
         // on any program card while the search field is focused.
@@ -288,7 +291,7 @@ export default function ProgramHistoryScreen() {
             </BounceButton>
           );
         })}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <KeyboardDismissButton onPress={onKeyboardDown} />
     </FadeScreen>

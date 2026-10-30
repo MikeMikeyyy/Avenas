@@ -1,12 +1,19 @@
 // Shared sheet: pick one of the PT's saved programs to share.
+//
+// Each program is a row on the sheet, its name over its weeks and days, with a
+// line between rows as on Reorder Exercises (user pick, 2026-10-30, option A
+// of the Send Picker canvas: each was a card with a chip per cycle day, big
+// and mostly empty). The list goes straight in the sheet, which scrolls it
+// once it's as tall as the screen allows; it was a box of a fixed 380pt.
 
 import { useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import SimpleSheet from "./SimpleSheet";
-import NeuCard from "../NeuCard";
-import BounceButton from "../BounceButton";
 import SheetPill from "../SheetPill";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
+import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
+import { CARD_META, CARD_TITLE } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { SavedProgram } from "../../constants/programs";
 import { unarchivedPrograms } from "../../utils/programArchive";
@@ -18,6 +25,14 @@ interface Props {
   programs: SavedProgram[];
   onPick: (program: SavedProgram) => void;
   onClose: () => void;
+}
+
+/** "8 weeks · 6 days a week", or "8 weeks · 5 days in a 9-day cycle" for a
+ *  cycle that isn't a week. */
+function scheduleLine(p: SavedProgram): string {
+  const weeks = `${p.totalWeeks} week${p.totalWeeks === 1 ? "" : "s"}`;
+  const days = `${p.trainingDays} day${p.trainingDays === 1 ? "" : "s"}`;
+  return p.cycleDays === 7 ? `${weeks} · ${days} a week` : `${weeks} · ${days} in a ${p.cycleDays}-day cycle`;
 }
 
 export default function ProgramPickerSheet({ visible, title, subtitle, programs: all, onPick, onClose }: Props) {
@@ -44,61 +59,45 @@ export default function ProgramPickerSheet({ visible, title, subtitle, programs:
         <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
         {subtitle ? <Text style={[styles.subtitle, { color: t.ts }]}>{subtitle}</Text> : null}
       </View>
-      <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+      <View style={styles.list}>
         {programs.length === 0 ? (
-          <Text style={[styles.empty, { color: t.ts }]}>You don't have any programs yet. Create one first.</Text>
+          <Text style={[styles.empty, { color: t.ts }]}>{"You don't have any programs yet. Create one first."}</Text>
         ) : (
-          programs.map(p => (
-            <BounceButton key={p.id} style={{ marginBottom: 10 }} onPress={() => { onPick(p); onClose(); }}>
-              <NeuCard dark={isDark} radius={14}>
-                <View style={styles.cardInner}>
-                  <View style={styles.row}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{p.name}</Text>
-                      <Text style={[styles.meta, { color: t.ts }]}>{p.totalWeeks} weeks</Text>
-                    </View>
-                  </View>
-                  <View style={styles.cycleGrid}>
-                    {p.cyclePattern.map((day, i) => {
-                      const isTraining = day !== "Rest" && day !== "";
-                      return (
-                        <View
-                          key={i}
-                          style={[
-                            styles.cycleChip,
-                            isTraining
-                              ? { backgroundColor: ACCT + "22", borderColor: ACCT, borderWidth: 1 }
-                              : { backgroundColor: t.div },
-                          ]}
-                        >
-                          <Text style={[styles.cycleChipText, { color: isTraining ? t.tp : t.ts }]}>
-                            {day || "Rest"}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </View>
+          programs.map((p, i) => {
+            const line = scheduleLine(p);
+            return (
+              <TouchableOpacity
+                key={p.id}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onPick(p); onClose(); }}
+                activeOpacity={0.6}
+                accessibilityRole="button"
+                accessibilityLabel={`${p.name}, ${line}`}
+                style={[styles.row, i > 0 && { borderTopWidth: 1, borderTopColor: t.sheetLine }]}
+              >
+                <View style={styles.rowText}>
+                  <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{p.name}</Text>
+                  <Text style={[styles.meta, { color: t.ts }]} numberOfLines={1}>{line}</Text>
                 </View>
-              </NeuCard>
-            </BounceButton>
-          ))
+                <Ionicons name="chevron-forward" size={16} color={t.ts} />
+              </TouchableOpacity>
+            );
+          })
         )}
-      </ScrollView>
+      </View>
     </SimpleSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  header:     { paddingHorizontal: 24, paddingBottom: 16, gap: 4 },
+  header:     { paddingHorizontal: 24, paddingBottom: 12, gap: 4 },
   title:      { fontFamily: FontFamily.bold, fontSize: 20 },
   subtitle:   { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
-  list:       { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 8 },
+  // The rows' words line up with the header's, 24pt in; their lines run 12pt
+  // short of the sheet's sides.
+  list:       { paddingHorizontal: 12, paddingBottom: 8 },
   empty:      { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
-  cardInner:  { padding: 14, gap: 10 },
-  row:        { flexDirection: "row", alignItems: "center", gap: 12 },
-  name:       { fontFamily: FontFamily.semibold, fontSize: 15 },
-  meta:       { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  cycleGrid:  { flexDirection: "row", flexWrap: "wrap", gap: 4 },
-  cycleChip:  { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
-  cycleChipText: { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
+  row:        { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 12 },
+  rowText:    { flex: 1, minWidth: 0 },
+  name:       { ...CARD_TITLE },
+  meta:       { ...CARD_META },
 });

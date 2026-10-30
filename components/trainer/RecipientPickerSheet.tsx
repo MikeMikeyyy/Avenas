@@ -5,6 +5,10 @@
 // sheet drew initials where the tab shows photos): each client's photo, and
 // under a group's name the faces of everyone a send to it reaches.
 //
+// Each part is one card of lines, Manage Group's (components/trainer/
+// PersonRow.tsx), with the same green tick (user request, 2026-10-30: a card
+// for each person and each group was too much).
+//
 // Everything above the buttons scrolls as one, in the sheet's own scroll, and
 // Send and Cancel are its pinned footer (user report, 2026-10-29). Only the
 // clients used to scroll, in a box of a fixed 320pt, and with the groups and
@@ -31,7 +35,7 @@
 // one, onto the group above it.
 
 import { useEffect, useMemo, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -39,11 +43,15 @@ import SimpleSheet from "./SimpleSheet";
 import NeuCard from "../NeuCard";
 import BounceButton from "../BounceButton";
 import SheetPill from "../SheetPill";
-import Avatar from "../Avatar";
 import GroupAvatar from "./GroupAvatar";
 import MemberStack from "./MemberStack";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, NEU_BG, NEU_BG_DARK, PAUSED_ORANGE } from "../../constants/theme";
-import { darkGlow, glowOpacity, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
+import PersonRow, { PERSON_AVATAR, Tick, type RowTag } from "./PersonRow";
+import {
+  APP_DARK, APP_LIGHT, FontFamily, ACCT, NEU_BG, NEU_BG_DARK, PAUSED_ORANGE,
+  replacedTextColor, roleColor, roleTextColor,
+} from "../../constants/theme";
+import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
+import { CARD_META } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { fetchPeopleUnits } from "../../lib/clientTraining";
@@ -77,22 +85,12 @@ interface Props {
   /** Every client, or the groups and the clients picked. */
   onConfirm: (choice: RecipientChoice) => void;
   onClose: () => void;
+  /** Back to pick another program, when the program was picked in the sheet
+   *  before this one (user request, 2026-10-30): a glass chevron top left. */
+  onBack?: () => void;
 }
 
-/** A row's tick: the accent circle with its glow when on, an outline when off. */
-function CheckCircle({ checked }: { checked: boolean }) {
-  const { isDark } = useTheme();
-  return (
-    <View style={[styles.check, checked
-      ? { backgroundColor: ACCT, borderColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: glowOpacity(0.5, isDark), shadowRadius: 6 }
-      : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
-    ]}>
-      {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
-    </View>
-  );
-}
-
-export default function RecipientPickerSheet({ visible, programName, clients, groups = NO_GROUPS, onConfirm, onClose }: Props) {
+export default function RecipientPickerSheet({ visible, programName, clients, groups = NO_GROUPS, onConfirm, onClose, onBack }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   // The Trainer tab's card under a group's faces, which rings each one so the
@@ -130,6 +128,10 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
     [units, myUnit],
   );
   const otherUnit: WeightUnit = myUnit === "kg" ? "lb" : "kg";
+  // A trainer among them in the trainer role's colours, as on Manage Group, and
+  // the other unit in the orange the note under the list explains.
+  const trainerTag: RowTag = { label: "TRAINER", fill: `${roleColor("trainer")}22`, ink: roleTextColor("trainer", isDark) };
+  const unitTag: RowTag = { label: `LOGS IN ${unitLabel(otherUnit).toUpperCase()}`, fill: `${PAUSED_ORANGE}22`, ink: replacedTextColor(isDark) };
 
   const toggleClient = (id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -202,6 +204,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
     <SimpleSheet
       visible={visible}
       onClose={onClose}
+      onBack={onBack}
       footer={
         <View style={styles.actions}>
           <BounceButton onPress={canSend ? handleConfirm : undefined}>
@@ -220,77 +223,64 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
         </Text>
       </View>
 
-      <View style={styles.allWrap}>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={toggleAll}
-          accessibilityRole="button"
-          accessibilityState={{ checked: sendToAll }}
-          accessibilityLabel={`Send to all ${clients.length} clients`}
-        >
-          <NeuCard dark={isDark} radius={14}>
-            <View style={styles.row}>
-              <View style={[styles.allIcon, { backgroundColor: isDark ? "rgba(29,236,160,0.12)" : "rgba(29,236,160,0.18)" }]}>
+      <View style={[styles.cardWrap, styles.firstCard]}>
+        <NeuCard dark={isDark} radius={16}>
+          <PersonRow
+            person={{ id: "all", name: "Send to all clients" }}
+            leading={(
+              <View style={[styles.allIcon, { backgroundColor: isDark ? `${ACCT}1F` : `${ACCT}2E` }]}>
                 <Ionicons name="people-outline" size={18} color={ACCT} />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.rowTitle, { color: t.tp }]}>Send to all clients</Text>
-                <Text style={[styles.rowMeta, { color: t.ts }]}>
-                  {clients.length} {clients.length === 1 ? "client" : "clients"}
-                </Text>
-              </View>
-              <CheckCircle checked={sendToAll} />
-            </View>
-          </NeuCard>
-        </TouchableOpacity>
+            )}
+            first
+            tags={[]}
+            below={<Text style={[styles.rowMeta, { color: t.ts }]}>{clients.length} {clients.length === 1 ? "client" : "clients"}</Text>}
+            end={<Tick on={sendToAll} tone="add" />}
+            onPress={toggleAll}
+            accessibilityLabel={`Send to all ${clients.length} clients`}
+            accessibilityState={{ checked: sendToAll }}
+          />
+        </NeuCard>
       </View>
 
       {groups.length > 0 && (
         <>
           <Text style={[styles.section, { color: t.ts }]}>OR PICK A GROUP</Text>
           <Text style={[styles.sectionHint, { color: t.ts }]}>{"Everyone in it receives it, and it shows on the group's page."}</Text>
-          <View style={styles.groupList}>
-            {groups.map(g => {
-              const checked = !sendToAll && pickedGroups.has(g.id);
-              const off = sendToAll || g.memberIds.length === 0;
-              // Who a send to it reaches, as faces: the roster's, less me. Only
-              // when they cover everyone it reaches, so the row never shows
-              // fewer people than it sends to; otherwise the count.
-              const reaches = new Set(g.memberIds);
-              const faces = g.faces?.filter(f => reaches.has(f.id)) ?? [];
-              const showFaces = faces.length > 0 && faces.length === g.memberIds.length;
-              return (
-                <TouchableOpacity
-                  key={g.id}
-                  activeOpacity={0.85}
-                  style={{ marginBottom: 10 }}
-                  onPress={() => toggleGroup(g)}
-                  disabled={off}
-                  accessibilityRole="button"
-                  accessibilityState={{ checked, disabled: off }}
-                  accessibilityLabel={`${checked ? "Deselect" : "Select"} ${g.name}, ${g.memberIds.length} ${g.memberIds.length === 1 ? "person" : "people"}`}
-                >
-                  <NeuCard dark={isDark} radius={14}>
-                    <View style={[styles.row, off && { opacity: 0.45 }]}>
-                      <GroupAvatar uri={g.photoUri} size={34} isDark={isDark} colorKey={g.id} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{g.name}</Text>
-                        {showFaces ? (
-                          <View style={styles.faces}>
-                            <MemberStack members={faces} size={20} overlap={8} isDark={isDark} ringColor={cardSurface} countColor={t.ts} />
-                          </View>
-                        ) : (
-                          <Text style={[styles.rowMeta, { color: t.ts }]}>
-                            {g.memberIds.length} {g.memberIds.length === 1 ? "person" : "people"}
-                          </Text>
-                        )}
+          <View style={styles.cardWrap}>
+            <NeuCard dark={isDark} radius={16}>
+              {groups.map((g, i) => {
+                const checked = !sendToAll && pickedGroups.has(g.id);
+                const count = `${g.memberIds.length} ${g.memberIds.length === 1 ? "person" : "people"}`;
+                // Who a send to it reaches, as faces: the roster's, less me. Only
+                // when they cover everyone it reaches, so the row never shows
+                // fewer people than it sends to; otherwise the count.
+                const reaches = new Set(g.memberIds);
+                const faces = g.faces?.filter(f => reaches.has(f.id)) ?? [];
+                const showFaces = faces.length > 0 && faces.length === g.memberIds.length;
+                return (
+                  <PersonRow
+                    key={g.id}
+                    person={{ id: g.id, name: g.name }}
+                    leading={<GroupAvatar uri={g.photoUri} size={PERSON_AVATAR} isDark={isDark} colorKey={g.id} />}
+                    first={i === 0}
+                    tags={[]}
+                    dimmed={sendToAll || g.memberIds.length === 0}
+                    below={showFaces ? (
+                      <View style={styles.faces}>
+                        <MemberStack members={faces} size={20} overlap={8} isDark={isDark} ringColor={cardSurface} countColor={t.ts} />
                       </View>
-                      <CheckCircle checked={checked} />
-                    </View>
-                  </NeuCard>
-                </TouchableOpacity>
-              );
-            })}
+                    ) : (
+                      <Text style={[styles.rowMeta, { color: t.ts }]}>{count}</Text>
+                    )}
+                    end={<Tick on={checked} tone="add" />}
+                    onPress={() => toggleGroup(g)}
+                    accessibilityLabel={`${checked ? "Deselect" : "Select"} ${g.name}, ${count}`}
+                    accessibilityState={{ checked }}
+                  />
+                );
+              })}
+            </NeuCard>
           </View>
         </>
       )}
@@ -300,54 +290,31 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
         <Text style={[styles.sectionHint, { color: t.ts }]}>{"Straight to them, on their own Trainer tab, not through a group."}</Text>
       ) : null}
 
-      <View style={styles.list}>
+      <View style={styles.cardWrap}>
         {clients.length === 0 ? (
-          <Text style={[styles.empty, { color: t.ts }]}>You don't have any clients yet.</Text>
+          <Text style={[styles.empty, { color: t.ts }]}>{"You don't have any clients yet."}</Text>
         ) : (
-          clients.map(c => {
-            const checked = !sendToAll && selected.has(c.id);
-            return (
-              <TouchableOpacity
-                key={c.id}
-                activeOpacity={0.85}
-                style={{ marginBottom: 10 }}
-                onPress={() => toggleClient(c.id)}
-                disabled={sendToAll}
-                accessibilityRole="button"
-                accessibilityState={{ checked, disabled: sendToAll }}
-                accessibilityLabel={`${checked ? "Deselect" : "Select"} ${c.name}`}
-              >
-                <NeuCard dark={isDark} radius={14}>
-                  <View style={[styles.row, sendToAll && { opacity: 0.45 }]}>
-                    <Avatar
-                      uri={c.photoUri}
-                      initials={c.initials}
-                      size={40}
-                      colorKey={c.id}
-                      textStyle={styles.avatarText}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.nameRow}>
-                        <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{c.name}</Text>
-                        {c.isTrainer && (
-                          <View style={[styles.trainerTag, { backgroundColor: `${ACCT}22` }]}>
-                            <Text style={[styles.trainerTagText, { color: ACCT }]}>TRAINER</Text>
-                          </View>
-                        )}
-                        {otherUnitIds.has(c.id) && (
-                          <View style={[styles.trainerTag, { backgroundColor: `${PAUSED_ORANGE}22` }]}>
-                            <Text style={[styles.trainerTagText, { color: PAUSED_ORANGE }]}>{`LOGS IN ${unitLabel(otherUnit).toUpperCase()}`}</Text>
-                          </View>
-                        )}
-                      </View>
-                      {c.note ? <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={1}>{c.note}</Text> : null}
-                    </View>
-                    <CheckCircle checked={checked} />
-                  </View>
-                </NeuCard>
-              </TouchableOpacity>
-            );
-          })
+          <NeuCard dark={isDark} radius={16}>
+            {clients.map((c, i) => {
+              const checked = !sendToAll && selected.has(c.id);
+              const tags: RowTag[] = [];
+              if (c.isTrainer) tags.push(trainerTag);
+              if (otherUnitIds.has(c.id)) tags.push(unitTag);
+              return (
+                <PersonRow
+                  key={c.id}
+                  person={c}
+                  first={i === 0}
+                  tags={tags}
+                  dimmed={sendToAll}
+                  end={<Tick on={checked} tone="add" />}
+                  onPress={() => toggleClient(c.id)}
+                  accessibilityLabel={`${checked ? "Deselect" : "Select"} ${c.name}`}
+                  accessibilityState={{ checked }}
+                />
+              );
+            })}
+          </NeuCard>
         )}
       </View>
 
@@ -355,7 +322,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
           every row down as a finger reached for one. */}
       {otherUnitIds.size > 0 && (
         <Text style={[styles.subtitle, styles.unitNote, { color: t.ts }]}>
-          Anyone marked <Text style={{ color: PAUSED_ORANGE, fontFamily: FontFamily.semibold }}>{`logs in ${unitLabel(otherUnit)}`}</Text> will see your weights in the unit you entered them in.
+          Anyone marked <Text style={{ color: replacedTextColor(isDark), fontFamily: FontFamily.semibold }}>{`logs in ${unitLabel(otherUnit)}`}</Text> will see your weights in the unit you entered them in.
         </Text>
       )}
     </SimpleSheet>
@@ -363,27 +330,21 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
 }
 
 const styles = StyleSheet.create({
-  header:     { paddingHorizontal: 24, paddingBottom: 14, gap: 4 },
-  title:      { fontFamily: FontFamily.bold, fontSize: 20 },
-  subtitle:   { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
-  unitNote:   { paddingHorizontal: 24, paddingBottom: 8 },
-  allWrap:    { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 14 },
-  section:    { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", paddingHorizontal: 24, marginBottom: 10 },
-  sectionHint: { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, paddingHorizontal: 24, marginTop: -6, marginBottom: 10 },
-  list:       { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
-  groupList:  { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 4 },
-  empty:      { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
-  row:        { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  nameRow:    { flexDirection: "row", alignItems: "center", gap: 6 },
-  rowTitle:   { fontFamily: FontFamily.semibold, fontSize: 15, flexShrink: 1 },
-  rowMeta:    { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  faces:      { marginTop: 4 },
-  trainerTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  trainerTagText: { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
-  avatarText: { fontFamily: FontFamily.bold, fontSize: 14 },
-  allIcon:    { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-  check:      { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-  actions:    { paddingHorizontal: 20, paddingTop: 12 },
-  send:       { ...pill(PILL_H_SM), backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
-  sendText:   { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
+  header:      { paddingHorizontal: 24, paddingBottom: 14, gap: 4 },
+  title:       { fontFamily: FontFamily.bold, fontSize: 20 },
+  subtitle:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
+  unitNote:    { paddingHorizontal: 24, paddingBottom: 8 },
+  // Each part's card, and the room under it before the next part's label.
+  cardWrap:    { paddingHorizontal: 20, paddingBottom: 18 },
+  firstCard:   { paddingTop: 4 },
+  // Manage Group's labels over its cards.
+  section:     { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, paddingHorizontal: 24, marginBottom: 8 },
+  sectionHint: { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, paddingHorizontal: 24, marginTop: -4, marginBottom: 8 },
+  empty:       { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
+  rowMeta:     { ...CARD_META },
+  faces:       { marginTop: 4 },
+  allIcon:     { width: PERSON_AVATAR, height: PERSON_AVATAR, borderRadius: PERSON_AVATAR / 2, alignItems: "center", justifyContent: "center" },
+  actions:     { paddingHorizontal: 20, paddingTop: 12 },
+  send:        { ...pill(PILL_H_SM), backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
+  sendText:    { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
 });

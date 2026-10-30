@@ -425,7 +425,7 @@ export default function ExercisePicker({
         <TouchableOpacity
           onPress={() => togglePick(e.name)}
           activeOpacity={0.6}
-          style={[styles.pickerRow, { borderBottomColor: t.div }]}
+          style={[styles.pickerRow, { borderBottomColor: t.sheetLine }]}
         >
           {renderThumb(e.name, (
             <ExerciseImage exerciseId={`custom:${e.name}`} overrideUri={e.imageUri} variant="thumb" size={52} radius={10}
@@ -481,7 +481,7 @@ export default function ExercisePicker({
         <TouchableOpacity
           onPress={() => togglePick(e.name)}
           activeOpacity={0.6}
-          style={[styles.pickerRow, { borderBottomColor: t.div }]}
+          style={[styles.pickerRow, { borderBottomColor: t.sheetLine }]}
         >
           {renderThumb(e.name, (
             <ExerciseImage exerciseId={`custom:${e.name}`} overrideUri={e.imageUri} variant="thumb" size={52} radius={10}
@@ -504,7 +504,7 @@ export default function ExercisePicker({
       <TouchableOpacity
         onPress={() => togglePick(e.name)}
         activeOpacity={0.6}
-        style={[styles.pickerRow, { borderBottomColor: t.div }]}
+        style={[styles.pickerRow, { borderBottomColor: t.sheetLine }]}
       >
         {renderThumb(e.name, (
           <ExerciseImage exerciseId={e.id} variant="thumb" size={52} radius={10}
@@ -777,7 +777,9 @@ const styles = StyleSheet.create({
   favBadgeIdle:        { opacity: 0.45 },
   pickerSectionHeader: { height: HEADER_H, justifyContent: "flex-end", paddingHorizontal: 16, paddingBottom: 6 },
   pickerSectionLabel:  { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 1.2 },
-  pickerRow:           { height: ROW_H, flexDirection: "row", alignItems: "center", paddingHorizontal: 16, borderBottomWidth: 1, gap: 12 },
+  // Its line is t.sheetLine, as the reorder sheet's rows: t.div all but
+  // vanished on the glass sheet (user request, 2026-10-30).
+  pickerRow:          { height: ROW_H, flexDirection: "row", alignItems: "center", paddingHorizontal: 16, borderBottomWidth: 1, gap: 12 },
   pickerExName:        { fontFamily: FontFamily.semibold, fontSize: 15 },
   pickerExMeta:        { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
   customActions:       { flexDirection: "row", alignItems: "center", gap: 8 },

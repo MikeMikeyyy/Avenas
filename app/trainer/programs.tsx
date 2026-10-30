@@ -584,6 +584,10 @@ export default function TrainerProgramsScreen() {
   // as it hands over (ProgramPickerSheet), so only one sheet is ever up.
   const [sendOpen, setSendOpen] = useState(false);
   const [pendingProgram, setPendingProgram] = useState<SavedProgram | null>(null);
+  /** The program was picked in the program sheet, so the send sheet's back
+   *  chevron reopens it to pick another (user request, 2026-10-30). Send on a
+   *  program someone sent me starts at the send sheet: no step before it. */
+  const [pickedInSheet, setPickedInSheet] = useState(false);
 
   // The groups the send sheet offers: the ones I may send to (mine, and those
   // I'm a trainer in), each sent to as its own page sends (shareEntriesFor),
@@ -736,6 +740,7 @@ export default function TrainerProgramsScreen() {
       Alert.alert("Program not found", "The accepted program no longer exists in your library.");
       return;
     }
+    setPickedInSheet(false);
     handleProgramPicked(copy);
   }, [handleProgramPicked]);
 
@@ -1034,7 +1039,7 @@ export default function TrainerProgramsScreen() {
         title="Send a Program"
         subtitle="Pick a program, then choose who receives it."
         programs={myPrograms}
-        onPick={handleProgramPicked}
+        onPick={p => { setPickedInSheet(true); handleProgramPicked(p); }}
         onClose={() => setSendOpen(false)}
       />
       <RecipientPickerSheet
@@ -1044,6 +1049,7 @@ export default function TrainerProgramsScreen() {
         groups={recipientGroups}
         onConfirm={handleConfirmRecipients}
         onClose={() => setPendingProgram(null)}
+        onBack={pickedInSheet ? () => setSendOpen(true) : undefined}
       />
     </FadeScreen>
   );

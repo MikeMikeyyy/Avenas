@@ -3,13 +3,14 @@
 // Where the workout bar and the rest timer sit right now (see
 // constants/floatingBars.ts), so the two can't disagree about it.
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Keyboard, Platform } from "react-native";
+import { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSegments } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
-import { BAR_STACK_GAP, NO_TAB_BAR_GAP, WORKOUT_BAR_H } from "../constants/floatingBars";
+import { BAR_RISE, BAR_SETTLE_MS, BAR_STACK_GAP, NO_TAB_BAR_GAP, WORKOUT_BAR_H } from "../constants/floatingBars";
 import { useTabBar } from "./useTabBar";
 
 /** Whether the keyboard is up, from the moment it starts to rise. */
@@ -96,4 +97,32 @@ function readReach(): number {
  *  scrollEndPadding (constants/floatingBars.ts). */
 export function useFloatingBarsReach(): number {
   return useSyncExternalStore(subscribeReach, readReach);
+}
+
+// ─── Buttons pinned to a page's foot ─────────────────────────────────────────
+
+/**
+ * Buttons pinned to a page's foot stand on the workout bar while it shows,
+ * BAR_STACK_GAP above its top edge, rising and settling with it as it comes
+ * and goes and as a rest opens and closes inside it, as the Workout tab's
+ * stand on a rest (user pick, 2026-10-30: under it they couldn't be pressed
+ * for as long as a workout ran). `ownBottom` is where the lowest of them sits
+ * without it; `liftStyle` moves every one of them by the same amount, so a
+ * stack keeps its shape. `lift` goes on the page's end padding too, so its
+ * last row still scrolls clear of them.
+ */
+export function usePinnedLift(ownBottom: number) {
+  const reach = useFloatingBarsReach();
+  const lift = reach > 0 ? Math.max(0, reach + BAR_STACK_GAP - ownBottom) : 0;
+  const shown = useSharedValue(lift);
+  const last = useRef(lift);
+  useEffect(() => {
+    // Up on the bar's own spring, back down as it gives a rest's room back.
+    shown.value = lift > last.current
+      ? withSpring(lift, BAR_RISE)
+      : withTiming(lift, { duration: BAR_SETTLE_MS });
+    last.current = lift;
+  }, [lift, shown]);
+  const liftStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -shown.value }] }));
+  return { lift, liftStyle };
 }

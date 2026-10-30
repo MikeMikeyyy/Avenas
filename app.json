@@ -2,7 +2,7 @@
   "expo": {
     "name": "avenas",
     "slug": "avenas",
-    "version": "2.13.1",
+    "version": "2.13.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon-transparent.png",
     "scheme": "avenas",
@@ -26,7 +26,7 @@
       },
       "bundleIdentifier": "com.avenas.app",
       "appleTeamId": "8X55YH783A",
-      "buildNumber": "55",
+      "buildNumber": "56",
       "usesAppleSignIn": true
     },
     "android": {

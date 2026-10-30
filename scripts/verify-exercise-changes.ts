@@ -52,12 +52,16 @@ eq(sessionChanges(session([ex("Barbell Bench Press"), ex("Cable Fly")], { plan: 
 const [b1, b2, b3, b4, b5] = PLAN.map(asPlanned);
 eq(cuesOf(session([b1, b2, b3, b5, b4])), [null, null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 4 }],
   "the 5th moved up to 4th: the 4th it went ahead of says Planned 4th too (user report, 2026-10-22)");
+eq(cuesOf(session([b1, b2, b5, b3, b4])), [null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 4 }],
+  "the 5th moved up to 3rd: the 3rd and the 4th it went ahead of both say where they were planned (user report, 2026-10-30)");
 eq(cuesOf(session([b2, b1, b3, b4, b5])), [{ kind: "moved", plannedPosition: 2 }, { kind: "moved", plannedPosition: 1 }, null, null, null],
   "1 and 2 swapped round: both say where they were planned");
-eq(cuesOf(session([b5, b1, b2, b3, b4])), [{ kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 1 }, null, null, null],
-  "one done first from 5th: it and the 1st whose place it took, not the three that slid down after");
-eq(cuesOf(session([b2, b3, b4, b5, b1])), [null, null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 1 }],
-  "one left to the end: it and the 5th whose place it took");
+eq(cuesOf(session([b5, b1, b2, b3, b4])), [{ kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 1 }, { kind: "moved", plannedPosition: 2 }, { kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 4 }],
+  "one done first from 5th: it and all four that slid down after it");
+eq(cuesOf(session([b2, b3, b4, b5, b1])), [{ kind: "moved", plannedPosition: 2 }, { kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 4 }, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 1 }],
+  "one left to the end: it and all four that moved up");
+eq(cuesOf(session([b3, b2, b1, b4, b5])), [{ kind: "moved", plannedPosition: 3 }, null, { kind: "moved", plannedPosition: 1 }, null, null],
+  "the 1st and 3rd traded: the 2nd between them, still 2nd, says nothing");
 eq(cuesOf(session([b3, b4, b1, b2, b5])), [{ kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 4 }, { kind: "moved", plannedPosition: 1 }, { kind: "moved", plannedPosition: 2 }, null],
   "two pairs traded: all four say so, the 5th untouched");
 eq(cuesOf(session([b1, b2, b5, b4])), [null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 4 }],
@@ -94,6 +98,11 @@ eq(lastTimeCues(last, PLAN), {
   e3: { kind: "swapped", to: "Pec Deck" },
   e5: { kind: "skipped" },
 }, "next week: Incline done 1st, Bench done 2nd, Pec Deck instead, Lateral Raise skipped");
+eq(lastTimeCues(session([b1, b2, b5, b3, b4]), PLAN), {
+  e5: { kind: "moved", donePosition: 3 },
+  e3: { kind: "moved", donePosition: 4 },
+  e4: { kind: "moved", donePosition: 5 },
+}, "next time after the 5th went 3rd: it and the two it pushed down each say where they were done");
 eq(lastTimeCues(null, PLAN), {}, "no last session: nothing");
 eq(lastTimeCues(session([b1, b2, b3, b4, b5, ex("Dips")]), PLAN), {}, "an exercise added last time has no card to mark");
 
@@ -133,8 +142,10 @@ const live = (exercises: { id: string; name: string; programExerciseId?: string;
 const card = (p: PlannedExercise, i: number) => ({ id: `s${i}`, name: p.name, programExerciseId: p.id });
 const cards = PLAN.map(card);
 eq(live(cards), [null, null, null, null, null], "under way, as planned: no lines");
-eq(live([cards[2], cards[0], cards[1], cards[3], cards[4]]), [{ kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 1 }, null, null, null],
-  "under way: a card dragged to the top says Planned 3rd at once, and the 1st it went ahead of Planned 1st");
+eq(live([cards[2], cards[0], cards[1], cards[3], cards[4]]), [{ kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 1 }, { kind: "moved", plannedPosition: 2 }, null, null],
+  "under way: a card dragged to the top says Planned 3rd at once, and the two it went ahead of Planned 1st and 2nd");
+eq(live([cards[0], cards[1], cards[4], cards[2], cards[3]]), [null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 3 }, { kind: "moved", plannedPosition: 4 }],
+  "under way: the 5th dragged up to 3rd, and the 3rd and 4th it pushed down say Planned 3rd and 4th (user report, 2026-10-30)");
 eq(live([cards[0], cards[1], cards[2], cards[4], cards[3]]), [null, null, null, { kind: "moved", plannedPosition: 5 }, { kind: "moved", plannedPosition: 4 }],
   "under way: the 5th moved up to 4th, and the 4th says Planned 4th too");
 eq(live([cards[0], { ...cards[1], name: "Smith Incline Press", swappedFrom: "Incline Bench Press" }, cards[2], cards[3], cards[4]]),

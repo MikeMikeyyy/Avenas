@@ -85,7 +85,8 @@ export const APP_DARK = {
   // of whatever is under it, the faded look, quieter than ctrl so it reads as
   // a place to type rather than a button (user decision, 2026-10-22).
   field: "rgba(255,255,255,0.06)",
-  // A line between rows on a sheet (the reorder sheet's exercises): stronger
+  // A line between rows on a sheet (the reorder sheet's exercises, the exercise
+  // picker's): stronger
   // than div, which is pitched for a solid card and all but vanished on a
   // glass sheet (user report, 2026-10-30: the lines between exercises had
   // gone). Light mode's is the ink at 12%, so it shows on glass and page alike.
@@ -415,6 +416,20 @@ export const SET_INPUT_RING_DARK = "rgba(255,255,255,0.45)";
 // drawn half under the tip's edge is exactly its colour where the two overlap.
 export function tipFill(isDark: boolean): string {
   return washOver(isDark ? NEU_BG_DARK : NEU_BG, ACCT, isDark ? 0.14 : 0.12);
+}
+
+// ─── The Journal's calendar ───────────────────────────────────────────────────
+// The month on the Journal, and on a trainer's view of a client's (user pick,
+// 2026-10-30, option C of the Journal Calendar canvas). Days trained back to
+// back share one band: the accent washed over the card, solid, with a faint
+// accent edge so it holds its shape on white. Days missed back to back share
+// one dashed outline (the user's ask, the same day: joined as the trained days
+// are), in a grey that still shows on the white card. Today's accent ring wears
+// a pale halo of the accent until it's trained.
+export function journalCalendarInk(isDark: boolean): { run: string; runEdge: string; missed: string; halo: string } {
+  return isDark
+    ? { run: washOver(NEU_BG_DARK, ACCT, 0.18), runEdge: "rgba(29,236,160,0.28)", missed: "rgba(255,255,255,0.30)", halo: "rgba(29,236,160,0.16)" }
+    : { run: washOver(NEU_BG, ACCT, 0.2), runEdge: "rgba(29,236,160,0.45)", missed: "#A7B1BF", halo: "rgba(29,236,160,0.14)" };
 }
 
 // ─── Switch ───────────────────────────────────────────────────────────────────

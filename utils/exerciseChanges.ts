@@ -23,14 +23,13 @@
 //   session says so at once ("Planned 2nd", "Instead of Bench Press",
 //   "Added"), in place of its "Last session" line.
 //
-// The exercises that MOVED are marked, not every one whose number changed:
-// the ones outside the longest run still in the plan's order (of a swapped
-// pair, the one done earlier than planned), and with each, the one whose
-// place it took, the exercise the plan had where it was done (user request,
-// 2026-10-22: move the 5th up to 4th and the 4th says "Planned 4th" too, so
-// you can see what it traded places with). The others a long move shifted
-// along by one keep quiet: bring the 5th to the top and only it and the 1st
-// say so, not the four that slid down.
+// Every exercise done out of its planned place is marked, counted among the
+// plan's exercises that were done, so one added or skipped shifts nothing
+// (user report, 2026-10-30): move the 5th up to 3rd and the 3rd and 4th it
+// went ahead of say "Planned 3rd" and "Planned 4th" beside its "Planned 5th";
+// bring the 5th to the top and all five say so. Until then only the one
+// moved and the one whose place it took said so (2026-10-22), and the 4th,
+// slid down one, keeping quiet read as the line missing.
 //
 // A session saved before plans existed has no "Planned" or "Skipped" (there's
 // nothing to read them against); its swaps and adds still show, a swap on the
@@ -68,53 +67,12 @@ export function samePlan(a: readonly PlannedExercise[], b: readonly PlannedExerc
 }
 
 /**
- * Which of `placed` (in the order done) moved: everything outside the longest
- * run still in plan order. Of runs as long as each other, the one keeping the
- * exercises that weren't done EARLIER than planned wins, so of a swapped pair
- * it's the one brought forward that's marked.
+ * Which of `placed` (in the order done) are out of their planned place: the
+ * k-th of them done isn't the plan's k-th of them.
  */
-function movedOf(placed: readonly { idx: number; plannedIdx: number }[]): Set<number> {
-  const n = placed.length;
-  // Where each would sit if nothing had moved: its rank in plan order.
-  const rank = new Map([...placed].sort((a, b) => a.plannedIdx - b.plannedIdx).map((p, r) => [p.idx, r]));
-  const keeps: number[] = placed.map((p, i) => (i >= (rank.get(p.idx) ?? 0) ? 1 : 0));
-  const len = new Array<number>(n).fill(1);
-  const score = keeps.slice();
-  const prev = new Array<number>(n).fill(-1);
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < i; j++) {
-      if (placed[j].plannedIdx >= placed[i].plannedIdx) continue;
-      const l = len[j] + 1;
-      const s = score[j] + keeps[i];
-      if (l > len[i] || (l === len[i] && s > score[i])) {
-        len[i] = l;
-        score[i] = s;
-        prev[i] = j;
-      }
-    }
-  }
-  let end = -1;
-  for (let i = 0; i < n; i++) {
-    if (end < 0 || len[i] > len[end] || (len[i] === len[end] && score[i] > score[end])) end = i;
-  }
-  const inRun = new Set<number>();
-  for (let i = end; i >= 0; i = prev[i]) inRun.add(i);
-  return new Set(placed.filter((_, i) => !inRun.has(i)).map(p => p.idx));
-}
-
-/**
- * The exercises whose place a `moved` one took: for each, the one the plan
- * had at the spot it was done (its k-th among `placed`, in the order done, is
- * the plan's k-th of them). Never one that moved itself.
- */
-function displacedBy(placed: readonly { idx: number; plannedIdx: number }[], moved: ReadonlySet<number>): Set<number> {
+function outOfPlace(placed: readonly { idx: number; plannedIdx: number }[]): Set<number> {
   const byPlan = [...placed].sort((a, b) => a.plannedIdx - b.plannedIdx);
-  const out = new Set<number>();
-  placed.forEach((p, k) => {
-    const there = byPlan[k];
-    if (moved.has(p.idx) && there && !moved.has(there.idx)) out.add(there.idx);
-  });
-  return out;
+  return new Set(placed.filter((p, k) => byPlan[k] !== p).map(p => p.idx));
 }
 
 /** What one exercise of a session was, against the session's plan. */
@@ -154,12 +112,10 @@ export function sessionChanges(w: {
     return ex.swappedFrom ? { kind: "swapped", from: ex.swappedFrom } : null;
   });
 
-  const moved = movedOf(placed);
-  const displaced = displacedBy(placed, moved);
+  const moved = outOfPlace(placed);
   for (const p of placed) {
     // A swap-in that also moved says it was a swap: one line each.
-    const outOfPlace = moved.has(p.idx) || displaced.has(p.idx);
-    if (outOfPlace && cues[p.idx] === null) cues[p.idx] = { kind: "moved", plannedPosition: p.plannedIdx + 1 };
+    if (moved.has(p.idx) && cues[p.idx] === null) cues[p.idx] = { kind: "moved", plannedPosition: p.plannedIdx + 1 };
   }
 
   const skipped = (plan ?? []).flatMap((p, i) => {
@@ -172,7 +128,7 @@ export function sessionChanges(w: {
     cues,
     skipped,
     counts: {
-      moved: moved.size + displaced.size,
+      moved: moved.size,
       swapped: cues.filter(c => c?.kind === "swapped").length,
       skipped: skipped.length,
       added: cues.filter(c => c?.kind === "added").length,

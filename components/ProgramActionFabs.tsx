@@ -12,7 +12,8 @@
 // Left side is omitted when there's nothing to edit: a program someone sent you
 // isn't yours to open in the builder until you've accepted it.
 
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, type StyleProp, type ViewStyle } from "react-native";
+import Reanimated, { type AnimatedStyle } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 
 import GlassButton from "./GlassButton";
@@ -20,13 +21,16 @@ import SquarePenIcon from "./SquarePenIcon";
 import { APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK } from "../constants/theme";
 import { darkGlow, haloGlow, PILL_H_SM } from "../constants/buttons";
 
-export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpenSummary }: {
+export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpenSummary, liftStyle }: {
   /** Distance from the bottom of the screen, safe-area already included. */
   bottom: number;
   isDark: boolean;
   /** Omit for a program the viewer can't edit — the left pill isn't rendered. */
   onOpenBuilder?: () => void;
   onOpenSummary: () => void;
+  /** Stands the pair on the workout bar while it shows, with the page's other
+   *  pinned buttons (usePinnedLift, hooks/useFloatingBars.ts). */
+  liftStyle?: StyleProp<AnimatedStyle<ViewStyle>>;
 }) {
   const slate = isDark ? BTN_SLATE_DARK : BTN_SLATE;
   const slateContent = isDark ? APP_DARK.bg : "#fff";
@@ -34,7 +38,7 @@ export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpe
   return (
     <>
       {onOpenBuilder && (
-        <View style={[styles.left, { bottom }]}>
+        <Reanimated.View style={[styles.left, { bottom }, liftStyle]}>
           <GlassButton
             pill
             size={PILL_H_SM}
@@ -47,10 +51,10 @@ export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpe
             <SquarePenIcon size={16} color={slateContent} />
             <Text style={[styles.fabText, { color: slateContent }]}>Open in Builder</Text>
           </GlassButton>
-        </View>
+        </Reanimated.View>
       )}
 
-      <View style={[styles.right, { bottom }]}>
+      <Reanimated.View style={[styles.right, { bottom }, liftStyle]}>
         <GlassButton
           pill
           size={PILL_H_SM}
@@ -63,7 +67,7 @@ export default function ProgramActionFabs({ bottom, isDark, onOpenBuilder, onOpe
           <Ionicons name="list" size={16} color="#fff" />
           <Text style={[styles.fabText, { color: "#fff" }]}>Summary</Text>
         </GlassButton>
-      </View>
+      </Reanimated.View>
     </>
   );
 }

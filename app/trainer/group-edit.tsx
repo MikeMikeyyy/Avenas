@@ -13,8 +13,10 @@
 // menu): a search from the button opposite Back, and each person opening the
 // group page's own sheet (components/trainer/GroupMemberSheet.tsx), with
 // Add to favourites and Report (user request, 2026-10-29: a flag on each row
-// reported them). The owner's form ("Manage group") ends with Delete group,
-// which used to sit in that ⋯ menu.
+// reported them). The owner's form ("Manage group") has Delete group and Save
+// as glass buttons at its top right (user request, 2026-10-30: they were big
+// pills at its foot; Delete used to sit in that ⋯ menu), and leaving it with
+// something unsaved asks whether to save it or discard it.
 //
 // Anyone you're CONNECTED to can be a member — a client or a fellow trainer.
 // Migration 0016's insert policy asks for an accepted connection and nothing
@@ -24,32 +26,33 @@
 // as a client before they could be put in a group, and a gym that ran on
 // trainer-to-trainer groups couldn't make one at all.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Alert, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View,
   type TextInputInstance,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import Reanimated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { scrollEndPadding } from "../../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
-import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
+import { useRouter, useLocalSearchParams, useFocusEffect, usePreventRemove } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 
 import FadeScreen from "../../components/FadeScreen";
 import NeuCard from "../../components/NeuCard";
-import BounceButton from "../../components/BounceButton";
 import GlassButton from "../../components/GlassButton";
-import Avatar from "../../components/Avatar";
 import KeyboardDismissButton from "../../components/KeyboardDismissButton";
 import SearchField from "../../components/SearchField";
 import FavouriteStar from "../../components/FavouriteStar";
 import GroupMemberSheet from "../../components/trainer/GroupMemberSheet";
+import PersonRow, { Tick, type RowTag } from "../../components/trainer/PersonRow";
+import TrashIcon from "../../components/TrashIcon";
 import PeopleIcon from "../../components/icons/PeopleIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, DANGER_BRIGHT, ON_FILL, dangerTextColor, roleColor, roleTextColor } from "../../constants/theme";
-import { darkGlow, haloGlow, PILL_RADIUS } from "../../constants/buttons";
-import { CARD_TITLE, SUMMARY_ROW } from "../../constants/cards";
+import { darkGlow, haloGlow } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAccountType } from "../../contexts/AccountTypeContext";
 import { useAuth } from "../../contexts/AuthContext";
@@ -65,63 +68,10 @@ import { GROUP_FULL_MESSAGE, GROUP_FULL_TITLE, GROUP_LIMIT_TITLE, MAX_GROUP_MEMB
 import { alertMessage } from "../../utils/errors";
 import BackButton, { BACK_SIZE, BACK_TOP, BACK_LEFT } from "../../components/BackButton";
 
-/** A tag after a person's name: their role in the group, an unanswered invite,
- *  NOT CONNECTED. */
-type RowTag = { label: string; fill: string; ink: string };
-
-/** One person's line in a card, as the group page draws its members: their
- *  face, their name and its tags, and what ends the line (a tick, a chevron). */
-function PersonRow({ person, first, tags, faded, end, onPress, accessibilityLabel, accessibilityState }: {
-  person: { id: string; name: string; initials: string; photoUri?: string };
-  /** The card's first line has no hairline above it. */
-  first: boolean;
-  tags: RowTag[];
-  /** Greyed: a member ticked to be removed. */
-  faded?: boolean;
-  end?: React.ReactNode;
-  onPress?: () => void;
-  accessibilityLabel: string;
-  accessibilityState?: { checked?: boolean };
-}) {
-  const { isDark } = useTheme();
-  const t = isDark ? APP_DARK : APP_LIGHT;
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={!onPress}
-      activeOpacity={0.7}
-      accessibilityRole={onPress ? "button" : "text"}
-      accessibilityLabel={accessibilityLabel}
-      accessibilityState={accessibilityState}
-      style={[styles.row, !first && { borderTopWidth: 1, borderTopColor: t.div }]}
-    >
-      <Avatar uri={person.photoUri} initials={person.initials} size={36} colorKey={person.id} textStyle={styles.avatarText} />
-      <View style={styles.rowNameLine}>
-        <Text style={[styles.rowTitle, styles.rowName, { color: faded ? t.ts : t.tp }]} numberOfLines={1}>{person.name}</Text>
-        {tags.map(tag => (
-          <View key={tag.label} style={[styles.tag, { backgroundColor: tag.fill }]}>
-            <Text style={[styles.tagText, { color: tag.ink }]}>{tag.label}</Text>
-          </View>
-        ))}
-      </View>
-      {end}
-    </TouchableOpacity>
-  );
-}
-
-/** The round tick ending a line: green to add someone, red to remove them. */
-function Tick({ on, tone }: { on: boolean; tone: "add" | "remove" }) {
-  const { isDark } = useTheme();
-  const color = tone === "add" ? ACCT : DANGER_BRIGHT;
-  return (
-    <View style={[styles.check, on
-      ? { backgroundColor: color, borderColor: color, ...haloGlow(color, 0.5, 6, isDark) }
-      : { backgroundColor: "transparent", borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.15)" },
-    ]}>
-      {on && <Ionicons name="checkmark" size={14} color={ON_FILL} />}
-    </View>
-  );
-}
+/** Between the header's two buttons, as a logged workout's. */
+const HEADER_GAP = 10;
+/** How the tick grows in and out: the builder's Update button's spring. */
+const SAVE_SPRING = { damping: 18, stiffness: 280, mass: 0.8 };
 
 export default function GroupEditScreen() {
   const router = useRouter();
@@ -392,12 +342,33 @@ export default function GroupEditScreen() {
 
   const trimmed = name.trim();
   const canSave = trimmed.length > 0 && !busy && !deleting;
+  /** What Save would keep: a new group begun (a name, someone ticked, a
+   *  photo), or on one that exists its name, members or photo changed. A
+   *  member's list has nothing to save. */
+  const unsaved = isOwner && !loading && (isNew
+    ? trimmed.length > 0 || selected.size > 0 || photoChange !== null
+    : trimmed !== savedName || removing > 0 || adding > 0 || photoChange !== null);
 
-  const ctaLabel = useMemo(() => {
-    if (busy) return "Saving…";
-    if (isNew) return selected.size > 0 ? `Create with ${selected.size} member${selected.size === 1 ? "" : "s"}` : "Create group";
-    return "Save changes";
-  }, [busy, isNew, selected.size]);
+  /** Off the page on purpose (a save, Discard, a delete): the leave guard
+   *  below stands down. */
+  const [leaving, setLeaving] = useState(false);
+
+  /** The header's sides: the owner's two buttons (Delete and Save), else one
+   *  (Create, a member's search), and Back's side as wide. */
+  const sideW = isOwner && !isNew ? BACK_SIZE * 2 + HEADER_GAP : BACK_SIZE;
+
+  // The tick shows once there's something to save, a new group once it has a
+  // name, growing in as the builder's Update does (user request, 2026-10-30:
+  // it sat there dulled out); while it saves it stays, its spinner turning.
+  // The bin keeps the corner until then and moves over for it. Scaled and
+  // moved, never faded: glass draws wrongly under any opacity.
+  const saveShown = busy || (trimmed.length > 0 && (isNew || unsaved));
+  const saveIn = useSharedValue(saveShown ? 1 : 0);
+  useEffect(() => {
+    saveIn.value = withSpring(saveShown ? 1 : 0, SAVE_SPRING);
+  }, [saveShown, saveIn]);
+  const saveStyle = useAnimatedStyle(() => ({ transform: [{ scale: saveIn.value }] }));
+  const binStyle = useAnimatedStyle(() => ({ transform: [{ translateX: (1 - saveIn.value) * (BACK_SIZE + HEADER_GAP) }] }));
 
   // Unticking someone takes them out of the group on Save, so Save asks first.
   // Only people who were in the roster count: ticking and unticking someone
@@ -444,7 +415,7 @@ export default function GroupEditScreen() {
         } catch (e) {
           Alert.alert("Group created", `The photo didn't upload. ${alertMessage(e, "Try again from the group's settings.")}`);
         }
-        router.replace({ pathname: "/trainer/group/[id]", params: { id: newId, name: trimmed } });
+        leave(() => router.replace({ pathname: "/trainer/group/[id]", params: { id: newId, name: trimmed } }));
         return;
       }
       await renameGroup(groupId, trimmed);
@@ -457,7 +428,7 @@ export default function GroupEditScreen() {
         Alert.alert("Photo didn't upload", `Your other changes are saved. ${alertMessage(e, "Try adding the photo again.")}`);
         return;
       }
-      router.back();
+      leave(() => router.back());
     } catch (e) {
       // The hub checks the creating limit before opening this screen, and the
       // picker the group's size; these are the database refusing what was out
@@ -470,11 +441,13 @@ export default function GroupEditScreen() {
     }
   };
 
-  // Delete group, at the foot of the owner's page (it was in the group page's
-  // ⋯ menu; user request, 2026-10-29). Afterwards, straight to the Trainer tab,
-  // where groups are listed: back to the group's page (or its chat, under it)
-  // would only find the group gone and say so.
+  // Delete group, the bin at the top of the owner's page (it was in the group
+  // page's ⋯ menu, then a red pill at the page's foot; user requests,
+  // 2026-10-29 and 2026-10-30). Afterwards, straight to the Trainer tab, where
+  // groups are listed: back to the group's page (or its chat, under it) would
+  // only find the group gone and say so.
   const onDelete = () => {
+    if (busy || deleting) return;
     Alert.alert(
       `Delete ${savedName || "this group"}?`,
       "The group and its messages are removed for everyone. Programs you've already sent stay in your clients' libraries.",
@@ -485,7 +458,7 @@ export default function GroupEditScreen() {
           try {
             await deleteGroup(groupId);
             dropGroupPage(groupId);
-            router.dismissTo("/(tabs)/trainer-hub");
+            leave(() => router.dismissTo("/(tabs)/trainer-hub"));
           } catch (e) {
             setDeleting(false);
             Alert.alert("Couldn't delete group", alertMessage(e, "Check your connection and try again."));
@@ -495,28 +468,91 @@ export default function GroupEditScreen() {
     );
   };
 
+  // Leaving with something unsaved asks first, save it or discard it, as the
+  // program builder does (user request, 2026-10-30). usePreventRemove holds
+  // the screen while it would ask; leaving on purpose stands it down first.
+  const standDownLeaveGuard = usePreventRemove(!leaving && !busy && !deleting && unsaved, ({ repeat }) => {
+    Alert.alert(
+      "Unsaved Changes",
+      isNew ? "Would you like to create this group or discard it?" : "Would you like to save your changes or discard them?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Discard", style: "destructive", onPress: () => { setLeaving(true); repeat(); } },
+        // Save goes the way the tick does (asking about anyone it removes),
+        // and leaves once it's done. With no name there's nothing to save.
+        ...(canSave ? [{ text: isNew ? "Create" : "Save", onPress: onSave }] : []),
+      ],
+    );
+  });
+  /** Saved or deleted: off this page without the guard asking. */
+  function leave(go: () => void) {
+    setLeaving(true);
+    standDownLeaveGuard();
+    go();
+  }
+
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
       <View style={[styles.header, { paddingTop: insets.top + BACK_TOP, borderBottomColor: t.div }]}>
-        <BackButton inline />
+        {/* Back, in a space as wide as the buttons opposite, so the title
+            stays centred between them. */}
+        <View style={[styles.headerSide, { width: sideW }]}>
+          <BackButton inline />
+        </View>
         <Text style={[styles.headerTitle, { color: t.tp }]} numberOfLines={1}>
           {isNew ? "New Group" : isOwner ? "Manage Group" : "Group Members"}
         </Text>
-        {/* A member's list is searched from here, opposite Back, as the
-            Journal's Programs page is; live once it has loaded. Otherwise the
-            space keeps the title centred. */}
-        {!isNew && !isOwner ? (
-          <GlassButton
-            onPress={toggleSearch}
-            size={BACK_SIZE}
-            disabled={loading}
-            accessibilityLabel={searchOpen ? "Close search" : "Search members"}
-          >
-            <Ionicons name={searchOpen ? "close" : "search"} size={searchOpen ? 22 : 19} color={t.tp} />
-          </GlassButton>
-        ) : (
-          <View style={{ width: 40 }} />
-        )}
+        <View style={[styles.headerSide, styles.headerEnd, { width: sideW }]}>
+          {isOwner ? (
+            <>
+              {/* Delete and Save, glass at the top, always in reach (user
+                  request, 2026-10-30: they were big pills at the page's foot).
+                  Both need the server, so they dim offline. */}
+              {!isNew && (
+                <Reanimated.View style={binStyle}>
+                  <GlassButton
+                    onPress={onDelete}
+                    size={BACK_SIZE}
+                    disabled={loading || busy}
+                    needsConnection
+                    accessibilityLabel="Delete group"
+                  >
+                    {deleting ? <ActivityIndicator color={DANGER_BRIGHT} /> : <TrashIcon size={18} color={DANGER_BRIGHT} />}
+                  </GlassButton>
+                </Reanimated.View>
+              )}
+              <Reanimated.View
+                style={saveStyle}
+                pointerEvents={saveShown ? "box-none" : "none"}
+                accessibilityElementsHidden={!saveShown}
+                importantForAccessibility={saveShown ? "auto" : "no-hide-descendants"}
+              >
+                <GlassButton
+                  tint={ACCT}
+                  onPress={onSave}
+                  size={BACK_SIZE}
+                  disabled={loading || deleting}
+                  needsConnection
+                  solidStyle={[styles.saveGlow, darkGlow(styles.saveGlow, isDark)]}
+                  accessibilityLabel={isNew ? "Create group" : "Save changes"}
+                >
+                  {busy ? <ActivityIndicator color={ON_FILL} /> : <Ionicons name="checkmark" size={22} color={ON_FILL} />}
+                </GlassButton>
+              </Reanimated.View>
+            </>
+          ) : (
+            // A member's list is searched from here, opposite Back, as the
+            // Journal's Programs page is; live once it has loaded.
+            <GlassButton
+              onPress={toggleSearch}
+              size={BACK_SIZE}
+              disabled={loading}
+              accessibilityLabel={searchOpen ? "Close search" : "Search members"}
+            >
+              <Ionicons name={searchOpen ? "close" : "search"} size={searchOpen ? 22 : 19} color={t.tp} />
+            </GlassButton>
+          )}
+        </View>
       </View>
 
       {loading ? (
@@ -524,7 +560,12 @@ export default function GroupEditScreen() {
           <ActivityIndicator color={ACCT} />
         </View>
       ) : (
-        <ScrollView
+        // With the keyboard up (the name, a member's search) the page still
+        // scrolls to its last person (user report, 2026-10-30: they sat behind
+        // the keyboard, out of reach): KeyboardAwareScrollView adds its height
+        // under the page.
+        <KeyboardAwareScrollView
+          bottomOffset={ABOVE_KEYBOARD_TOOLS}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ padding: 20, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }}
@@ -558,7 +599,7 @@ export default function GroupEditScreen() {
                 </View>
                 <Text style={[styles.photoNote, { color: t.ts }]}>
                   {photoChange
-                    ? `Tap ${isNew ? "Create" : "Save changes"} to apply the photo`
+                    ? "Tap the tick at the top to apply the photo"
                     : shownPhoto ? "Tap to change the group photo" : "Tap to add a group photo"}
                 </Text>
               </TouchableOpacity>
@@ -658,31 +699,6 @@ export default function GroupEditScreen() {
                 </NeuCard>
               )}
 
-              <BounceButton style={{ marginTop: 22 }} onPress={canSave ? onSave : undefined} accessibilityLabel={ctaLabel}>
-                <View style={[styles.cta, { backgroundColor: ACCT, shadowColor: ACCT, opacity: canSave ? 1 : 0.4 }, darkGlow(styles.cta, isDark)]}>
-                  <Text style={styles.ctaText}>{ctaLabel}</Text>
-                </View>
-              </BounceButton>
-
-              {/* The red pill the ⋯ menu had, Save's size, set apart from it.
-                  It needs the server, so it dims offline. */}
-              {!isNew && (
-                <BounceButton
-                  style={{ marginTop: 24 }}
-                  onPress={busy || deleting ? undefined : onDelete}
-                  needsConnection
-                  accessibilityLabel="Delete group"
-                >
-                  <View style={[
-                    styles.deleteCta,
-                    haloGlow(DANGER_BRIGHT, 0.5, 6, isDark),
-                    { opacity: busy || deleting ? 0.4 : 1 },
-                  ]}>
-                    <Ionicons name="trash-outline" size={18} color={ON_FILL} />
-                    <Text style={[styles.ctaText, { color: ON_FILL }]}>{deleting ? "Deleting…" : "Delete group"}</Text>
-                  </View>
-                </BounceButton>
-              )}
             </>
           ) : (
             <>
@@ -733,7 +749,7 @@ export default function GroupEditScreen() {
               )}
             </>
           )}
-        </ScrollView>
+        </KeyboardAwareScrollView>
       )}
 
       {/* The group page's member sheet: the same actions, Report as a step of
@@ -758,6 +774,11 @@ export default function GroupEditScreen() {
 const styles = StyleSheet.create({
   header:       { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: BACK_LEFT, paddingBottom: 12, borderBottomWidth: 1 },
   headerTitle:  { flex: 1, fontFamily: FontFamily.bold, fontSize: 18, textAlign: "center" },
+  headerSide:   { flexDirection: "row", alignItems: "center", gap: HEADER_GAP },
+  headerEnd:    { justifyContent: "flex-end" },
+  // The tick's glow below iOS 26, a logged workout's (the glass is lit by
+  // the glass).
+  saveGlow:     haloGlow(ACCT),
   loading:      { flex: 1, alignItems: "center", justifyContent: "center" },
 
   label:        { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, marginBottom: 8, marginLeft: 4 },
@@ -773,15 +794,6 @@ const styles = StyleSheet.create({
   cameraBadge:  { position: "absolute", bottom: 0, right: 0, width: 32, height: 32, borderRadius: 16, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   photoNote:    { fontFamily: FontFamily.regular, fontSize: 12 },
 
-  // A person's line: the group page's member row, in one card.
-  row:          { ...SUMMARY_ROW, paddingVertical: 12 },
-  rowNameLine:  { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 6 },
-  rowTitle:     { ...CARD_TITLE },
-  rowName:      { flexShrink: 1 },
-  avatarText:   { fontFamily: FontFamily.bold, fontSize: 13 },
-  check:        { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-  tag:          { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  tagText:      { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
   // Under the members card: what ticking does, or how many it will remove.
   hint:         { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 8, marginLeft: 4 },
   // The add card with nobody to add.
@@ -791,12 +803,6 @@ const styles = StyleSheet.create({
   emptyIcon:    { width: 56, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   emptyTitle:   { fontFamily: FontFamily.bold, fontSize: 16, textAlign: "center" },
   emptyBody:    { fontFamily: FontFamily.regular, fontSize: 13, textAlign: "center", lineHeight: 19 },
-
-  cta:          { borderRadius: PILL_RADIUS, paddingVertical: 15, alignItems: "center", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
-  ctaText:      { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
-  // Save's pill, in the sheet's danger red with its centred halo (laid on
-  // inline, for dark mode's softer glow).
-  deleteCta:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: PILL_RADIUS, paddingVertical: 15, backgroundColor: DANGER_BRIGHT },
 
   readonlyName: { fontFamily: FontFamily.bold, fontSize: 22, marginBottom: 6 },
   readonlyHint: { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19, marginBottom: 18 },

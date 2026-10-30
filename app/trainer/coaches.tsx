@@ -7,12 +7,13 @@
 // foot of the list (user decision, 2026-10-21, as the gym user's page has it;
 // it was a "+" opening an Add / Remove alert).
 
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { BlurView } from "expo-blur";
 import MaskedView from "../../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { scrollEndPadding } from "../../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../../constants/floatingBars";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
 import { useRouter } from "expo-router";
 
@@ -71,7 +72,10 @@ export default function CoachesScreen() {
         <UserRoundPlusIcon size={20} color={t.tp} />
       </GlassButton>
 
-      <ScrollView
+      {/* Searching, the keyboard's height goes under the page, so every
+          trainer scrolls clear of it (user request, 2026-10-30). */}
+      <KeyboardAwareScrollView
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         showsVerticalScrollIndicator={false}
         // A tap on a trainer fires on the first touch while the search field
         // is focused, instead of being swallowed to dismiss the keyboard.
@@ -91,7 +95,7 @@ export default function CoachesScreen() {
         <OfflineBanner />
 
         <MyCoachesSection presenceById={presenceById} />
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <KeyboardDismissButton />
     </FadeScreen>

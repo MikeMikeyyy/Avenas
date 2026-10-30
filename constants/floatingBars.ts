@@ -29,6 +29,9 @@
 //    while it shows, taller with a rest inside it (scrollEndPadding, with
 //    useFloatingBarsReach): the bar covered the foot of every page, buttons
 //    included, for as long as a workout ran (user report, 2026-10-22).
+//  - Buttons pinned to a page's foot stand on the workout bar while it shows,
+//    rising and settling with it (usePinnedLift): under it they couldn't be
+//    pressed (user pick, 2026-10-30).
 
 import type { ViewStyle } from "react-native";
 
@@ -70,6 +73,12 @@ export const REST_DIVIDER_H = 1;
 
 /** The gap between two stacked bars. */
 export const BAR_STACK_GAP = 8;
+
+/** The workout bar's moves: the spring it rises and grows on, and how long it
+ *  takes to give a rest's room back. Whatever stands on it moves the same way
+ *  (usePinnedLift, hooks/useFloatingBars.ts). */
+export const BAR_RISE = { damping: 32, stiffness: 280, overshootClamping: true };
+export const BAR_SETTLE_MS = 250;
 
 /** How far the workout bar drops to hide: clear of the screen at its tallest,
  *  a rest inside it. A shorter drop left it half on screen. */

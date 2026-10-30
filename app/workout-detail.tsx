@@ -21,7 +21,7 @@ import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFloatingBarsReach } from "../hooks/useFloatingBars";
+import { useFloatingBarsReach, usePinnedLift } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -71,6 +71,8 @@ import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 const WARMUP_ORANGE = "#ffbf0f";
 /** The floating + while editing, a size up from the buttons at the top. */
 const ADD_SIZE = 44;
+/** A date / time chip's height: its 18pt line, 6pt above and below. */
+const META_CHIP_H = 30;
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 // Abbreviated on purpose: with the full name, "Wednesday" was the one day whose
 // chip row didn't fit on a single line and pushed the duration chip down.
@@ -102,23 +104,16 @@ function workoutMetaParts(dateYMD: string, completedIso: string, durationSeconds
 }
 
 // Date / time-range / duration chips under the workout title. Each stat sits in
-// its own soft pill so the session summary reads at a glance; in edit mode the
-// pills tint ACCT and a solid green Edit chip joins them, so "tap to change the
-// time" is unmistakable (the old treatment was small text that merely turned
-// green).
+// its own soft grey pill so the session summary reads at a glance. In edit mode
+// a clear glass Edit chip joins them, the page's ink on it, and the pills stay
+// grey (user request, 2026-10-30: the pills turned green and the Edit chip was
+// a solid green one with a glow).
 function WorkoutMetaRow({ dateYMD, completedIso, durationSeconds, isDark, editable = false }: {
   dateYMD: string; completedIso: string; durationSeconds: number; isDark: boolean; editable?: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const parts = workoutMetaParts(dateYMD, completedIso, durationSeconds);
-  const chipBg = editable
-    ? `${ACCT}22`
-    : isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)";
-  // Values stay primary-text in BOTH modes — ACCT green text on the pale green
-  // wash is unreadable in light mode. Editability is signalled by the tinted
-  // background, the green icons, and the solid Edit chip instead.
-  const textColor = t.tp;
-  const iconColor = editable ? ACCT : t.ts;
+  const chipBg = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)";
   const items: { icon: React.ComponentProps<typeof Ionicons>["name"]; label: string }[] = [
     { icon: "calendar-outline", label: parts.date },
     { icon: "time-outline", label: parts.time },
@@ -128,15 +123,17 @@ function WorkoutMetaRow({ dateYMD, completedIso, durationSeconds, isDark, editab
     <View style={styles.metaRow}>
       {items.map(it => (
         <View key={it.icon} style={[styles.metaChip, { backgroundColor: chipBg }]}>
-          <Ionicons name={it.icon} size={13} color={iconColor} />
-          <Text style={[styles.metaText, { color: textColor }]}>{it.label}</Text>
+          <Ionicons name={it.icon} size={13} color={t.ts} />
+          <Text style={[styles.metaText, { color: t.tp }]}>{it.label}</Text>
         </View>
       ))}
+      {/* The row bounces as one under a press (the page's BounceButton), so
+          the glass takes no press of its own. */}
       {editable && (
-        <View style={[styles.metaChip, styles.metaEditChip, darkGlow(styles.metaEditChip, isDark)]}>
-          <Ionicons name="pencil" size={12} color="#fff" />
-          <Text style={[styles.metaText, { color: "#fff" }]}>Edit</Text>
-        </View>
+        <GlassSurface style={[styles.metaChip, styles.metaEditChip]} solidStyle={PILL_SHADOW}>
+          <Ionicons name="pencil" size={12} color={t.tp} />
+          <Text style={[styles.metaText, { color: t.tp }]}>Edit</Text>
+        </GlassSurface>
       )}
     </View>
   );
@@ -245,6 +242,8 @@ export default function WorkoutDetailScreen() {
   const insets = useSafeAreaInsets();
   // How far up the workout bar reaches, so the page scrolls clear of it.
   const barsReach = useFloatingBarsReach();
+  // The + pinned while editing stands on the workout bar while it shows.
+  const { lift: pinnedLift, liftStyle: pinnedStyle } = usePinnedLift(insets.bottom + 24);
   const t = isDark ? APP_DARK : APP_LIGHT;
 
   // Stored weights are canonical kg. The edit buffer + on-screen rows work in the
@@ -675,7 +674,7 @@ export default function WorkoutDetailScreen() {
         ref={scrollRef}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (isEditing ? 100 : 40), barsReach), paddingHorizontal: 20 }}
+        contentContainerStyle={{ paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (isEditing ? 100 + pinnedLift : 40), barsReach), paddingHorizontal: 20 }}
       >
         {/* Nav title — scrolls with content */}
         <View style={styles.scrollTitleRow}>
@@ -690,13 +689,15 @@ export default function WorkoutDetailScreen() {
             <View style={{ marginBottom: 24 }}>
               <Text style={[styles.title, { color: t.tp }]}>{displayWorkoutName(workout.workoutName)}</Text>
               {isEditing ? (
-                <TouchableOpacity
-                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTimeSheetOpen(true); }}
-                  activeOpacity={0.7}
+                // A bounce, not a fade: glass draws wrongly under a fading parent.
+                <BounceButton
+                  onPress={() => setTimeSheetOpen(true)}
                   style={{ alignSelf: "flex-start" }}
+                  accessibilityLabel="Edit start and end time"
+                  accessibilityRole="button"
                 >
                   <WorkoutMetaRow dateYMD={workout.date} completedIso={editedCompletedAt || workout.completedAt} durationSeconds={editedDurationSeconds} isDark={isDark} editable />
-                </TouchableOpacity>
+                </BounceButton>
               ) : (
                 <WorkoutMetaRow dateYMD={workout.date} completedIso={workout.completedAt} durationSeconds={workout.durationSeconds} isDark={isDark} />
               )}
@@ -1064,7 +1065,7 @@ export default function WorkoutDetailScreen() {
           editing. History edits never touch the program — only this
           CompletedWorkout. */}
       {isEditing && (
-        <View style={{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 6 }}>
+        <Reanimated.View style={[{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 6 }, pinnedStyle]}>
           <GlassButton
             tint={ACCT}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAddingExercise(true); }}
@@ -1074,7 +1075,7 @@ export default function WorkoutDetailScreen() {
           >
             <Ionicons name="add" size={24} color="#fff" />
           </GlassButton>
-        </View>
+        </Reanimated.View>
       )}
       <ExercisePicker
         visible={changingExIdx !== null || addingExercise}
@@ -1167,7 +1168,9 @@ const styles = StyleSheet.create({
   unitNote: { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 6 },
   metaRow:      { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 10 },
   metaChip:     { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
-  metaEditChip: { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
+  // Glass takes its radius exactly as given (never clamped to half its
+  // height), so the Edit chip is the grey chips' height, set, not 999 round.
+  metaEditChip: { height: META_CHIP_H, borderRadius: META_CHIP_H / 2, paddingVertical: 0 },
   metaText:     { fontFamily: FontFamily.semibold, fontSize: 13, lineHeight: 18 },
 
   exHeader:    { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 },

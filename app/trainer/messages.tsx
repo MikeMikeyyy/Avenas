@@ -8,9 +8,11 @@
 
 import { useCallback, useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, Alert,
+  View, Text, StyleSheet, Alert,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ABOVE_KEYBOARD_TOOLS } from "../../constants/floatingBars";
 import { useRouter, useFocusEffect } from "expo-router";
 import { BlurView } from "expo-blur";
 import MaskedView from "../../components/MaskedView";
@@ -238,7 +240,10 @@ export default function MessagesScreen() {
         </GlassButton>
       )}
 
-      <ScrollView
+      {/* Searching, the keyboard's height goes under the page, so every
+          conversation scrolls clear of it (user request, 2026-10-30). */}
+      <KeyboardAwareScrollView
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         showsVerticalScrollIndicator={false}
         // Lets a tap on a result row fire on the first touch while the search
         // field is focused, instead of being swallowed to dismiss the keyboard.
@@ -306,7 +311,7 @@ export default function MessagesScreen() {
             </BounceButton>
           ))
         )}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       {/* The keyboard's down button, for the name search. It only lowers the
           keyboard: the search stays, with what you typed still filtering. */}

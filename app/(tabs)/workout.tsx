@@ -3012,27 +3012,38 @@ function WorkoutScreen() {
             </View>
 
             {/* Edit in Journal + Discard row. Pills, not the chunky neumorphic
-                Finish button — these are secondary actions on a finished
-                session, so they take the top bar's control styling (see
-                completedActionBtn). */}
+                Finish button: these are secondary actions on a finished
+                session, so they're glass like the top bar's buttons (user
+                request, 2026-10-30: Edit was a dark slate pill), the page's
+                ink on Edit and the delete red on Discard. */}
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 16 }}>
               {/* edit=1 lands in edit mode: this button is a request to change
                   the numbers, so a second Edit on the next screen was a tap
                   that did nothing but confirm what you'd already said. */}
-              <BounceButton onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id, edit: "1" } })} style={{ flex: 1 }}>
-                <View style={[styles.completedActionBtn, { backgroundColor: isDark ? BTN_SLATE_DARK : BTN_SLATE }]}>
-                  <Ionicons name="create-outline" size={17} color={isDark ? APP_DARK.bg : "#fff"} />
-                  <Text style={[styles.completedActionText, { color: isDark ? APP_DARK.bg : "#fff" }]} numberOfLines={1}>Edit Workout</Text>
-                </View>
-              </BounceButton>
-              <BounceButton onPress={handleDiscardCompleted} style={{ flex: 1 }}>
-                {/* t.ctrl is the same white the timer pill and the +/back
-                    circles sit on, so the row reads as one control family. */}
-                <View style={[styles.completedActionBtn, { backgroundColor: t.ctrl }]}>
-                  <TrashIcon size={15} color={DANGER_BRIGHT} />
-                  <Text style={[styles.completedActionText, { color: DANGER_BRIGHT }]} numberOfLines={1}>Discard Workout</Text>
-                </View>
-              </BounceButton>
+              <GlassButton
+                pill
+                size={PILL_H_SM}
+                onPress={() => router.navigate({ pathname: "/workout-detail", params: { id: todaysCompletedWorkout.id, edit: "1" } })}
+                style={{ flex: 1 }}
+                contentStyle={styles.completedActionContent}
+                solidStyle={PILL_SHADOW}
+                accessibilityLabel="Edit workout"
+              >
+                <Ionicons name="create-outline" size={17} color={t.tp} />
+                <Text style={[styles.completedActionText, { color: t.tp }]} numberOfLines={1}>Edit Workout</Text>
+              </GlassButton>
+              <GlassButton
+                pill
+                size={PILL_H_SM}
+                onPress={handleDiscardCompleted}
+                style={{ flex: 1 }}
+                contentStyle={styles.completedActionContent}
+                solidStyle={PILL_SHADOW}
+                accessibilityLabel="Discard workout"
+              >
+                <TrashIcon size={15} color={DANGER_BRIGHT} />
+                <Text style={[styles.completedActionText, { color: DANGER_BRIGHT }]} numberOfLines={1}>Discard Workout</Text>
+              </GlassButton>
             </View>
 
             {/* Locked exercise cards, with a Skipped row in the place of each
@@ -3640,7 +3651,7 @@ const styles = StyleSheet.create({
   // bar's timer pill and round icon buttons: pill height, fully rounded ends,
   // and a soft drop shadow rather than the Finish button's offset neumorphic
   // one — thinner and quieter, since the session is already saved.
-  completedActionBtn: { ...pill(PILL_H_SM), gap: 7, paddingHorizontal: 12, ...PILL_SHADOW },
+  completedActionContent: { gap: 7, paddingHorizontal: 12 },
   completedActionText: { fontFamily: FontFamily.bold, fontSize: 14, letterSpacing: 0.3, flexShrink: 1 },
 
   // Focus mode's pinned ‹ › and Complete Workout (components/GlassButton.tsx).

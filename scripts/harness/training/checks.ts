@@ -27,6 +27,10 @@
 //   save/          a saved session: weights read back as typed, PR cards
 //   journal/       a saved session's "Planned 2nd" / "Instead of" / "Added"
 //                  lines, its Skipped rows and its card's summary
+//   journal-calendar/
+//                  the Journal's month calendar (a trainer's view of a client's
+//                  too): which days read trained, the bands joining days trained
+//                  and days missed, and the month's workouts
 //   compare/       the Progress page comparing the program on the go with a
 //                  finished one: which runs it offers, which it starts from
 //                  with nothing on the go, each run's sessions, its weekly
@@ -57,6 +61,7 @@ import { exerciseDateSlots, exerciseDaySlots, type ChartSlot } from "../../../ut
 import { buildSessionTracks, type SessionTracks } from "../../../utils/sessionTrack";
 import { buildProgramHistory } from "../../../utils/programHistory";
 import { buildWeekSchedule, weekStartFor, weekTotals } from "../../../utils/weekSchedule";
+import { calendarWeeks, monthWorkouts, type CalendarDay } from "../../../utils/journalCalendar";
 import { addDaysYMD, toYMD } from "../../../utils/dates";
 import {
   buildPrevNoteLookup, buildPrevSetsLookup, getEffectiveToday, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, resolveWorkoutForDate, type DayOverride,
@@ -1050,6 +1055,71 @@ export function checkHome(l: Lifter, snap: Snapshot): Problem[] {
   return out;
 }
 
+// ─── The Journal's calendar ──────────────────────────────────────────────────
+
+/** A week's days that pass `test`, in runs: "column+length", Monday 0. */
+function runsWhere(days: (CalendarDay | null)[], test: (day: CalendarDay) => boolean): string[] {
+  const out: string[] = [];
+  let from = -1;
+  for (let col = 0; col <= days.length; col++) {
+    const day = col < days.length ? days[col] : null;
+    const hit = !!day && test(day);
+    if (hit && from < 0) from = col;
+    if (!hit && from >= 0) {
+      out.push(`${from}+${col - from}`);
+      from = -1;
+    }
+  }
+  return out;
+}
+
+/** The Journal's month calendar, this month and the one before (the two Home's
+ *  calendar opens it on), drawn from the history's dates as a trainer's view of
+ *  a client draws it. A day reads trained exactly when a session was logged on
+ *  it, each week's green bands are its runs of such days and its dashed bands
+ *  its runs of missed days, and the line under the month counts the month's
+ *  sessions. */
+export function checkJournalCalendar(l: Lifter, snap: Snapshot): Problem[] {
+  const out: Problem[] = [];
+  const active = snap.programs.find(p => p.status === "active") ?? null;
+  const dates = new Set(snap.history.map(w => w.date));
+  const logged = new Set(l.sessions.map(s => s.date));
+  const [y, m] = snap.calendarToday.split("-").map(Number);
+  const months: [number, number][] = [[y, m - 1], m === 1 ? [y - 1, 11] : [y, m - 2]];
+  for (const [year, month] of months) {
+    const label = `${MONTHS[month]} ${year}`;
+    const weeks = calendarWeeks(year, month, snap.calendarToday, dates, active);
+    for (const week of weeks) {
+      const from = week.days.find(d => d !== null)?.date;
+      const green = week.runs.filter(r => r.kind === "trained").map(r => `${r.start}+${r.length}`).join(" ");
+      const did = runsWhere(week.days, d => logged.has(d.date)).join(" ");
+      if (green !== did) {
+        out.push({ code: "journal-calendar/bands", what: `${label}, the week of ${from}: green bands at ${green || "none"}; days logged at ${did || "none"}` });
+      }
+      const dashed = week.runs.filter(r => r.kind === "missed").map(r => `${r.start}+${r.length}`).join(" ");
+      const missed = runsWhere(week.days, d => d.state === "missed").join(" ");
+      if (dashed !== missed) {
+        out.push({ code: "journal-calendar/dashed", what: `${label}, the week of ${from}: dashed bands at ${dashed || "none"}; missed days at ${missed || "none"}` });
+      }
+      for (const day of week.days) {
+        if (!day) continue;
+        const reads = day.state === "workout" || day.state === "todayWorkout";
+        const was = logged.has(day.date);
+        if (reads !== was) {
+          out.push({ code: "journal-calendar/day", what: `${day.date} reads ${day.state}; ${was ? "a session was logged on it" : "nothing was logged on it"}` });
+        }
+      }
+    }
+    const workouts = monthWorkouts(year, month, snap.history);
+    const prefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
+    const sessions = l.sessions.filter(s => s.date.startsWith(prefix)).length;
+    if (workouts !== sessions) {
+      out.push({ code: "journal-calendar/workouts", what: `${label} says ${workouts} workouts; ${sessions} were logged` });
+    }
+  }
+  return out;
+}
+
 // ─── The Workout tab's "Previous" ────────────────────────────────────────────
 
 /** A ledger set as the "Previous" hint should read it, in the unit on screen. */
@@ -1171,8 +1241,10 @@ export function checkHints(b: BeforeLog): Problem[] {
       for (const m of moved) {
         if (prev.exercises[m.at - 1]?.place !== m.id) out.push({ code: "hints/changes-move", what: `${where}: "done ${m.at}" on ${m.id}, which was done ${prev.exercises.findIndex(e => e.place === m.id) + 1}` });
       }
-      if (!movesAccountFor(want, prev.exercises, new Set(moved.map(m => m.id)))) {
-        out.push({ code: "hints/changes-move", what: `${where}: ${moved.length} marked moved; ${want.moves} had to move (${prev.exercises.map(e => e.place ?? "+").join(" ")})` });
+      const shownMoved = moved.map(m => m.id).sort();
+      const outOfPlace = movedPlaces(want, prev.exercises);
+      if (shownMoved.join(",") !== outOfPlace.join(",")) {
+        out.push({ code: "hints/changes-move", what: `${where}: "done Nth" on ${shownMoved.join(", ") || "none"}; out of place ${outOfPlace.join(", ") || "none"} (${prev.exercises.map(e => e.place ?? "+").join(" ")})` });
       }
     }
   }
@@ -1200,14 +1272,17 @@ function ledgerChanges(plan: PlannedExercise[], exercises: LedgerExercise[]) {
   };
 }
 
-/** The exercises left unmarked (`marked` by place, a swap-in counting as
- *  marked) are in plan order, and no more were marked than had to move and,
- *  with each, the one whose place it took (user request, 2026-10-22). */
-function movesAccountFor(want: ReturnType<typeof ledgerChanges>, exercises: LedgerExercise[], marked: Set<string>): boolean {
-  const left = want.placed.filter(p => !marked.has(exercises[p.i].place!) && !exercises[p.i].swappedFrom);
-  const inOrder = left.every((p, k) => k === 0 || left[k - 1].at < p.at);
-  const markedPlain = want.placed.filter(p => marked.has(exercises[p.i].place!) && !exercises[p.i].swappedFrom).length;
-  return inOrder && markedPlain <= want.moves * 2;
+/** The places that should say they moved, sorted: every exercise done out of
+ *  its planned place, counted among the plan's exercises that were done (one
+ *  added or skipped shifts nothing), but a swap-in, which says it was a swap
+ *  (user report, 2026-10-30: all a move shifted along, not only the one moved
+ *  and the one whose place it took). */
+function movedPlaces(want: ReturnType<typeof ledgerChanges>, exercises: LedgerExercise[]): string[] {
+  const byPlan = [...want.placed].sort((a, b) => a.at - b.at);
+  return want.placed
+    .filter((p, k) => byPlan[k] !== p && !exercises[p.i].swappedFrom)
+    .map(p => exercises[p.i].place!)
+    .sort();
 }
 
 // ─── A save ──────────────────────────────────────────────────────────────────
@@ -1465,8 +1540,8 @@ export function checkSave(a: AfterSave): Problem[] {
       if (added.join(",") !== done.added.join(",")) out.push({ code: "journal/changes", what: `${where}: "Added" on ${added.join(", ") || "none"}; added were ${done.added.join(", ") || "none"}` });
       const skipped = changes.skipped.map(s => s.id);
       if (skipped.join(",") !== done.skipped.join(",")) out.push({ code: "journal/changes", what: `${where}: Skipped rows for ${skipped.join(", ") || "none"}; left out ${done.skipped.join(", ") || "none"}` });
-      // "Planned Nth" names its place in the plan, and what's left unmarked is
-      // in plan order with no more marked than had to move.
+      // "Planned Nth" names its place in the plan, on every exercise done out
+      // of its planned place and no other.
       const marked = new Set<string>();
       changes.cues.forEach((c, i) => {
         if (c?.kind !== "moved") return;
@@ -1475,8 +1550,10 @@ export function checkSave(a: AfterSave): Problem[] {
         const at = ledger.plan!.findIndex(p => p.id === place) + 1;
         if (c.plannedPosition !== at) out.push({ code: "journal/changes", what: `${where}: "Planned ${c.plannedPosition}" on ${ledger.exercises[i].name}, planned ${at}` });
       });
-      if (!movesAccountFor(done, ledger.exercises, marked)) {
-        out.push({ code: "journal/changes", what: `${where}: ${marked.size} marked moved; ${done.moves} had to move (${ledger.exercises.map(e => e.place ?? "+").join(" ")})` });
+      const shownMarked = [...marked].sort();
+      const outOfPlace = movedPlaces(done, ledger.exercises);
+      if (shownMarked.join(",") !== outOfPlace.join(",")) {
+        out.push({ code: "journal/changes", what: `${where}: "Planned" on ${shownMarked.join(", ") || "none"}; out of place ${outOfPlace.join(", ") || "none"} (${ledger.exercises.map(e => e.place ?? "+").join(" ")})` });
       }
       if ((changes.counts.moved > 0) !== (done.moves > 0)) out.push({ code: "journal/changes", what: `${where}: the card ${changes.counts.moved > 0 ? "says" : "doesn't say"} the order changed; ${done.moves} moved` });
     }

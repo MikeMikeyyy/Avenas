@@ -10,7 +10,7 @@ import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFloatingBarsReach } from "../hooks/useFloatingBars";
+import { useFloatingBarsReach, usePinnedLift } from "../hooks/useFloatingBars";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
@@ -676,6 +676,10 @@ export default function LogWorkoutScreen() {
   const safeBottomRef = useRef(insets.bottom);
   if (insets.bottom > safeBottomRef.current) safeBottomRef.current = insets.bottom;
   const safeBottom = safeBottomRef.current;
+  // Save Workout, and the notes and + above it, stand on the workout bar while
+  // it shows, as one; the notes card opens out of its button wherever it is.
+  // From the live inset, as the bar places itself.
+  const { lift: pinnedLift, liftStyle: pinnedStyle } = usePinnedLift(insets.bottom + 16);
   const { isDark } = useTheme();
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -925,7 +929,7 @@ export default function LogWorkoutScreen() {
     const show = Keyboard.addListener("keyboardWillShow", e => {
       setKbHeight(e.endCoordinates.height);
       // Lift the floating notes card above the keyboard (animated → no jump).
-      const base = safeBottom + 140;
+      const base = safeBottom + 140 + pinnedLift;
       notesKbShift.value = withTiming(Math.min(0, base - (e.endCoordinates.height + 12)), { duration: e.duration || 250, easing: ReEasing.out(ReEasing.cubic) });
     });
     const hide = Keyboard.addListener("keyboardWillHide", e => {
@@ -933,7 +937,7 @@ export default function LogWorkoutScreen() {
       notesKbShift.value = withTiming(0, { duration: (e && e.duration) || 250, easing: ReEasing.out(ReEasing.cubic) });
     });
     return () => { show.remove(); hide.remove(); };
-  }, [safeBottom]);
+  }, [safeBottom, pinnedLift]);
 
   // Load custom exercises
   useEffect(() => {
@@ -1217,7 +1221,7 @@ export default function LogWorkoutScreen() {
           ref={scrollRef}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[s.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(safeBottom + 150, barsReach) }]}
+          contentContainerStyle={[s.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(safeBottom + 150 + pinnedLift, barsReach) }]}
         >
           {/* Nav title — scrolls with content like journal page */}
           <View style={s.scrollTitleRow}>
@@ -1274,7 +1278,7 @@ export default function LogWorkoutScreen() {
 
       {/* Bottom-left action cluster (same as the workout screen): Session Notes
           button + round green + Add Exercise. Pinned just above the Save button. */}
-      <View style={{ position: "absolute", left: 20, bottom: safeBottom + 80, zIndex: 6 }}>
+      <Reanimated.View style={[{ position: "absolute", left: 20, bottom: safeBottom + 80, zIndex: 6 }, pinnedStyle]}>
         <View style={s.actionCluster}>
           <GlassButton
             onPress={openNotes}
@@ -1298,7 +1302,7 @@ export default function LogWorkoutScreen() {
             <Ionicons name="add" size={24} color="#fff" />
           </GlassButton>
         </View>
-      </View>
+      </Reanimated.View>
 
       {/* Floating Session Notes card (same as the workout screen). Mounted only
           while open (plus a brief close-animation window) so no full-screen overlay
@@ -1314,7 +1318,7 @@ export default function LogWorkoutScreen() {
         pointerEvents={showNotes ? "auto" : "none"}
         style={[
           s.notesFloatCard,
-          { bottom: safeBottom + 140, backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? CARD_SHADE_DARK : CARD_SHADE },
+          { bottom: safeBottom + 140 + pinnedLift, backgroundColor: isDark ? NEU_BG_DARK : NEU_BG, shadowColor: isDark ? CARD_SHADE_DARK : CARD_SHADE },
           notesCardStyle,
         ]}
       >
@@ -1387,7 +1391,7 @@ export default function LogWorkoutScreen() {
       )}
 
       {/* Save Workout — floating above safe area */}
-      <View style={[s.saveRow, { bottom: safeBottom + 16 }]} pointerEvents="box-none">
+      <Reanimated.View style={[s.saveRow, { bottom: safeBottom + 16 }, pinnedStyle]} pointerEvents="box-none">
         <GlassButton
           pill
           size={PILL_H}
@@ -1401,7 +1405,7 @@ export default function LogWorkoutScreen() {
           <Ionicons name="checkmark-circle" size={18} color={isDark ? APP_DARK.bg : "#fff"} />
           <Text style={[s.saveBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Save Workout</Text>
         </GlassButton>
-      </View>
+      </Reanimated.View>
 
       {/* Add exercise picker */}
       <ExercisePicker

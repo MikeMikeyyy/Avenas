@@ -12,9 +12,9 @@
 // ledger of what they did (scripts/harness/training/checks.ts): the Progress
 // page's bars, day list, charts, records and Exercise History; the exercise
 // chart's layout on every phone width; each program's page; Home's week and
-// Recent Activity. Every session logged is checked as it's saved (weights read
-// back as typed, the PR card), and before it's started (the Workout tab's
-// "Previous" sets and notes).
+// Recent Activity; the Journal's calendar. Every session logged is checked as
+// it's saved (weights read back as typed, the PR card), and before it's
+// started (the Workout tab's "Previous" sets and notes).
 //
 // Run:  npx tsx scripts/verify-training-months.ts          (--deep: more lifters, longer)
 //       npx tsx scripts/verify-training-months.ts --seed 7  (one lifter, with its story)
@@ -24,8 +24,8 @@ import { warnings } from "./harness/app";
 import { crossesDst } from "./harness/solo/env";
 import { Lifter } from "./harness/training/lifter";
 import {
-  checkChartLayout, checkCompare, checkHints, checkHome, checkProgramPages, checkProgressBars, checkProgressDays, checkSave,
-  snapshot, type Problem,
+  checkChartLayout, checkCompare, checkHints, checkHome, checkJournalCalendar, checkProgramPages, checkProgressBars,
+  checkProgressDays, checkSave, snapshot, type Problem,
 } from "./harness/training/checks";
 import { addDaysYMD } from "../utils/dates";
 
@@ -96,6 +96,7 @@ async function runLifter(seed: number) {
     record(lifter, checkChartLayout(charts));
     record(lifter, checkProgramPages(lifter, snap));
     record(lifter, checkHome(lifter, snap));
+    record(lifter, checkJournalCalendar(lifter, snap));
     record(lifter, checkCompare(lifter, snap));
     record(lifter, warnings.splice(0, warnings.length).map(w => ({ code: "app/swallowed-error", what: w.text })));
   }

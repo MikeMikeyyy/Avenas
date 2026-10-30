@@ -20,7 +20,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
-import { useFloatingBarsReach } from "../hooks/useFloatingBars";
+import { useFloatingBarsReach, usePinnedLift } from "../hooks/useFloatingBars";
 import { useRouter, useFocusEffect, useLocalSearchParams, usePreventRemove } from "expo-router";
 import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
@@ -1792,6 +1792,8 @@ export default function NewProgramScreen() {
   const insets = useSafeAreaInsets();
   // How far up the workout bar reaches, so the page scrolls clear of it.
   const barsReach = useFloatingBarsReach();
+  // Next, Create Program and Summary stand on the workout bar while it shows.
+  const { lift: pinnedLift, liftStyle: pinnedStyle } = usePinnedLift(insets.bottom + 24);
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -3027,7 +3029,7 @@ export default function NewProgramScreen() {
         // keeps its longer-standing 120 because its content runs much further.
         // Padding on the CONTENT, not a fixed height, so adding cycle days or
         // exercises keeps the same gap rather than eating into it.
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (step === 2 ? 120 : 90), barsReach) }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (step === 2 ? 120 : 90) + pinnedLift, barsReach) }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -3143,7 +3145,7 @@ export default function NewProgramScreen() {
           right side is free and a forward arrow reads better there. Dimmed and
           inert until the program has a name and at least one named training day. */}
       {step === 1 && kbHeight === 0 && (
-        <View style={{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
+        <Reanimated.View style={[{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }, pinnedStyle]}>
           <GlassButton
             pill
             size={PILL_H_SM}
@@ -3157,14 +3159,14 @@ export default function NewProgramScreen() {
             <Text style={[styles.createFabText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Next</Text>
             <Ionicons name="arrow-forward" size={16} color={isDark ? APP_DARK.bg : "#fff"} />
           </GlassButton>
-        </View>
+        </Reanimated.View>
       )}
 
       {/* Floating Create button — bottom LEFT, paired with Summary on the right.
           Only in create mode: editing, reviewing and shared-edit each commit
           through their own header action, not this one. */}
       {step === 2 && kbHeight === 0 && !isEditMode && !isReviewMode && !isSharedEditMode && (
-        <View style={{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
+        <Reanimated.View style={[{ position: "absolute", left: 20, bottom: insets.bottom + 24, zIndex: 8 }, pinnedStyle]}>
           <GlassButton
             pill
             size={PILL_H_SM}
@@ -3177,13 +3179,13 @@ export default function NewProgramScreen() {
             <Ionicons name="checkmark" size={16} color={isDark ? APP_DARK.bg : "#fff"} />
             <Text style={[styles.createFabText, { color: isDark ? APP_DARK.bg : "#fff" }]}>Create Program</Text>
           </GlassButton>
-        </View>
+        </Reanimated.View>
       )}
 
       {/* Floating Workout Summary button — Step 2 only, where the full page gets
           long. Hidden while the keyboard is up so it never overlaps the toolbar. */}
       {step === 2 && kbHeight === 0 && (
-        <View style={{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }}>
+        <Reanimated.View style={[{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }, pinnedStyle]}>
           <GlassButton
             pill
             size={PILL_H_SM}
@@ -3196,7 +3198,7 @@ export default function NewProgramScreen() {
             <Ionicons name="list" size={16} color="#fff" />
             <Text style={styles.summaryFabText}>Summary</Text>
           </GlassButton>
-        </View>
+        </Reanimated.View>
       )}
 
       <ProgramSummarySheet

@@ -12,12 +12,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import Reanimated from "react-native-reanimated";
 import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
-import { useFloatingBarsReach } from "../hooks/useFloatingBars";
+import { useFloatingBarsReach, usePinnedLift } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -229,6 +230,9 @@ export default function ProgramViewScreen() {
   const showFloatingAcceptProgram = !isOutgoing && !isSent && !!share && !accepted;
   const showFloatingAcceptChanges = sentReturned && !sentApplied;
   const showFloatingAccept = showFloatingAcceptProgram || showFloatingAcceptChanges;
+  // Accept and the pair above it (or the pair alone) stand on the workout bar
+  // while it shows, the lowest of them setting how far.
+  const { lift: pinnedLift, liftStyle: pinnedStyle } = usePinnedLift(insets.bottom + (showFloatingAccept ? 16 : 24));
 
   // A second tap on Accept while the first is on its way would otherwise say
   // "added" twice (the store adds it once either way).
@@ -445,7 +449,7 @@ export default function ProgramViewScreen() {
           paddingTop: insets.top + BACK_TOP,
           // Clears whichever floats above it: the Builder/Summary pills always,
           // plus the Accept CTA below them when that's showing.
-          paddingBottom: scrollEndPadding(insets.bottom + (showFloatingAccept ? 170 : 100), barsReach),
+          paddingBottom: scrollEndPadding(insets.bottom + (showFloatingAccept ? 170 : 100) + pinnedLift, barsReach),
         }}
       >
         {/* A screen title in the review screen's style, with the program's name
@@ -564,9 +568,9 @@ export default function ProgramViewScreen() {
       </ScrollView>
 
       {showFloatingAccept && (
-        <View
+        <Reanimated.View
           pointerEvents="box-none"
-          style={[styles.floatingBtnWrap, { bottom: insets.bottom + 16 }]}
+          style={[styles.floatingBtnWrap, { bottom: insets.bottom + 16 }, pinnedStyle]}
         >
           {/* Slate, not green: it sits directly under the green Summary pill,
               and two green buttons stacked read as one cluster with no clear
@@ -585,13 +589,14 @@ export default function ProgramViewScreen() {
               {showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
             </Text>
           </GlassButton>
-        </View>
+        </Reanimated.View>
       )}
 
       {/* Builder + Summary, sitting above the Accept CTA when there is one. */}
       {snapshot && (
         <ProgramActionFabs
           bottom={insets.bottom + (showFloatingAccept ? 80 : 24)}
+          liftStyle={pinnedStyle}
           isDark={isDark}
           // Only the sender edits: a program sent TO you becomes yours to change
           // once you accept it, and until then the builder would be editing

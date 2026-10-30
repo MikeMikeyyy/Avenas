@@ -16,7 +16,7 @@ import { RestActions, RestDrainLine, RestTime, formatRestTime, useRestProgress }
 import { upNextTail } from "../utils/workoutTimer";
 import { FontFamily, ACCT, APP_LIGHT, APP_DARK, CUE_INK, CUE_INK_DARK } from "../constants/theme";
 import {
-  BAR_INSET_X, BAR_SHADOW, REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H, barButtonFill, workoutBarReach,
+  BAR_INSET_X, BAR_RISE, BAR_SETTLE_MS, BAR_SHADOW, REST_DIVIDER_H, REST_SECTION_H, WORKOUT_BAR_H, barButtonFill, workoutBarReach,
 } from "../constants/floatingBars";
 
 function fmtTime(secs: number): string {
@@ -36,7 +36,8 @@ const OPEN_HIT_SLOP = { top: 10, bottom: 10, left: 14, right: 8 };
 const PRESS_IN = { damping: 30, stiffness: 600 };
 const PRESS_OUT = { damping: 12, stiffness: 250 };
 // The bar's own moves: the spring it rises and grows on, and how fast it goes.
-const RISE = { damping: 32, stiffness: 280, overshootClamping: true };
+// Shared with what stands on it (constants/floatingBars.ts).
+const RISE = BAR_RISE;
 
 export default function WorkoutActiveBar() {
   const { isPaused, elapsedSeconds, pauseTimer, resumeTimer, discardWorkout } = useWorkoutTimer();
@@ -78,7 +79,7 @@ export default function WorkoutActiveBar() {
   }, [reach]);
   const restOpen = useSharedValue(resting ? 1 : 0);
   useEffect(() => {
-    restOpen.value = resting ? withSpring(1, RISE) : withTiming(0, { duration: 250 });
+    restOpen.value = resting ? withSpring(1, RISE) : withTiming(0, { duration: BAR_SETTLE_MS });
   }, [resting, restOpen]);
   const progress = useRestProgress();
   // The set that's next, which only this bigger card has room for (the pill on

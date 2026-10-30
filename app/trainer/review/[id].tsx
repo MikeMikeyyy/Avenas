@@ -8,7 +8,7 @@ import { Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../../../constants/floatingBars";
-import { useFloatingBarsReach } from "../../../hooks/useFloatingBars";
+import { useFloatingBarsReach, usePinnedLift } from "../../../hooks/useFloatingBars";
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
@@ -52,6 +52,8 @@ export default function ReviewScreen() {
   const insets = useSafeAreaInsets();
   // How far up the workout bar reaches, so the page scrolls clear of it.
   const barsReach = useFloatingBarsReach();
+  // Open in Builder and Summary stand on the workout bar while it shows.
+  const { lift: pinnedLift, liftStyle: pinnedStyle } = usePinnedLift(insets.bottom + 24);
   const offline = useOffline();
   // The account the Trainer tab's saved copy belongs to (utils/pageSnapshot.ts).
   const { userId } = useAuth();
@@ -185,7 +187,7 @@ export default function ReviewScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 120, barsReach) }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 120 + pinnedLift, barsReach) }}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.titleRow}>
@@ -250,6 +252,7 @@ export default function ReviewScreen() {
       {snap && kbHeight === 0 && (
         <ProgramActionFabs
           bottom={insets.bottom + 24}
+          liftStyle={pinnedStyle}
           isDark={isDark}
           // The builder saves this review to the server as you go, so with no
           // signal it says why rather than opening onto edits it can't keep.

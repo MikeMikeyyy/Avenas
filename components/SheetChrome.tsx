@@ -67,6 +67,26 @@ export function SheetGlass({ radius = GLASS_SHEET_RADIUS }: { radius?: number })
   return <GlassSurface style={[StyleSheet.absoluteFill, { borderRadius: radius }]}>{null}</GlassSurface>;
 }
 
+/** The back chevron in a sheet's top left corner, facing the X, on a sheet
+ *  that's a step after another (Send a Program's people, after its program;
+ *  user request, 2026-10-30): pass the sheet's own animated close, then the
+ *  step before's open. It places itself. */
+export function SheetBackButton({ onPress }: { onPress: () => void }) {
+  const { isDark } = useTheme();
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <GlassButton
+      onPress={onPress}
+      size={SHEET_CLOSE_SIZE}
+      style={styles.back}
+      solidStyle={PILL_SHADOW}
+      accessibilityLabel="Back"
+    >
+      <Ionicons name="chevron-back" size={20} color={t.tp} />
+    </GlassButton>
+  );
+}
+
 /** The X in a sheet's top right corner, which closes it the way its other
  *  ways do (pass the sheet's own animated close). It places itself. */
 export function SheetCloseButton({ onPress, style }: { onPress: () => void; style?: StyleProp<ViewStyle> }) {
@@ -87,4 +107,5 @@ export function SheetCloseButton({ onPress, style }: { onPress: () => void; styl
 
 const styles = StyleSheet.create({
   close: { position: "absolute", top: SHEET_CLOSE_INSET, right: SHEET_CLOSE_INSET, zIndex: 5 },
+  back:  { position: "absolute", top: SHEET_CLOSE_INSET, left: SHEET_CLOSE_INSET, zIndex: 5 },
 });

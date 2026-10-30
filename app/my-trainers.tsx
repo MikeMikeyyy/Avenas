@@ -5,12 +5,13 @@
 // count of the requests waiting) adds a trainer, as Connect does from anywhere;
 // "Remove a trainer" is at the foot of the list.
 
-import { StyleSheet, ScrollView, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { scrollEndPadding } from "../constants/floatingBars";
+import { ABOVE_KEYBOARD_TOOLS, scrollEndPadding } from "../constants/floatingBars";
 import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter } from "expo-router";
 
@@ -72,7 +73,10 @@ export default function MyTrainersScreen() {
         <UserRoundPlusIcon size={20} color={t.tp} />
       </GlassButton>
 
-      <ScrollView
+      {/* Searching, the keyboard's height goes under the page, so every
+          trainer scrolls clear of it (user request, 2026-10-30). */}
+      <KeyboardAwareScrollView
+        bottomOffset={ABOVE_KEYBOARD_TOOLS}
         showsVerticalScrollIndicator={false}
         // A tap on a trainer fires on the first touch while the search field
         // is focused, instead of being swallowed to dismiss the keyboard.
@@ -92,7 +96,7 @@ export default function MyTrainersScreen() {
         <OfflineBanner />
 
         <MyTrainersSection presenceById={presenceById} unreadByPerson={byPerson} />
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <KeyboardDismissButton />
     </FadeScreen>

@@ -1,25 +1,44 @@
+// The Journal's month calendar, and a trainer's view of a client's (user pick,
+// 2026-10-30, option C of the Journal Calendar canvas): flat days on the card,
+// days trained back to back joined in one soft band, days missed back to back
+// in one dashed outline, a rest day just its number, today a ring. What each
+// day is, and the line under the month's name, come from
+// utils/journalCalendar.ts.
+
 import React, { useState, useMemo, useCallback, useRef } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, LayoutChangeEvent, Platform } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, LayoutChangeEvent } from "react-native";
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK, BUBBLE_DARK, CARD_GLOW, CARD_SHADE, CARD_SHADE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, accentTextColor, journalCalendarInk } from "../constants/theme";
+import { cardButton } from "../constants/buttons";
 import NeuCard from "./NeuCard";
+import BounceButton from "./BounceButton";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
-import { getWorkoutForDate } from "../utils/workout";
+import { MONTH_FULL } from "../utils/dates";
+import {
+  calendarWeeks, monthWorkouts, summaryLine, ymdOf,
+  type CalendarDay, type CalendarDayState, type CalendarRun,
+} from "../utils/journalCalendar";
 
-const MONTH_LABELS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const DAY_ABBRS    = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
+const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 
-// Rest-day colours (the dark ones neutral charcoal since Graphite, where they
-// were navy)
-const REST_BG_LIGHT     = "#b8bec8";
-const REST_BG_DARK      = "#3B3D44";
-const REST_SHADOW_LIGHT = "#8a9099";
-const REST_SHADOW_DARK  = "#0A0B0D";
-const REST_HI_LIGHT     = "#d0d4da";
-const REST_HI_DARK      = "#4A4C53";
+// A day's circle and the row it sits in. A band is a circle high, and its ends
+// are its first and last days' circles.
+const DISC  = 36;
+const ROW_H = 46;
+// How far today's pale halo reaches past its ring.
+const HALO  = 4;
 
-type CellState = "workout" | "todayWorkout" | "today" | "rest" | "missed" | "future" | null;
+/** What VoiceOver says after a day's date. */
+const STATE_WORDS: Record<CalendarDayState, string> = {
+  workout: "trained",
+  todayWorkout: "today, trained",
+  today: "today",
+  rest: "rest day",
+  missed: "missed",
+  future: "still to come",
+  plain: "nothing logged",
+};
 
 interface Props {
   isDark: boolean;
@@ -30,13 +49,6 @@ interface Props {
   /** The month to open on, "YYYY-MM" (Home's calendar sends the month before
    *  this one when that month is tapped). Otherwise it opens on this month. */
   initialMonth?: string;
-}
-
-// Local toYMD has a different signature — (year, month, day) — than the one
-// in utils/dates.ts; leave it local to avoid an overload that complicates
-// the shared helper.
-function toYMD(year: number, month: number, day: number): string {
-  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 // The first month the calendar goes back to.
@@ -53,11 +65,75 @@ function openingMonth(initialMonth: string | undefined, curYear: number, curMont
   return { year: Math.floor(shown / 12), month: shown % 12 };
 }
 
+/**
+ * A week's bands, laid out by flex across its seven columns, so they're right
+ * on the first frame at any width with nothing measured. A band's basis is one
+ * circle, and half a circle of negative margin each side takes it back; gaps
+ * grow by the distance between column middles (half a column at each end of
+ * the week), a band by the columns it spans past its first. Nothing is left
+ * over but the row's width, so one unit of grow is exactly one column, and each
+ * band starts on its first day's circle and ends on its last's.
+ *
+ * A dashed outline is one view for the whole run: pieced together from each
+ * day's part of it, its dashes would break at every join, and iOS draws dashes
+ * only on a border whose four sides match.
+ */
+function RunLayer({ runs, ink }: { runs: CalendarRun[]; ink: ReturnType<typeof journalCalendarInk> }) {
+  const items: React.ReactNode[] = [];
+  // Where the last item ended, in columns from the week's left edge.
+  let end = 0;
+  runs.forEach((run, i) => {
+    const middle = run.start + 0.5;
+    items.push(<View key={`gap${i}`} style={{ flexGrow: middle - end, flexBasis: 0 }} />);
+    items.push(
+      <View
+        key={`run${i}`}
+        style={[
+          s.run,
+          { flexGrow: run.length - 1 },
+          run.kind === "trained"
+            ? { backgroundColor: ink.run, borderWidth: 1, borderColor: ink.runEdge }
+            : { borderWidth: 1.5, borderStyle: "dashed", borderColor: ink.missed },
+        ]}
+      />,
+    );
+    end = middle + run.length - 1;
+  });
+  items.push(<View key="end" style={{ flexGrow: 7 - end, flexBasis: 0 }} />);
+  return <View pointerEvents="none" style={[StyleSheet.absoluteFill, s.runLayer]}>{items}</View>;
+}
+
+/** A month arrow in the card's button look. At the first or last month the
+ *  calendar goes to, only its chevron fades, and it takes no taps. */
+function MonthArrow({ back, disabled, onPress, t }: {
+  back: boolean;
+  disabled: boolean;
+  onPress: () => void;
+  t: { tp: string; cardCtrl: string; div: string };
+}) {
+  const label = back ? "Previous month" : "Next month";
+  const chevron = (
+    <Ionicons name={back ? "chevron-back" : "chevron-forward"} size={16} color={t.tp} style={disabled ? s.arrowOff : undefined} />
+  );
+  if (disabled) {
+    return (
+      <View style={[s.arrow, cardButton(t)]} accessible accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: true }}>
+        {chevron}
+      </View>
+    );
+  }
+  return (
+    <BounceButton onPress={onPress} accessibilityRole="button" accessibilityLabel={label}>
+      <View style={[s.arrow, cardButton(t)]}>{chevron}</View>
+    </BounceButton>
+  );
+}
+
 export default function JournalCalendar({ isDark, workoutDates, workoutHistory, activeProgram, onDayPress, initialMonth }: Props) {
   const today    = useMemo(() => new Date(), []);
   const curYear  = today.getFullYear();
   const curMonth = today.getMonth();
-  const todayStr = toYMD(curYear, curMonth, today.getDate());
+  const todayStr = ymdOf(curYear, curMonth, today.getDate());
 
   const [viewYear, setViewYear]   = useState(() => openingMonth(initialMonth, curYear, curMonth).year);
   const [viewMonth, setViewMonth] = useState(() => openingMonth(initialMonth, curYear, curMonth).month);
@@ -81,6 +157,7 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
   }, [gridHeight]);
 
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const ink = journalCalendarInk(isDark);
   const atCurrentMonth = viewYear === curYear && viewMonth === curMonth;
   const atMinMonth = viewYear === FIRST_YEAR && viewMonth === FIRST_MONTH;
 
@@ -107,174 +184,78 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
 
   const workoutSet = useMemo(() => new Set(workoutDates), [workoutDates]);
 
-  const cells = useMemo(() => {
-    const totalDays = new Date(viewYear, viewMonth + 1, 0).getDate();
-    const firstDow  = new Date(viewYear, viewMonth, 1).getDay();
-    const padBefore = (firstDow + 6) % 7; // Monday-first
+  const weeks = useMemo(
+    () => calendarWeeks(viewYear, viewMonth, todayStr, workoutSet, activeProgram),
+    [viewYear, viewMonth, todayStr, workoutSet, activeProgram],
+  );
+  const summary = useMemo(
+    () => summaryLine(monthWorkouts(viewYear, viewMonth, workoutHistory), atCurrentMonth),
+    [viewYear, viewMonth, workoutHistory, atCurrentMonth],
+  );
 
-    const result: Array<{ day: number; state: CellState } | null> = [];
-    for (let i = 0; i < padBefore; i++) result.push(null);
-
-    for (let day = 1; day <= totalDays; day++) {
-      const ds   = toYMD(viewYear, viewMonth, day);
-      let state: CellState;
-
-      if (ds === todayStr) {
-        state = workoutSet.has(ds) ? "todayWorkout" : "today";
-      } else if (ds > todayStr) {
-        state = "future";
-      } else if (workoutSet.has(ds)) {
-        state = "workout";
-      } else if (activeProgram && getWorkoutForDate(activeProgram, ds) === null) {
-        // Shared resolver, so this month view agrees with the week strip and
-        // the Home calendar. The hand-rolled formula it replaced knew nothing
-        // about marked-off days, pushes or holds, and painted "missed" on all
-        // of them.
-        state = "rest";
-      } else {
-        state = "missed";
-      }
-      result.push({ day, state });
-    }
-
-    while (result.length % 7 !== 0) result.push(null);
-    return result;
-  }, [viewYear, viewMonth, todayStr, workoutSet, activeProgram]);
-
-  const rows: Array<Array<{ day: number; state: CellState } | null>> = [];
-  for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
-
-  // Theme-derived shadow colours
-  const neutralBg    = isDark ? NEU_BG_DARK : NEU_BG;
-  const outerShadow  = isDark ? CARD_SHADE_DARK : CARD_SHADE;
-  const innerShadow  = isDark ? BUBBLE_DARK : CARD_GLOW;
-
-  function renderCell(cell: { day: number; state: CellState } | null, ci: number) {
-    if (!cell) return <View key={ci} style={s.cellWrap} />;
-
-    const { day, state } = cell;
-    const ds        = toYMD(viewYear, viewMonth, day);
-    const isWorkout = state === "workout" || state === "todayWorkout";
-    const isToday   = state === "today";
-    const isRest    = state === "rest";
-    const isFuture  = state === "future";
-
-    let cellBg: string;
-    let cellOuterShadow: string;
-    let cellInnerShadow: string;
-    let numColor: string;
-    let bold = false;
-
-    let cellBorder: string;
-
-    if (isWorkout) {
-      cellBg           = ACCT;
-      cellOuterShadow  = "#0a9e60";
-      cellInnerShadow  = "#4affc0";
-      numColor         = "#fff";
-      bold             = true;
-      cellBorder       = "rgba(255,255,255,0.2)";
-    } else if (isRest) {
-      cellBg           = isDark ? REST_BG_DARK  : REST_BG_LIGHT;
-      cellOuterShadow  = isDark ? REST_SHADOW_DARK : REST_SHADOW_LIGHT;
-      cellInnerShadow  = isDark ? REST_HI_DARK  : REST_HI_LIGHT;
-      numColor         = isDark ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.85)";
-      cellBorder       = isDark ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.7)";
-    } else {
-      // today / missed / future — all same neutral card
-      cellBg           = neutralBg;
-      cellOuterShadow  = outerShadow;
-      cellInnerShadow  = innerShadow;
-      numColor         = isFuture ? (isDark ? "#7a7068" : "#a89f96") : t.tp;
-      bold             = isToday;
-      cellBorder       = isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)";
-    }
-
+  function renderDay(day: CalendarDay | null, col: number) {
+    if (!day) return <View key={col} style={s.cell} />;
+    const { state } = day;
+    const trained = state === "workout" || state === "todayWorkout";
+    const isToday = state === "today" || state === "todayWorkout";
+    const quiet   = state === "rest" || state === "future";
     return (
-      <View key={ci} style={[s.cellWrap, isFuture && { opacity: 0.4 }]}>
-        {/* Outer layer: dark drop-shadow + today border */}
-        <View style={[
-          s.cellOuter,
-          { shadowColor: cellOuterShadow },
-          isWorkout && s.workoutGlow,
-          isToday && s.todayGlow,
-          isToday && { borderWidth: 2, borderColor: ACCT },
-          // Android fades a view by drawing each child at the faded alpha rather
-          // than fading the whole cell, so this shadow showed through the faded
-          // day's face as an octagon. A faded day goes flat there instead.
-          isFuture && Platform.OS === "android" && { elevation: 0 },
-        ]}>
-          {/* Inner layer: light highlight shadow + background */}
-          <View style={[s.cellInner, { shadowColor: cellInnerShadow, backgroundColor: cellBg, borderWidth: 1, borderColor: cellBorder }, (isWorkout || isToday) && { shadowOpacity: 0 }, isToday && { borderWidth: 0 }]}>
-            <TouchableOpacity
-              activeOpacity={0.75}
-              onPress={() => onDayPress(ds, dateToWorkoutId[ds])}
-              style={s.cellTouch}
-              disabled={isFuture}
-            >
-              <Text style={[s.dayNum, { color: numColor, fontFamily: bold ? FontFamily.bold : FontFamily.regular }]}>
-                {day}
-              </Text>
-            </TouchableOpacity>
-          </View>
+      <TouchableOpacity
+        key={col}
+        style={s.cell}
+        activeOpacity={0.6}
+        disabled={state === "future"}
+        onPress={() => onDayPress(day.date, dateToWorkoutId[day.date])}
+        accessibilityRole="button"
+        accessibilityLabel={`${day.day} ${MONTH_FULL[viewMonth]}, ${STATE_WORDS[state]}`}
+      >
+        <View style={[s.disc, state === "future" && s.future]}>
+          {/* Today: the accent ring, with a pale halo until it's trained */}
+          {state === "today" && <View style={[s.halo, { borderColor: ink.halo }]} />}
+          {isToday && <View style={[StyleSheet.absoluteFill, s.todayRing]} />}
+          <Text style={[s.dayNum, {
+            color: trained ? accentTextColor(isDark) : quiet ? t.ts : t.tp,
+            fontFamily: trained || isToday ? FontFamily.bold : FontFamily.semibold,
+          }]}>
+            {day.day}
+          </Text>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   }
 
   return (
     <NeuCard dark={isDark} style={s.card}>
       <View style={s.inner}>
-        {/* Month navigation */}
+        {/* The month, with its workouts under it, and the arrows */}
         <View style={s.header}>
-          <TouchableOpacity
-            onPress={goBack}
-            style={s.navBtn}
-            activeOpacity={atMinMonth ? 1 : 0.7}
-            disabled={atMinMonth}
-          >
-            <Ionicons
-              name="chevron-back"
-              size={20}
-              color={atMinMonth
-                ? (isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)")
-                : t.tp}
-            />
-          </TouchableOpacity>
-          <Text style={[s.monthTitle, { color: t.tp }]}>
-            {MONTH_LABELS[viewMonth]} {viewYear}
-          </Text>
-          <TouchableOpacity
-            onPress={goForward}
-            style={s.navBtn}
-            activeOpacity={atCurrentMonth ? 1 : 0.7}
-            disabled={atCurrentMonth}
-          >
-            <Ionicons
-              name="chevron-forward"
-              size={20}
-              color={atCurrentMonth
-                ? (isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)")
-                : t.tp}
-            />
-          </TouchableOpacity>
+          <View style={s.titleBlock}>
+            <Text style={[s.monthTitle, { color: t.tp }]}>
+              {MONTH_FULL[viewMonth]}
+              <Text style={[s.yearTitle, { color: t.ts }]}>{` ${viewYear}`}</Text>
+            </Text>
+            <Text style={[s.summary, { color: t.ts }]}>{summary}</Text>
+          </View>
+          <View style={s.arrows}>
+            <MonthArrow back disabled={atMinMonth} onPress={goBack} t={t} />
+            <MonthArrow back={false} disabled={atCurrentMonth} onPress={goForward} t={t} />
+          </View>
         </View>
 
-        {/* Day-of-week header */}
-        <View style={s.row}>
-          {DAY_ABBRS.map((d, i) => (
-            <View key={i} style={s.cellWrap}>
-              <Text style={[s.dayHdr, { color: t.ts }]}>{d}</Text>
-            </View>
+        {/* Day-of-week letters (each day says its own date to VoiceOver) */}
+        <View style={s.weekdays} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+          {DAY_LETTERS.map((d, i) => (
+            <Text key={i} style={[s.weekday, { color: t.ts }]}>{d}</Text>
           ))}
         </View>
 
-        {/* Calendar grid */}
+        {/* Calendar grid: a row per week, its bands under its days */}
         <Animated.View style={animatedGridStyle}>
-          <View onLayout={onGridLayout} style={s.gridInner}>
-            {rows.map((row, ri) => (
-              <View key={ri} style={[s.row, s.gridRow]}>
-                {row.map((cell, ci) => renderCell(cell, ci))}
+          <View onLayout={onGridLayout}>
+            {weeks.map((week, wi) => (
+              <View key={wi} style={s.week}>
+                {week.runs.length > 0 && <RunLayer runs={week.runs} ink={ink} />}
+                {week.days.map(renderDay)}
               </View>
             ))}
           </View>
@@ -286,53 +267,30 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
 
 const s = StyleSheet.create({
   card:  { borderRadius: 20, marginBottom: 4 },
-  inner: { padding: 14, paddingBottom: 16 },
+  inner: { paddingTop: 18, paddingHorizontal: 16, paddingBottom: 14 },
 
-  header:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-  monthTitle: { fontFamily: FontFamily.bold, fontSize: 16 },
-  navBtn:     { width: 32, height: 32, alignItems: "center", justifyContent: "center", borderRadius: 16 },
+  header:     { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, paddingLeft: 4 },
+  titleBlock: { flex: 1, gap: 3 },
+  monthTitle: { fontFamily: FontFamily.bold, fontSize: 21 },
+  yearTitle:  { fontFamily: FontFamily.semibold },
+  summary:    { fontFamily: FontFamily.semibold, fontSize: 12.5 },
+  arrows:     { flexDirection: "row", gap: 8, paddingTop: 2 },
+  arrow:      { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  arrowOff:   { opacity: 0.3 },
 
-  row:     { flexDirection: "row" },
-  gridRow: { marginBottom: 8 },
-  gridInner: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 12 },
-  cellWrap:{ flex: 1, alignItems: "center" },
-  dayHdr:  { fontFamily: FontFamily.semibold, fontSize: 11, marginBottom: 12, textAlign: "center" },
+  weekdays: { flexDirection: "row", marginBottom: 4 },
+  weekday:  { flex: 1, textAlign: "center", fontFamily: FontFamily.bold, fontSize: 11 },
 
-  cellOuter: {
-    width: "86%",
-    aspectRatio: 1,
-    borderRadius: 999,
-    shadowOffset: { width: 2.5, height: 2.5 },
-    shadowOpacity: 0.32,
-    shadowRadius: 5,
-    elevation: 4,
+  week:      { flexDirection: "row", height: ROW_H },
+  runLayer:  { flexDirection: "row", alignItems: "center" },
+  run:       { flexBasis: DISC, height: DISC, borderRadius: DISC / 2, marginHorizontal: -DISC / 2 },
+  cell:      { flex: 1, alignItems: "center", justifyContent: "center" },
+  disc:      { width: DISC, height: DISC, borderRadius: DISC / 2, alignItems: "center", justifyContent: "center" },
+  halo:      {
+    position: "absolute", top: -HALO, left: -HALO,
+    width: DISC + 2 * HALO, height: DISC + 2 * HALO, borderRadius: DISC / 2 + HALO, borderWidth: HALO,
   },
-  cellInner: {
-    flex: 1,
-    borderRadius: 999,
-    shadowOffset: { width: -2, height: -2 },
-    shadowOpacity: 0.9,
-    shadowRadius: 3,
-  },
-  cellTouch: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 999,
-  },
-  todayGlow: {
-    shadowColor: ACCT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.42,
-    shadowRadius: 6,
-    elevation: 5,
-  },
-  workoutGlow: {
-    shadowColor: ACCT,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.5,
-    shadowRadius: 7,
-    elevation: 5,
-  },
-  dayNum: { fontSize: 13, textAlign: "center" },
+  todayRing: { borderRadius: DISC / 2, borderWidth: 2, borderColor: ACCT },
+  future:    { opacity: 0.45 },
+  dayNum:    { fontSize: 14 },
 });

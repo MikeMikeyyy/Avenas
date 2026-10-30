@@ -25,7 +25,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { APP_DARK, APP_LIGHT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
+import { SHEET_DIM, SHEET_TOP_ROW, SheetBackButton, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
 
 /** The least of the page left showing above a sheet, under the status bar. */
 const SHEET_TOP_GAP = 12;
@@ -33,6 +33,11 @@ const SHEET_TOP_GAP = 12;
 interface Props {
   visible: boolean;
   onClose: () => void;
+  /** A step after another sheet (Send a Program's people, after its program):
+   *  a glass back chevron in the top left corner, facing the X, slides the
+   *  sheet away and then runs this, after `onClose`, so the step before opens
+   *  once this one has gone (one RN Modal at a time). */
+  onBack?: () => void;
   /** Or a function of the sheet's own close, for content that leaves through
    *  it: the sheet slides away, then `onClose` runs. A button that opens
    *  another sheet can so wait for this one to go first (one RN Modal at a
@@ -51,7 +56,7 @@ interface Props {
   over?: ReactNode;
 }
 
-export default function SimpleSheet({ visible, onClose, children, footer, scrollEnabled = true, over }: Props) {
+export default function SimpleSheet({ visible, onClose, onBack, children, footer, scrollEnabled = true, over }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -76,12 +81,18 @@ export default function SimpleSheet({ visible, onClose, children, footer, scroll
     return () => { show.remove(); hide.remove(); };
   }, []);
 
-  const dismiss = useCallback(() => {
+  // Slides the sheet away, then `then`: its close, and on Back the step
+  // before's open as well.
+  const slideAway = useCallback((then: () => void) => {
     Animated.parallel([
       Animated.timing(slideY, { toValue: screenH, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(screenH); backdropOpacity.setValue(0); onClose(); });
-  }, [onClose, screenH, slideY, backdropOpacity]);
+    ]).start(() => { slideY.setValue(screenH); backdropOpacity.setValue(0); then(); });
+  }, [screenH, slideY, backdropOpacity]);
+  const dismiss = useCallback(() => slideAway(onClose), [slideAway, onClose]);
+  const back = useCallback(() => {
+    if (onBack) slideAway(() => { onClose(); onBack(); });
+  }, [slideAway, onClose, onBack]);
 
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -149,6 +160,7 @@ export default function SimpleSheet({ visible, onClose, children, footer, scroll
               {typeof children === "function" ? children(dismiss) : children}
             </ScrollView>
             {typeof footer === "function" ? footer(dismiss) : footer}
+            {onBack ? <SheetBackButton onPress={back} /> : null}
             <SheetCloseButton onPress={dismiss} />
           </Animated.View>
         </View>
