@@ -51,6 +51,8 @@ import GroupAvatar from "../../components/trainer/GroupAvatar";
 import ProgramRow, { AcceptButton, CycleStrip, RowActions, StatusPill, rowButtonStyles } from "../../components/trainer/ProgramRow";
 import ProgramPickerSheet from "../../components/trainer/ProgramPickerSheet";
 import RecipientPickerSheet from "../../components/trainer/RecipientPickerSheet";
+import RemoveReviewSheet from "../../components/trainer/RemoveReviewSheet";
+import RemovalNote from "../../components/trainer/RemovalNote";
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote } from "../../components/trainer/ReviewStatusPill";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
@@ -64,12 +66,9 @@ import {
   appendSharedPrograms,
   applyReturnedProgram,
   dismissKeyOf,
-  dismissReceivedReview,
   dismissSharedBatch,
   removeSentProgram,
   removeSharedProgramBatch,
-  setGroupReviewDone,
-  setReviewArchived,
   setSendBatchArchived,
   ShareUnavailableError,
   type AssignedPT,
@@ -79,6 +78,7 @@ import {
 } from "../../utils/trainerStore";
 import {
   batchKeyOf,
+  firstName,
   receivedReviews,
   reviewStage,
   sendBatches,
@@ -89,7 +89,7 @@ import {
   type RecipientChoice,
   type SendBatch,
 } from "../../utils/trainerLists";
-import { askRemoveReturned } from "../../utils/reviewRemoval";
+import { askRemoveReturned, removeReviewForTrainer } from "../../utils/reviewRemoval";
 import { getJSON } from "../../utils/storage";
 import { archiveShareChoice } from "../../utils/removeShare";
 import { askArchiveOrDelete } from "../../utils/archiveChoice";
@@ -235,6 +235,7 @@ function RequestRow({ review, meta, first, open, onToggle, onView, onRemove }: {
       meta={meta}
       trailing={<ReviewStatusPill review={review} />}
     >
+      {review.removalNote ? <RemovalNote note={review.removalNote} /> : null}
       <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} />
       <RowActions
         label="View"
@@ -487,9 +488,11 @@ export default function TrainerProgramsScreen() {
   }, [router]);
 
   /**
-   * Take a program off my reviews: Archive (back from the archive button, top
-   * right) or Delete. Where either reaches depends on where it came from, and
-   * the prompt says which, because the two reach different people:
+   * Take a program off my reviews: RemoveReviewSheet's Archive (back from the
+   * archive button, top right) or Delete, with a message to the person who
+   * asked while it hasn't been sent back. Where either reaches depends on
+   * where it came from, and the sheet says which, because the two reach
+   * different people:
    *
    *   a GROUP review — off the group's queue, for every coach of the group.
    *     Delete is `set_group_review_completed` (coach-only at the database);
@@ -497,38 +500,18 @@ export default function TrainerProgramsScreen() {
    *   a 1:1 review — off MY list only (Delete: dismissReceivedReview).
    *
    * Either way the person who sent it keeps their copy and any feedback, and
-   * can still accept what was sent back. The prompt says where it stands
+   * can still accept what was sent back. The sheet says where it stands
    * (removeReviewNote), and warns when it hasn't been sent back yet, since
    * removing it then leaves them waiting on a review nobody will do.
    */
-  const handleRemoveReview = useCallback((entry: SentProgram) => {
-    const where = entry.groupId ? "the group's review list" : "your list";
-    const drop = () => setHub(h => h && (entry.groupId
+  const [removingReview, setRemovingReview] = useState<SentProgram | null>(null);
+  const handleRemoveReview = useCallback((entry: SentProgram) => setRemovingReview(entry), []);
+  const removingAsker = removingReview ? senderOf(removingReview) : null;
+  const removeReview = useCallback(async (entry: SentProgram, how: "archive" | "delete", note: string | null) => {
+    if (!(await removeReviewForTrainer(entry, how, note))) return;
+    setHub(h => h && (entry.groupId
       ? { ...h, groupReviews: h.groupReviews.filter(r => r.id !== entry.id) }
       : { ...h, reviews: h.reviews.filter(r => r.id !== entry.id) }));
-    askArchiveOrDelete({
-      title: "Remove Program",
-      body: `Archive "${entry.programName}" to take it off ${where} until you restore it, or delete it. ${removeReviewNote(entry)}`,
-      onArchive: async () => {
-        try {
-          await setReviewArchived(entry.id, true);
-        } catch (e) {
-          Alert.alert("Couldn't archive it", alertMessage(e, "Check your connection and try again."));
-          return;
-        }
-        drop();
-      },
-      onDelete: async () => {
-        try {
-          if (entry.groupId) await setGroupReviewDone(entry.id, true);
-          else await dismissReceivedReview(entry.id);
-        } catch (e) {
-          Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
-          return;
-        }
-        drop();
-      },
-    });
   }, []);
 
   const sentToOf = useCallback((b: SendBatch) => (b.groupId
@@ -1050,6 +1033,16 @@ export default function TrainerProgramsScreen() {
         onConfirm={handleConfirmRecipients}
         onClose={() => setPendingProgram(null)}
         onBack={pickedInSheet ? () => setSendOpen(true) : undefined}
+      />
+      <RemoveReviewSheet
+        review={removingReview}
+        body={removingReview
+          ? `Archive "${removingReview.programName}" to take it off ${removingReview.groupId ? "the group's review list" : "your list"} until you restore it, or delete it. ${removeReviewNote(removingReview)}`
+          : ""}
+        askerName={removingAsker ? firstName(removingAsker.name) : undefined}
+        onArchive={note => { if (removingReview) void removeReview(removingReview, "archive", note); }}
+        onDelete={note => { if (removingReview) void removeReview(removingReview, "delete", note); }}
+        onClose={() => setRemovingReview(null)}
       />
     </FadeScreen>
   );

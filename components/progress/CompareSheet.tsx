@@ -10,8 +10,8 @@
 // more than once lists each run ("Push Pull Legs, 1st run"). One sheet for
 // every step, so the page never has two up at once, and a step moves on in
 // place rather than sliding away and back. While there's nothing to compare it
-// opens locked: a preview with empty rows and the two steps comparing needs
-// (user request, 2026-10-15, in place of hiding the button). A drag down on
+// opens locked: a small chart of what comparing looks like and the two steps
+// comparing needs (user request, 2026-10-15, in place of hiding the button). A drag down on
 // its top closes it, the locked card's being all of it but Close (user
 // request, 2026-10-16).
 
@@ -22,7 +22,7 @@ import SheetPill from "../SheetPill";
 import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
 import { Ionicons } from "@expo/vector-icons";
 import { ACCT, APP_DARK, APP_LIGHT, CUE_INK, CUE_INK_DARK, FontFamily, accentTextColor, compareBlue } from "../../constants/theme";
-import { PILL_RADIUS } from "../../constants/buttons";
+import Svg, { Circle, Line, Polyline } from "react-native-svg";
 import { useTheme } from "../../contexts/ThemeContext";
 import { runDates, runName, runStatus, runSummary } from "../../utils/programCompare";
 import { sameRun, type ProgramRunView, type RunRef } from "../../utils/programRuns";
@@ -62,8 +62,51 @@ function Marker({ side, isDark }: { side: "green" | "blue"; isDark: boolean }) {
     : <View style={[styles.ring, { borderColor: compareBlue(isDark) }]} />;
 }
 
-/** Two rows where the programs would be, empty, so the sheet shows what it's
- *  for, then the two steps comparing needs, each ticked once done. */
+// The preview's chart, in its own points: six sessions across, the lift up.
+// The program on the go climbs (green), a finished one more slowly (blue).
+const PREVIEW_W = 300;
+const PREVIEW_H = 92;
+const PREVIEW_X = [14, 68, 122, 176, 230, 286];
+const PREVIEW_GREEN = [64, 56, 48, 38, 30, 18];
+const PREVIEW_BLUE = [76, 72, 68, 63, 60, 55];
+const PREVIEW_R = 4.5;
+const PREVIEW_GRID = [10, 46, 86];
+
+/** What comparing looks like, drawn small with no numbers: the program on the
+ *  go in green with dots beside a finished one in blue with rings, session by
+ *  session, as the Compare page draws them (user report, 2026-11-05: the empty
+ *  dashed rows it replaced were in t.div, which vanishes on the glass sheet,
+ *  so all that showed was two blue rings). Glass has no colour to fill a ring
+ *  with, so the blue line stops short of each ring rather than run through. */
+function PreviewChart({ isDark }: { isDark: boolean }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const blue = compareBlue(isDark);
+  const gap = PREVIEW_R + 2;
+  const blueSegments = PREVIEW_X.slice(1).map((x2, i) => {
+    const x1 = PREVIEW_X[i];
+    const y1 = PREVIEW_BLUE[i];
+    const y2 = PREVIEW_BLUE[i + 1];
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    const ux = (x2 - x1) / len;
+    const uy = (y2 - y1) / len;
+    return { x1: x1 + ux * gap, y1: y1 + uy * gap, x2: x2 - ux * gap, y2: y2 - uy * gap };
+  });
+  return (
+    <Svg width={PREVIEW_W} height={PREVIEW_H}>
+      {PREVIEW_GRID.map(y => <Line key={y} x1={0} y1={y} x2={PREVIEW_W} y2={y} stroke={t.sheetLine} strokeWidth={1} />)}
+      {blueSegments.map((s, i) => <Line key={`b${i}`} {...s} stroke={blue} strokeWidth={2.5} strokeLinecap="round" />)}
+      {PREVIEW_X.map((x, i) => <Circle key={`r${i}`} cx={x} cy={PREVIEW_BLUE[i]} r={PREVIEW_R} fill="none" stroke={blue} strokeWidth={2} />)}
+      <Polyline
+        points={PREVIEW_X.map((x, i) => `${x},${PREVIEW_GREEN[i]}`).join(" ")}
+        fill="none" stroke={ACCT} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round"
+      />
+      {PREVIEW_X.map((x, i) => <Circle key={`d${i}`} cx={x} cy={PREVIEW_GREEN[i]} r={PREVIEW_R} fill={ACCT} />)}
+    </Svg>
+  );
+}
+
+/** What comparing looks like (PreviewChart, with its key), so the sheet shows
+ *  what it's for, then the two steps comparing needs, each ticked once done. */
 function LockedPreview({ readiness, forClient }: { readiness: Readiness; forClient: boolean }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -87,16 +130,24 @@ function LockedPreview({ readiness, forClient }: { readiness: Readiness; forClie
           ? "Compare two of their programs week by week and lift by lift: the one they're on beside one they've finished, or two they've finished."
           : "Compare two programs week by week and lift by lift: the one you're on beside one you've finished, or two you've finished."}
       </Text>
-      <View style={styles.ghostList} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        {[0, 1].map(i => (
-          <View key={i} style={[styles.ghost, { borderColor: t.div, opacity: i === 0 ? 1 : 0.55 }]}>
-            <View style={[styles.ring, { borderColor: compareBlue(isDark), opacity: 0.5 }]} />
-            <View style={styles.ghostText}>
-              <View style={[styles.ghostBar, { width: 128, backgroundColor: t.div }]} />
-              <View style={[styles.ghostBar, styles.ghostSub, { backgroundColor: t.div }]} />
-            </View>
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <View style={styles.legend}>
+          <View style={styles.legendItem}>
+            <Marker side="green" isDark={isDark} />
+            <Text style={[styles.legendText, { color: t.ts }]}>{forClient ? "Their current program" : "Your current program"}</Text>
           </View>
-        ))}
+          <View style={styles.legendItem}>
+            <Marker side="blue" isDark={isDark} />
+            <Text style={[styles.legendText, { color: t.ts }]}>{forClient ? "One they've finished" : "One you've finished"}</Text>
+          </View>
+        </View>
+        <View style={styles.preview}>
+          <PreviewChart isDark={isDark} />
+          <View style={styles.previewAxis}>
+            <Text style={[styles.previewAxisText, { color: t.ts }]}>Session 1</Text>
+            <Text style={[styles.previewAxisText, { color: t.ts }]}>Session 6</Text>
+          </View>
+        </View>
       </View>
       <Text style={[styles.stepsHead, { color: t.tp }]}>To compare programs</Text>
       {steps.map((s, i) => (
@@ -319,15 +370,14 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4 },
   ring: { width: 9, height: 9, borderRadius: 4.5, borderWidth: 2 },
   intro: { marginTop: 4, marginLeft: 4, lineHeight: 18 },
-  ghostList: { gap: 12, marginTop: 20 },
-  ghost: {
-    minHeight: 56, borderRadius: PILL_RADIUS, borderWidth: 1.5, borderStyle: "dashed",
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 20,
-  },
-  ghostText: { alignItems: "center", gap: 6 },
-  ghostBar: { height: 10, borderRadius: 5 },
-  ghostSub: { width: 84, height: 7, borderRadius: 3.5 },
-  stepsHead: { fontFamily: FontFamily.bold, fontSize: 15, marginTop: 24, marginLeft: 4 },
+  legend: { flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 6, marginTop: 18, marginLeft: 4 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 7 },
+  legendText: { fontFamily: FontFamily.semibold, fontSize: 13 },
+  // The chart at its own size, centred: it fits the narrowest sheet (an SE's).
+  preview: { width: PREVIEW_W, alignSelf: "center", marginTop: 12 },
+  previewAxis: { flexDirection: "row", justifyContent: "space-between", marginTop: 2 },
+  previewAxisText: { fontFamily: FontFamily.regular, fontSize: 11 },
+  stepsHead: { fontFamily: FontFamily.bold, fontSize: 15, marginTop: 20, marginLeft: 4 },
   step: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 12, marginLeft: 4 },
   stepMark: { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   stepNum: { fontFamily: FontFamily.bold, fontSize: 13 },

@@ -231,8 +231,7 @@ function SetWorkoutPicker({ visible, program, isDark, onConfirm, onClose }: SetW
 
 // ─── Date Chip ─────────────────────────────────────────────────────────────────
 
-// A program's start / finish date as a pill, matching Home's "Finishes" chip.
-// The start is quiet (t.div fill); the finish line is the green one. Accent
+// A program's start / finish date as a pill. The start is quiet (t.div fill); the finish line is the green one. Accent
 // green washes out as small text on the light card, so the ink takes the
 // deeper green there (see theme.ts).
 function DateChip({ icon, label, isDark, accent }: { icon: "calendar" | "flag"; label: string; isDark: boolean; accent?: boolean }) {

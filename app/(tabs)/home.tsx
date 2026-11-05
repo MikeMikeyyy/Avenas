@@ -16,7 +16,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NeuCard from "../../components/NeuCard";
 import FlameIcon from "../../components/FlameIcon";
 import FadeScreen from "../../components/FadeScreen";
-import { APP_LIGHT, APP_DARK, NEU_BG, CARD_SHADE, CARD_GLOW, CARD_SHADE_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, ORB_GRADS, PAUSED_ORANGE } from "../../constants/theme";
+import { APP_LIGHT, APP_DARK, NEU_BG, CARD_SHADE, CARD_GLOW, CARD_SHADE_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, ORB_PASTELS, ORB_PASTEL_EDGE, PAUSED_ORANGE } from "../../constants/theme";
 import { glowOpacity, pill, pillGlow, PILL_RADIUS } from "../../constants/buttons";
 import BounceButton from "../../components/BounceButton";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -30,8 +30,8 @@ import {
   MAX_TIER_DAYS,
   getTier,
 } from "../../constants/streakTiers";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek, programFinishDate } from "../../constants/programs";
-import { MONTH_NAMES, sessionTimeRange } from "../../utils/dates";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY, SavedProgram, CompletedWorkout, getCurrentWeek } from "../../constants/programs";
+import { sessionTimeRange } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
 import { buildWeekSchedule, weekStartFor, weekTotals, type WeekDayPlan } from "../../utils/weekSchedule";
@@ -179,7 +179,7 @@ type QuickAction = {
   id: string;
   label: string;
   route?: string;
-  grad: keyof typeof ORB_GRADS;
+  grad: keyof typeof ORB_PASTELS;
   renderIcon: (c: string) => React.ReactElement;
 };
 
@@ -265,6 +265,7 @@ function HomeScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const orbMode = isDark ? "dark" : "light";
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good Morning" : hour < 18 ? "Good Afternoon" : "Good Evening";
 
@@ -475,8 +476,8 @@ function HomeScreen() {
           const todaysTimes = todaysSession
             ? sessionTimeRange(todaysSession.completedAt, todaysSession.durationSeconds)
             : null;
-          // As on the Finishes tag: accent green washes out as small text on
-          // the light card, so it takes the deeper green there.
+          // Accent green washes out as small text on the light card, so the
+          // tag takes the deeper green there.
           const doneInk = isDark ? ACCT : ACCT_DEEP;
           return (
             <NeuCard dark={isDark} style={styles.workoutCard}>
@@ -559,17 +560,8 @@ function HomeScreen() {
           const paused = !!activeProgram.pausedAt;
           const accent = paused ? PAUSED_ORANGE : ACCT;
           const week = getCurrentWeek(activeProgram);
-          const finish = programFinishDate(activeProgram);
-          // The year only when it isn't this one, so "12 Nov" doesn't quietly
-          // mean next November on a long program.
-          const finishLabel = finish
-            ? `${finish.getDate()} ${MONTH_NAMES[finish.getMonth()]}${
-                finish.getFullYear() !== new Date().getFullYear() ? ` ${finish.getFullYear()}` : ""
-              }`
-            : null;
-          // Accent green washes out as small text on the light card, so the
-          // chip's text and icon take the deeper green there (see theme.ts).
-          const finishInk = isDark ? accent : ACCT_DEEP;
+          // No finish date on this card (user request, 2026-11-05): the
+          // program's card on My Programs shows it.
           return (
           <NeuCard dark={isDark} style={styles.programCard}>
             <View style={styles.programCardInner}>
@@ -594,17 +586,6 @@ function HomeScreen() {
                   />
                 ))}
               </View>
-              {/* The end of the timeline, so moving a day around has somewhere
-                  visible to land: pushing a day moves this out, spending a rest
-                  day brings it back. Hidden while held, because a hold has no
-                  end date until it's resumed.
-                  Sits at the END of the progress bar, as the finish line it is. */}
-              {!paused && finishLabel && (
-                <View style={[styles.statusTag, styles.programFinish, { backgroundColor: `${accent}26` }]}>
-                  <Ionicons name="flag" size={11} color={finishInk} />
-                  <Text style={[styles.statusTagText, { color: finishInk }]}>Finishes {finishLabel}</Text>
-                </View>
-              )}
             </View>
           </NeuCard>
           );
@@ -620,18 +601,22 @@ function HomeScreen() {
                     accessibilityLabel={a.label.replace("\n", " ")}
                     accessibilityRole="button"
                   >
-                    <View style={[styles.quickOrbGlow, {
-                      backgroundColor: ORB_GRADS[a.grad].glow,
-                      shadowColor: ORB_GRADS[a.grad].glow,
-                      shadowOpacity: glowOpacity(0.55, isDark),
+                    {/* The glow's View is filled solid with the bubble's own
+                        light end, so iOS draws the glow from the circle's
+                        outline at full strength; only its edge shows past the
+                        gradient. */}
+                    <View style={[styles.quickOrbGlow, !isDark && styles.quickOrbGlowLight, {
+                      backgroundColor: ORB_PASTELS[a.grad][orbMode].colors[0],
+                      shadowColor: ORB_PASTELS[a.grad].glow,
+                      shadowOpacity: isDark ? glowOpacity(0.55, true) : 0.4,
                     }]}>
                       <LinearGradient
-                        colors={ORB_GRADS[a.grad].colors}
+                        colors={ORB_PASTELS[a.grad][orbMode].colors}
                         start={{ x: 0.1, y: 0 }}
                         end={{ x: 0.9, y: 1 }}
-                        style={[styles.quickOrb, { borderColor: isDark ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.65)" }]}
+                        style={[styles.quickOrb, { borderColor: ORB_PASTEL_EDGE[orbMode] }]}
                       >
-                        {a.renderIcon("#fff")}
+                        {a.renderIcon(ORB_PASTELS[a.grad][orbMode].ink)}
                       </LinearGradient>
                     </View>
                   </BounceButton>
@@ -915,9 +900,8 @@ const styles = StyleSheet.create({
   workoutRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   sectionLabel: { fontFamily: FontFamily.semibold, fontSize: 13, color: TS, letterSpacing: 1.2, textTransform: "uppercase" },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  // The tags on Home's two top cards, Today's Workout's Completed and the
-  // program's Finishes: one capsule, so the two read as a set (Completed was
-  // the summary rows' squarer card pill).
+  // Today's Workout's Completed tag: a capsule (it was the summary rows'
+  // squarer card pill).
   statusTag: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: PILL_RADIUS },
   statusTagText: { fontFamily: FontFamily.semibold, fontSize: 12 },
   // Completed sits in the section label's line: about 26pt tall against the
@@ -942,6 +926,10 @@ const styles = StyleSheet.create({
   quickCard: { borderRadius: 20 },
   quickInner: { alignItems: "center", paddingVertical: 18, paddingHorizontal: 8, gap: 10 },
   quickOrbGlow: { width: 56, height: 56, borderRadius: 28, shadowOffset: { width: 0, height: 5 }, shadowRadius: 10 },
+  // Light's glow is smaller and softer, at 0.4 (user request, 2026-11-05:
+  // round the pastel orbs it read too big); dark keeps the orbs' usual glow,
+  // 0.55 at the dark scale.
+  quickOrbGlowLight: { shadowOffset: { width: 0, height: 3 }, shadowRadius: 6 },
   quickOrb: { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   quickLabel: { fontFamily: FontFamily.regular, fontSize: 14, color: TS, textAlign: "center", lineHeight: 18 },
   sectionTitle: { fontFamily: FontFamily.bold, fontSize: 18, color: TP, marginBottom: 12 },
@@ -995,5 +983,4 @@ const styles = StyleSheet.create({
   programWeek: { fontFamily: FontFamily.regular, fontSize: 14, color: TS },
   progressRow: { flexDirection: "row", gap: 5 },
   progressSegment: { flex: 1, height: 6, borderRadius: 3 },
-  programFinish:     { alignSelf: "flex-end", marginTop: 2 },
 });

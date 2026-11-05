@@ -65,7 +65,7 @@ import { resumeWithPrompt } from "../../utils/programPause";
 import { exercisePageParams, exerciseSummaryParams } from "../../utils/customExerciseDetails";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
 import { formatWeightForDisplay, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder, parseWeightToKg } from "../../utils/units";
-import { bestLiftsBefore, isPrSet, prSetsOfWorkout } from "../../utils/achievements";
+import { bestLiftsBefore, prSetsOfWorkout, prTrophySets } from "../../utils/achievements";
 import { exerciseIdentity } from "../../utils/exerciseNames";
 import PrTrophy from "../../components/PrTrophy";
 import { scheduleCloudPush } from "../../lib/syncManager";
@@ -726,16 +726,15 @@ interface ExerciseCardProps {
    *  moved, swapped or added. Wins over `changeCue`: what you've just changed
    *  is the news. */
   sessionCue?: SessionCue | null;
-  /** The heaviest this exercise was lifted before today's workout (kg,
-   *  utils/achievements.ts bestLiftsBefore): a ticked working set heavier than
-   *  it gets the PR trophy. Absent: no best yet, so no trophy. */
-  prBestKg?: number;
+  /** The row (warm-ups first) wearing the PR trophy, worked out across the
+   *  session's cards (utils/achievements.ts prTrophySets). Absent: none. */
+  prRow?: number;
   /** On the finished session: which sets are PRs, by row (warm-ups first),
    *  worked out from the saved kg rather than the numbers as shown. */
   prFlags?: readonly boolean[];
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onUpdateNotes, exNotes, onOpenOptions, isIsometric, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prBestKg, prFlags }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onUpdateNotes, exNotes, onOpenOptions, isIsometric, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prRow, prFlags }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -858,12 +857,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           const setLabel = set.isWarmup ? "W" : workingCounter.count;
           const rowIsActive = flatIdx === activeSetFlatIdx;
           const isNew = !!drawn.added?.has(set.rowKey) && rowHeight > 0;
-          // A new PR: the weight as Finish will save it (kg), against the best
-          // from before today. The finished session's own flags come from
-          // what it saved.
-          const isPr = prFlags
-            ? !!prFlags[flatIdx]
-            : isPrSet({ type: set.type, done: set.done, reps: set.reps, weightKg: parseFloat(parseWeightToKg(set.weight, isKg)) || 0 }, prBestKg);
+          // The PR trophy: the row the screen worked out across the session's
+          // cards. The finished session's own flags come from what it saved.
+          const isPr = prFlags ? !!prFlags[flatIdx] : flatIdx === prRow;
 
           return (
             <CollapsibleCard
@@ -2348,18 +2344,31 @@ function WorkoutScreen() {
     return out;
   }, [workoutInfo]);
   // The heaviest each exercise has been lifted before this workout
-  // (utils/achievements.ts): a ticked working set heavier than its exercise's
-  // best gets the trophy by its number (user request, 2026-10-22). One number
-  // per card by session exercise id, so typing never rebuilds it.
+  // (utils/achievements.ts), and the row on each card wearing the PR trophy
+  // by its number: one per exercise, the first set at the session's heaviest
+  // new weight (prTrophySets; user decision, 2026-11-05). Worked out across
+  // every card at once, since an exercise can be on two, from the weights as
+  // Finish will save them. One row index per card (warm-ups first, as it draws
+  // them), so a card re-renders only when its own trophy moves.
   const bestLifts = useMemo(() => bestLiftsBefore(prevHistory), [prevHistory]);
-  const prBestById = useMemo(() => {
+  const prRowById = useMemo(() => {
+    const exercises = workoutInfo?.exercises ?? [];
+    const asSet = (type: "warmup" | "working") => (s: SetLog) =>
+      ({ type, done: s.done, reps: s.reps, weightKg: parseFloat(parseWeightToKg(s.weight, isKg)) || 0 });
+    const worn = prTrophySets(
+      exercises.map(ex => ({
+        identity: exerciseIdentity(ex),
+        sets: [...(log[ex.id]?.warmup ?? []).map(asSet("warmup")), ...(log[ex.id]?.working ?? []).map(asSet("working"))],
+      })),
+      identity => bestLifts.get(identity),
+    );
     const out: Record<string, number> = {};
-    for (const ex of workoutInfo?.exercises ?? []) {
-      const kg = bestLifts.get(exerciseIdentity(ex));
-      if (kg !== undefined) out[ex.id] = kg;
-    }
+    exercises.forEach((ex, i) => {
+      const row = worn[i].indexOf(true);
+      if (row >= 0) out[ex.id] = row;
+    });
     return out;
-  }, [bestLifts, workoutInfo]);
+  }, [workoutInfo, log, bestLifts, isKg]);
   // Today's FINISHED session's PR sets, from the kg it saved, against the
   // sessions before it (prSetsOfWorkout, as its Journal page reads them): per
   // card, in the card's row order, warm-ups first.
@@ -3122,7 +3131,7 @@ function WorkoutScreen() {
                   numberBadge={focusMode ? undefined : i + 1}
                   changeCue={changeCueById[exercise.id]}
                   sessionCue={sessionCueById[exercise.id]}
-                  prBestKg={prBestById[exercise.id]}
+                  prRow={prRowById[exercise.id]}
                 />
               </CollapsibleCard>
             );

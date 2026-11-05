@@ -22,7 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, accentTextColor, addSlotInk } from "../constants/theme";
 import { darkGlow, glowOpacity, pill, pillGlow } from "../constants/buttons";
 import {
   CUSTOM_KEY, MAX_CUSTOM, MAX_MEDIA_BYTES, MAX_VIDEO_SECONDS, MUSCLE_GROUPS,
@@ -82,6 +82,7 @@ export default function CreateCustomExerciseScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
+  const addSlot = addSlotInk(isDark);
   // `name` is what the user was searching for in the exercise picker when they
   // tapped Create Custom Exercise, so they don't have to type it twice.
   const { edit: editName, name: searchedName } = useLocalSearchParams<{ edit?: string; name?: string }>();
@@ -470,12 +471,12 @@ export default function CreateCustomExerciseScreen() {
         <TouchableOpacity
           onPress={addStep}
           activeOpacity={0.7}
-          style={[styles.addStepBtn, { borderColor: t.div }]}
+          style={[styles.addStepBtn, { backgroundColor: addSlot.fill, borderColor: addSlot.edge }]}
           accessibilityLabel="Add step"
           accessibilityRole="button"
         >
-          <Ionicons name="add-circle-outline" size={20} color={ACCT} />
-          <Text style={[styles.addStepText, { color: ACCT }]}>Add Step</Text>
+          <Ionicons name="add-circle-outline" size={20} color={accentTextColor(isDark)} />
+          <Text style={[styles.addStepText, { color: accentTextColor(isDark) }]}>Add Step</Text>
         </TouchableOpacity>
 
         {/* Save button — inline in scroll, never moves with keyboard */}
@@ -531,7 +532,8 @@ const styles = StyleSheet.create({
   stepNumText:     { fontFamily: FontFamily.bold, fontSize: 13 },
   stepInput:       { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21, paddingTop: 6, paddingBottom: 6, minHeight: 38 },
   stepRemoveBtn:   { marginTop: 6 },
-  addStepBtn:      { ...pill(), gap: 8, borderWidth: 1, borderStyle: "dashed", marginBottom: 20 },
+  // A dashed "add one here" slot, coloured by addSlotInk (constants/theme.ts).
+  addStepBtn:      { ...pill(), gap: 8, borderWidth: 1.5, borderStyle: "dashed", marginBottom: 20 },
   addStepText:     { fontFamily: FontFamily.semibold, fontSize: 15 },
   saveBtn:         { ...pill(), gap: 8, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
   saveBtnText:     { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },

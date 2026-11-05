@@ -12,7 +12,7 @@
 import type { CompletedSet, CompletedWorkout, SavedProgram } from "../constants/programs";
 import { CUSTOM_WORKOUTS_NAME, workoutBelongsToProgram } from "./progressStats";
 import { exerciseIdentity } from "./exerciseNames";
-import { bestBeforeEach, isPrSet } from "./achievements";
+import { bestBeforeEach, prTrophySets } from "./achievements";
 import { customDayKey, displayWorkoutName, indexOfDayId } from "./programDays";
 
 /** One thing the page can be filtered to. None picked is everything. */
@@ -72,8 +72,9 @@ export type ExerciseHistoryRow = {
   /** The exercise's done sets in this session, warmups included: every time
    *  it was done in the session, in the order done. */
   sets: CompletedSet[];
-  /** Per set in `sets`: a new PR when it was lifted, the trophy its Journal
-   *  page shows (utils/achievements.ts isPrSet). */
+  /** Per set in `sets`: whether it wears the PR trophy, the one its Journal
+   *  page shows (utils/achievements.ts prTrophySets: one a session, both
+   *  times it was done counted together). */
   prs: boolean[];
   /** The top set's place in `sets`: the heaviest working set with its reps
    *  in, the most reps at that weight (the chart's Strength dot). -1 when
@@ -221,7 +222,10 @@ export function exerciseHistoryRows(
         workoutName: w.workoutName,
         programName: sessionProgramName(w, programs),
         sets: doneSets,
-        prs: doneSets.map(s => isPrSet({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) }, best)),
+        prs: prTrophySets(
+          [{ identity: want, sets: doneSets.map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) })) }],
+          () => best,
+        )[0],
         top: topSetOf(doneSets),
         change: null,
         isHold: mine.some(e => e.isIsometric === true),

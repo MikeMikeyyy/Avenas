@@ -181,6 +181,16 @@ export async function setShareArchived(ids: string[], archived: boolean): Promis
   return typeof data === "number" ? data : 0;
 }
 
+/** A review's trainer's message to the person who asked, as they remove it
+ *  without sending it back, or null to clear it (a restore). Migration 0053:
+ *  the RPC lets only the review's trainer write it, and only before it's sent
+ *  back. Returns how many rows changed, 0 being "not yours" (as the archive). */
+export async function setReviewRemovalNote(id: string, note: string | null): Promise<number> {
+  const { data, error } = await supabase.rpc("set_review_removal_note", { p_share: id, p_note: note });
+  if (error) throw new Error(error.message);
+  return typeof data === "number" ? data : 0;
+}
+
 /** Sender-only (RLS): unsend a share/review entirely. */
 /** Delete one share row. Returns how many rows actually went (0 or 1): a delete
  *  the policy doesn't allow is not an error to the API, just a no-op, so the

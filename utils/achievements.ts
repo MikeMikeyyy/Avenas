@@ -62,23 +62,53 @@ export function bestLiftsBefore(history: readonly CompletedWorkout[]): Map<strin
   return best;
 }
 
+/** A set as the PR trophy reads it: its kind, whether it's ticked, its reps
+ *  as typed, and its weight in kg. */
+export type PrSetInput = { type: "warmup" | "working"; done: boolean; reps: string; weightKg: number };
+
 /**
- * Whether one set is a new PR, for the trophy beside its number on the Workout
- * tab (user request, 2026-10-22): a working set, ticked, with its reps in,
- * heavier than `bestKg`, its exercise's best from before this workout
- * (bestLiftsBefore). No best, none at all. Every set that beats the old best
- * gets one, so 102.5 then 105 over a best of 100 is two.
+ * Whether one set beats its exercise's best from before this workout
+ * (`bestKg`, bestLiftsBefore): a working set, ticked, with its reps in,
+ * heavier than it. No best, none at all. Which of these wears the trophy is
+ * prTrophySets': one per exercise.
  */
-export function isPrSet(
-  set: { type: "warmup" | "working"; done: boolean; reps: string; weightKg: number },
-  bestKg: number | undefined,
-): boolean {
+export function isPrSet(set: PrSetInput, bestKg: number | undefined): boolean {
   return bestKg !== undefined && set.type === "working" && set.done && positive(set.reps) > 0 && set.weightKg > bestKg;
 }
 
 /**
- * Which of a SAVED workout's sets wear the PR trophy: per exercise, each set
- * in saved order, against the sessions completed before it
+ * Which of a session's sets wear the PR trophy beside their number (user
+ * decision, 2026-11-05): ONE per exercise, the first set, in the session's
+ * order, at the heaviest weight that beat its best (isPrSet). A later set at
+ * that weight only matches the record, and a heavier one takes the trophy
+ * from it: 75 then 75 over a best of 70 is the first 75's, 75 then 78 the
+ * 78's. So the trophies mark the records the session leaves, the PR card's.
+ * By identity, so an exercise done on two cards is one. It was every set over
+ * the old best until then, my call, never the user's. `bestOf`: an exercise's
+ * best from before the session, undefined for none.
+ */
+export function prTrophySets(
+  exercises: readonly { identity: string; sets: readonly PrSetInput[] }[],
+  bestOf: (identity: string) => number | undefined,
+): boolean[][] {
+  const bestOfEx = (identity: string) => (identity ? bestOf(identity) : undefined);
+  const top = new Map<string, number>();
+  for (const ex of exercises) {
+    for (const s of ex.sets) {
+      if (isPrSet(s, bestOfEx(ex.identity)) && s.weightKg > (top.get(ex.identity) ?? 0)) top.set(ex.identity, s.weightKg);
+    }
+  }
+  const worn = new Set<string>();
+  return exercises.map(ex => ex.sets.map(s => {
+    if (worn.has(ex.identity) || s.weightKg !== top.get(ex.identity) || !isPrSet(s, bestOfEx(ex.identity))) return false;
+    worn.add(ex.identity);
+    return true;
+  }));
+}
+
+/**
+ * Which of a SAVED workout's sets wear the PR trophy (prTrophySets): per
+ * exercise, each set in saved order, against the sessions completed before it
  * (achievementsForWorkout's prior), so a heavier session since never takes a
  * trophy away. `history` may include `workout` itself. An unreadable
  * completedAt has nothing before it, so no trophies.
@@ -88,10 +118,13 @@ export function prSetsOfWorkout(workout: CompletedWorkout, history: readonly Com
   const best = bestLiftsBefore(
     Number.isFinite(at) ? history.filter(w => w.id !== workout.id && Date.parse(w.completedAt) < at) : [],
   );
-  return workout.exercises.map(ex => {
-    const bestKg = ex.name ? best.get(exerciseIdentity(ex)) : undefined;
-    return ex.sets.map(s => isPrSet({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) }, bestKg));
-  });
+  return prTrophySets(
+    workout.exercises.map(ex => ({
+      identity: ex.name ? exerciseIdentity(ex) : "",
+      sets: ex.sets.map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) })),
+    })),
+    identity => best.get(identity),
+  );
 }
 
 /**

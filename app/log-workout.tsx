@@ -42,7 +42,7 @@ import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDay
 import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
 import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
-import { bestLiftsBefore, isPrSet } from "../utils/achievements";
+import { bestLiftsBefore, prTrophySets } from "../utils/achievements";
 import { exerciseIdentity } from "../utils/exerciseNames";
 import { exercisePageParams } from "../utils/customExerciseDetails";
 import PrTrophy from "../components/PrTrophy";
@@ -347,17 +347,16 @@ interface ExerciseCardProps {
    *  (utils/workout.ts buildPrevNoteLookup). Shown as the empty box's
    *  placeholder; Reuse and Undo write through onUpdateNotes. */
   prevNote?: string;
-  /** The heaviest this exercise was lifted before the session being logged
-   *  (kg): a ticked working set heavier than it gets the PR trophy. Absent:
-   *  no best yet, so no trophy. */
-  prBestKg?: number;
+  /** Per set, whether it wears the PR trophy, worked out across the session's
+   *  cards (utils/achievements.ts prTrophySets). */
+  prSets?: readonly boolean[];
 }
 
 function ExerciseCard({
   ex, exIndex, totalExercises, isDark,
   onUpdateSet, onToggleDone, onToggleType, onAddSet, onRemoveLastSet,
   onRemoveExercise, onOpenReorder, onChangeExercise, onToggleIsometric, onUpdateNotes,
-  onInputFocus, prevSets, prevNote, prBestKg,
+  onInputFocus, prevSets, prevNote, prSets,
 }: ExerciseCardProps) {
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -439,9 +438,7 @@ function ExerciseCard({
             if (!isWU) workingCounter++;
             const setLabel = isWU ? "W" : String(workingCounter);
             const isLast = idx === ex.sets.length - 1;
-            // A new PR: the weight as it will be saved (kg), against the best
-            // from before this session.
-            const isPr = isPrSet({ type: set.type, done: set.done, reps: set.reps, weightKg: parseFloat(parseWeightToKg(set.weight, isKg)) || 0 }, prBestKg);
+            const isPr = !!prSets?.[idx];
 
             return (
               <CollapsibleCard
@@ -755,6 +752,19 @@ export default function LogWorkoutScreen() {
   const bestLifts = useMemo(
     () => bestLiftsBefore(Number.isFinite(logAt) ? history.filter(w => Date.parse(w.completedAt) < logAt) : []),
     [history, logAt],
+  );
+  // Which sets wear the trophy: one per exercise, the first at the session's
+  // heaviest new weight (prTrophySets), across every card at once since an
+  // exercise can be on two, from the weights as they'll be saved.
+  const prSetsByCard = useMemo(
+    () => prTrophySets(
+      exercises.map(ex => ({
+        identity: exerciseIdentity(ex),
+        sets: ex.sets.map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: parseFloat(parseWeightToKg(s.weight, isKg)) || 0 })),
+      })),
+      identity => bestLifts.get(identity),
+    ),
+    [exercises, bestLifts, isKg],
   );
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
@@ -1268,7 +1278,7 @@ export default function LogWorkoutScreen() {
               // where it is, so a warm-up row can sit between working ones.
               prevSets={prevHintsForRows(prevSetsOf(ex), ex.sets.map(s => s.type)).map(p => formatPrevHint(p, isKg))}
               prevNote={prevNoteOf(ex)}
-              prBestKg={bestLifts.get(exerciseIdentity(ex))}
+              prSets={prSetsByCard[idx]}
             />
           ))}
 

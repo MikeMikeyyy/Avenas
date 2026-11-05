@@ -622,7 +622,8 @@ export default function JournalScreen() {
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>
-      {/* Pastel glow matching the blush Journal orb on Home */}
+      {/* Pastel glow matching the Journal's own orb (ORB_GRADS.blush, on its
+          empty page) */}
       <AuroraBackdrop dark={isDark} tint="blush" />
 
       {/* Top gradient blur */}

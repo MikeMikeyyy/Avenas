@@ -1261,8 +1261,8 @@ eq([isExerciseMetric("strength"), isExerciseMetric("topWeight")], [true, false],
     { kind: "same" },
     { kind: "weight", kg: 5 },
   ], "history page: each top set against the session before it, the oldest listed against one out of range");
-  eq(rows.map(r => r.prs), [[false], [false, false], [false, true, true], [false, false], [false, true, true]],
-    "history page: a trophy on every set heavier than the best before it");
+  eq(rows.map(r => r.prs), [[false], [false, false], [false, false, true], [false, false], [false, true, false]],
+    "history page: one trophy a session, the first set at its heaviest new weight (the back-off card's 100 over the 97.5 before it; the first 95, not the 92.5 after)");
   eq(rows.map(r => r.notes), ["", "", "Back-off", "", "Felt good"], "history page: the note written on it, trimmed");
   eq(exerciseHistoryRows(hist, [], { exerciseName: "Bench", days: 365, today: new Date(2026, 9, 20) }).at(-1)?.change, null,
     "history page: the first session has nothing to compare with");

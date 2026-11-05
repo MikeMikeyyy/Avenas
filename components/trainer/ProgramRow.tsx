@@ -166,9 +166,12 @@ export default function ProgramRow({ first, open, onToggle, accessibilityLabel, 
       >
         <View style={styles.rowTop}>
           {leading}
+          {/* One line each while shut, the whole of each once open (user
+              report, 2026-11-05: "Removed from [group] without a review"
+              ended in "…" with no way to read the rest). */}
           <View style={{ flex: 1 }}>
-            <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={1}>{title}</Text>
-            <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
+            <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={open ? undefined : 1}>{title}</Text>
+            <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={open ? undefined : 1}>{meta}</Text>
           </View>
           {trailing != null && (
             // Hidden, a tap where it was falls through to the row and closes it.

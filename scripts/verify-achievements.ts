@@ -12,6 +12,8 @@ import {
   bestLiftsBefore,
   isPrSet,
   prSetsOfWorkout,
+  prTrophySets,
+  type PrSetInput,
   describeAchievement,
   detectProgramAchievement,
   detectStreakAchievement,
@@ -255,15 +257,32 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
   eq(pr(102.5, { type: "warmup" }), false, "trophy: never a warm-up");
   eq(isPrSet({ type: "working", done: true, reps: "5", weightKg: 60 }, undefined), false,
     "trophy: no best before (a first time, or bodyweight only) is no PR");
-  eq([pr(102.5), pr(105)], [true, true], "trophy: two sets over the old best both get one");
+  // One trophy per exercise a session (prTrophySets): the first set at the
+  // session's heaviest new weight.
+  const bp = exerciseIdentity({ name: "Bench Press" });
+  const sq = exerciseIdentity({ name: "Squat" });
+  const lift = (weightKg: number, extra: Partial<PrSetInput> = {}): PrSetInput => ({ type: "working", done: true, reps: "3", weightKg, ...extra });
+  const worn = (...exercises: [string, PrSetInput[]][]) =>
+    prTrophySets(exercises.map(([identity, sets]) => ({ identity, sets })), id => best.get(id));
+  eq(worn([bp, [lift(102.5), lift(102.5)]]), [[true, false]], "trophy: the first to lift the new best wears it; the same again only matches it");
+  eq(worn([bp, [lift(102.5), lift(105)]]), [[false, true]], "trophy: a heavier set later takes it from the first");
+  eq(worn([bp, [lift(105), lift(102.5)]]), [[true, false]], "trophy: a lighter PR after the record doesn't take it");
+  eq(worn([bp, [lift(102.5), lift(110, { done: false }), lift(107.5, { reps: "" }), lift(120, { type: "warmup" })]]), [[true, false, false, false]],
+    "trophy: an unticked, rep-less or warm-up set never takes it");
+  eq(worn([bp, [lift(102.5)]], [sq, [lift(145)]]), [[true], [true]], "trophy: one for each exercise");
+  eq(worn([bp, [lift(102.5)]], [sq, [lift(145)]], [bp, [lift(105)]]), [[false], [true], [true]],
+    "trophy: an exercise on two cards is one, and the heavier card's set wears it");
+  eq(worn([bp, [lift(102.5)]], [bp, [lift(102.5)]]), [[true], [false]], "trophy: across two cards at the same weight, the earlier one");
+  eq(worn([bp, [lift(100), lift(95)]]), [[false, false]], "trophy: none when nothing beat the best");
+  eq(worn(["", [lift(500)]]), [[false]], "trophy: no exercise, no trophy");
 
   // The trophy and the PR card agree: a session earns the card exactly when one
-  // of its sets would wear the trophy.
+  // of its sets wears the trophy.
   const sessions = [["102.5", "3"], ["100", "8"], ["95", "10"], ["120", ""]] as const;
   for (const [w, r] of sessions) {
     const s = workout([ex("Bench Press", [set(w, r)])]);
     const card = detectWorkoutAchievements(s, prior, EMPTY_ACHIEVEMENTS, NOW).some(a => a.category === "pr");
-    const trophy = s.exercises[0].sets.some(x => isPrSet({ ...x, weightKg: parseFloat(x.weight) || 0 }, bench));
+    const trophy = worn([bp, s.exercises[0].sets.map(x => ({ ...x, weightKg: parseFloat(x.weight) || 0 }))]).flat().some(Boolean);
     eq(trophy, card, `trophy and PR card agree on ${w} × ${r || "no reps"}`);
   }
 
@@ -284,6 +303,10 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
     eq(prSetsOfWorkout(w, history).flat().some(Boolean), achievementsForWorkout(w, history).some(a => a.category === "pr"),
       `saved ${w.id}: a trophy exactly when its Journal page shows the PR card`);
   }
+  const twice = on("s6", "2026-09-10T10:00:00.000Z", [set("102.5", "5"), set("102.5", "4")]);
+  const climb = on("s7", "2026-09-10T10:00:00.000Z", [set("102.5", "5"), set("104", "3")]);
+  eq(prSetsOfWorkout(twice, [before, twice]), [[true, false]], "saved: the new best twice, the first one wears it");
+  eq(prSetsOfWorkout(climb, [before, climb]), [[false, true]], "saved: a heavier set later wears it, not the first");
 
   // The Exercise History page works every session's best out in one pass
   // (bestBeforeEach): the same trophies as each session's Journal page.
@@ -294,7 +317,7 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
   eq([each.get("s1"), each.get("s2"), each.get("s3"), each.get("s4"), each.get("s5")], [undefined, 100, 102.5, 102.5, undefined],
     "each: nothing before the first; finished together, neither counts the other; an unreadable time has none and counts for none");
   for (const w of all) {
-    const page = w.exercises[0].sets.map(x => isPrSet({ ...x, weightKg: parseFloat(x.weight) || 0 }, each.get(w.id)));
+    const page = prTrophySets([{ identity: bp, sets: w.exercises[0].sets.map(x => ({ ...x, weightKg: parseFloat(x.weight) || 0 })) }], () => each.get(w.id))[0];
     eq(page, prSetsOfWorkout(w, all)[0], `each ${w.id}: the history page's trophies are its Journal page's`);
   }
 }

@@ -1,6 +1,8 @@
 // utils/reviewRemoval.ts
 //
-// Taking a review that's come back to me off my lists, from a gym user's
+// Taking a review off a list. For its trainer, removeReviewForTrainer below.
+//
+// For me, the person who asked, one that's come back to me, from a gym user's
 // "From [trainer]" page (changes not added yet) or Sent for Review page
 // (changes added). A hide on this phone, in the same dismissed list as a
 // program a trainer sent me (DISMISSED_SHARES_KEY), keyed by returnedKeyOf: it
@@ -10,7 +12,47 @@
 // button raises.
 
 import { Alert } from "react-native";
-import { dismissSharedBatch, returnedKeyOf, type SentProgram } from "./trainerStore";
+import {
+  dismissReceivedReview,
+  dismissSharedBatch,
+  returnedKeyOf,
+  saveReviewRemovalNote,
+  setGroupReviewDone,
+  setReviewArchived,
+  type SentProgram,
+} from "./trainerStore";
+import { alertMessage } from "./errors";
+
+/**
+ * A review's trainer taking it off their list: RemoveReviewSheet's Archive or
+ * Delete, on their Programs page and a group's. Archive comes back from the
+ * page's archive; Delete is, for a group review, clearing it from the group's
+ * queue for every trainer of it (set_group_review_completed), and for a 1:1
+ * one, off my list (dismissReceivedReview). Their message to the person who
+ * asked is saved first, so it's there as "Not reviewed" reaches them, and it's
+ * written even when there isn't one, so one left from an earlier removal can't
+ * outlive a restore that couldn't clear it. It never holds the removal up: a
+ * message that couldn't be saved (a server without 0053) is said once it's
+ * done. Resolves true once it's removed; a failed removal is said, and false.
+ */
+export async function removeReviewForTrainer(entry: SentProgram, how: "archive" | "delete", note: string | null): Promise<boolean> {
+  // Once sent back there's nothing to explain, and the server refuses it.
+  const noteSaved = entry.status === "returned"
+    ? true
+    : await saveReviewRemovalNote(entry.id, note).then(() => true, () => false);
+  try {
+    if (how === "archive") await setReviewArchived(entry.id, true);
+    else if (entry.groupId) await setGroupReviewDone(entry.id, true);
+    else await dismissReceivedReview(entry.id);
+  } catch (e) {
+    Alert.alert(how === "archive" ? "Couldn't archive it" : "Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+    return false;
+  }
+  if (note && !noteSaved) {
+    Alert.alert("Message not sent", "It's removed, but your message couldn't be saved, so they'll see it wasn't reviewed without a reason.");
+  }
+  return true;
+}
 
 export function askRemoveReturned(entry: SentProgram, onRemoved: (key: string) => void): void {
   const applied = !!entry.appliedAtISO;

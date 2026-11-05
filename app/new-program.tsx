@@ -29,7 +29,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, BUBBLE_LIGHT, DANGER_BRIGHT, NEU_BG, NEU_BG_DARK, ON_FILL, PAUSED_ORANGE, WARMUP_ORANGE, accentTextColor, tipFill } from "../constants/theme";
-import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H_CHIP, PILL_H_SM, PILL_RADIUS, setInputSurface } from "../constants/buttons";
+import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H_CHIP, PILL_H_SM, PILL_RADIUS, PILL_SHADOW, setInputSurface } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WARMUP_TIP_KEY, WORKOUT_DAY_OVERRIDE_KEY, NEW_PROGRAM_DRAFT_KEY, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets } from "../constants/programs";
 import { activateProgram, type FinishedProgram } from "../utils/programLifecycle";
@@ -40,7 +40,7 @@ import { batchKeyOf, loadGroupReviewPrograms, loadSentPrograms, loadSharedProgra
 import NeuCard from "../components/NeuCard";
 import TrashIcon from "../components/TrashIcon";
 import BounceButton from "../components/BounceButton";
-import GlassButton from "../components/GlassButton";
+import GlassButton, { GLASS, GlassSurface } from "../components/GlassButton";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
@@ -551,7 +551,18 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
         </TouchableOpacity>
         <TouchableOpacity onPress={() => onEditExercise(day, exId)} activeOpacity={0.7} style={styles.exNameBtn}>
           <Text style={[styles.exNumLabel, { color: t.ts }]}>EXERCISE {exIndex + 1} OF {totalExercises}</Text>
-          <Text style={[styles.exName, { color: t.tp }]} numberOfLines={1} ellipsizeMode="tail">{exercise.name}</Text>
+          {/* Two lines before an ellipsis (user request, 2026-11-05: long names
+              ended in "…"), tight enough that two barely outgrow the photo;
+              a longer custom name shrinks a little first. */}
+          <Text
+            style={[styles.exName, { color: t.tp }]}
+            numberOfLines={2}
+            adjustsFontSizeToFit
+            minimumFontScale={0.85}
+            ellipsizeMode="tail"
+          >
+            {exercise.name}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onOpenReorder(day); }}
@@ -2868,10 +2879,10 @@ export default function NewProgramScreen() {
   // also fades as it rolls off centre, so titles dissolve instead of hard-clipping
   // at the bar edges. scrollY is native RN Animated (not Reanimated — avoids the
   // Reanimated.ScrollView reflow bug).
-  const scrollY = useRef(new Animated.Value(0)).current;
+  const [scrollY] = useState(() => new Animated.Value(0));
   const scrollRef = useRef<ScrollViewInstance>(null);
   const dayOffsets = useRef<Record<string, number>>({});
-  const [, bumpOffsets] = useState(0);
+  const [offsetsVersion, bumpOffsets] = useState(0);
   const daysOrder = useMemo(() => Object.keys(workouts), [workouts]);
   const PIN_TOP = insets.top + BACK_TOP;   // screen-Y where a day docks (aligns with back button)
   const PIN_H = 40;                  // one title row's height / roll distance
@@ -2891,6 +2902,54 @@ export default function NewProgramScreen() {
   useEffect(() => () => {
     if (bumpFrame.current !== null) cancelAnimationFrame(bumpFrame.current);
   }, []);
+
+  // The glass behind the pinned day name (user request, 2026-11-05: the white
+  // pill was hard to see over the white cards). iOS draws glass wrongly under a
+  // fade or a clip, so it can't roll and fade with the names: it stays put
+  // behind them, as wide as the docked day's name, going from one name's width
+  // to the next's over the same stretch of scroll the names roll over. It's
+  // there once the first day docks, iOS dissolving it in (and out again above
+  // it). Read off the scroll in JS, the names' roll staying native.
+  const nameWidths = useRef<Record<string, number>>({});
+  const pinWidth = useSharedValue(0);
+  const pinWidthStyle = useAnimatedStyle(() => ({ width: pinWidth.value }));
+  const [pinShown, setPinShown] = useState(false);
+  const pinShownRef = useRef(false);
+  const lastScrollY = useRef(0);
+  const placePin = useCallback((y: number) => {
+    lastScrollY.current = y;
+    const docks = daysOrder.map(d => dayOffsets.current[d]);
+    const widths = daysOrder.map(d => nameWidths.current[d]);
+    // Only on Workouts, so it's gone when Setup is and starts afresh back here.
+    const ready = step === 2 && docks.length > 0 && docks.every(o => o != null) && widths.every(w => w != null);
+    const at = ready ? docks.map(o => (o as number) - PIN_TOP) : [];   // scrollY at which each day docks
+    const shown = ready && y >= at[0] - PIN_H / 2;
+    if (shown !== pinShownRef.current) {
+      pinShownRef.current = shown;
+      setPinShown(shown);
+    }
+    if (!ready) return;
+    // Day i's name rolls in over the PIN_H before it docks; the glass goes
+    // from the name before's width to its own over the same stretch.
+    const ws = widths as number[];
+    let w = ws[0];
+    for (let i = 1; i < at.length && y > at[i] - PIN_H; i++) {
+      const t = Math.min(1, (y - (at[i] - PIN_H)) / PIN_H);
+      w = ws[i - 1] + (ws[i] - ws[i - 1]) * t;
+    }
+    pinWidth.set(w);
+  }, [daysOrder, PIN_TOP, pinWidth, step]);
+  // Again whenever the days move or are renamed, from where the page is.
+  useEffect(() => { placePin(lastScrollY.current); }, [placePin, offsetsVersion]);
+  const onMeasureName = useCallback((day: string, w: number) => {
+    if (nameWidths.current[day] === w) return;
+    nameWidths.current[day] = w;
+    placePin(lastScrollY.current);
+  }, [placePin]);
+  useEffect(() => {
+    const id = scrollY.addListener(({ value }) => placePin(value));
+    return () => scrollY.removeListener(id);
+  }, [scrollY, placePin]);
 
   // Jump the long Step 2 page to a day (Workout Summary's "Go to Day"). Lands
   // exactly on the day's dock boundary, so the pinned title strip shows it —
@@ -2941,6 +3000,11 @@ export default function NewProgramScreen() {
     stripTYNode
       ? stripTYNode.interpolate({ inputRange: [-(i + 1) * PIN_H, -i * PIN_H, -(i - 1) * PIN_H], outputRange: [0, 1, 0], extrapolate: "clamp" })
       : 0;
+  // Below iOS 26 the pill is solid, so it can fade: in with the first day's
+  // name, and there from then on.
+  const solidPinOpacity = stripTYNode
+    ? stripTYNode.interpolate({ inputRange: [0, PIN_H], outputRange: [1, 0], extrapolate: "clamp" })
+    : 0;
   const updateBtnGap = isEditMode || isReviewMode || isSharedEditMode;   // leave room for the Update button
   // Is a modal surface already presented? Nothing else may mount its <Modal>
   // while this is true — see the single-modal note where these states are declared.
@@ -2975,29 +3039,38 @@ export default function NewProgramScreen() {
         </Reanimated.View>
       )}
 
-      {/* Sticky day header — pins the current day's name next to the back button.
-          Two title layers (current + next) clipped to a PIN_H-tall bar; the next
-          pushes the current up and out, driven natively by scrollY. */}
+      {/* Sticky day header — pins the current day's name next to the back button,
+          on a glass pill that stays put while the names roll over it. */}
       {step === 2 && daysOrder.length > 0 && (
-        <Animated.View
+        <View
           pointerEvents="none"
-          style={{ position: "absolute", top: PIN_TOP, left: 92, right: updateBtnGap ? 116 : 20, height: PIN_H, zIndex: 9, overflow: "hidden" }}
+          style={{ position: "absolute", top: PIN_TOP, left: 92, right: updateBtnGap ? 116 : 20, height: PIN_H, zIndex: 9 }}
         >
-          {/* One filmstrip of all day names; translateY rolls the active one to
-              centre. Each row fades off-centre so the roll dissolves (no clip lines). */}
-          <Animated.View style={{ transform: [{ translateY: stripTY }] }}>
-            {daysOrder.map((d, i) => (
-              <Animated.View
-                key={d}
-                style={{ height: PIN_H, justifyContent: "center", alignItems: "flex-start", opacity: titleOpacity(i) }}
-              >
-                <View style={[styles.pinnedDayChip, { backgroundColor: isDark ? APP_DARK.div : "#ffffff" }]}>
-                  <Text numberOfLines={1} style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(d).toUpperCase()}</Text>
-                </View>
-              </Animated.View>
-            ))}
+          {/* The pill: glass on iOS 26 (never faded or clipped, so no opacity
+              on it or above it), the solid control below that. */}
+          <Animated.View style={[styles.pinnedDayPill, !GLASS && { opacity: solidPinOpacity }]}>
+            <Reanimated.View style={pinWidthStyle}>
+              <GlassSurface shown={GLASS ? pinShown : undefined} style={styles.pinnedDayChip} solidStyle={PILL_SHADOW}>{null}</GlassSurface>
+            </Reanimated.View>
           </Animated.View>
-        </Animated.View>
+          {/* One filmstrip of all day names over it, clipped to the bar;
+              translateY rolls the active one to centre. Each row fades
+              off-centre so the roll dissolves (no clip lines). */}
+          <View style={[StyleSheet.absoluteFill, styles.pinnedDayNames]}>
+            <Animated.View style={{ transform: [{ translateY: stripTY }] }}>
+              {daysOrder.map((d, i) => (
+                <Animated.View
+                  key={d}
+                  style={{ height: PIN_H, justifyContent: "center", alignItems: "flex-start", opacity: titleOpacity(i) }}
+                >
+                  <View style={styles.pinnedDayName} onLayout={e => onMeasureName(d, e.nativeEvent.layout.width)}>
+                    <Text numberOfLines={1} style={[styles.dayHeading, { color: t.tp }]}>{dayLabel(d).toUpperCase()}</Text>
+                  </View>
+                </Animated.View>
+              ))}
+            </Animated.View>
+          </View>
+        </View>
       )}
 
       <View pointerEvents="none" style={[styles.topGradient, { top: 0, height: insets.top + 10 }]}>
@@ -3395,7 +3468,14 @@ const styles = StyleSheet.create({
   dayHeading:           { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 1.2 },
   // Matches the workout page's "Start" pill (workoutTimerPill) and the back
   // button height: a 40px-tall pill. Fills the PIN_H (40) roll window exactly.
-  pinnedDayChip:        { height: 40, paddingHorizontal: 14, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  // Shape only: the surface (glass, or the solid control) is GlassSurface's,
+  // its width the docked name's (pinWidthStyle).
+  pinnedDayChip:        { height: 40, borderRadius: 20 },
+  pinnedDayPill:        { alignSelf: "flex-start" },
+  pinnedDayNames:       { overflow: "hidden" },
+  // A name as wide as it reads, the pill's own 14 either side: what the glass
+  // is sized to.
+  pinnedDayName:        { paddingHorizontal: 14 },
   daySummaryCard:       { borderRadius: 16, marginBottom: 14 },
   daySummaryCardInner:  { paddingVertical: 4, paddingHorizontal: 0 },
   daySummaryEmpty:      { fontFamily: FontFamily.regular, fontSize: 13, fontStyle: "italic", paddingVertical: 14, paddingHorizontal: 16 },
@@ -3417,7 +3497,9 @@ const styles = StyleSheet.create({
   exReorderBtn:       { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   exNameBtn:        { flex: 1, flexDirection: "column", justifyContent: "center", gap: 3 },
   exNumLabel:       { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.8 },
-  exName:           { fontFamily: FontFamily.bold, fontSize: 16, flexShrink: 1 },
+  // A 19pt line: two lines under the "EXERCISE 1 OF 4" label come to 56pt,
+  // 4 over the 52pt photo, so a wrapped name hardly grows the row.
+  exName:           { fontFamily: FontFamily.bold, fontSize: 16, lineHeight: 19, flexShrink: 1 },
   exCompactRow:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, paddingHorizontal: 9, borderTopWidth: 1 },
   // The rest timer's button (cardButton), a point less padding for its hairline.
   exRestBtn:        { ...pill(PILL_H_CHIP), gap: 6, paddingLeft: 6 - CARD_BUTTON_BORDER, paddingRight: 12 - CARD_BUTTON_BORDER },

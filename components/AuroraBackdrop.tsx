@@ -36,7 +36,8 @@ const TINT_BLOBS: Record<AuroraTint, Blob[]> = {
   ],
   // The journal family (journal, log-workout, workout-detail, program-history
   // and its detail page). Leads with `orchid` rather than `blush` so it tracks
-  // the violet journal orb; the Home mix still uses `blush` and is unaffected.
+  // the Journal's own violet orb (ORB_GRADS.blush; Home's View Journal orb is
+  // a lilac pastel since 2026-11-05); the Home mix still uses `blush`.
   blush: [
     { color: AURORA.orchid, o: 0.18, cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.50 },
     { color: AURORA.aqua,   o: 0.10, cx: 0.92, cy: 0.32, rx: 0.65, ry: 0.42 },

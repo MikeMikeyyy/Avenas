@@ -364,19 +364,61 @@ export const AURORA = {
   seafoam: "#56F5C5",  // New Program     — from the first green orb's #2ff3b8
 } as const;
 
-// Gradient orb buttons (Home's quick actions, the Journal's add button). `glow`
-// doubles as the shadow color. New Program sky to mint, My Programs an ocean
-// blue, View Journal periwinkle to orchid (user picks, 2026-10-28, from the
-// Light Mode Whites canvas). The canvas's own values (#70E2FF to #1DECA0,
-// #4BE1F2 to #1E88F5, #8F96F9 to #E06AF0) looked very dull on the phone (user
-// report, the same day): a wide-colour monitor shows them more saturated than
-// an iPhone, which draws them exactly. So each stop here is that colour pushed
-// out to the most saturated version of itself the phone draws.
+// Gradient orbs, a white icon on a saturated gradient. Home's quick actions
+// were these until 2026-11-05 (now ORB_PASTELS, below); the Journal's empty
+// page still draws View Journal's. `glow` doubles as the shadow color. New
+// Program sky to mint, My Programs an ocean blue, View Journal periwinkle to
+// orchid (user picks, 2026-10-28, from the Light Mode Whites canvas). The
+// canvas's own values (#70E2FF to #1DECA0, #4BE1F2 to #1E88F5, #8F96F9 to
+// #E06AF0) looked very dull on the phone (user report, the same day): a
+// wide-colour monitor shows them more saturated than an iPhone, which draws
+// them exactly. So each stop here is that colour pushed out to the most
+// saturated version of itself the phone draws (the same numbers read as
+// Display P3, clipped to sRGB).
 export const ORB_GRADS = {
   green: { colors: ["#2EE5FF", "#00F099"] as const, glow: "#10DDBD" },
   aqua:  { colors: ["#00E5F5", "#008AFD"] as const, glow: "#0AA6F7" },
   blush: { colors: ["#8D96FF", "#F161F7"] as const, glow: "#B56EF8" },
 } as const;
+
+// Home's quick-action orbs as pastel bubbles (user pick, 2026-11-05, option E
+// of the Home Quick Actions canvas, after "something feels off" with the
+// gradients above): a wash of each colour with the icon in it, and the glow
+// in the full colour. Canvas colours: mint #3DF2B0 (light's icon
+// #008F6E), sky #5AB8FF (#1F5FE0), lilac #C29BFF (#6E3DE0). On light the wash
+// runs from 28% of the colour over white to 55%, the icon in the deep tone.
+// On dark it runs from 48% over
+// the card (NEU_BG_DARK) to 28%, and the icon is the colour 40% of the way to
+// white: brighter than the canvas's 34% to 16% and a fifth of the way (user
+// request, the same day: "a little brighter / more pop" on dark, without more
+// glow). Written out as solid colours: the glow View under the gradient is
+// filled solid, so iOS draws the glow from the circle's outline at full
+// strength (a translucent fill falls back to a weaker shadow drawn
+// offscreen), and that fill would show through a translucent wash. Every
+// value is pushed for the phone as ORB_GRADS' were. The icons read at 3:1 or
+// more on both ends of their bubble in both themes; New Program's on light is
+// the lowest, 3.1:1 at its deep end.
+export const ORB_PASTELS = {
+  green: {
+    light: { colors: ["#BBFDE8", "#6DFBD2"] as const, ink: "#00926C" },
+    dark:  { colors: ["#008564", "#015A48"] as const, ink: "#5CFACE" },
+    glow: "#00F6AB",
+  },
+  aqua: {
+    light: { colors: ["#CBECFF", "#95DAFF"] as const, ink: "#0061E8" },
+    dark:  { colors: ["#28688F", "#244961"] as const, ink: "#8BD6FF" },
+    glow: "#24BBFF",
+  },
+  blush: {
+    light: { colors: ["#F0E3FF", "#E1C7FF"] as const, ink: "#763AE9" },
+    dark:  { colors: ["#705890", "#4C4061"] as const, ink: "#DFC2FF" },
+    glow: "#C999FF",
+  },
+} as const;
+
+// A pastel orb's rim: all but white on light, a faint white on dark (0.22, up
+// from the canvas's 0.14 with dark's brighter wash, for a crisper edge).
+export const ORB_PASTEL_EDGE = { light: "rgba(255,255,255,0.9)", dark: "rgba(255,255,255,0.22)" } as const;
 
 // ─── The timer and the rest ───────────────────────────────────────────────────
 // The Workout tab's timer ring, the rest pop-up's ring and the workout bar's
@@ -416,6 +458,18 @@ export const SET_INPUT_RING_DARK = "rgba(255,255,255,0.45)";
 // drawn half under the tip's edge is exactly its colour where the two overlap.
 export function tipFill(isDark: boolean): string {
   return washOver(isDark ? NEU_BG_DARK : NEU_BG, ACCT, isDark ? 0.14 : 0.12);
+}
+
+// ─── Add slots ────────────────────────────────────────────────────────────────
+// A dashed "add one here" pill on the page (Create Exercise's Add Step; user
+// report, 2026-11-05: its dashes, in the divider colour, all but vanished on
+// the page): the accent washed over the page, solid, so its shape shows, and a
+// dashed accent edge, deepened a third of the way to ACCT_INK on light so it
+// shows against the wash (about 2:1). Its words are accentTextColor's.
+export function addSlotInk(isDark: boolean): { fill: string; edge: string } {
+  return isDark
+    ? { fill: washOver(APP_DARK.bg, ACCT, 0.12), edge: ACCT }
+    : { fill: washOver(APP_LIGHT.bg, ACCT, 0.14), edge: washOver(ACCT, ACCT_INK, 0.35) };
 }
 
 // ─── The Journal's calendar ───────────────────────────────────────────────────

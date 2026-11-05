@@ -36,6 +36,8 @@ import NotebookIcon from "../../../../components/icons/NotebookIcon";
 import ProgramRow, { CycleStrip, RowActions, StatusPill, rowButtonStyles } from "../../../../components/trainer/ProgramRow";
 import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "../../../../components/trainer/ReviewStatusPill";
 import GroupSendSheet, { type GroupSendMode } from "../../../../components/trainer/GroupSendSheet";
+import RemoveReviewSheet from "../../../../components/trainer/RemoveReviewSheet";
+import RemovalNote from "../../../../components/trainer/RemovalNote";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../../../constants/theme";
 import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
 import { scrollEndPadding } from "../../../../constants/floatingBars";
@@ -64,11 +66,11 @@ import {
   removeGroupSharedProgramBatch,
   removeSentProgram,
   returnedKeyOf,
-  setGroupReviewDone,
-  setReviewArchived,
   setSendBatchArchived,
   type SentProgram,
 } from "../../../../utils/trainerStore";
+import { firstName } from "../../../../utils/trainerLists";
+import { removeReviewForTrainer } from "../../../../utils/reviewRemoval";
 import { scheduleCloudPush } from "../../../../lib/syncManager";
 import { getJSON } from "../../../../utils/storage";
 import { fmtAgo } from "../../../../utils/dates";
@@ -267,6 +269,7 @@ function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemov
         <ReviewStatusPill review={review} />
       )}
     >
+      {review.removalNote ? <RemovalNote note={review.removalNote} /> : null}
       <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} />
       {stage !== "awaiting" ? (
         <RowActions
@@ -400,33 +403,17 @@ export default function GroupProgramsScreen() {
       : { pathname: "/program-view", params: { sentId: r.id, groupId } });
   }, [router, groupId]);
 
-  /** Take a review out of the group's queue, for every coach: Archive (back
-   *  from the archive, top right) or Delete (what Mark Done was). */
-  const handleCompleteReview = useCallback((entry: SentProgram) => {
-    const drop = () => setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
-    askArchiveOrDelete({
-      title: "Remove Program",
-      body: `Archive "${entry.programName}" to take it off the group's review list until you restore it, or delete it. ${removeReviewNote(entry)}`,
-      onArchive: async () => {
-        try {
-          await setReviewArchived(entry.id, true);
-        } catch (e) {
-          Alert.alert("Couldn't archive it", alertMessage(e, "Check your connection and try again."));
-          return;
-        }
-        drop();
-      },
-      onDelete: async () => {
-        try {
-          await setGroupReviewDone(entry.id, true);
-        } catch (e) {
-          Alert.alert("Couldn't update", alertMessage(e, "Check your connection and try again."));
-          return;
-        }
-        drop();
-      },
-    });
+  /** Take a review out of the group's queue, for every coach: RemoveReviewSheet's
+   *  Archive (back from the archive, top right) or Delete (what Mark Done
+   *  was), with a message to the member who asked while it hasn't been sent
+   *  back. */
+  const [removingReview, setRemovingReview] = useState<SentProgram | null>(null);
+  const handleCompleteReview = useCallback((entry: SentProgram) => setRemovingReview(entry), []);
+  const removeReview = useCallback(async (entry: SentProgram, how: "archive" | "delete", note: string | null) => {
+    if (!(await removeReviewForTrainer(entry, how, note))) return;
+    setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
   }, []);
+  const removingAsker = removingReview ? members.find(m => m.id === removingReview.senderId) : undefined;
 
   /** A member taking a send off THEIR list (a hide on this phone): an accepted
    *  copy stays in My Programs, and the coach still sees it as sent. */
@@ -752,6 +739,16 @@ export default function GroupProgramsScreen() {
         recipientIds={recipientIds}
         programs={myPrograms}
         onSent={refreshPrograms}
+      />
+      <RemoveReviewSheet
+        review={removingReview}
+        body={removingReview
+          ? `Archive "${removingReview.programName}" to take it off the group's review list until you restore it, or delete it. ${removeReviewNote(removingReview)}`
+          : ""}
+        askerName={removingAsker ? firstName(removingAsker.name) : undefined}
+        onArchive={note => { if (removingReview) void removeReview(removingReview, "archive", note); }}
+        onDelete={note => { if (removingReview) void removeReview(removingReview, "delete", note); }}
+        onClose={() => setRemovingReview(null)}
       />
     </FadeScreen>
   );

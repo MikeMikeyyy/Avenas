@@ -499,6 +499,15 @@ export default function ProgramViewScreen() {
                           <Text style={[styles.commentBody, { color: t.tp }]}>{sent.trainerComments}</Text>
                         </View>
                       </NeuCard>
+                    ) : sent?.removalNote ? (
+                      // Removed without a review, and the trainer said why
+                      // (0053; user request, 2026-11-05).
+                      <NeuCard dark={isDark} radius={14} style={{ marginBottom: 18 }}>
+                        <View style={styles.commentBox}>
+                          <Text style={[styles.commentLabel, { color: t.ts }]}>{"WHY IT WASN'T REVIEWED"}</Text>
+                          <Text style={[styles.commentBody, { color: t.tp }]}>{sent.removalNote}</Text>
+                        </View>
+                      </NeuCard>
                     ) : null
                   }
                 />

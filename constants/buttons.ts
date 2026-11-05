@@ -83,7 +83,8 @@ export function setInputSurface(t: { cardCtrl: string; div: string }, isDark: bo
  *  strength. A glow blooms far brighter on Graphite's near-black page than on
  *  a light one (user report, 2026-10-28: "a little too bright and glowy" on
  *  dark), so every button glow is laid on at this share there. One number:
- *  raise it for more glow on dark, lower it for less. */
+ *  raise it for more glow on dark, lower it for less. Home's quick-action
+ *  orbs are the one exception: light's glow there is its own, smaller one. */
 export const DARK_GLOW_SCALE = 0.6;
 
 /** A glow's shadowOpacity for the theme: `opacity` on light, DARK_GLOW_SCALE

@@ -38,6 +38,7 @@ import {
   insertShareRows,
   returnSharedReview,
   setGroupReviewCompleted,
+  setReviewRemovalNote,
   setShareArchived,
   stampReviewApplied,
   stampShareAccepted,
@@ -295,6 +296,10 @@ export type SentProgram = {
    * ever reads it. Absent once it's been sent back: they have their review.
    */
   removedUnreviewedAtISO?: string;
+  /** To the person who asked, with removedUnreviewedAtISO: what the trainer
+   *  wrote as they removed it, if anything (migration 0053; user request,
+   *  2026-11-05: "Not reviewed" never said why). */
+  removalNote?: string;
 };
 
 export const clientDataKey = (clientId: string) => `${CLIENT_DATA_PREFIX}${clientId}`;
@@ -445,6 +450,11 @@ function rowToShared(row: SharedProgramRow, uid: string, isPT: boolean, meta: Cl
  *  rename in the builder is an edit like any other. */
 function rowToSent(row: SharedProgramRow, uid: string): SentProgram {
   const mine = row.sender_id === uid;
+  // The asker's view only: deleted (or cleared from the group's queue)
+  // outranks archived, which a restore can still undo.
+  const removedAt = mine && !row.returned_at
+    ? row.deleted_by_recipient_at ?? row.completed_at ?? row.archived_at ?? undefined
+    : undefined;
   const snap = (mine
     ? (row.returned_at ? row.returned_snapshot ?? row.snapshot : row.snapshot)
     : row.draft_snapshot ?? row.returned_snapshot ?? row.snapshot) as unknown as SavedProgram | null;
@@ -465,11 +475,8 @@ function rowToSent(row: SharedProgramRow, uid: string): SentProgram {
     recipientId: row.recipient_id,
     completedAtISO: row.completed_at ?? undefined,
     archivedAtISO: row.archived_at ?? undefined,
-    // The asker's view only: deleted (or cleared from the group's queue)
-    // outranks archived, which a restore can still undo.
-    removedUnreviewedAtISO: mine && !row.returned_at
-      ? row.deleted_by_recipient_at ?? row.completed_at ?? row.archived_at ?? undefined
-      : undefined,
+    removedUnreviewedAtISO: removedAt,
+    removalNote: removedAt ? row.removal_note ?? undefined : undefined,
   };
 }
 
@@ -1455,6 +1462,20 @@ export async function setSendBatchArchived(batchKey: string, archived: boolean, 
   if ((await setShareArchived(ids, archived)) === 0 && await batchStillThere(groupId, batchKey)) {
     throw new Error("Only the trainer who sent it, or a trainer of its group, can do that.");
   }
+}
+
+/**
+ * A review's trainer's message to the person who asked, written just before
+ * they remove it without sending it back (Archive or Delete), or null to clear
+ * it, as a restore does (migration 0053). What it reaches is rowToSent's
+ * removalNote: the asker sees it only while the review reads Not reviewed. A
+ * mock-roster review has nobody behind it to read it, so only a cloud one is
+ * written. THROWS when it couldn't be saved (offline, or a server without
+ * 0053), so the screen can say so; the removal itself doesn't hang on it.
+ */
+export async function saveReviewRemovalNote(id: string, note: string | null): Promise<void> {
+  if (!isCloudShareId(id)) return;
+  await setReviewRemovalNote(id, note);
 }
 
 /**

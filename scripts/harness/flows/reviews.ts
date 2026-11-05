@@ -54,6 +54,9 @@ type Model = {
   /** Cara's own program. */
   program: "present" | "archived" | "none";
   programVersion: number;
+  /** What the trainer last wrote as they removed it without sending it back
+   *  (migration 0053), or null: Cara reads it while it's Not reviewed. */
+  note: string | null;
 };
 
 const status = (m: Model) => (m.returns > 0 ? "returned" : "sent");
@@ -70,6 +73,7 @@ function expected(m: Model): View {
   const v: View = {
     caraWaiting: m.exists && m.returns === 0 && !notReviewed(m),
     caraNotReviewed: notReviewed(m),
+    caraNote: notReviewed(m) ? m.note : null,
     caraReturned: returnedCard(m) ? { applied: m.applied } : null,
     caraProgram: m.program === "none" ? null : { count: 1, archived: m.program === "archived", version: m.programVersion },
   };
@@ -81,7 +85,7 @@ function expected(m: Model): View {
       // Her own request stays on the group's page until she removes it: one a
       // coach cleared without a review says so, rather than vanishing.
       caraGroupPage: m.exists && (m.returns > 0 ? m.removedAt !== m.returns : true)
-        ? { returned: m.returns > 0, applied: m.applied, notReviewed: notReviewed(m) } : null,
+        ? { returned: m.returns > 0, applied: m.applied, notReviewed: notReviewed(m), note: notReviewed(m) ? m.note : null } : null,
       // Tara owns the group, so the row is addressed to her: it must still
       // stay out of her 1:1 inbox.
       taraInbox: null,
@@ -109,6 +113,8 @@ async function observe(kind: Kind): Promise<View> {
     // Accepted (utils/trainerLists.ts fromTrainerLists / sentForReviewList).
     v.caraWaiting = !!mine && reviewStage(mine) === "awaiting";
     v.caraNotReviewed = !!mine && reviewStage(mine) === "removed";
+    // Why, when the trainer said (RemovalNote on the row and the program page).
+    v.caraNote = mine?.removalNote ?? null;
     v.caraReturned = mine && mine.status === "returned" && !CARA.app.isReturnedDismissed(mine, dismissed)
       ? { applied: !!mine.appliedAtISO } : null;
     const programs = (await getJSON<SavedProgram[]>(PROGRAMS_KEY, [])).filter(p => p.name === CARA_PLAN.name);
@@ -120,7 +126,7 @@ async function observe(kind: Kind): Promise<View> {
     if (kind === "group") {
       const own = (await CARA.app.loadGroupReviewPrograms(GROUP)).find(s => isIt(s) && s.senderId === CARA.uid);
       v.caraGroupPage = own
-        ? { returned: own.status === "returned", applied: !!own.appliedAtISO, notReviewed: reviewStage(own) === "removed" }
+        ? { returned: own.status === "returned", applied: !!own.appliedAtISO, notReviewed: reviewStage(own) === "removed", note: own.removalNote ?? null }
         : null;
     }
   });
@@ -171,8 +177,59 @@ async function drawn(p: Person, kind: Kind): Promise<SentProgram | undefined> {
   });
 }
 
+/** The trainer's message, written before a removal from their list as
+ *  utils/reviewRemoval.ts removeReviewForTrainer does: always (null for none),
+ *  never once it's been sent back, and never holding the removal up. */
+async function writeNote(t: Person, entry: SentProgram, note: string | null): Promise<void> {
+  if (entry.status === "returned") return;
+  await t.app.saveReviewRemovalNote(entry.id, note).catch(() => undefined);
+}
+
 function trainerActions(t: Person, kind: Kind): Action<Model>[] {
   const at = kind === "direct" ? "" : ` (${t.name})`;
+  const reason = `${t.name}: no time for reviews this month`;
+  // Archive from Programs Received, with or without a message.
+  const archive = (note: string | null): Action<Model> => ({
+    label: `${t.name} archives it${note ? " with a reason" : ""}${at}`,
+    kinds: [kind],
+    enabled: listed,
+    draw: async () => {
+      const entry = await drawn(t, kind);
+      return () => on(t, async () => {
+        await writeNote(t, entry!, note);
+        await t.app.setReviewArchived(entry!.id, true);
+        return OK;
+      });
+    },
+    apply: m => {
+      if (!m.exists) return OK;
+      m.archived = true;
+      if (m.returns === 0) m.note = note;
+      return OK;
+    },
+  });
+  // Programs Received's Delete (the sheet, so a message), or the archive's
+  // (no sheet: the message it was archived with stays).
+  const remove = (note: string | null): Action<Model> => ({
+    label: `${t.name} deletes it${note ? " with a reason" : ""}${at}`,
+    kinds: [kind],
+    enabled: m => listed(m) || (!note && inArchive(m)),
+    draw: async () => {
+      const entry = await drawn(t, kind);
+      return () => on(t, async () => {
+        if (!entry!.archivedAtISO) await writeNote(t, entry!, note);
+        if (kind === "group") await t.app.setGroupReviewDone(entry!.id, true);
+        else await t.app.dismissReceivedReview(entry!.id);
+        return OK;
+      });
+    },
+    apply: (m, d) => {
+      if (!m.exists) return OK;
+      m.closed = true;
+      if (listed(d) && m.returns === 0) m.note = note;
+      return OK;
+    },
+  });
   return [
     {
       label: `${t.name} edits it in the builder${at}`,
@@ -215,41 +272,30 @@ function trainerActions(t: Person, kind: Kind): Action<Model>[] {
         return OK;
       },
     },
+    archive(null),
+    archive(reason),
     {
-      label: `${t.name} archives it${at}`,
-      kinds: [kind],
-      enabled: listed,
-      draw: async () => {
-        const entry = await drawn(t, kind);
-        return () => on(t, async () => { await t.app.setReviewArchived(entry!.id, true); return OK; });
-      },
-      apply: m => { if (m.exists) m.archived = true; return OK; },
-    },
-    {
+      // The archive page's Restore: back to waiting, so its message goes too.
       label: `${t.name} restores it${at}`,
       kinds: [kind],
       enabled: inArchive,
       draw: async () => {
         const entry = await drawn(t, kind);
-        return () => on(t, async () => { await t.app.setReviewArchived(entry!.id, false); return OK; });
-      },
-      apply: m => { if (m.exists) m.archived = false; return OK; },
-    },
-    {
-      // Programs Received's Delete, or the archive's: the same call.
-      label: `${t.name} deletes it${at}`,
-      kinds: [kind],
-      enabled: m => listed(m) || inArchive(m),
-      draw: async () => {
-        const entry = await drawn(t, kind);
         return () => on(t, async () => {
-          if (kind === "group") await t.app.setGroupReviewDone(entry!.id, true);
-          else await t.app.dismissReceivedReview(entry!.id);
+          await t.app.setReviewArchived(entry!.id, false);
+          await t.app.saveReviewRemovalNote(entry!.id, null).catch(() => undefined);
           return OK;
         });
       },
-      apply: m => { if (m.exists) m.closed = true; return OK; },
+      apply: m => {
+        if (!m.exists) return OK;
+        m.archived = false;
+        if (m.returns === 0) m.note = null;
+        return OK;
+      },
     },
+    remove(null),
+    remove(reason),
   ];
 }
 
@@ -374,7 +420,7 @@ export function reviewFlow(kind: Kind): Flow<Model> {
     },
     fresh: () => ({
       kind, exists: true, archived: false, closed: false, draft: null, returned: null, returns: 0,
-      applied: false, removedAt: null, program: "present", programVersion: 0,
+      applied: false, removedAt: null, program: "present", programVersion: 0, note: null,
     }),
     expected,
     observe: () => observe(kind),
@@ -404,7 +450,17 @@ export function reviewFlow(kind: Kind): Flow<Model> {
         // waiting again once it's restored, Not reviewed for good once deleted,
         // and gone when she clears it (user request, 2026-10-29).
         [t("Tara archives it"), t("Tara restores it"), t("Tara deletes it"), "Cara withdraws it (Sent to Trainer)"],
+        // With a reason (user request, 2026-11-05): Cara reads it while it's
+        // Not reviewed; a restore takes it away, a removal without one leaves
+        // none, and a delete from the archive keeps the one it was archived with.
+        [t("Tara archives it with a reason"), t("Tara restores it"), t("Tara archives it"), t("Tara restores it"),
+          t("Tara archives it with a reason"), t("Tara deletes it"), "Cara withdraws it (Sent to Trainer)"],
+        [t("Tara deletes it with a reason")],
+        // Sent back after all: the reason it was archived with has nothing to
+        // explain, and a later removal can't write one.
+        [t("Tara archives it with a reason"), t("Tara restores it"), t("Tara sends it back"), t("Tara archives it with a reason")],
         ...(kind === "group" ? [
+          [t("Cole archives it with a reason", "Cole"), t("Tara restores it"), t("Cole deletes it with a reason", "Cole")],
           [t("Cole edits it in the builder", "Cole"), t("Tara sends it back"), t("Cole archives it", "Cole"),
             "Cara accepts the changes", t("Tara restores it"), t("Cole deletes it", "Cole")],
         ] : []),

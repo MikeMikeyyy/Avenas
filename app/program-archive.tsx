@@ -61,6 +61,7 @@ import {
   removeGroupSharedProgramBatch,
   removeSharedProgramBatch,
   removeSharedProgramByLocalId,
+  saveReviewRemovalNote,
   setGroupReviewDone,
   setReviewArchived,
   setSendBatchArchived,
@@ -308,6 +309,10 @@ export default function ProgramArchiveScreen() {
   const restoreReview = (r: SentProgram) => {
     void run("Couldn't restore it", async () => {
       await setReviewArchived(r.id, false);
+      // Back to Awaiting review, so the message saying why it wasn't goes too
+      // (0053). After the restore, so a failed one leaves the reason with it;
+      // a removal writes its own anyway (removeReviewForTrainer).
+      await saveReviewRemovalNote(r.id, null).catch(() => undefined);
       dropReview(r.id);
     });
   };

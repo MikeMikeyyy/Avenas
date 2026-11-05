@@ -59,11 +59,16 @@ const DIM_OPACITY = 0.4;
 
 /** The surface alone: inside GlassButton, and for a control that only shows
  *  something (the Workout page's running clock, the timer's mode switch). */
-export function GlassSurface({ tint, interactive = false, style, solidStyle, children }: {
+export function GlassSurface({ tint, interactive = false, shown, style, solidStyle, children }: {
   /** Coloured glass, and the solid surface's fill. */
   tint?: string;
   /** Swells and lights under a finger. Only a button's. */
   interactive?: boolean;
+  /** For glass that comes and goes (the builder's pinned day name): false
+   *  takes the glass away and true brings it back, iOS dissolving it out and
+   *  in as it does its own bars, since glass can't be faded. The solid
+   *  surface isn't drawn while false. Left out, it's always there. */
+  shown?: boolean;
   /** Shape and layout (size, radius, padding, the row inside), never a fill. */
   style?: StyleProp<ViewStyle>;
   /** The solid surface's extras: a shadow, a glow, another fill. */
@@ -76,7 +81,7 @@ export function GlassSurface({ tint, interactive = false, style, solidStyle, chi
     // which the glass takes natively (cornerConfiguration), not a clip.
     return (
       <GlassView
-        glassEffectStyle="regular"
+        glassEffectStyle={shown === undefined ? "regular" : { style: shown ? "regular" : "none", animate: true }}
         isInteractive={interactive}
         tintColor={tint}
         colorScheme={isDark ? "dark" : "light"}
@@ -86,6 +91,7 @@ export function GlassSurface({ tint, interactive = false, style, solidStyle, chi
       </GlassView>
     );
   }
+  if (shown === false) return <View style={style}>{children}</View>;
   const fill = tint ?? (isDark ? APP_DARK : APP_LIGHT).ctrl;
   return <View style={[style, { backgroundColor: fill }, solidStyle]}>{children}</View>;
 }

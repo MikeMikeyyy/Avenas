@@ -305,6 +305,11 @@ export type SharedProgramRow = {
    *  never sees. Written only through the set_share_archived RPC, and absent
    *  from the row until 0037 is applied. */
   archived_at?: string | null;
+  /** A review's trainer's message to the person who asked, left as they
+   *  removed it without sending it back (migration 0053). Written only through
+   *  the set_review_removal_note RPC, and absent from the row until 0053 is
+   *  applied. */
+  removal_note?: string | null;
 };
 
 // ── push tokens (server-sent notifications; migration 0012) ───────────────────

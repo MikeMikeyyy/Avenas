@@ -1,13 +1,14 @@
-// The trophy beside a set's number once it's a new PR (utils/achievements.ts
-// isPrSet / prSetsOfWorkout; user decision, 2026-10-22, the PR Trophy canvas,
-// option A2): on the Workout tab, log-workout and the Journal's workout page.
+// The trophy beside a set's number once it's a new PR, one per exercise a
+// session (utils/achievements.ts prTrophySets; user decision, 2026-10-22, the
+// PR Trophy canvas, option A2): on the Workout tab, log-workout, the Journal's
+// workout page and Exercise History.
 //
 // It hangs off the number's left, a clear gap away, so the number never moves:
 // put it inside a View that holds just the number's Text, and it measures from
 // that box, the same gap beside "3" as beside "10". Always mounted, so a card
 // drawn with a PR already in it (a restored session, a saved one) shows it
 // still; it pops in with the tick's bounce when a tick makes the record, and
-// shrinks away on an untick.
+// shrinks away on an untick, or when a heavier set later takes the record.
 
 import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";

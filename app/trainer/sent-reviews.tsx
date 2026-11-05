@@ -40,6 +40,7 @@ import OfflineBanner from "../../components/OfflineBanner";
 import SendIcon from "../../components/icons/SendIcon";
 import ProgramRow, { CycleStrip, RowActions } from "../../components/trainer/ProgramRow";
 import ReviewStatusPill, { REVIEW_STAGE_LABEL } from "../../components/trainer/ReviewStatusPill";
+import RemovalNote from "../../components/trainer/RemovalNote";
 import SendForReviewSheet from "../../components/trainer/SendForReviewSheet";
 import { ACCT, APP_DARK, APP_LIGHT, AWAITING_ORANGE, FontFamily } from "../../constants/theme";
 import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
@@ -231,6 +232,8 @@ export default function SentForReviewScreen() {
                   meta={metaOf(s)}
                   trailing={<ReviewStatusPill review={s} />}
                 >
+                  {/* Why it wasn't reviewed, when the trainer said (0053). */}
+                  {s.removalNote ? <RemovalNote note={s.removalNote} /> : null}
                   <CycleStrip cycle={s.programSnapshot?.cyclePattern ?? []} />
                   {/* Once the changes are in, View is your own program, the one
                       you train from; before, what you sent. */}

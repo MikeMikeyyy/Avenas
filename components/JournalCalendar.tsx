@@ -20,7 +20,9 @@ import {
   type CalendarDay, type CalendarDayState, type CalendarRun,
 } from "../utils/journalCalendar";
 
-const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+// Named, not lettered: a lone "M" or "T" over the grid read like more of its
+// day numbers (user request, 2026-11-05).
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 // A day's circle and the row it sits in. A band is a circle high, and its ends
 // are its first and last days' circles.
@@ -242,9 +244,9 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
           </View>
         </View>
 
-        {/* Day-of-week letters (each day says its own date to VoiceOver) */}
+        {/* Day names (each day says its own date to VoiceOver) */}
         <View style={s.weekdays} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-          {DAY_LETTERS.map((d, i) => (
+          {DAY_NAMES.map((d, i) => (
             <Text key={i} style={[s.weekday, { color: t.ts }]}>{d}</Text>
           ))}
         </View>

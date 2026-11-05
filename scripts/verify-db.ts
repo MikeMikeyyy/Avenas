@@ -619,6 +619,38 @@ async function main() {
   eq(await sendBack(COACHED_PT, inGroup), true, "review: a trainer of the group who isn't its owner can send it back");
   eq((await stateOf(inGroup)).returned, "Coach's edit", "review: ...handing over that trainer's edits");
 
+  // A trainer's message as they remove a review without sending it back
+  // (0053): only through set_review_removal_note, only the review's trainer,
+  // and only while it hasn't been sent back.
+  const noteOf = async (id: string) => (await db.query<{ note: string | null }>(
+    `select removal_note as note from public.shared_programs where id = $1`, [id])).rows[0].note;
+  const setNote = async (as_: string | null, id: string, note: string | null): Promise<number | string> => {
+    await as(as_);
+    try {
+      return (await db.query<{ n: number }>(`select public.set_review_removal_note($1, $2) as n`, [id, note])).rows[0].n;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  const toRemove = await askForReview(CLIENT, TRAINER);
+  eq(await setNote(TRAINER, toRemove, "  Not taking reviews this month  "), 1, "removal note: the review's trainer can leave one");
+  eq(await noteOf(toRemove), "Not taking reviews this month", "removal note: ...trimmed");
+  eq(await setNote(CLIENT, toRemove, "Looks fine to me"), 0, "removal note: the person who asked can't write their own");
+  eq(await setNote(STRANGER, toRemove, "x"), 0, "removal note: nor can anyone else");
+  eq(await noteOf(toRemove), "Not taking reviews this month", "removal note: ...so it's still the trainer's");
+  eq(/not authenticated/.test(String(await setNote(null, toRemove, "x"))), true, "removal note: signed out can't");
+  eq(/too long/.test(String(await setNote(TRAINER, toRemove, "x".repeat(501)))), true, "removal note: over 500 characters is refused");
+  eq(await setNote(TRAINER, toRemove, "   "), 1, "removal note: a blank one clears it (as a restore does)");
+  eq(await noteOf(toRemove), null, "removal note: ...to nothing, not an empty string");
+  eq(await setNote(TRAINER, direct, "Too late"), 0, "removal note: not on one already sent back");
+  const groupToRemove = await askForReview(GYM_USER, STRANGER, gid);
+  eq(await setNote(COACHED_PT, groupToRemove, "Ask in the group chat first"), 1, "removal note: a trainer of the group can leave one on its review");
+  eq(await setNote(STRANGER, groupToRemove, "From the owner"), 1, "removal note: ...and so can the group's owner");
+  eq(await setNote(PENDING_PT, groupToRemove, "x"), 0, "removal note: not a trainer still to accept the group's invite");
+  eq(await setNote(GYM_USER, groupToRemove, "x"), 0, "removal note: nor the member who asked");
+  eq(await setNote(TRAINER, groupToRemove, "x"), 0, "removal note: nor a trainer outside the group");
+  eq(await noteOf(groupToRemove), "From the owner", "removal note: ...leaving the group trainers' one");
+
   // ─── 5. The group limits (0042) ───────────────────────────────────────────
   // An account creates at most 3 groups and is in at most 3 of other people's,
   // the two counted apart. Only ACCEPTING counts toward the second, so an
@@ -924,6 +956,16 @@ async function main() {
     `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key)
      values ($1, $2, 'review', 'program_1', 'PPL', '{}'::jsonb, 'review-11')`, [CLIENT, TRAINER]), null,
     "columns: asking for a review still works");
+  // A removal note (0053) is the function's alone, to write and to start with.
+  const review12 = (await db.query<{ id: string }>(
+    `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key)
+     values ($1, $2, 'review', 'program_1', 'PPL', '{}'::jsonb, 'review-12') returning id`, [CLIENT, TRAINER])).rows[0].id;
+  eq(blocked(await setRow(CLIENT, review12, "removal_note = 'Fine by me'")), true, "columns: the person who asked can't write a removal note");
+  eq(blocked(await setRow(TRAINER, review12, "removal_note = 'Not now'")), true, "columns: ...nor its trainer, but through the function");
+  eq(blocked(await asApi(CLIENT,
+    `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key, removal_note)
+     values ($1, $2, 'review', 'program_1', 'PPL', '{}'::jsonb, 'review-13', 'Pre-written')`, [CLIENT, TRAINER])), true,
+    "columns: a new row can't arrive with a removal note");
 
   // Deleting a group nulls its sends' group_id: the database's own action, not
   // the caller's, so it isn't refused.
