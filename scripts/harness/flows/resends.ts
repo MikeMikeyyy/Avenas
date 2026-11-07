@@ -21,6 +21,7 @@ import { CARA, CARA_OWN, CODY, COLE, db, GROUP, resetWorld, TARA, type Person } 
 import { BLOCK } from "./sends";
 import type { SharedProgram } from "../../../utils/trainerStore";
 import { groupAlertCounts } from "../../../utils/groupAlerts";
+import { shareRejected, shareStatus } from "../../../utils/trainerLists";
 import { archiveProgram, restoreProgram, unarchivedPrograms } from "../../../utils/programArchive";
 import { getJSON, setJSON } from "../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
@@ -58,8 +59,10 @@ type Rec = {
   accepted: boolean;
   /** Their accept of this send landed on the copy they have now. */
   linked: boolean;
-  /** They deleted the copy this send was on (deleted_by_recipient_at). */
-  deletedCopy: boolean;
+  /** They've turned this send's version down (deleted_by_recipient_at):
+   *  removed its card without accepting it, or deleted the copy it was on.
+   *  Tara reads it as Rejected; an accept or her update clears it. */
+  rejected: boolean;
   /** The version of the send they removed its card at, or null. */
   removedAt: number | null;
 };
@@ -95,23 +98,31 @@ function expected(m: Model): View {
     const shown = m.sends.flatMap((s, n) => {
       if (!cardShows(s, c.name)) return [];
       const r = s.r[c.name];
-      return [{ send: n, accepted: r.accepted, deletedCopy: !r.accepted && r.deletedCopy }];
+      return [{ send: n, accepted: r.accepted, rejected: !r.accepted && r.rejected }];
     });
     cards[c.name] = shown;
     const copy = m.copies[c.name];
     copies[c.name] = copy.state === "none" ? null : { count: 1, archived: copy.state === "archived", weeks: copy.weeks };
     if (m.kind === "group") {
       groupCards[c.name] = shown;
-      badges[c.name] = shown.filter(x => !x.accepted && !x.deletedCopy).length;
+      badges[c.name] = shown.filter(x => !x.accepted && !x.rejected).length;
     } else {
+      // Tara's page for the client: each send she has a row for, a turned-down
+      // one too, and where it stands.
       clientPage[c.name] = m.sends.flatMap((s, n) => {
         const r = s.r[c.name];
-        return r && r.row && !s.archived && !r.deletedCopy ? [n] : [];
+        return r && r.row && !s.archived
+          ? [{ send: n, status: r.accepted ? "accepted" : r.rejected ? "rejected" : "pending" }] : [];
       });
     }
   }
   const listed = m.sends.flatMap((s, n) => (live(s) && !s.archived
-    ? [{ send: n, total: rows(s).length, accepted: rows(s).filter(r => r.accepted).length }] : []));
+    ? [{
+      send: n,
+      total: rows(s).length,
+      accepted: rows(s).filter(r => r.accepted).length,
+      rejected: rows(s).filter(r => !r.accepted && r.rejected).length,
+    }] : []));
   const archived = m.sends.flatMap((s, n) => (live(s) && s.archived ? [{ send: n, total: rows(s).length }] : []));
   const v: View = {
     cards, copies, trainerSent: listed, trainerArchive: archived,
@@ -132,7 +143,12 @@ function bySend<T>(entries: SharedProgram[], summarise: (rows: SharedProgram[], 
   for (const s of entries) groups.set(sendOf(s), [...(groups.get(sendOf(s)) ?? []), s]);
   return [...groups.keys()].sort((a, b) => a - b).map(n => summarise(groups.get(n)!, n));
 }
-const listedSummary = (rs: SharedProgram[], n: number) => ({ send: n, total: rs.length, accepted: rs.filter(s => !!s.acceptedAtISO).length });
+const listedSummary = (rs: SharedProgram[], n: number) => ({
+  send: n,
+  total: rs.length,
+  accepted: rs.filter(s => !!s.acceptedAtISO).length,
+  rejected: rs.filter(shareRejected).length,
+});
 
 async function observe(kind: Kind): Promise<View> {
   const cards: Record<string, unknown> = {};
@@ -144,7 +160,7 @@ async function observe(kind: Kind): Promise<View> {
     await on(c, async () => {
       const shares = await c.app.loadSharedPrograms();
       cards[c.name] = c.app.receivedFromTrainers(shares, c.uid).filter(ofBlock)
-        .map(s => ({ send: sendOf(s), accepted: !!s.acceptedAtISO, deletedCopy: !s.acceptedAtISO && !!s.deletedByRecipientAtISO }))
+        .map(s => ({ send: sendOf(s), accepted: !!s.acceptedAtISO, rejected: shareRejected(s) }))
         .sort((a, b) => a.send - b.send);
       const mine = (await getJSON<SavedProgram[]>(PROGRAMS_KEY, [])).filter(p => p.name === BLOCK.name);
       copies[c.name] = mine.length === 0 ? null : {
@@ -157,7 +173,7 @@ async function observe(kind: Kind): Promise<View> {
         const sent = (await c.app.loadGroupSharedPrograms(GROUP)).filter(s => ofBlock(s) && s.senderId !== c.uid);
         groupCards[c.name] = bySend(sent, (rs, n) => {
           const own = rs.find(s => s.clientId === c.uid);
-          return { send: n, accepted: !!own?.acceptedAtISO, deletedCopy: !own?.acceptedAtISO && !!own?.deletedByRecipientAtISO };
+          return { send: n, accepted: !!own?.acceptedAtISO, rejected: !!own && shareRejected(own) };
         });
         badges[c.name] = groupAlertCounts({ unreadByGroup: {}, shares, reviews: await c.app.loadMyGroupReviews(), myUid: c.uid })[GROUP] ?? 0;
       }
@@ -170,9 +186,11 @@ async function observe(kind: Kind): Promise<View> {
     v.trainerSent = bySend(mine, listedSummary);
     v.trainerArchive = bySend((await TARA.app.loadTrainerArchive())?.sends.filter(ofBlock) ?? [], (rs, n) => ({ send: n, total: rs.length }));
     if (kind === "direct") {
-      // A client's page, as app/trainer/client/[id].tsx filters it.
+      // A client's page, as app/trainer/client/[id].tsx lists it.
       for (const c of CLIENTS) {
-        clientPage[c.name] = [...new Set(mine.filter(s => s.clientId === c.uid && !s.deletedByRecipientAtISO).map(sendOf))].sort((a, b) => a - b);
+        clientPage[c.name] = mine.filter(s => s.clientId === c.uid)
+          .map(s => ({ send: sendOf(s), status: shareStatus(s) }))
+          .sort((a, b) => a.send - b.send);
       }
     }
     // The send sheet's picker (ProgramPickerSheet), and the program itself.
@@ -224,7 +242,7 @@ async function sendNow(kind: Kind, onlyCara: boolean, program: SavedProgram): Pr
 
 function newSend(kind: Kind, onlyCara: boolean, weeks: number): Send {
   const r: Record<string, Rec> = {};
-  for (const p of recipientsOf(kind, onlyCara)) r[p.name] = { row: true, accepted: false, linked: false, deletedCopy: false, removedAt: null };
+  for (const p of recipientsOf(kind, onlyCara)) r[p.name] = { row: true, accepted: false, linked: false, rejected: false, removedAt: null };
   return { archived: false, version: 0, weeks, r };
 }
 
@@ -335,14 +353,16 @@ function perSendActions(n: number): Action<Model>[] {
         if (!x || !live(x)) return OK;
         x.version += 1;
         x.weeks += 1;
-        for (const r of Object.values(x.r)) if (r.row) r.accepted = false;
+        // Re-offered to everyone: a turn-down of the version before doesn't
+        // count (migration 0055).
+        for (const r of Object.values(x.r)) if (r.row) { r.accepted = false; r.rejected = false; }
         return OK;
       },
     },
     ...CLIENTS.map((c): Action<Model> => ({
       label: `Tara takes ${send} back from ${c.name} (client page)`,
       kinds: ["direct"],
-      enabled: m => { const r = s(m)?.r[c.name]; return !!r && r.row && !s(m)!.archived && !r.deletedCopy; },
+      enabled: m => { const r = s(m)?.r[c.name]; return !!r && r.row && !s(m)!.archived; },
       draw: async () => {
         const row = await rowOf(c, n);
         return () => on(TARA, async () => { if (row) await TARA.app.removeSharedProgram(row.id); return OK; });
@@ -378,7 +398,7 @@ function perSendActions(n: number): Action<Model>[] {
       const r = x?.r[c.name];
       if (!x || !r || !r.row || x.archived) return "refused";
       r.accepted = true;
-      r.deletedCopy = false;
+      r.rejected = false;
       r.linked = true;
       // One copy: made by the first accept, updated (and back from the
       // archive) by every one after.
@@ -405,15 +425,26 @@ function perSendActions(n: number): Action<Model>[] {
         apply: accept,
       },
       {
+        // Its Remove (removeReceivedShare): never accepted, it's turned down.
         label: `${c.name} removes ${send}'s card`,
         kinds: ["direct", "group"],
         enabled: m => !!s(m) && cardShows(s(m)!, c.name),
         draw: async () => {
           const card = await on(c, async () => (await c.app.loadSharedPrograms()).find(x => ofBlock(x) && sendOf(x) === n && x.clientId === c.uid));
-          return () => on(c, async () => { if (card) await c.app.dismissSharedBatch(c.app.dismissKeyOf(card)); return OK; });
+          return () => on(c, () => pressed(async () => { if (card) await c.app.removeReceivedShare(card); }));
         },
-        // It hides the version the card showed; a newer one still comes back.
-        apply: (m, drawn) => { const r = s(m)?.r[c.name]; if (r) r.removedAt = drawn.sends[n]?.version ?? 0; return OK; },
+        apply: (m, drawn) => {
+          const x = s(m);
+          const r = x?.r[c.name];
+          const was = drawn.sends[n];
+          if (!x || !r) return OK;
+          // Never accepted when drawn nor since, still that version: Rejected
+          // to Tara (an update since is theirs to decide on).
+          if (was && !was.r[c.name]?.accepted && r.row && !r.accepted && x.version === was.version) r.rejected = true;
+          // It hides the version the card showed; a newer one still comes back.
+          r.removedAt = was?.version ?? 0;
+          return OK;
+        },
       },
     ];
   });
@@ -444,11 +475,12 @@ function copyActions(c: Person): Action<Model>[] {
       apply: m => {
         if (m.copies[c.name].state === "none") return OK; // gone already (another screen)
         m.copies[c.name] = { state: "none", weeks: 0 };
-        // Every send whose accept landed on it hears it was deleted.
+        // Every send whose accept landed on it hears it was deleted: Rejected
+        // to Tara (user decision, 2026-11-06).
         for (const x of m.sends) {
           const r = x.r[c.name];
           if (!r?.linked) continue;
-          if (r.row) { r.deletedCopy = true; r.accepted = false; }
+          if (r.row) { r.rejected = true; r.accepted = false; }
           r.linked = false;
         }
         return OK;

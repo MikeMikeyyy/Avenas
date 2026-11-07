@@ -17,7 +17,13 @@ import { ACCT, compareBlue } from "../../constants/theme";
 import { PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 
-export default function CompareButton({ onPress, size = 40 }: { onPress: () => void; size?: number }) {
+/** The circle, across. */
+export const COMPARE_SIZE = 40;
+/** Its touch area round the circle, wider by 2 each side: a layout lining
+ *  the circle itself up takes the spare off. */
+export const COMPARE_HIT = 44;
+
+export default function CompareButton({ onPress, size = COMPARE_SIZE }: { onPress: () => void; size?: number }) {
   const { isDark } = useTheme();
   return (
     <GlassButton
@@ -36,5 +42,5 @@ export default function CompareButton({ onPress, size = 40 }: { onPress: () => v
 }
 
 const styles = StyleSheet.create({
-  hit: { minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
+  hit: { minWidth: COMPARE_HIT, minHeight: COMPARE_HIT, alignItems: "center", justifyContent: "center" },
 });

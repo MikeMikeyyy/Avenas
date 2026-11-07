@@ -1,6 +1,7 @@
 // utils/removeShare.ts
 //
-// The confirm a trainer sees when taking back a program they sent.
+// The confirm a trainer sees when taking back a program they sent, and the one
+// the person they sent it to sees when they remove it (removeReceivedWords).
 //
 // It's the same decision on four screens (the hub's "Programs You've Sent", a
 // group's "Programs Sent", one client's page, and the program view), so the
@@ -66,6 +67,27 @@ export function removeShareConfirm({ programName, recipients, total, accepted }:
     body: `${who} "${programName}" yet. Removing it now takes it back before they've had the chance.${kept}`,
     cancel: "Keep",
     confirm: "Remove",
+  };
+}
+
+/**
+ * The other end: Remove on a program sent TO me (a gym user's Programs page, a
+ * trainer's TO ACCEPT, a group's Programs page). Accepted, it only leaves the
+ * list, and my copy stays. Not accepted, I'm turning it down, and whoever sent
+ * it sees that (user request, 2026-11-06: it read Pending to them for good)
+ * until they send an update, which brings it back.
+ */
+export function removeReceivedWords({ programName, accepted, sender }: {
+  programName: string;
+  accepted: boolean;
+  /** Who sent it, to start a sentence: "Jordan", "Your trainer". */
+  sender: string;
+}): { title: string; body: string } {
+  return {
+    title: "Remove Program",
+    body: accepted
+      ? `Remove "${programName}" from this list? It stays in your programs.`
+      : `Remove "${programName}" without accepting it? ${sender} will see you didn't take it. It comes back if they send an update.`,
   };
 }
 

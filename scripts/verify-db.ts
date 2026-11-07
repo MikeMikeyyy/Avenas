@@ -51,13 +51,15 @@ import { PGlite } from "@electric-sql/pglite";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 import type { CustomExercise } from "../constants/exercises";
-import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "../lib/database.types";
+import type { CustomExerciseRow, JournalRow, MyBackupPayload, ProgramRow, WorkoutRow } from "../lib/database.types";
 import {
   customFromRow,
   journalFromRow,
+  journalFromRows,
   snapshotFromRows,
   toReplaceUserDataPayload,
 } from "../lib/mappers";
+import { baseOf, sameBase } from "../utils/syncMerge";
 import { migrationFiles, readMigration, SUPABASE_STANDINS } from "./harness/db";
 import { compareCandidates, greenRunFor } from "../utils/programCompare";
 import type { ProgramRunView } from "../utils/programRuns";
@@ -250,6 +252,8 @@ const fullCustom: Required<CustomExercise> = {
   muted: true,
   steps: ["Grip the band", "Pull apart"],
   description: "Old single-paragraph description",
+  // Its Assisted switch (0058): must come back on.
+  assisted: true,
   deletedAt: "2026-10-15",
 };
 /** A new exercise later given the deleted one's name: another exercise, with
@@ -399,7 +403,9 @@ async function main() {
     if (!w1 || !w2 || !w3 || !w4) {
       failures.push("✗ backup: a workout didn't come back at all");
     } else {
-      sameFields("workout with every field", w1, fullWorkout, ["id"]);
+      // Its own id included (0057): two phones on one account know a session
+      // by it, and a restore used to hand back the row's, new every backup.
+      sameFields("workout with every field", w1, fullWorkout);
       eq(w1.programId, full.id, "workout: still points at its program, by the program's own id");
       eq(w2.programId, bare.id, "workout: a second program's session points at the second program");
       eq(w3.programId, "", "workout: a free workout stays free");
@@ -407,7 +413,7 @@ async function main() {
     }
   }
   const entry = cloud.journal[0];
-  if (entry) sameFields("journal entry", entry, fullEntry, ["id"]);
+  if (entry) sameFields("journal entry", entry, fullEntry);
   // Two of one name (rows come back in name order, so found by id), and one
   // from before ids.
   const bandPull = cloud.custom.find(c => c.id === fullCustom.id);
@@ -619,6 +625,47 @@ async function main() {
   eq(await sendBack(COACHED_PT, inGroup), true, "review: a trainer of the group who isn't its owner can send it back");
   eq((await stateOf(inGroup)).returned, "Coach's edit", "review: ...handing over that trainer's edits");
 
+  // The trainer's comments go with the version sent back, in the same step
+  // (0054): Send Back's box, blank for none, which clears the last version's.
+  // A build from before 0054 names the review alone and leaves them as they are.
+  const commentsOf = async (id: string) => (await db.query<{ c: string | null }>(
+    `select trainer_comments as c from public.shared_programs where id = $1`, [id])).rows[0].c;
+  const sendBackWith = async (as_: string | null, id: string, comments: string | null): Promise<boolean> => {
+    await as(as_);
+    try { await db.query(`select public.return_shared_review($1, $2)`, [id, comments]); return true; } catch { return false; }
+  };
+  await saveDraft(direct, "Draft 3");
+  eq(await sendBackWith(TRAINER, direct, "  Kept your rest days  "), true, "comments: Send Back takes them");
+  eq({ returned: (await stateOf(direct)).returned, comments: await commentsOf(direct) }, { returned: "Draft 3", comments: "Kept your rest days" },
+    "comments: ...with the version they're about, trimmed");
+  eq(await sendBack(TRAINER, direct), true, "comments: an older build's Send Back still works");
+  eq(await commentsOf(direct), "Kept your rest days", "comments: ...and leaves them as they were");
+  eq(await sendBackWith(TRAINER, direct, "   "), true, "comments: an update with a blank box goes");
+  eq(await commentsOf(direct), null, "comments: ...and takes the last version's off");
+  eq(await sendBackWith(TRAINER, direct, "x".repeat(1001)), false, "comments: more than 1000 characters is refused");
+  eq(await commentsOf(direct), null, "comments: ...sending nothing");
+  eq(await sendBackWith(CLIENT, direct, "Fine by me"), false, "comments: the person who asked can't write them");
+  eq(await sendBackWith(COACHED_PT, inGroup, "From the group's trainer"), true, "comments: a group's trainer can send them");
+  eq(await commentsOf(inGroup), "From the group's trainer", "comments: ...on the group's review");
+
+  // Comments alone are an answer too (0054; user request, 2026-11-06). Sent
+  // back with nothing changed, it has no copy sent back (the app's noChanges:
+  // Got it, not Accept); once back, comments with no new edit keep the accept,
+  // since it's the version they took; changes reopen it.
+  const asIs = await askForReview(CLIENT, TRAINER);
+  eq(await sendBackWith(TRAINER, asIs, "Looks good as it is"), true, "no changes: sent back with comments alone");
+  eq(await stateOf(asIs), { draft: null, returned: null, isReturned: true, isAccepted: false }, "no changes: ...with no copy sent back");
+  await accept(asIs);
+  eq(await sendBackWith(TRAINER, asIs, "One more thing"), true, "no changes: another comment");
+  eq(await stateOf(asIs), { draft: null, returned: null, isReturned: true, isAccepted: true }, "no changes: ...keeps their Got it");
+  await saveDraft(asIs, "Changed after all");
+  eq(await sendBackWith(TRAINER, asIs, ""), true, "no changes: then changes");
+  eq(await stateOf(asIs), { draft: null, returned: "Changed after all", isReturned: true, isAccepted: false },
+    "no changes: ...which reopen Accept");
+  await accept(asIs);
+  eq(await sendBackWith(TRAINER, asIs, "A note on them"), true, "comments: a comment on changes they've taken");
+  eq((await stateOf(asIs)).isAccepted, true, "comments: ...leaves them taken");
+
   // A trainer's message as they remove a review without sending it back
   // (0053): only through set_review_removal_note, only the review's trainer,
   // and only while it hasn't been sent back.
@@ -822,6 +869,8 @@ async function main() {
   await setArchived(TRAINER, [direct1], false);
 
   // Reviews: `direct` is CLIENT asking TRAINER, `inGroup` GYM_USER asking the group.
+  // The app no longer archives a review (it's reviewed or removed, 2026-11-05),
+  // but the server still allows its trainer to, so who may is still pinned.
   eq(await setArchived(CLIENT, [direct]), 0, "archive: the person who asked can't archive their own request");
   eq(await setArchived(TRAINER, [direct]), 1, "archive: the review's trainer can");
   eq(await setArchived(TRAINER, [direct], false), 1, "archive: ...and restore it");
@@ -924,6 +973,15 @@ async function main() {
   const send9 = await sendShare(TRAINER, CLIENT, "send-9");
   eq(await setRow(CLIENT, send9, "accepted_at = now(), deleted_by_recipient_at = null"), null, "columns: a client accepts a send");
   eq(await setRow(CLIENT, send9, "deleted_by_recipient_at = now(), accepted_at = null"), null, "columns: ...and deletes their copy");
+  // That's also turning it down, which the trainer reads as Rejected; only
+  // their update re-offers it (0055).
+  eq(blocked(await setRow(TRAINER, send9, "deleted_by_recipient_at = null")), true,
+    "columns: the trainer can't take back the client's turning it down...");
+  eq(await setRow(TRAINER, send9,
+    `snapshot = '{"name":"v1b"}'::jsonb, last_edited_at = now(), accepted_at = null, deleted_by_recipient_at = null`), null,
+    "columns: ...but an update re-offers it, clearing it");
+  eq(blocked(await setRow(TRAINER, send9, "deleted_by_recipient_at = now(), last_edited_at = now()")), true,
+    "columns: ...and the trainer can never turn it down for them");
   eq(await setRow(TRAINER, send9, `snapshot = '{"name":"v2"}'::jsonb, program_name = 'v2', last_edited_at = now(), accepted_at = null`), null,
     "columns: the trainer sends an update, re-opening Accept");
   eq(await asApi(TRAINER, `select public.set_share_archived(array[$1]::uuid[], true)`, [send9]), null, "columns: the trainer archives it (the function)");
@@ -938,13 +996,17 @@ async function main() {
   const review9 = (await db.query<{ id: string }>(
     `insert into public.shared_programs (sender_id, recipient_id, kind, sender_program_id, program_name, snapshot, sent_key)
      values ($1, $2, 'review', 'program_1', 'PPL', '{"name":"PPL"}'::jsonb, 'review-9') returning id`, [CLIENT, TRAINER])).rows[0].id;
-  eq(await setRow(TRAINER, review9, `draft_snapshot = '{"name":"edit"}'::jsonb, program_name = 'edit', last_edited_at = now(), trainer_comments = 'Nice'`), null,
+  eq(await setRow(TRAINER, review9, `draft_snapshot = '{"name":"edit"}'::jsonb, program_name = 'edit', last_edited_at = now()`), null,
     "columns: the trainer saves a review in the builder");
   eq(blocked(await setRow(TRAINER, review9, `returned_snapshot = '{"name":"x"}'::jsonb, returned_at = now()`)), true,
     "columns: ...but can't send it back except through the function");
-  eq(await asApi(TRAINER, `select public.return_shared_review($1)`, [review9]), null, "columns: the trainer sends it back (the function)");
+  eq(blocked(await setRow(TRAINER, review9, "trainer_comments = 'Nice'")), true,
+    "columns: ...nor write comments but with a version sent back (0054)");
+  eq(await asApi(TRAINER, `select public.return_shared_review($1, $2)`, [review9, "Nice"]), null, "columns: the trainer sends it back with comments (the function)");
+  eq(await asApi(TRAINER, `select public.return_shared_review($1)`, [review9]), null, "columns: ...and as an older build does, naming the review alone");
   eq(await setRow(CLIENT, review9, "accepted_at = now()"), null, "columns: the client accepts the changes");
   eq(blocked(await setRow(CLIENT, review9, "returned_at = now()")), true, "columns: the client can't fake a send-back");
+  eq(blocked(await setRow(CLIENT, review9, "trainer_comments = 'Great work, me'")), true, "columns: ...or write the trainer's comments");
   eq(blocked(await setRow(CLIENT, review9, "completed_at = now()")), true, "columns: ...or close their own review");
   eq(await setRow(TRAINER, review9, "deleted_by_recipient_at = now()"), null, "columns: the trainer deletes it from their list");
 
@@ -1093,6 +1155,58 @@ async function main() {
   eq(await asApi(B_PEER, `delete from public.blocks where blocked_id = $1`, [B_POSTER]), null, "blocks: the blocker lifts it");
   await groupMessage(B_POSTER, gMain);
   eq((await pushedSince()).has(B_PEER), true, "blocks: ...and their messages notify them again");
+
+  // What a send-back tells the person who asked (0054): reviewed with no
+  // changes, a comment alone, nothing for a comment taken off, an update, or
+  // returned with changes.
+  const pushBodies = async () => {
+    const rows = (await db.query<{ body: string }>(
+      `select e->>'body' as body from public._pushes p, jsonb_array_elements(p.body) e`)).rows;
+    await db.query(`delete from public._pushes`);
+    return rows.map(r => r.body);
+  };
+  const sendBackAs = async (uid: string, id: string, comments: string | null) => {
+    await as(uid);
+    await db.query(`select public.return_shared_review($1, $2)`, [id, comments]);
+  };
+  const noEdits = await askForReview(B_PEER, B_OWNER);
+  await pushBodies();
+  await sendBackAs(B_OWNER, noEdits, "Looks good");
+  eq(await pushBodies(), ['Reviewed "Original" with no changes.'], "send-back push: reviewed with no changes");
+  await sendBackAs(B_OWNER, noEdits, "One more thing");
+  eq(await pushBodies(), ['Left a comment on "Original".'], "send-back push: a comment alone");
+  await sendBackAs(B_OWNER, noEdits, "");
+  eq(await pushBodies(), [], "send-back push: none for a comment taken off");
+  await saveDraft(noEdits, "Edited");
+  await sendBackAs(B_OWNER, noEdits, "");
+  eq(await pushBodies(), ['Sent an update to "Original".'], "send-back push: changes after it");
+  const edited = await askForReview(B_PEER, B_OWNER);
+  await saveDraft(edited, "Edited");
+  await pushBodies();
+  await sendBackAs(B_OWNER, edited, null);
+  eq(await pushBodies(), ['Returned "Original" with their changes.'], "send-back push: returned with changes");
+
+  // What a program notification says it's about (0056), so a tap opens it:
+  // the row, its kind, sent to you or sent back, and the group it went
+  // through, beside the Trainer tab's link an older build reads alone.
+  const pushData = async () => {
+    const rows = (await db.query<{ data: Record<string, unknown> }>(
+      `select e->'data' as data from public._pushes p, jsonb_array_elements(p.body) e`)).rows;
+    await db.query(`delete from public._pushes`);
+    return rows.map(r => r.data);
+  };
+  await pushData();
+  const toOne = await sendShare(B_OWNER, B_PEER, "links-1");
+  eq(await pushData(), [{ url: "/trainer-hub", share: toOne, kind: "share", event: "sent", group: null, category: "programShared" }],
+    "push links: a program sent to you says which, and that it was sent");
+  const toGroup = await sendShare(B_OWNER, B_PEER, "links-2", gMain);
+  eq((await pushData()).map(d => [d.share, d.group]), [[toGroup, gMain]], "push links: ...and the group it went through");
+  const asked = await askForReview(B_PEER, B_OWNER);
+  eq((await pushData()).map(d => [d.share, d.kind, d.event]), [[asked, "review", "sent"]], "push links: a review asked of you");
+  await saveDraft(asked, "Edited");
+  await sendBackAs(B_OWNER, asked, "Done");
+  eq((await pushData()).map(d => [d.share, d.kind, d.event, d.url]), [[asked, "review", "returned", "/trainer-hub"]],
+    "push links: a review sent back to you, the tab's link kept for older builds");
 
   // ─── 11. Connection roles + switching account type (0041) ─────────────────
   // How a trainer files each trainer they're connected with is theirs alone.
@@ -1271,7 +1385,138 @@ async function main() {
   eq(Object.keys(await statusSeenBy(S_INVITEE)).length, 0, "group status: nor does someone only invited");
   await as(null);
 
+  await twoPhones(db, as);
+
   return finish(db);
+}
+
+/**
+ * Backups from two phones on one account (0057): a backup moves the version on
+ * and is refused when it's sent from an older one, an app from before it is
+ * let through, the deletions travel, the whole backup reads back in one go with
+ * its version, and what goes up comes back hashing the same, so the merge
+ * (utils/syncMerge.ts) never takes a trip through the database for a change.
+ */
+async function twoPhones(db: PGlite, as: (uid: string | null) => Promise<unknown>) {
+  const OWNER = "99999999-0000-4000-8000-000000000099";
+  const OTHER = "98989898-0000-4000-8000-000000000098";
+  for (const id of [OWNER, OTHER]) await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+
+  type Sent = { programs?: SavedProgram[]; workouts?: CompletedWorkout[]; journal?: JournalEntry[]; custom?: CustomExercise[] };
+  /** A backup as lib/cloud.ts sends one; the new version, or the error. */
+  const send = async (uid: string, s: Sent, opts: { base?: number | null; device?: string | null; deleted?: unknown[] | null; changedAt?: string | null } = {}) => {
+    await as(uid);
+    const p = toReplaceUserDataPayload(s.programs ?? [], s.workouts ?? [], s.journal ?? [], s.custom ?? [], uid);
+    try {
+      const { rows } = await db.query<{ v: number }>(
+        `select public.replace_user_data(p_programs => $1::jsonb, p_workouts => $2::jsonb, p_journal => $3::jsonb, p_custom => $4::jsonb,
+           p_base_version => $5::bigint, p_device => $6, p_deleted => $7::jsonb, p_changed_at => $8::timestamptz)::int as v`,
+        [JSON.stringify(p.p_programs), JSON.stringify(p.p_workouts), JSON.stringify(p.p_journal), JSON.stringify(p.p_custom),
+          opts.base === undefined ? null : opts.base, opts.device ?? null,
+          opts.deleted === undefined || opts.deleted === null ? null : JSON.stringify(opts.deleted), opts.changedAt ?? null],
+      );
+      return rows[0].v;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  /** An app from before 0057: the four lists alone. */
+  const sendOld = async (uid: string, s: Sent) => {
+    await as(uid);
+    const p = toReplaceUserDataPayload(s.programs ?? [], s.workouts ?? [], s.journal ?? [], s.custom ?? [], uid);
+    await db.query(`select public.replace_user_data(p_programs => $1::jsonb, p_workouts => $2::jsonb, p_journal => $3::jsonb, p_custom => $4::jsonb)`,
+      [JSON.stringify(p.p_programs), JSON.stringify(p.p_workouts), JSON.stringify(p.p_journal), JSON.stringify(p.p_custom)]);
+  };
+  /** The whole backup as lib/cloud.ts reads it (get_my_backup). */
+  const readBack = async (uid: string) => {
+    await as(uid);
+    const j = (await db.query<{ j: MyBackupPayload }>(`select public.get_my_backup() as j`)).rows[0].j;
+    const { programs, workouts } = snapshotFromRows(j.programs, j.workouts);
+    return { ...j, snap: { programs, workouts, journal: journalFromRows(j.journal), custom: j.custom.map(customFromRow) } };
+  };
+
+  const empty = await readBack(OWNER);
+  eq([empty.version, empty.device, empty.deleted, empty.snap.workouts.length], [0, null, [], 0],
+    "two phones: an account that never backed up is at version 0, with nothing");
+
+  const everything: Sent = {
+    programs: [fullProgram, bareProgram],
+    workouts: [fullWorkout, oldBlockWorkout, freeWorkout, legacyWorkout],
+    journal: [fullEntry],
+    custom: [fullCustom, recreated, stepless],
+  };
+  eq(await send(OWNER, everything, { base: 0, device: "phone-a", changedAt: "2026-11-07T08:00:00.000Z" }), 1,
+    "two phones: the first backup, on top of version 0, makes version 1");
+  const first = await readBack(OWNER);
+  eq([first.version, first.device, Date.parse(first.changed_at ?? "")], [1, "phone-a", Date.parse("2026-11-07T08:00:00.000Z")],
+    "two phones: the backup says which phone sent it and when its last change was");
+
+  // What goes up comes back the same, item by item, as the merge hashes it:
+  // otherwise every trip through the database would read as a change.
+  const sentSnap = { programs: everything.programs!, workouts: everything.workouts!, journal: everything.journal!, custom: everything.custom! };
+  eq(sameBase(baseOf(first.snap), baseOf(sentSnap)), true, "two phones: a backup read back hashes as it was sent, every field filled in");
+  for (const kind of ["programs", "workouts", "journal", "custom"] as const) {
+    const sentBase = baseOf(sentSnap)[kind];
+    const backBase = baseOf(first.snap)[kind];
+    for (const key of Object.keys(sentBase)) {
+      eq(backBase[key]?.h, sentBase[key].h, `two phones: ${kind} ${key} hashes the same after the trip`);
+    }
+  }
+  eq(first.snap.programs.map(p => p.id), [fullProgram.id, bareProgram.id], "two phones: programs read back in the phone's order");
+  eq(first.snap.custom.map(c => c.id ?? c.name), [fullCustom.id, recreated.id, stepless.name], "two phones: and custom exercises");
+  eq(first.snap.workouts.map(w => w.id).sort(), everything.workouts!.map(w => w.id).sort(), "two phones: every session under its own id");
+
+  // A second backup from the same version is the other phone's, refused.
+  eq(await send(OWNER, { ...everything, workouts: [freeWorkout] }, { base: 1, device: "phone-a" }), 2,
+    "two phones: a backup on top of the latest goes through");
+  const stale = await send(OWNER, { programs: [bareProgram] }, { base: 1, device: "phone-b" });
+  eq(typeof stale === "string" && /stale backup/.test(stale), true, "two phones: one on top of an older version is refused");
+  const after = await readBack(OWNER);
+  eq([after.version, after.device, after.snap.workouts.map(w => w.id), after.snap.programs.length], [2, "phone-a", [freeWorkout.id], 2],
+    "two phones: and changes nothing");
+
+  // Deletions travel with a backup, and stay when one doesn't say.
+  const tomb = [{ k: "workouts", id: "workout_9", key: "2026-09-01|0|Push", at: "2026-11-07T09:00:00.000Z" }];
+  eq(await send(OWNER, { programs: [bareProgram] }, { base: 2, device: "phone-b", deleted: tomb }), 3, "two phones: a backup with its deletions");
+  eq((await readBack(OWNER)).deleted, tomb, "two phones: the deletions are kept with the backup");
+  eq(await send(OWNER, { programs: [bareProgram] }, { base: 3, device: "phone-b" }), 4, "two phones: one without any");
+  eq((await readBack(OWNER)).deleted, tomb, "two phones: leaves the ones known");
+
+  // An app from before 0057 can't merge: let through as it always was, the
+  // version moved on so the new app notices, its deletions kept.
+  await sendOld(OWNER, { workouts: [legacyWorkout] });
+  const old = await readBack(OWNER);
+  eq([old.version, old.device, old.deleted.length, old.snap.workouts.length], [5, null, 1, 1],
+    "two phones: an older app's backup goes through, moves the version on, says no phone, keeps the deletions");
+
+  // Only the account itself reads it, and nobody writes it but the backup.
+  await db.exec(`grant usage on schema public to authenticated; grant select on all tables in schema public to authenticated;`);
+  const readAs = async (uid: string) => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      return (await db.query<{ version: number }>(`select version::int as version from public.backup_state where user_id = $1`, [OWNER])).rows;
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  eq((await readAs(OWNER)).map(r => r.version), [5], "two phones: the account reads its own backup's version");
+  eq((await readAs(OTHER)).length, 0, "two phones: another account doesn't");
+  await as(OWNER);
+  await db.exec("set role authenticated");
+  try {
+    const { affectedRows } = await db.query(`update public.backup_state set version = 99 where user_id = $1`, [OWNER]);
+    eq(affectedRows ?? 0, 0, "two phones: nobody moves the version but a backup");
+  } catch {
+    passed += 1;
+  } finally {
+    await db.exec("reset role");
+  }
+
+  await as(null);
+  await db.query(`delete from auth.users where id = $1`, [OWNER]);
+  eq((await db.query(`select 1 from public.backup_state where user_id = $1`, [OWNER])).rows.length, 0,
+    "two phones: the backup's state goes with the account");
 }
 
 async function finish(db: PGlite) {

@@ -15,7 +15,7 @@ import { heldOn, programAsOf } from "./programHolds";
 import { dayIdAt, indexOfDayId, normalizeDayName, programDays, workoutKey } from "./programDays";
 import { exerciseIdentity, exerciseKey, sameExercise, type ExerciseRef } from "./exerciseNames";
 import type { SetType } from "./setRows";
-import type { CompletedSet, CompletedWorkout, Exercise, SavedProgram } from "../constants/programs";
+import { programFinishDate, type CompletedSet, type CompletedWorkout, type Exercise, type SavedProgram } from "../constants/programs";
 
 export type ResolvedWorkout = {
   /** Index into cyclePattern. -1 when resolved from a free-workout override
@@ -51,7 +51,8 @@ export type DayOverride = {
  * The negative-safe cycle-day index for `dateYMD`, matching the documented
  * formula: `(((daysPassed + cycleOffset) mod cycleDays) + cycleDays) mod cycleDays`.
  * Returns null when the program's startDate is unparseable (never the Jan-year-0
- * fallback) or when `dateYMD` is before the program started.
+ * fallback), when `dateYMD` is before the program started, and after its last
+ * day (programFinishDate).
  */
 export function resolveDayIndex(program: SavedProgram, dateYMD: string): number | null {
   // A held program schedules nothing from the pause date onward. This is the
@@ -71,6 +72,13 @@ export function resolveDayIndex(program: SavedProgram, dateYMD: string): number 
   // "which slot was this already-logged session performed on", and marking a
   // date off afterwards must not erase that answer.
   if (program.skippedDates?.includes(dateYMD)) return null;
+  // Nothing after the run's last day. A program ends by itself there
+  // (utils/programLifecycle.ts runFinishedOn), so the cycle doesn't run on past
+  // it: scheduled on, Home's week, the reminders and the calendars showed
+  // workouts past the end that never came round. The program's own page and
+  // the session dots already stopped there.
+  const finish = programFinishDate(program);
+  if (finish && dateYMD > toYMD(finish)) return null;
   return cycleIndexForDate(program, dateYMD);
 }
 
@@ -761,4 +769,36 @@ export function buildPrevSetsLookup(
     }
     return ownName;
   };
+}
+
+/**
+ * The "Previous" column of a FINISHED session's cards, the Workout tab's once
+ * today's workout is done: what the cards read while it ran, so finishing
+ * doesn't empty it (user report, 2026-11-06: it went blank). That's the day's
+ * last session before this one, by the same rules as a live card
+ * (buildPrevSetsLookup, scoped to the day this session was logged against, so
+ * a day picked with Change Day reads its own), lined up with each card's rows
+ * by kind (prevHintsForRows). The session itself, and anything finished after
+ * it, are left out; next time the day comes round, this session is its cards'
+ * "Previous", as any other last session is.
+ *
+ * One list per exercise, index-aligned with `session.exercises`, warm-up rows
+ * first as the cards draw them, unformatted ("80×8", "—" for none).
+ */
+export function finishedSessionPrevSets(
+  session: CompletedWorkout,
+  history: readonly CompletedWorkout[],
+  program?: SavedProgram | null,
+): string[][] {
+  const finished = Date.parse(session.completedAt);
+  const before = history.filter(w => w.id !== session.id && !(Date.parse(w.completedAt) > finished));
+  const scope = prevDayScopeFor({ name: session.workoutName, programId: session.programId, dayId: session.dayId }, program);
+  const setsOf = buildPrevSetsLookup(before, undefined, scope);
+  return session.exercises.map(ex => {
+    const rows: SetType[] = [
+      ...ex.sets.filter(s => s.type === "warmup").map((): SetType => "warmup"),
+      ...ex.sets.filter(s => s.type !== "warmup").map((): SetType => "working"),
+    ];
+    return prevHintsForRows(setsOf(ex), rows);
+  });
 }

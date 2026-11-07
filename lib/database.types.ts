@@ -206,8 +206,14 @@ export type ProgramRow = {
 };
 
 export type WorkoutRow = {
+  /** Minted afresh by every backup: the session's id only on a row from an
+   *  app before 0057 (no local_id). */
   id: string;
   user_id: string;
+  /** The app's own id for the session (migration 0057), read back as its id
+   *  (mappers.workoutFromRow), so two phones know a session by one id. Null on
+   *  a row from an app before it. */
+  local_id: string | null;
   program_id: string | null;      // program uuid, or null for a free workout
   /** With program_id null: true for a LEGACY record (programId absent, the
    *  program is inferred from day name + dates), false for a free workout
@@ -237,6 +243,8 @@ export type WorkoutRow = {
 export type JournalRow = {
   id: string;
   user_id: string;
+  /** The entry's own id (migration 0057), as WorkoutRow.local_id. */
+  local_id: string | null;
   title: string;
   body: string;
   created_at: string;             // ISO timestamp
@@ -256,6 +264,9 @@ export type CustomExerciseRow = {
   description: string | null;
   steps: string[] | null;
   muted: boolean;
+  /** Its weight is help, not load (migration 0058): CustomExercise.assisted.
+   *  Absent from a server before 0058, which the mapper reads as not assisted. */
+  assisted: boolean;
   /** "YYYY-MM-DD" it was deleted (migration 0048): kept, hidden, for the
    *  sessions logged with it. Null while it's live. See CustomExercise.deletedAt. */
   deleted_at: string | null;
@@ -285,6 +296,8 @@ export type SharedProgramRow = {
   accepted_at: string | null;
   deleted_by_recipient_at: string | null;
   returned_at: string | null;
+  /** The trainer's comments on the version sent back, or null. Written only by
+   *  the return_shared_review RPC, with that version (migration 0054). */
   trainer_comments: string | null;
   /** What the client was SENT BACK: the copy they view and accept. Written only
    *  by the return_shared_review RPC (migration 0034). Rows reviewed before 0034
@@ -323,6 +336,38 @@ export type PushTokenRow = {
    *  missing key counts as enabled server-side. */
   categories: Record<string, boolean>;
   updated_at: string;
+};
+
+// ── backup state (one row per account; migration 0057) ───────────────────────
+// Written only by replace_user_data; read through get_my_backup, or on its own
+// for the quick "has another phone backed up?" check (lib/cloud.ts).
+export type BackupStateRow = {
+  user_id: string;
+  /** Moved on by one by every backup. A phone sends the one it last saw, and
+   *  the backup is refused when another has landed since. */
+  version: number;
+  /** The install that sent the last backup (utils/syncLocal.ts deviceId), or
+   *  null when it came from an app before 0057. */
+  device: string | null;
+  /** When that phone's last change was made (ISO), which decides a change made
+   *  on both phones. */
+  changed_at: string | null;
+  backed_up_at: string;
+  /** Every deletion known, so one made on a phone reaches the other. */
+  deleted: unknown[];
+};
+
+/** What get_my_backup returns: the whole backup, with the version it's at. */
+export type MyBackupPayload = {
+  version: number;
+  device: string | null;
+  changed_at: string | null;
+  backed_up_at: string | null;
+  deleted: unknown[];
+  programs: ProgramRow[];
+  workouts: WorkoutRow[];
+  journal: JournalRow[];
+  custom: CustomExerciseRow[];
 };
 
 type Insert<T> = Omit<T, "id" | "created_at" | "updated_at">;

@@ -114,7 +114,7 @@ export async function updateShareRow(
   id: string,
   patch: Partial<Pick<SharedProgramRow,
     "snapshot" | "program_name" | "last_edited_at" | "accepted_at" |
-    "deleted_by_recipient_at" | "trainer_comments" | "draft_snapshot"
+    "deleted_by_recipient_at" | "draft_snapshot"
   >>,
 ): Promise<number> {
   const { data, error } = await supabase.from("shared_programs").update(patch).eq("id", id).select("id");
@@ -139,6 +139,23 @@ export async function stampShareAccepted(id: string, lastEditedAt: string | null
   return (data?.length ?? 0) > 0;
 }
 
+/** The person it was sent to turns it down (Remove, never having accepted it),
+ *  on the version they saw: false when the sender's update has moved
+ *  `last_edited_at` on (the new version is theirs to decide on) or they've
+ *  accepted it meanwhile, which is nothing to turn down. The sender reads it
+ *  as Rejected (utils/trainerLists.ts shareRejected). */
+export async function stampShareRemoved(id: string, lastEditedAt: string | null, at: string): Promise<boolean> {
+  let q = supabase
+    .from("shared_programs")
+    .update({ deleted_by_recipient_at: at })
+    .eq("id", id)
+    .is("accepted_at", null);
+  q = lastEditedAt ? q.eq("last_edited_at", lastEditedAt) : q.is("last_edited_at", null);
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`turn down share: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
 /** The person who asked accepts what came back, on the version they applied:
  *  false when `returned_at` has moved on (a Send Update landed meanwhile). */
 export async function stampReviewApplied(id: string, returnedAt: string): Promise<boolean> {
@@ -154,11 +171,13 @@ export async function stampReviewApplied(id: string, returnedAt: string): Promis
 
 /** Send a review back, or send an update to one already sent back: copies the
  *  trainer's draft into what the client sees, stamps returned_at and clears
- *  accepted_at so the client can accept again (migration 0034). Raises for the
- *  sender and for anyone who isn't the review's trainer. returned_at and
- *  returned_snapshot are written only here, never as a column patch. */
-export async function returnSharedReview(id: string): Promise<void> {
-  const { error } = await supabase.rpc("return_shared_review", { p_share: id });
+ *  accepted_at so the client can accept again (migration 0034), with the
+ *  trainer's comments on that version (0054: blank for none, which clears the
+ *  last version's). Raises for the sender and for anyone who isn't the review's
+ *  trainer. returned_at, returned_snapshot and trainer_comments are written
+ *  only here, never as a column patch. */
+export async function returnSharedReview(id: string, comments: string): Promise<void> {
+  const { error } = await supabase.rpc("return_shared_review", { p_share: id, p_comments: comments });
   if (error) throw new Error(error.message);
 }
 

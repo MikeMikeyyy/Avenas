@@ -61,10 +61,10 @@ import { exerciseDateSlots, exerciseDaySlots, type ChartSlot } from "../../../ut
 import { buildSessionTracks, type SessionTracks } from "../../../utils/sessionTrack";
 import { buildProgramHistory } from "../../../utils/programHistory";
 import { buildWeekSchedule, weekStartFor, weekTotals } from "../../../utils/weekSchedule";
-import { calendarWeeks, monthWorkouts, type CalendarDay } from "../../../utils/journalCalendar";
+import { calendarWeeks, monthWorkouts, pastPlanFrom, type CalendarDay } from "../../../utils/journalCalendar";
 import { addDaysYMD, toYMD } from "../../../utils/dates";
 import {
-  buildPrevNoteLookup, buildPrevSetsLookup, getEffectiveToday, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, resolveWorkoutForDate, type DayOverride,
+  buildPrevNoteLookup, buildPrevSetsLookup, finishedSessionPrevSets, getEffectiveToday, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, resolveWorkoutForDate, type DayOverride,
 } from "../../../utils/workout";
 import { formatPrevHint, formatWeightForDisplay, trimNumber } from "../../../utils/units";
 import { detectWorkoutAchievements } from "../../../utils/achievements";
@@ -952,9 +952,9 @@ export function checkProgramPages(l: Lifter, snap: Snapshot): Problem[] {
     }
     // A past day reads as it did on the day (whatever holds, moves and logs
     // came after), and a hold the run came back from reads as held.
-    // Past the program's end the page reads "off" by design (it's over, even
-    // while the app keeps scheduling until it's marked complete), and a
-    // shelved program's page ends at its last session.
+    // Past the program's end the page reads "off" (the run ends there by
+    // itself: utils/programLifecycle.ts runFinishedOn), and a shelved
+    // program's page ends at its last session.
     const finish = programFinishDate(p);
     const lastSession = mine.reduce((m, s) => (s.date > m ? s.date : m), "");
     const endsAt = p.status === "paused" ? lastSession : finish ? toYMD(finish) : "9999-12-31";
@@ -1084,11 +1084,18 @@ export function checkJournalCalendar(l: Lifter, snap: Snapshot): Problem[] {
   const active = snap.programs.find(p => p.status === "active") ?? null;
   const dates = new Set(snap.history.map(w => w.date));
   const logged = new Set(l.sessions.map(s => s.date));
+  const plan = pastPlanFrom(snap.programs, snap.history);
+  // A shelved run's last session: the app keeps no record of the day it was
+  // shelved, so the run covers no day after it (null: nothing logged in it,
+  // so no run was kept).
+  const lastIn = (r: ProgramRun): string | null => l.sessions
+    .filter(s => s.programId === r.programId && s.date >= r.startYMD && s.date <= (r.endYMD ?? s.date))
+    .reduce<string | null>((m, s) => (m === null || s.date > m ? s.date : m), null);
   const [y, m] = snap.calendarToday.split("-").map(Number);
   const months: [number, number][] = [[y, m - 1], m === 1 ? [y - 1, 11] : [y, m - 2]];
   for (const [year, month] of months) {
     const label = `${MONTHS[month]} ${year}`;
-    const weeks = calendarWeeks(year, month, snap.calendarToday, dates, active);
+    const weeks = calendarWeeks(year, month, snap.calendarToday, dates, active, plan);
     for (const week of weeks) {
       const from = week.days.find(d => d !== null)?.date;
       const green = week.runs.filter(r => r.kind === "trained").map(r => `${r.start}+${r.length}`).join(" ");
@@ -1107,6 +1114,22 @@ export function checkJournalCalendar(l: Lifter, snap: Snapshot): Problem[] {
         const was = logged.has(day.date);
         if (reads !== was) {
           out.push({ code: "journal-calendar/day", what: `${day.date} reads ${day.state}; ${was ? "a session was logged on it" : "nothing was logged on it"}` });
+        }
+        // A day gone by with nothing logged reads as the program going on it
+        // planned it then, ended since or not (user request, 2026-11-06: a
+        // finished program's skipped last workout reads missed). Not past a
+        // shelved run's last session, which ends what the app keeps of it.
+        if (was || day.date >= snap.calendarToday) continue;
+        const then = l.plans.get(day.date);
+        const run = then && l.runs.find(r => r.programId === then.programId && r.startYMD <= day.date && (!r.endYMD || day.date <= r.endYMD));
+        if (!then || !run) continue;
+        if (run.endYMD && !run.finished) {
+          const last = lastIn(run);
+          if (!last || day.date > last) continue;
+        }
+        const want = then.planned ? "missed" : "rest";
+        if (day.state !== want) {
+          out.push({ code: "journal-calendar/past-plan", what: `${day.date} reads ${day.state}; ${programName(snap, then.programId)} had ${then.planned ? "a workout" : "nothing"} planned that day${run.endYMD ? `, its run since ended (${run.finished ? "finished" : "shelved"})` : ""}` });
         }
       }
     }
@@ -1160,6 +1183,27 @@ function sameToken(a: string, b: string, isKg: boolean): boolean {
   return Number.isFinite(an) && Number.isFinite(bn) && near(an, bn, isKg ? 0.011 : 0.051);
 }
 
+/** The sets a card's "Previous" is read from, per the ledger: the last
+ *  session of the day (`day`, newest first) that did this place as this
+ *  exercise; else the exercise by name on this day, the first time it appears
+ *  (a swap-in, one added, or a place new to the day). */
+function ledgerLast(
+  day: readonly LedgerSession[],
+  card: { name: string; programExerciseId?: string; swappedFrom?: string },
+): { sets: LedgerSet[]; unit: "kg" | "lb" } | undefined {
+  if (card.programExerciseId && !card.swappedFrom) {
+    for (const s of day) {
+      const e = s.exercises.find(x => x.place === card.programExerciseId && liftKey(x.name) === liftKey(card.name));
+      if (e) return { sets: e.sets, unit: s.unit };
+    }
+  }
+  for (const s of day) {
+    const e = s.exercises.find(x => liftKey(x.name) === liftKey(card.name));
+    if (e) return { sets: e.sets, unit: s.unit };
+  }
+  return undefined;
+}
+
 export function checkHints(b: BeforeLog): Problem[] {
   const out: Problem[] = [];
   const { lifter: l, workout, cards, isKg } = b;
@@ -1174,26 +1218,9 @@ export function checkHints(b: BeforeLog): Problem[] {
     .sort((x, y) => y.finishedAt - x.finishedAt);
   for (const card of cards) {
     const where = `${workout.name} (${workout.dayId}) › ${card.name}${card.swappedFrom ? ` (in for ${card.swappedFrom})` : ""}`;
-    // Sets: this place, done as this exercise; else the exercise by name on
-    // this day (the first time it appears in a session). Lined up with the
-    // card's rows as it's finished with, each row its own kind.
-    let last: { sets: LedgerSet[]; unit: "kg" | "lb" } | undefined;
-    const byName = () => {
-      for (const s of day) {
-        const e = s.exercises.find(x => liftKey(x.name) === liftKey(card.name));
-        if (e) return { sets: e.sets, unit: s.unit };
-      }
-      return undefined;
-    };
-    if (card.programExerciseId && !card.swappedFrom) {
-      for (const s of day) {
-        const e = s.exercises.find(x => x.place === card.programExerciseId && liftKey(x.name) === liftKey(card.name));
-        if (e) { last = { sets: e.sets, unit: s.unit }; break; }
-      }
-      last ??= byName();
-    } else {
-      last = byName();
-    }
+    // Sets: lined up with the card's rows as it's finished with, each row its
+    // own kind.
+    const last = ledgerLast(day, card);
     const want = hintRows(last?.sets ?? [], last?.unit ?? "kg", isKg, card.rows);
     const shown = prevHintsForRows(setsOf({ name: card.name, programExerciseId: card.programExerciseId, swappedFrom: card.swappedFrom }), card.rows)
       .map(t => formatPrevHint(t, isKg));
@@ -1353,10 +1380,15 @@ export function checkCompare(l: Lifter, snap: Snapshot): Problem[] {
   const candidates = compareCandidates(snap.programs, snap.history, green.ref);
 
   // What can be compared: every run the lifter FINISHED with a session in it,
-  // never the one going now (shelved runs aren't offered).
+  // never green's own: the one going now, or, with nothing on the go (a
+  // program ends by itself once its last session is done, and the lifter
+  // starts the next one the morning after), the one that finished last
+  // (shelved runs aren't offered).
   const inRun = (r: ProgramRun, end: string) => (s: LedgerSession) => s.programId === r.programId && s.date >= r.startYMD && s.date <= end;
   const finished = l.runs.filter(r => r.endYMD && r.finished && l.sessions.some(inRun(r, r.endYMD)));
-  const want = finished.map(r => `${programName(snap, r.programId)} from ${r.startYMD}`).sort();
+  const want = finished
+    .filter(r => !(r.programId === green.ref.programId && r.startYMD === green.startYMD))
+    .map(r => `${programName(snap, r.programId)} from ${r.startYMD}`).sort();
   const got = candidates.map(c => `${programName(snap, c.ref.programId)} from ${c.startYMD}`).sort();
   if (want.join(", ") !== got.join(", ")) {
     out.push({ code: "compare/candidates", what: `offered ${got.join(", ") || "nothing"} to compare with; finished were ${want.join(", ") || "none"}` });
@@ -1364,8 +1396,8 @@ export function checkCompare(l: Lifter, snap: Snapshot): Problem[] {
 
   // With nothing on the go, green is the run that finished last, so two
   // finished programs can be compared (user request, 2026-10-14). The lifter
-  // always starts the next program the day one ends, so it's played here by
-  // shelving the one going now.
+  // starts the next program the morning after one ends, so it's played here
+  // by shelving the one going now (and as it is between the two).
   {
     const idle = snap.programs.map(p => (p.status === "active" ? { ...p, status: "paused" as const } : p));
     const g = greenRunFor({ kind: "current" }, idle, snap.history);
@@ -1517,6 +1549,27 @@ export function checkSave(a: AfterSave): Problem[] {
     const before = topOf(prior, n);
     return before > 0 && topOf([saved], n) > before;
   });
+  // The session's cards once it's finished (the Workout tab's locked view)
+  // keep the "Previous" they were done against: the day's last session before
+  // this one, row by row (user report, 2026-11-06: they went blank). Next
+  // time round, checkHints holds this session as the day's Previous.
+  if (ledger.dayId) {
+    const day = lifter.sessions
+      .filter(s => s.id !== ledger.id && s.programId === ledger.programId && s.dayId === ledger.dayId && s.finishedAt <= ledger.finishedAt)
+      .sort((x, y) => y.finishedAt - x.finishedAt);
+    const program = a.programs.find(p => p.id === saved.programId) ?? null;
+    const shown = finishedSessionPrevSets(saved, [saved, ...prior], program);
+    ledger.exercises.forEach((e, i) => {
+      const rows = [...e.sets.filter(x => x.type === "warmup"), ...e.sets.filter(x => x.type !== "warmup")].map(x => x.type);
+      const last = ledgerLast(day, { name: e.name, programExerciseId: e.place, swappedFrom: e.swappedFrom });
+      const want = hintRows(last?.sets ?? [], last?.unit ?? "kg", isKg, rows);
+      const got = (shown[i] ?? []).map(t => formatPrevHint(t, isKg));
+      if (!(want.length === got.length && want.every((t, j) => sameToken(t, got[j], isKg)))) {
+        out.push({ code: "hints/finished-prev", what: `${ledger.workoutName} ${ledger.date} › ${e.name}, finished: Previous reads ${got.join("  ") || "nothing"}; was ${want.join("  ")} while it ran` });
+      }
+    });
+  }
+
   const earned = detectWorkoutAchievements(saved, prior, EMPTY_ACHIEVEMENTS, new Date());
   const pr = earned.find(x => x.category === "pr");
   const got = pr && "prs" in pr ? pr.prs.map(r => liftKey(r.exerciseName)) : [];

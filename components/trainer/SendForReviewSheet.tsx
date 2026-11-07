@@ -5,7 +5,8 @@
 // differently: a gym user's trainer card on the Trainer tab and their Sent for
 // Review page, and a trainer's card menu on their own My Trainers page (user
 // decision, 2026-10-29: a trainer could send their trainer a program but not
-// ask them to review one). It reads the person's own programs itself each
+// ask them to review one). The request itself is utils/reviewRequest.ts,
+// which My Programs' Send for Review makes too. It reads the person's own programs itself each
 // time its screen comes into view, so a program made a moment ago is there to
 // pick.
 
@@ -16,7 +17,8 @@ import { useFocusEffect } from "expo-router";
 import ProgramPickerSheet from "./ProgramPickerSheet";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import { getJSON } from "../../utils/storage";
-import { appendSentProgram, loadSentPrograms, sentKeyOf, type AssignedPT, type SentProgram } from "../../utils/trainerStore";
+import { loadSentPrograms, sentKeyOf, type AssignedPT, type SentProgram } from "../../utils/trainerStore";
+import { requestReview, reviewSentWords, type ReviewTo } from "../../utils/reviewRequest";
 import { alertMessage } from "../../utils/errors";
 
 export default function SendForReviewSheet({ visible, trainer, onClose, onSent }: {
@@ -46,18 +48,11 @@ export default function SendForReviewSheet({ visible, trainer, onClose, onSent }
     }
     if (sending.current) return;
     sending.current = true;
-    const entry: SentProgram = {
-      id: `sent_${Date.now()}`,
-      programId: program.id,
-      programName: program.name,
-      sentAtISO: new Date().toISOString(),
-      status: "sent",
-      programSnapshot: program,
-      recipientId: trainer.id,
-    };
+    const to: ReviewTo = { kind: "trainer", trainer };
+    let entry: SentProgram;
     try {
-      // Real trainers (uuid id) receive through the cloud; mock stays local.
-      await appendSentProgram(entry, trainer.id);
+      // The one request every place that asks makes (utils/reviewRequest.ts).
+      entry = await requestReview(program, to);
     } catch (e) {
       Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
@@ -73,7 +68,8 @@ export default function SendForReviewSheet({ visible, trainer, onClose, onSent }
     const fresh = await loadSentPrograms();
     const landed = fresh.some(s => sentKeyOf(s) === sentKeyOf(entry));
     onSent(landed ? fresh : [entry, ...fresh]);
-    Alert.alert("Sent for Review", `"${program.name}" was sent to ${trainer.name} for review.`);
+    const done = reviewSentWords(program, to);
+    Alert.alert(done.title, done.body);
   }, [trainer, onSent]);
 
   return (

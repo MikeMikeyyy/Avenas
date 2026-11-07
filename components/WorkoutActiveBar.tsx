@@ -83,8 +83,9 @@ export default function WorkoutActiveBar() {
   }, [resting, restOpen]);
   const progress = useRestProgress();
   // The set that's next, which only this bigger card has room for (the pill on
-  // the Workout page leaves it out; user decision, 2026-10-15). The Workout tab
-  // publishes it (utils/workoutTimerStore.ts).
+  // the Workout page leaves it out; user decision, 2026-10-15): the exercise
+  // and the set, not its numbers, so a long name has the room (user request,
+  // 2026-11-06). The Workout tab publishes it (utils/workoutTimerStore.ts).
   const upNext = useUpNext();
   const openTimer = useOpenWorkoutTimer();
   const sizeStyle = useAnimatedStyle(() => ({
@@ -152,7 +153,7 @@ export default function WorkoutActiveBar() {
             </View>
             {upNext ? (
               // The name is what gives way; the set and its numbers stay whole.
-              <View style={styles.upNext} accessible accessibilityLabel={`Up next: ${upNext.exerciseName}, ${upNext.setLabel}${upNext.numbers ? `, ${upNext.numbers}` : ""}`}>
+              <View style={styles.upNext} accessible accessibilityLabel={`Up next: ${upNext.exerciseName}, ${upNext.setLabel}`}>
                 <Text style={[styles.upNextLabel, { color: isDark ? CUE_INK_DARK : CUE_INK }]}>UP NEXT</Text>
                 <Text style={[styles.upNextName, { color: t.tp }]} numberOfLines={1}>{upNext.exerciseName}</Text>
                 <Text style={[styles.upNextTail, { color: isDark ? CUE_INK_DARK : CUE_INK }]} numberOfLines={1}>{upNextTail(upNext)}</Text>

@@ -21,8 +21,9 @@
 // program sent to me shows its cycle with View and Remove (and Send once it's
 // mine); a review shows its cycle with Review and Remove; a send shows its
 // cycle, who it went to and who's accepted, with View Program and Remove.
-// Remove is Archive or Delete on what I sent or was asked to review, and a hide
-// on this phone on what was sent to me.
+// Remove is Archive or Delete on what I sent, Remove for good on what I was
+// asked to review (there's no archive for a review: it's reviewed or removed,
+// user decision, 2026-11-05), and a hide on this phone on what was sent to me.
 //
 // It reads and saves the same page copy as the Trainer tab (utils/trainerHub.ts),
 // so it opens at once on what the tab last saw.
@@ -48,12 +49,12 @@ import Avatar from "../../components/Avatar";
 import SendIcon from "../../components/icons/SendIcon";
 import NotebookIcon from "../../components/icons/NotebookIcon";
 import GroupAvatar from "../../components/trainer/GroupAvatar";
-import ProgramRow, { AcceptButton, CycleStrip, RowActions, StatusPill, rowButtonStyles } from "../../components/trainer/ProgramRow";
+import ProgramRow, { AcceptButton, CycleStrip, RecipientList, RowActions, StatusPill, rowButtonStyles } from "../../components/trainer/ProgramRow";
 import ProgramPickerSheet from "../../components/trainer/ProgramPickerSheet";
 import RecipientPickerSheet from "../../components/trainer/RecipientPickerSheet";
 import RemoveReviewSheet from "../../components/trainer/RemoveReviewSheet";
-import RemovalNote from "../../components/trainer/RemovalNote";
-import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote } from "../../components/trainer/ReviewStatusPill";
+import ReviewNote from "../../components/trainer/ReviewNote";
+import ReviewStatusPill, { reviewStatusLabel } from "../../components/trainer/ReviewStatusPill";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
@@ -62,13 +63,13 @@ import { useAuth } from "../../contexts/AuthContext";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { EMPTY_PT_HUB, fetchPTHub, peekPTHub, savePTHub, type PTHubData } from "../../utils/trainerHub";
 import {
+  acceptedChangesProgramId,
   acceptSharedProgramBatch,
   appendSharedPrograms,
-  applyReturnedProgram,
-  dismissKeyOf,
-  dismissSharedBatch,
+  removeReceivedShare,
   removeSentProgram,
   removeSharedProgramBatch,
+  ReviewChangedError,
   setSendBatchArchived,
   ShareUnavailableError,
   type AssignedPT,
@@ -76,6 +77,7 @@ import {
   type SentProgram,
   type SharedProgram,
 } from "../../utils/trainerStore";
+import { takeFailedTitle, takeReturnedReview, type TakenReview } from "../../utils/reviewAccept";
 import {
   batchKeyOf,
   firstName,
@@ -84,6 +86,7 @@ import {
   sendBatches,
   sentToSummary,
   shareEntriesFor,
+  shareRejected,
   trainerProgramLists,
   type FromTrainerItem,
   type RecipientChoice,
@@ -91,17 +94,10 @@ import {
 } from "../../utils/trainerLists";
 import { askRemoveReturned, removeReviewForTrainer } from "../../utils/reviewRemoval";
 import { getJSON } from "../../utils/storage";
-import { archiveShareChoice } from "../../utils/removeShare";
+import { archiveShareChoice, removeReceivedWords } from "../../utils/removeShare";
 import { askArchiveOrDelete } from "../../utils/archiveChoice";
 import { alertMessage } from "../../utils/errors";
-
-function fmtAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
+import { fmtAgo } from "../../utils/dates";
 
 /** Someone I'm connected with, as a row's face draws them. */
 type Person = Pick<Client, "id" | "name" | "initials" | "photoUri">;
@@ -160,7 +156,9 @@ function ReceivedRow({ share, person, groupPhotoUri, meta, first, open, onToggle
         onRemove={onRemove}
         accessibilityLabel={accepted ? `Open ${share.programName} in your programs` : `View ${share.programName}`}
         removeLabel={`Remove ${share.programName} from this list`}
-        removeNeedsConnection={false}
+        // Not accepted: removing it turns it down, which the sender has to
+        // hear (removeReceivedShare). Accepted: a hide on this phone.
+        removeNeedsConnection={!accepted}
         accept={accepted ? { label: "Send", onPress: onSend, accessibilityLabel: `Send ${share.programName} to your clients` } : undefined}
       />
     </ProgramRow>
@@ -180,8 +178,6 @@ function ReturnedRow({ review, meta, first, open, onToggle, onAccept, onView, on
   onView: () => void;
   onRemove: () => void;
 }) {
-  const { isDark } = useTheme();
-  const t = isDark ? APP_DARK : APP_LIGHT;
   return (
     <ProgramRow
       first={first}
@@ -190,20 +186,19 @@ function ReturnedRow({ review, meta, first, open, onToggle, onAccept, onView, on
       accessibilityLabel={`${review.programName}, your program back reviewed, ${meta}`}
       title={review.programName}
       meta={meta}
-      trailing={<AcceptButton onPress={onAccept} accessibilityLabel={`Accept the changes to ${review.programName}`} />}
+      // Got it, when it came back with no changes: nothing to take.
+      trailing={review.noChanges
+        ? <AcceptButton label="Got it" onPress={onAccept} accessibilityLabel={`Got it: ${review.programName} was reviewed with no changes`} />
+        : <AcceptButton onPress={onAccept} accessibilityLabel={`Accept the changes to ${review.programName}`} />}
     >
-      {review.trainerComments ? (
-        <View style={[styles.commentBox, { borderColor: t.div }]}>
-          <Text style={[styles.commentLabel, { color: t.ts }]}>TRAINER COMMENTS</Text>
-          <Text style={[styles.commentBody, { color: t.tp }]}>{review.trainerComments}</Text>
-        </View>
-      ) : null}
+      {/* What the trainer wrote as they sent it back (Send Back's box). */}
+      <ReviewNote review={review} />
       <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} />
       <RowActions
-        label="See Changes"
+        label={review.noChanges ? "View" : "See Changes"}
         onOpen={onView}
         onRemove={onRemove}
-        accessibilityLabel={`See the changes to ${review.programName}`}
+        accessibilityLabel={review.noChanges ? `View ${review.programName}` : `See the changes to ${review.programName}`}
         removeLabel={`Remove ${review.programName} from this list`}
         removeNeedsConnection={false}
       />
@@ -230,12 +225,14 @@ function RequestRow({ review, meta, first, open, onToggle, onView, onRemove }: {
       first={first}
       open={open}
       onToggle={onToggle}
-      accessibilityLabel={`${review.programName}, ${REVIEW_STAGE_LABEL[stage].toLowerCase()}, ${meta}`}
+      accessibilityLabel={`${review.programName}, ${reviewStatusLabel(review).toLowerCase()}, ${meta}`}
       title={review.programName}
       meta={meta}
       trailing={<ReviewStatusPill review={review} />}
     >
-      {review.removalNote ? <RemovalNote note={review.removalNote} /> : null}
+      {/* Why it wasn't reviewed, or, once taken, the comments it came back
+          with (kept to re-read: user decision, 2026-11-06). */}
+      <ReviewNote review={review} />
       <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} />
       <RowActions
         label="View"
@@ -275,7 +272,7 @@ function ReviewRow({ review, sender, groupPhotoUri, from, first, open, onToggle,
       first={first}
       open={open}
       onToggle={onToggle}
-      accessibilityLabel={`${review.programName}, ${from}, ${REVIEW_STAGE_LABEL[reviewStage(review)].toLowerCase()}`}
+      accessibilityLabel={`${review.programName}, ${from}, ${reviewStatusLabel(review).toLowerCase()}`}
       leading={sender ? (
         <Avatar
           uri={sender.photoUri}
@@ -328,9 +325,11 @@ function SentRow({ batch, sentTo, nameFor, first, open, onToggle, onView, onRemo
   onView: () => void;
   onRemove: () => void;
 }) {
-  const { isDark } = useTheme();
-  const t = isDark ? APP_DARK : APP_LIGHT;
-  const label = batch.allAccepted ? "Accepted" : `${batch.acceptedCount}/${batch.total} accepted`;
+  // One person, who turned it down: Rejected, in red (user request,
+  // 2026-11-06). Several: how many have it, and the red circles inside say
+  // who turned it down.
+  const rejected = batch.total === 1 && batch.rejectedCount === 1;
+  const label = batch.allAccepted ? "Accepted" : rejected ? "Rejected" : `${batch.acceptedCount}/${batch.total} accepted`;
 
   return (
     <ProgramRow
@@ -342,32 +341,10 @@ function SentRow({ batch, sentTo, nameFor, first, open, onToggle, onView, onRemo
       // Where it went belongs on the closed row: it's the first thing you want
       // to know, and behind a tap you'd open every one to find out.
       meta={`Sent ${fmtAgo(batch.sentAtISO)} · ${sentTo}`}
-      trailing={<StatusPill label={label} done={batch.allAccepted} />}
+      trailing={<StatusPill label={label} done={batch.allAccepted} alert={rejected} />}
     >
       <CycleStrip cycle={batch.programSnapshot?.cyclePattern ?? []} />
-      <View style={[styles.recipientList, { borderColor: t.div }]}>
-        {batch.entries.map((e, i) => {
-          const accepted = !!e.acceptedAtISO;
-          return (
-            <View
-              key={e.id}
-              style={[
-                styles.recipientRow,
-                { borderBottomColor: t.div, borderBottomWidth: i === batch.entries.length - 1 ? 0 : StyleSheet.hairlineWidth },
-              ]}
-            >
-              <View style={[styles.recipientDot, accepted
-                ? { backgroundColor: ACCT, borderColor: ACCT }
-                : { backgroundColor: "transparent", borderColor: t.ts },
-              ]} />
-              <Text style={[styles.recipientName, { color: t.tp }]} numberOfLines={1}>{nameFor(e.clientId)}</Text>
-              <Text style={[styles.recipientStatus, { color: accepted ? ACCT : t.ts }]}>
-                {accepted ? `Accepted · ${fmtAgo(e.acceptedAtISO!)}` : "Pending"}
-              </Text>
-            </View>
-          );
-        })}
-      </View>
+      <RecipientList entries={batch.entries} nameFor={nameFor} />
       <RowActions
         label="View Program"
         onOpen={onView}
@@ -488,27 +465,25 @@ export default function TrainerProgramsScreen() {
   }, [router]);
 
   /**
-   * Take a program off my reviews: RemoveReviewSheet's Archive (back from the
-   * archive button, top right) or Delete, with a message to the person who
-   * asked while it hasn't been sent back. Where either reaches depends on
-   * where it came from, and the sheet says which, because the two reach
-   * different people:
+   * Take a program off my reviews for good: RemoveReviewSheet's Remove, with a
+   * message to the person who asked while it hasn't been sent back. Where it
+   * reaches depends on where it came from, and the sheet says which, because
+   * the two reach different people:
    *
-   *   a GROUP review — off the group's queue, for every coach of the group.
-   *     Delete is `set_group_review_completed` (coach-only at the database);
-   *     Archive is the same, restorable.
-   *   a 1:1 review — off MY list only (Delete: dismissReceivedReview).
+   *   a GROUP review — off the group's queue, for every coach of the group
+   *     (`set_group_review_completed`, coach-only at the database).
+   *   a 1:1 review — off MY list only (dismissReceivedReview).
    *
    * Either way the person who sent it keeps their copy and any feedback, and
    * can still accept what was sent back. The sheet says where it stands
    * (removeReviewNote), and warns when it hasn't been sent back yet, since
-   * removing it then leaves them waiting on a review nobody will do.
+   * removing it then leaves them with a review nobody did.
    */
   const [removingReview, setRemovingReview] = useState<SentProgram | null>(null);
   const handleRemoveReview = useCallback((entry: SentProgram) => setRemovingReview(entry), []);
   const removingAsker = removingReview ? senderOf(removingReview) : null;
-  const removeReview = useCallback(async (entry: SentProgram, how: "archive" | "delete", note: string | null) => {
-    if (!(await removeReviewForTrainer(entry, how, note))) return;
+  const removeReview = useCallback(async (entry: SentProgram, note: string | null) => {
+    if (!(await removeReviewForTrainer(entry, note))) return;
     setHub(h => h && (entry.groupId
       ? { ...h, groupReviews: h.groupReviews.filter(r => r.id !== entry.id) }
       : { ...h, reviews: h.reviews.filter(r => r.id !== entry.id) }));
@@ -630,8 +605,9 @@ export default function TrainerProgramsScreen() {
    *  through, looked up live, so a renamed group reads correctly on old sends),
    *  and when. */
   const receivedMeta = useCallback((s: SharedProgram) => {
-    // Accepted once, then deleted from My Programs: Accept adds it back.
-    if (!s.acceptedAtISO && s.deletedByRecipientAtISO) return "Removed from your programs";
+    // Turned down (removed, or taken once and deleted since), on another phone
+    // or before a restore: Accept still takes it.
+    if (shareRejected(s)) return "You removed it";
     const when = fmtAgo(s.sentAtISO);
     if (s.groupId) return `${groups.find(g => g.id === s.groupId)?.name ?? "A group"} · ${when}`;
     const from = s.receivedFromCoachId ? personById.get(s.receivedFromCoachId)?.name : undefined;
@@ -676,32 +652,38 @@ export default function TrainerProgramsScreen() {
   }, [dropReceived]);
 
   /**
-   * Take a program someone sent me off these lists. A hide on my side only
-   * (DISMISSED_SHARES_KEY): an accepted copy stays in My Programs, and the
-   * sender still sees it as sent. The prompt says which, because the two lose
-   * different things: nothing once it's accepted, the chance to if it isn't.
+   * Take a program someone sent me off these lists. One I've accepted only
+   * leaves them, on this phone (DISMISSED_SHARES_KEY): my copy stays in My
+   * Programs, and the sender still sees I have it. One I haven't, I've turned
+   * down, and the sender sees it Rejected (removeReceivedShare; user request,
+   * 2026-11-06). The prompt says which, because the two lose different things:
+   * nothing once it's accepted, the chance to (until an update) if it isn't.
    */
   const handleRemoveReceived = useCallback((share: SharedProgram) => {
-    const accepted = !!share.acceptedAtISO;
-    Alert.alert(
-      "Remove Program",
-      accepted
-        ? `Remove "${share.programName}" from this list? It stays in your programs.`
-        : `Remove "${share.programName}" without accepting it? It comes back if it's sent to you again or updated.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
+    const from = share.receivedFromCoachId ? personById.get(share.receivedFromCoachId)?.name : undefined;
+    const words = removeReceivedWords({
+      programName: share.programName,
+      accepted: !!share.acceptedAtISO,
+      sender: from ? firstName(from) : "The trainer who sent it",
+    });
+    Alert.alert(words.title, words.body, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          try {
             // Hides this version: an update brings it back (dismissKeyOf).
-            await dismissSharedBatch(dismissKeyOf(share));
-            dropReceived(batchKeyOf(share));
-          },
+            await removeReceivedShare(share);
+          } catch (e) {
+            Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+            return;
+          }
+          dropReceived(batchKeyOf(share));
         },
-      ],
-    );
-  }, [dropReceived]);
+      },
+    ]);
+  }, [dropReceived, personById]);
 
   /** View opens the program itself, or once it's accepted my copy in My
    *  Programs, since that's the one I'll be working from. */
@@ -754,10 +736,16 @@ export default function TrainerProgramsScreen() {
     const to = !r.groupId && r.recipientId ? personById.get(r.recipientId)?.name : undefined;
     if (stage === "returned") {
       const when = fmtAgo(r.returnedAtISO ?? r.sentAtISO);
-      if (group) return `Back from ${group} · ${when}`;
+      if (group) return `Back from ${group}${r.noChanges ? ", no changes" : ""} · ${when}`;
+      if (r.noChanges) return to ? `Reviewed by ${to}, no changes · ${when}` : `Reviewed, no changes · ${when}`;
       return to ? `Back with ${to}'s changes · ${when}` : `Back with changes · ${when}`;
     }
-    if (stage === "accepted") return `Changes added ${fmtAgo(r.appliedAtISO ?? r.returnedAtISO ?? r.sentAtISO)}`;
+    if (stage === "accepted") {
+      // Seen, for one with no changes: there were none to add.
+      return r.noChanges
+        ? `Reviewed with no changes · ${fmtAgo(r.returnedAtISO ?? r.sentAtISO)}`
+        : `Changes added ${fmtAgo(r.appliedAtISO ?? r.returnedAtISO ?? r.sentAtISO)}`;
+    }
     if (stage === "removed") {
       const when = fmtAgo(r.removedUnreviewedAtISO ?? r.sentAtISO);
       if (group) return `Removed from ${group} without a review · ${when}`;
@@ -771,20 +759,28 @@ export default function TrainerProgramsScreen() {
   const handleApplyReturned = useCallback(async (entry: SentProgram) => {
     if (entry.appliedAtISO || accepting.current.has(entry.id)) return;
     accepting.current.add(entry.id);
+    // The trainer's changes, into the program I sent or saved as a new one;
+    // or, sent back with none, Got it (utils/reviewAccept.ts).
+    let taken: TakenReview | null = null;
     try {
-      await applyReturnedProgram(entry.id);
+      taken = await takeReturnedReview(entry);
     } catch (e) {
-      Alert.alert("Couldn't update your program", alertMessage(e, "Check your connection and try again."));
+      Alert.alert(takeFailedTitle(entry), alertMessage(e, "Check your connection and try again."));
+      // Changes sent while this said Got it: show them.
+      if (e instanceof ReviewChangedError) void onRefresh();
       return;
     } finally {
       accepting.current.delete(entry.id);
     }
-    scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
+    if (!taken) return;
     const appliedAt = new Date().toISOString();
     setHub(h => h && { ...h, myRequests: (h.myRequests ?? []).map(r => (r.id === entry.id ? { ...r, appliedAtISO: appliedAt } : r)) });
-    void getJSON<SavedProgram[]>(PROGRAMS_KEY, []).then(progs => setMyPrograms(Array.isArray(progs) ? progs : []));
-    Alert.alert("Program Updated", `"${entry.programName}" in your programs was updated with the trainer's changes.`);
-  }, []);
+    if (taken.programsChanged) {
+      scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
+      void getJSON<SavedProgram[]>(PROGRAMS_KEY, []).then(progs => setMyPrograms(Array.isArray(progs) ? progs : []));
+    }
+    if (taken.words) Alert.alert(taken.words.title, taken.words.body);
+  }, [onRefresh]);
 
   /** Off these lists, on this phone (this version: an update brings it back). */
   const handleRemoveReturned = useCallback((entry: SentProgram) => {
@@ -821,12 +817,12 @@ export default function TrainerProgramsScreen() {
     );
   }, []);
 
-  /** View one of my requests: once its changes are in, my own program; before,
-   *  what I sent or what came back (the program page finds a group's through
-   *  the group). */
-  const viewRequest = useCallback((r: SentProgram) => {
+  /** View one of my requests: once its changes are in, my own program with
+   *  them (the new one, when I saved them apart); before, what I sent or what
+   *  came back (the program page finds a group's through the group). */
+  const viewRequest = useCallback(async (r: SentProgram) => {
     router.navigate(r.appliedAtISO
-      ? { pathname: "/programs", params: { focus: r.programId } }
+      ? { pathname: "/programs", params: { focus: await acceptedChangesProgramId(r) } }
       : { pathname: "/program-view", params: r.groupId ? { sentId: r.id, groupId: r.groupId } : { sentId: r.id } });
   }, [router]);
 
@@ -879,7 +875,8 @@ export default function TrainerProgramsScreen() {
       </View>
 
       <BackButton />
-      {/* Programs archived off these lists, restored from there. */}
+      {/* Programs I sent and archived, restored from there (a review is
+          never archived: it's reviewed or removed). */}
       <ArchiveButton floating onPress={() => router.navigate({ pathname: "/program-archive", params: { scope: "trainer" } })} />
 
       <ScrollView
@@ -1036,12 +1033,8 @@ export default function TrainerProgramsScreen() {
       />
       <RemoveReviewSheet
         review={removingReview}
-        body={removingReview
-          ? `Archive "${removingReview.programName}" to take it off ${removingReview.groupId ? "the group's review list" : "your list"} until you restore it, or delete it. ${removeReviewNote(removingReview)}`
-          : ""}
         askerName={removingAsker ? firstName(removingAsker.name) : undefined}
-        onArchive={note => { if (removingReview) void removeReview(removingReview, "archive", note); }}
-        onDelete={note => { if (removingReview) void removeReview(removingReview, "delete", note); }}
+        onRemove={note => { if (removingReview) void removeReview(removingReview, note); }}
         onClose={() => setRemovingReview(null)}
       />
     </FadeScreen>
@@ -1055,16 +1048,7 @@ const styles = StyleSheet.create({
   sendBtn: { ...pill(PILL_H_SM), gap: 10, ...pillGlow(ACCT, 0.4) },
   sendText: { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff", letterSpacing: 0.2 },
   sectionLabel: { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.6, marginTop: 24, marginBottom: 8, marginLeft: 4 },
-  // A gym user's Programs page's (app/trainer/received.tsx), value for value.
-  commentBox: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, gap: 6 },
-  commentLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.8 },
-  commentBody: { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 13 },
-  recipientList: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10 },
-  recipientRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  recipientDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
-  recipientName: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 13 },
-  recipientStatus: { fontFamily: FontFamily.regular, fontSize: 11 },
   emptyInner: { padding: 28, alignItems: "center", gap: 10 },
   emptyIcon: { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   emptyTitle: { fontFamily: FontFamily.bold, fontSize: 17 },

@@ -7,8 +7,10 @@
 // backup mints them afresh. A program's own id travels as `local_id` (migration
 // 0044) and comes back as its id, so a program keeps one id for life; read a
 // backup through snapshotFromRows, which also points each workout at its program
-// by that id. A custom exercise's own id travels the same way (0048). Workouts
-// and journal entries take the row's uuid.
+// by that id. A custom exercise's own id travels the same way (0048), and so do
+// a session's and a journal entry's (0057), so two phones on one account know
+// each by one id (utils/syncMerge.ts). A row from an app before them has no
+// local_id and takes the row's uuid.
 
 import { parseStoredDate, formatStoredDate, toYMD } from "../utils/dates";
 import type {
@@ -123,6 +125,8 @@ export function programFromRow(r: ProgramRow): SavedProgram {
 export function workoutToRow(w: CompletedWorkout, userId: string, programUuid: string | null): WorkoutInsert {
   return {
     user_id: userId,
+    // The session's own id, given back on a restore (0057).
+    local_id: w.id || null,
     program_id: programUuid,
     // undefined (legacy, inferred by name) and "" (free) both leave program_id
     // null, so the difference has to travel on its own (migration 0033).
@@ -139,9 +143,11 @@ export function workoutToRow(w: CompletedWorkout, userId: string, programUuid: s
   };
 }
 
+/** One workout row as the app holds it: under its own id (local_id), or the
+ *  row's on a row from before 0057. */
 export function workoutFromRow(r: WorkoutRow): CompletedWorkout {
   return {
-    id: r.id,
+    id: r.local_id || r.id,
     date: r.date,
     completedAt: r.completed_at,
     workoutName: r.workout_name,
@@ -188,14 +194,30 @@ export function snapshotFromRows(
     idOfRow.set(r.id, id);
     return id === p.id ? p : { ...p, id };
   });
+  const takenWorkouts = new Set<string>();
   return {
     programs,
     workouts: workoutRows.map(r => {
-      const w = workoutFromRow(r);
+      const read = workoutFromRow(r);
+      // As with programs: a second session of one id keeps its row's.
+      const w = takenWorkouts.has(read.id) ? { ...read, id: r.id } : read;
+      takenWorkouts.add(w.id);
       const programId = r.program_id ? idOfRow.get(r.program_id) : undefined;
       return programId ? { ...w, programId } : w;
     }),
   };
+}
+
+/** A backup's journal entries as the app holds them, each under its own id
+ *  (a second of one id keeps its row's, as in snapshotFromRows). */
+export function journalFromRows(rows: JournalRow[]): JournalEntry[] {
+  const taken = new Set<string>();
+  return rows.map(r => {
+    const read = journalFromRow(r);
+    const e = taken.has(read.id) ? { ...read, id: r.id } : read;
+    taken.add(e.id);
+    return e;
+  });
 }
 
 // ── replace_user_data RPC payload (atomic full-snapshot push) ─────────────────
@@ -240,11 +262,11 @@ export function toReplaceUserDataPayload(
 
 // ── journal ───────────────────────────────────────────────────────────────────
 export function journalToRow(j: JournalEntry, userId: string): JournalInsert {
-  return { user_id: userId, title: j.title, body: j.body, created_at: j.createdAt };
+  return { user_id: userId, local_id: j.id || null, title: j.title, body: j.body, created_at: j.createdAt };
 }
 
 export function journalFromRow(r: JournalRow): JournalEntry {
-  return { id: r.id, title: r.title, body: r.body, createdAt: r.created_at };
+  return { id: r.local_id || r.id, title: r.title, body: r.body, createdAt: r.created_at };
 }
 
 // ── custom exercises ──────────────────────────────────────────────────────────
@@ -262,6 +284,8 @@ export function customToRow(c: CustomExercise, userId: string): CustomExerciseIn
     description: c.description ?? null,
     steps: c.steps && c.steps.length > 0 ? c.steps : null,
     muted: c.muted ?? false,
+    // Its Assisted switch (migration 0058).
+    assisted: c.assisted ?? false,
     deleted_at: c.deletedAt ?? null,
   };
 }
@@ -276,6 +300,8 @@ export function customFromRow(r: CustomExerciseRow): CustomExercise {
     description: r.description ?? undefined,
     steps: r.steps && r.steps.length > 0 ? r.steps : undefined,
     muted: r.muted ? true : undefined,
+    // Absent from a server before 0058: not assisted.
+    ...(r.assisted ? { assisted: true } : {}),
     ...(r.deleted_at ? { deletedAt: r.deleted_at.slice(0, 10) } : {}),
   };
 }

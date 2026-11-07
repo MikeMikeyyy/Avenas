@@ -18,34 +18,32 @@ import {
   returnedKeyOf,
   saveReviewRemovalNote,
   setGroupReviewDone,
-  setReviewArchived,
   type SentProgram,
 } from "./trainerStore";
 import { alertMessage } from "./errors";
 
 /**
- * A review's trainer taking it off their list: RemoveReviewSheet's Archive or
- * Delete, on their Programs page and a group's. Archive comes back from the
- * page's archive; Delete is, for a group review, clearing it from the group's
- * queue for every trainer of it (set_group_review_completed), and for a 1:1
- * one, off my list (dismissReceivedReview). Their message to the person who
- * asked is saved first, so it's there as "Not reviewed" reaches them, and it's
- * written even when there isn't one, so one left from an earlier removal can't
- * outlive a restore that couldn't clear it. It never holds the removal up: a
- * message that couldn't be saved (a server without 0053) is said once it's
- * done. Resolves true once it's removed; a failed removal is said, and false.
+ * A review's trainer taking it off their list for good: RemoveReviewSheet's
+ * Remove, on their Programs page and a group's. There's no archive for a
+ * review (user decision, 2026-11-05): it's reviewed or removed. A group review
+ * leaves the group's queue for every trainer of it (set_group_review_completed),
+ * a 1:1 one leaves my list (dismissReceivedReview). Their message to the
+ * person who asked is saved first, so it's there as "Not reviewed" reaches
+ * them, and it's written even when there isn't one, so nothing written before
+ * can stand in for it. It never holds the removal up: a message that couldn't
+ * be saved (a server without 0053) is said once it's done. Resolves true once
+ * it's removed; a failed removal is said, and false.
  */
-export async function removeReviewForTrainer(entry: SentProgram, how: "archive" | "delete", note: string | null): Promise<boolean> {
+export async function removeReviewForTrainer(entry: SentProgram, note: string | null): Promise<boolean> {
   // Once sent back there's nothing to explain, and the server refuses it.
   const noteSaved = entry.status === "returned"
     ? true
     : await saveReviewRemovalNote(entry.id, note).then(() => true, () => false);
   try {
-    if (how === "archive") await setReviewArchived(entry.id, true);
-    else if (entry.groupId) await setGroupReviewDone(entry.id, true);
+    if (entry.groupId) await setGroupReviewDone(entry.id, true);
     else await dismissReceivedReview(entry.id);
   } catch (e) {
-    Alert.alert(how === "archive" ? "Couldn't archive it" : "Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+    Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
     return false;
   }
   if (note && !noteSaved) {

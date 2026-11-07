@@ -19,6 +19,7 @@ import {
   computeWorkoutDurationMinutes,
   computeMuscleGroupStats,
   getRangeOption,
+  autoWeekRange,
   rangeWindow,
   previousComparableWindow,
   filterByDateWindow,
@@ -32,6 +33,8 @@ import {
   computePRs,
   programIncludes,
   workoutBelongsToProgram,
+  programIdsWithSessions,
+  rangeHoldingLast,
   filterByProgramScope,
   programsInScope,
   scopedProgramDays,
@@ -41,7 +44,7 @@ import {
   sessionCountForDay,
 } from "../utils/progressStats";
 import { groupByMuscle, muscleCardOf, searchLoggedExercises } from "../utils/allExercises";
-import { allProgressParams, allProgressRequest } from "../utils/progressSession";
+import { allProgressParams, allProgressRequest, programProgressParams, programProgressRequest } from "../utils/progressSession";
 import { exerciseDateSlots } from "../utils/exerciseDaySlots";
 import { displayWorkoutName, historicalDays, markDayRefLabels, programDays, programDaysWithExtras } from "../utils/programDays";
 import {
@@ -260,6 +263,55 @@ for (const r of ["lastWeek", "thisMonth", "last3Months", "year"] as const) {
   eq(bars.length, 7, "thisWeek chart: seven day buckets mid-week");
   eq(bars.map(b => b.label).join(","), "Mon,Tue,Wed,Thu,Fri,Sat,Sun", "thisWeek chart: Mon..Sun labels");
   check(bars.every(b => b.label !== ""), "thisWeek chart: no unlabelled padding slots");
+}
+
+// ── autoWeekRange: the charts' week when it hasn't been picked ────────────────
+// This week once it has a session in it, last week until then (user request,
+// 2026-11-06), but only if last week has one: with neither, this week (user
+// follow-up, the same day). today = Fri 15 May 2026, so this week is Mon 11 to
+// today and last week Mon 4 to Sun 10.
+{
+  const on = (...dates: string[]) => dates.map(date => ({ date }));
+  eq(autoWeekRange([], today), "thisWeek", "auto week: nothing at all -> this week");
+  eq(autoWeekRange(on("2026-05-03", "2026-04-20"), today), "thisWeek", "auto week: only older weeks, last week empty -> this week");
+  eq(autoWeekRange(on("2026-05-04"), today), "lastWeek", "auto week: last Monday's session -> last week");
+  eq(autoWeekRange(on("2026-05-10", "2026-05-08"), today), "lastWeek", "auto week: last week's sessions only -> last week");
+  eq(autoWeekRange(on("2026-05-10", "2026-05-11"), today), "thisWeek", "auto week: one on this Monday -> this week");
+  eq(autoWeekRange(on("2026-05-15"), today), "thisWeek", "auto week: one today -> this week");
+  // Monday morning, the weekend's sessions behind it: last week, until Monday's
+  // is done.
+  const monday = new Date(2026, 4, 18, 9, 30);
+  eq(autoWeekRange(on("2026-05-17", "2026-05-16"), monday), "lastWeek", "auto week: Monday, Sunday's session -> last week");
+  eq(autoWeekRange(on("2026-05-17", "2026-05-18"), monday), "thisWeek", "auto week: Monday's done -> this week");
+  // A session dated ahead (a clock moved back) doesn't make this week.
+  eq(autoWeekRange(on("2026-05-16", "2026-05-08"), today), "lastWeek", "auto week: a date after today doesn't count");
+}
+
+// ── rangeHoldingLast: View Progress on a program not running ──────────────────
+// The range shown stays when it holds the program's last session, else the
+// shortest that does, Last Year at most, and one automatic would show stays
+// automatic (user decision, 2026-11-07). today = Fri 15 May 2026: Last Month
+// is from Mon 20 Apr, Last 3 Months from 1 Mar.
+{
+  const on = (...dates: string[]) => dates.map(date => ({ date }));
+  eq([rangeHoldingLast([], null, today), rangeHoldingLast([], "year", today)], [null, "year"], "reach: no sessions keeps the range");
+  eq(rangeHoldingLast(on("2026-05-01", "2026-05-13"), null, today), null, "reach: trained this week stays automatic");
+  eq(rangeHoldingLast(on("2026-05-08"), null, today), null, "reach: last week is automatic's own");
+  eq(rangeHoldingLast(on("2026-04-01", "2026-04-28"), null, today), "thisMonth", "reach: finished 2 weeks back -> Last Month");
+  eq(rangeHoldingLast(on("2026-03-20", "2026-02-10"), null, today), "last3Months", "reach: by its LAST session, in any order -> Last 3 Months");
+  eq(rangeHoldingLast(on("2025-08-04", "2025-09-29"), null, today), "year", "reach: last autumn -> Last Year");
+  eq(rangeHoldingLast(on("2024-11-04", "2025-01-20"), "lastWeek", today), "year", "reach: past a year -> Last Year, the most there is");
+  eq(rangeHoldingLast(on("2026-04-28"), "last3Months", today), "last3Months", "reach: a pick that holds it is kept, not shortened");
+  eq(rangeHoldingLast(on("2026-04-28"), "lastWeek", today), "thisMonth", "reach: a pick that misses it goes to the shortest that holds it");
+  eq(rangeHoldingLast(on("2026-05-13"), "lastWeek", today), null, "reach: landing on automatic's week goes back to automatic");
+}
+
+// ── View Progress rides on the navigation, as See All Progress does ──────────
+{
+  const asked = programProgressRequest(programProgressParams("program_123"));
+  eq(asked?.programId, "program_123", "view progress: which program, through the params");
+  check(!!asked && /^\d+$/.test(asked.at), "view progress: with when it was asked");
+  eq([programProgressRequest({}), programProgressRequest({ programProgress: "program_123" })], [null, null], "view progress: none without the program and when");
 }
 
 // ── previousComparableWindow ──────────────────────────────────────────────────
@@ -631,6 +683,10 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   eq(filterByProgramScope(ws, { kind: "program", programId: "old" }, programs).map(w => w.id), ["o"], "scope program: named program");
   eq(filterByProgramScope(ws, { kind: "program", programId: "ghost" }, programs), [], "scope program: missing -> []");
   eq(programsInScope({ kind: "current" }, programs).map(p => p.id), ["act"], "programsInScope current");
+  // My Programs' View Progress: the programs with a session on them.
+  const unused = makeProgram({ id: "new", status: "created", name: "New" });
+  eq([...programIdsWithSessions([...programs, unused], ws)].sort(), ["act", "old"], "view progress: programs with a session logged, none for one never trained");
+  eq([...programIdsWithSessions(programs, [workout({ id: "f", programId: "", exercises: [] })])], [], "view progress: a free workout puts it on no program");
 }
 {
   const p = makeProgram({ extraWorkouts: ["Conditioning", "conditioning"] }); // dupe case
@@ -1372,6 +1428,50 @@ eq([isExerciseMetric("strength"), isExerciseMetric("topWeight")], [true, false],
   ], [twice], { name: "Bench" });
   eq(twiceOptions.programs[0].days.map(d => d.name), ["Upper, day 1", "Upper, day 3", "Arms"],
     "filter: two days named alike say which, and a custom workout added to it is a day of its own");
+}
+
+// ── assisted exercises: less help is stronger (utils/assisted.ts) ─────────────
+{
+  const ap = (id: string, date: string, sets: CompletedSet[]) =>
+    workout({ id, date, exercises: [ex("Assisted Pull-Up", sets), ex("Bench", [set("100", "5")])] });
+  const sessions = [
+    ap("p1", "2026-05-01", [set("40", "8"), set("35", "6")]),
+    ap("p2", "2026-05-08", [set("30", "8"), set("30", "6")]),
+    ap("p3", "2026-05-15", [set("35", "10")]),
+  ];
+  eq(computeWorkoutTonnage(sessions[0]), 500, "assisted: its help isn't volume (only the bench's 500 counts)");
+  eq(computeMuscleGroupStats([sessions[0]], []).Back.volume, 0, "assisted: no volume for its muscles either");
+  eq(computeMuscleGroupStats([sessions[0]], []).Back.sets, 2, "assisted: its sets still count");
+
+  const hist = collectExerciseHistory(sessions, "Assisted Pull-Up");
+  eq(hist.map(p => [p.topWeight, p.topReps]), [[35, 6], [30, 8], [35, 10]], "assisted history: a session's top set is its least help");
+  eq(hist.map(p => [p.sessionVolume, p.e1rm, p.bestSetVolume]), [[0, 0, 0], [0, 0, 0], [0, 0, 0]], "assisted history: no volume, no 1RM");
+  eq(hist.every(p => p.isAssisted === true), true, "assisted history: every point says so");
+
+  const prs = computePRs(hist, sessions, "Assisted Pull-Up");
+  eq([prs.heaviest?.value, prs.heaviest?.workoutId], [30, "p2"], "assisted records: the least help is its record");
+  eq([prs.oneRepMax, prs.bestSetVolume, prs.bestSessionVolume], [null, null, null], "assisted records: no 1RM, Best Set or Most Volume");
+  eq([prs.mostReps?.value, prs.mostReps?.workoutId], [10, "p3"], "assisted records: Most reps still counts");
+  const tie = [ap("t1", "2026-05-01", [set("40", "8")]), ap("t2", "2026-05-08", [set("30", "8")])];
+  eq(computePRs(collectExerciseHistory(tie, "Assisted Pull-Up"), tie, "Assisted Pull-Up").mostReps?.workoutId, "t2",
+    "assisted records: of equal reps, the one with less help");
+
+  // The chart: drawn the other way up, so stronger still climbs.
+  const axis = windowAxis(hist, "strength", 0, hist.length - 1);
+  check(!!axis && axis.min > axis.max, "assisted chart: the axis is flipped (its top is the least help)");
+  if (axis) {
+    check(dotY(30, axis) < dotY(35, axis), "assisted chart: 30 kg sits above 35 kg");
+    eq(axis.labels[0], exerciseChartAxis(hist.map(p => p.topWeight), true).labels.at(-1), "assisted chart: its foot reads the most help");
+  }
+  const normal = collectExerciseHistory(sessions, "Bench");
+  const nAxis = windowAxis(normal, "strength", 0, normal.length - 1);
+  check(!!nAxis && nAxis.min < nAxis.max, "normal chart: not flipped");
+  eq(chartChange(hist, "strength")?.pct, 0, "assisted chart: 35 to 35 is no change");
+  approx(changeFromPrevious(hist, 1, "strength") ?? NaN, (5 / 35) * 100, "assisted chart: 35 to 30 kg reads as up");
+  check((changeFromPrevious(hist, 2, "strength") ?? 0) < 0, "assisted chart: 30 back to 35 reads as down");
+  const stack = setStacks(hist, exerciseChartGeometry(hist.length, 390), barAxis([18]))[0];
+  eq(stack.heaviest, 35, "assisted sets: the weight over the stack is its least help");
+  eq(stack.blocks.map(b => b.lighter), [true, false], "assisted sets: the set with more help is the paler one");
 }
 
 // ── report ────────────────────────────────────────────────────────────────────

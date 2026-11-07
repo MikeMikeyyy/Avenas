@@ -1,9 +1,10 @@
 // Trainer review screen for a SentProgram (gym user → trainer).
 // Shows the trainer's working copy and "Send Back"s it. Edits made in the
 // builder are a draft until then (migration 0034): Send Back, and Send Update
-// after it, are what hand the client that version with an Accept on it.
+// after it, are what hand the client that version with an Accept on it, with
+// the trainer's comments on it (SendBackSheet, migration 0054).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,12 +23,15 @@ import ProgramHeaderCard from "../../../components/ProgramHeaderCard";
 import ProgramSnapshotView from "../../../components/ProgramSnapshotView";
 import ProgramActionFabs from "../../../components/ProgramActionFabs";
 import ProgramSummarySheet from "../../../components/ProgramSummarySheet";
+import SendBackSheet, { type SendBackMode } from "../../../components/trainer/SendBackSheet";
+import { TrainerNote } from "../../../components/trainer/ReviewNote";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../../constants/theme";
-import { darkGlow, PILL_RADIUS } from "../../../constants/buttons";
+import { darkGlow, PILL_RADIUS, PILL_SHADOW } from "../../../constants/buttons";
 import { useTheme } from "../../../contexts/ThemeContext";
 import { useAuth } from "../../../contexts/AuthContext";
 import { loadGroupReviewPrograms, loadSentPrograms, returnReview, type SentProgram } from "../../../utils/trainerStore";
 import { peekPTHub } from "../../../utils/trainerHub";
+import { peekGroupPage } from "../../../utils/groupPage";
 import { firstName } from "../../../utils/trainerLists";
 import { alertMessage } from "../../../utils/errors";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../../../components/BackButton";
@@ -86,56 +90,67 @@ export default function ReviewScreen() {
   }, [id, groupId]));
 
   /** Send Back and Send Update are the same step (returnReview): the client
-   *  gets this version and an Accept for it. Only the prompt differs. */
-  const confirmReturn = useCallback((title: string, message: string) => {
-    if (!entry) return;
-    Alert.alert(title, message, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: title,
-        onPress: async () => {
-          try {
-            await returnReview(entry.id);
-          } catch (e) {
-            Alert.alert("Couldn't send it", alertMessage(e, "Check your connection and try again."));
-            return;
-          }
-          router.back();
-        },
-      },
-    ]);
+   *  gets this version, with the comments, and an Accept for it. Both open
+   *  SendBackSheet, which says which it is (it was an "Are you sure?" alert,
+   *  with nowhere to say anything: user request, 2026-11-06). */
+  const [sendMode, setSendMode] = useState<SendBackMode | null>(null);
+  // Whether the sheet is up, and whether what it sent has gone, so the page
+  // leaves once the sheet has slid away. Sent with the sheet already swiped
+  // down, the page leaves at once.
+  const sheetUp = useRef(false);
+  const sent = useRef(false);
+  const openSend = useCallback((mode: SendBackMode) => {
+    sheetUp.current = true;
+    sent.current = false;
+    setSendMode(mode);
+  }, []);
+  const sendBack = useCallback(async (comments: string): Promise<boolean> => {
+    if (!entry) return false;
+    try {
+      await returnReview(entry.id, comments);
+    } catch (e) {
+      Alert.alert("Couldn't send it", alertMessage(e, "Check your connection and try again."));
+      return false;
+    }
+    if (sheetUp.current) sent.current = true;
+    else router.back();
+    return true;
   }, [entry, router]);
+  const sheetClosed = useCallback(() => {
+    sheetUp.current = false;
+    setSendMode(null);
+    // Back to the list once it's gone, as Send Back always went.
+    if (sent.current) router.back();
+  }, [router]);
 
-  const handleSendBack = useCallback(() => {
-    confirmReturn("Send Back", "Are you sure all changes have been made?");
-  }, [confirmReturn]);
+  const handleSendUpdate = useCallback(() => openSend("update"), [openSend]);
+  // Comments alone, once it's back, with no new edits to send (user request,
+  // 2026-11-06): they keep the version they have, and their accept.
+  const handleSendComment = useCallback(() => openSend("comment"), [openSend]);
 
   /**
    * Who it goes back to, in words. A group review came from a member of the
    * group, who may be nobody's client ("Send Back to Client" was wrong for
    * them). A 1:1 one is from a client, or from a fellow trainer coached by me
    * who asked from their My Trainers (user decision, 2026-10-29): named, when
-   * they aren't my client too. Read off the Trainer tab's saved copy.
+   * they aren't my client too. Read off the Trainer tab's saved copy. `name`
+   * is for the comments box ("Comments for Cara"): their first name, from
+   * that copy or the group page's, wherever it's known.
    */
   const asker = useMemo(() => {
-    if (entry?.groupId) return { the: "the member", The: "The member", To: "Member" };
+    if (entry?.groupId) {
+      const member = peekGroupPage(userId ?? "", entry.groupId)?.members.find(m => m.id === entry.senderId);
+      return { the: "the member", The: "The member", To: "Member", name: member ? firstName(member.name) : "the member" };
+    }
     const hub = peekPTHub(userId ?? "");
-    const isClient = !!entry?.senderId && !!hub?.clients.some(c => c.id === entry.senderId);
-    const trainer = !isClient && entry?.senderId ? hub?.trainers?.find(tr => tr.id === entry.senderId) : undefined;
+    const client = entry?.senderId ? hub?.clients.find(c => c.id === entry.senderId) : undefined;
+    const trainer = !client && entry?.senderId ? hub?.trainers?.find(tr => tr.id === entry.senderId) : undefined;
     if (trainer) {
       const name = firstName(trainer.name);
-      return { the: name, The: name, To: name };
+      return { the: name, The: name, To: name, name };
     }
-    return { the: "the client", The: "The client", To: "Client" };
+    return { the: "the client", The: "The client", To: "Client", name: client ? firstName(client.name) : "the client" };
   }, [entry, userId]);
-
-  const handleSendUpdate = useCallback(() => {
-    if (!entry) return;
-    confirmReturn(
-      "Send Update",
-      `Send the latest edits to ${asker.the}? They'll get a tick to accept the new version into their programs.`,
-    );
-  }, [entry, confirmReturn, asker]);
 
   if (!loaded) {
     return <View style={{ flex: 1, backgroundColor: t.bg }} />;
@@ -156,17 +171,31 @@ export default function ReviewScreen() {
 
   const snap = entry.programSnapshot;
   const isReturned = entry.status === "returned";
-  // Trainer made edits in the program builder AFTER the last Send Back —
-  // surface a "Send Update to Client" CTA so they can push the new version.
-  // A cloud review knows exactly (it has a draft); a local one compares times.
-  const hasUnsentEdits = isReturned && (entry.unsentEdits ?? (
+  // Edits in the builder not yet sent: before Send Back, what decides whether
+  // it goes back with changes or as it came (reviewed, comments alone); after
+  // it, a "Send Update to Client" CTA so they can push the new version. A
+  // cloud review knows exactly (it has a draft); a local one compares times.
+  const hasEdits = entry.unsentEdits ?? (
     !!entry.lastEditedAtISO &&
     (!entry.returnedAtISO || entry.lastEditedAtISO > entry.returnedAtISO)
-  ));
-  // Where the version they were sent stands: still theirs to accept, or taken.
-  const returnedLine = entry.appliedAtISO
-    ? `Sent back. ${asker.The} has accepted your changes.`
-    : `Sent back. Waiting for ${asker.the} to accept it.`;
+  );
+  const hasUnsentEdits = isReturned && hasEdits;
+  // Where the version they were sent stands: still theirs to accept, or taken
+  // (seen, for one sent back with no changes: Got it).
+  const returnedLine = entry.noChanges
+    ? (entry.appliedAtISO
+      ? `Sent back with no changes. ${asker.The} has seen it.`
+      : `Sent back with no changes. Waiting for ${asker.the} to see it.`)
+    : (entry.appliedAtISO
+      ? `Sent back. ${asker.The} has accepted your changes.`
+      : `Sent back. Waiting for ${asker.the} to accept it.`);
+  // What they're reading with it: the comments sent with the version they
+  // have (what Send Update's box opens with).
+  const sentComments = isReturned && entry.trainerComments ? (
+    <View style={styles.sentComments}>
+      <TrainerNote label="YOUR COMMENTS" note={entry.trainerComments} />
+    </View>
+  ) : null;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
@@ -206,7 +235,9 @@ export default function ReviewScreen() {
               to go back?", and that button belongs next to the name of the
               thing you're deciding about. */}
           {!isReturned ? (
-            <BounceButton style={{ marginTop: 14 }} onPress={handleSendBack} needsConnection accessibilityLabel={`Send back to ${asker.the}`}>
+            // With nothing changed it goes back as it came, reviewed, with the
+            // comments: an answer that isn't removing it.
+            <BounceButton style={{ marginTop: 14 }} onPress={() => openSend(hasEdits ? "back" : "back-unchanged")} needsConnection accessibilityLabel={`Send back to ${asker.the}`}>
               <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                 <Ionicons name="paper-plane-outline" size={16} color="#fff" />
                 <Text style={styles.sendBtnText}>{`Send Back to ${asker.To}`}</Text>
@@ -218,6 +249,7 @@ export default function ReviewScreen() {
                 <Ionicons name="checkmark-circle" size={18} color={ACCT} />
                 <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
               </View>
+              {sentComments}
               <BounceButton style={{ marginTop: 12 }} onPress={handleSendUpdate} needsConnection accessibilityLabel={`Send your latest edits to ${asker.the}`}>
                 <View style={[styles.sendBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.sendBtn, isDark)]}>
                   <Ionicons name="paper-plane-outline" size={16} color="#fff" />
@@ -226,10 +258,21 @@ export default function ReviewScreen() {
               </BounceButton>
             </>
           ) : (
-            <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
-              <Ionicons name="checkmark-circle" size={18} color={ACCT} />
-              <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
-            </View>
+            <>
+              <View style={[styles.returnedBanner, { backgroundColor: `${ACCT}1a` }]}>
+                <Ionicons name="checkmark-circle" size={18} color={ACCT} />
+                <Text style={[styles.returnedText, { color: ACCT }]}>{returnedLine}</Text>
+              </View>
+              {sentComments}
+              {/* Nothing new to send but words: the page's white button, the
+                  green one being for changes. */}
+              <BounceButton style={{ marginTop: 12 }} onPress={handleSendComment} needsConnection accessibilityLabel={`Send ${asker.the} a comment`}>
+                <View style={[styles.sendBtn, PILL_SHADOW, { backgroundColor: t.ctrl }]}>
+                  <Ionicons name="chatbubble-outline" size={16} color={t.tp} />
+                  <Text style={[styles.sendBtnText, { color: t.tp }]}>{`Send a Comment to ${asker.To}`}</Text>
+                </View>
+              </BounceButton>
+            </>
           )}
 
           {/* The program itself, in the same detail as viewing a program that
@@ -273,6 +316,18 @@ export default function ReviewScreen() {
         />
       )}
 
+      {/* Mounted only while open, and never with the Summary up: one RN
+          Modal at a time. */}
+      {sendMode && !summaryOpen && (
+        <SendBackSheet
+          review={entry}
+          mode={sendMode}
+          askerName={asker.name}
+          onSend={sendBack}
+          onClose={sheetClosed}
+        />
+      )}
+
       {kbHeight > 0 && Platform.OS === "ios" && (
         <View style={{ position: "absolute", right: 10, bottom: kbHeight + 8, zIndex: 999 }}>
           <TouchableOpacity
@@ -304,5 +359,6 @@ const styles = StyleSheet.create({
   sendBtnText:    { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   returnedBanner: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 16, padding: 14, borderRadius: 14 },
   returnedText:   { fontFamily: FontFamily.semibold, fontSize: 13 },
+  sentComments:   { marginTop: 12 },
   kbFloatBtn:     { minWidth: 52, height: 42, borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 4 },
 });

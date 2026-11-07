@@ -29,7 +29,8 @@ export default function ProgramHeaderCard({ name, snapshot, isDark }: {
       <View style={styles.inner}>
         <View style={styles.nameBlock}>
           <Text style={[styles.label, { color: t.ts }]}>PROGRAM NAME</Text>
-          <Text style={[styles.name, { color: t.tp }]} numberOfLines={2}>{name}</Text>
+          {/* Whole, however long, never "…" (user request, 2026-11-06). */}
+          <Text style={[styles.name, { color: t.tp }]}>{name}</Text>
         </View>
         {snapshot ? (
           <View style={styles.metaRow}>

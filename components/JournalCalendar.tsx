@@ -16,7 +16,7 @@ import BounceButton from "./BounceButton";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { MONTH_FULL } from "../utils/dates";
 import {
-  calendarWeeks, monthWorkouts, summaryLine, ymdOf,
+  calendarWeeks, monthWorkouts, pastPlanFrom, summaryLine, ymdOf,
   type CalendarDay, type CalendarDayState, type CalendarRun,
 } from "../utils/journalCalendar";
 
@@ -47,6 +47,9 @@ interface Props {
   workoutDates: string[];
   workoutHistory: CompletedWorkout[];
   activeProgram: SavedProgram | null;
+  /** Every program, ended or not: a day gone by reads as the run going on it
+   *  planned it (utils/journalCalendar.ts pastPlanFrom). */
+  programs: SavedProgram[];
   onDayPress: (date: string, workoutId?: string) => void;
   /** The month to open on, "YYYY-MM" (Home's calendar sends the month before
    *  this one when that month is tapped). Otherwise it opens on this month. */
@@ -131,7 +134,7 @@ function MonthArrow({ back, disabled, onPress, t }: {
   );
 }
 
-export default function JournalCalendar({ isDark, workoutDates, workoutHistory, activeProgram, onDayPress, initialMonth }: Props) {
+export default function JournalCalendar({ isDark, workoutDates, workoutHistory, activeProgram, programs, onDayPress, initialMonth }: Props) {
   const today    = useMemo(() => new Date(), []);
   const curYear  = today.getFullYear();
   const curMonth = today.getMonth();
@@ -185,10 +188,11 @@ export default function JournalCalendar({ isDark, workoutDates, workoutHistory, 
   }, [workoutHistory]);
 
   const workoutSet = useMemo(() => new Set(workoutDates), [workoutDates]);
+  const pastPlan = useMemo(() => pastPlanFrom(programs, workoutHistory), [programs, workoutHistory]);
 
   const weeks = useMemo(
-    () => calendarWeeks(viewYear, viewMonth, todayStr, workoutSet, activeProgram),
-    [viewYear, viewMonth, todayStr, workoutSet, activeProgram],
+    () => calendarWeeks(viewYear, viewMonth, todayStr, workoutSet, activeProgram, pastPlan),
+    [viewYear, viewMonth, todayStr, workoutSet, activeProgram, pastPlan],
   );
   const summary = useMemo(
     () => summaryLine(monthWorkouts(viewYear, viewMonth, workoutHistory), atCurrentMonth),

@@ -30,6 +30,7 @@ import {
 } from "../constants/exercises";
 import { customNameTaken, liveCustoms, liveIndexOf, newCustomId } from "../utils/customExercises";
 import { renameCustomExercise } from "../utils/customExerciseStore";
+import { refreshAssisted } from "../utils/assistedStore";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import { useTheme } from "../contexts/ThemeContext";
@@ -95,6 +96,7 @@ export default function CreateCustomExerciseScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
+  const [assisted, setAssisted] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [slotCount, setSlotCount] = useState(0);
@@ -124,6 +126,7 @@ export default function CreateCustomExerciseScreen() {
       setImageUri(ex.imageUri ?? null);
       setVideoUri(ex.videoUri ?? null);
       setMuted(ex.muted ?? false);
+      setAssisted(ex.assisted === true);
       // Prefer saved steps; otherwise seed the editor from a legacy description
       // (one step per line) so old exercises convert cleanly when re-saved.
       setSteps(
@@ -243,6 +246,7 @@ export default function CreateCustomExerciseScreen() {
         ...(imageUri ? { imageUri } : {}),
         ...(videoUri ? { videoUri, ...(muted ? { muted: true } : {}) } : {}),
         ...(cleanSteps.length > 0 ? { steps: cleanSteps } : {}),
+        ...(assisted ? { assisted: true } : {}),
       };
       if (before) {
         current[idx] = updated;
@@ -257,6 +261,8 @@ export default function CreateCustomExerciseScreen() {
         }
         await AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify([...current, updated]));
       }
+      // Its Assisted switch, for every count from here (utils/assisted.ts).
+      await refreshAssisted();
       scheduleCloudPush(); // custom exercises (and cascaded program renames) are synced
       router.back();
     } catch (e) {
@@ -376,6 +382,21 @@ export default function CreateCustomExerciseScreen() {
             );
           })}
         </View>
+
+        {/* Assisted: its weight is help, not load (user request, 2026-11-07),
+            so less is harder and less is its record (utils/assisted.ts). */}
+        <Text style={[styles.fieldLabel, { color: t.ts }]}>WEIGHT</Text>
+        <NeuCard dark={isDark} style={styles.mediaCard}>
+          <View style={styles.assistedRow}>
+            <View style={styles.assistedText}>
+              <Text style={[styles.muteLabel, { color: t.tp }]}>Assisted</Text>
+              <Text style={[styles.slotSub, { color: t.ts }]}>
+                The weight helps you, like an assisted pull-up machine. Less is harder, so less weight is your record.
+              </Text>
+            </View>
+            <AppSwitch value={assisted} onValueChange={setAssisted} accessibilityLabel="Assisted" />
+          </View>
+        </NeuCard>
 
         {/* Icon Photo */}
         <Text style={[styles.fieldLabel, { color: t.ts }]}>ICON PHOTO <Text style={{ fontFamily: FontFamily.regular }}>(optional)</Text></Text>
@@ -526,6 +547,9 @@ const styles = StyleSheet.create({
   muteRow:         { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
   muteLabelRow:    { flexDirection: "row", alignItems: "center", gap: 8 },
   muteLabel:       { fontFamily: FontFamily.semibold, fontSize: 14 },
+  // The Assisted switch's row: its words, then the switch.
+  assistedRow:     { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
+  assistedText:    { flex: 1, gap: 3 },
   stepCard:        { marginBottom: 10, borderRadius: 16 },
   stepEditorRow:   { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
   stepNum:         { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", marginTop: 6 },

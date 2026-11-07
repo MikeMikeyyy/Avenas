@@ -102,4 +102,6 @@ stubModule({ file: "lib/syncManager.ts" }, {
 });
 stubModule({ file: "utils/notificationScheduler.ts" }, {
   resyncScheduledNotifications: () => {},
+  // A program ending by itself earns its achievement (utils/programFinish.ts).
+  notifyAchievement: () => {},
 });

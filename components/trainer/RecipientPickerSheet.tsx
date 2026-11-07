@@ -51,7 +51,7 @@ import {
   replacedTextColor, roleColor, roleTextColor,
 } from "../../constants/theme";
 import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
-import { CARD_META } from "../../constants/cards";
+import { CARD_META, CARD_SHADOW_ROOM } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { fetchPeopleUnits } from "../../lib/clientTraining";
@@ -334,8 +334,9 @@ const styles = StyleSheet.create({
   title:       { fontFamily: FontFamily.bold, fontSize: 20 },
   subtitle:    { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18 },
   unitNote:    { paddingHorizontal: 24, paddingBottom: 8 },
-  // Each part's card, and the room under it before the next part's label.
-  cardWrap:    { paddingHorizontal: 20, paddingBottom: 18 },
+  // Each part's card, and the room under it before the next part's label: all
+  // of its shadow, which the sheet's scroll cut off under the last one.
+  cardWrap:    { paddingHorizontal: 20, paddingBottom: CARD_SHADOW_ROOM },
   firstCard:   { paddingTop: 4 },
   // Manage Group's labels over its cards.
   section:     { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, paddingHorizontal: 24, marginBottom: 8 },

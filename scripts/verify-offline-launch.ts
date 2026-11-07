@@ -248,7 +248,7 @@ stub("lib/supabase", { supabase: { auth: { getSession: async () => answer } } })
 stub("lib/cloud", {
   BACKUP_OWED_KEY: OWED,
   getCacheOwner: async () => "user-1",
-  pushAllLocalDataToCloud: async () => { if (holdPush) await holdPush; pushes += 1; return {}; },
+  syncBackup: async () => { if (holdPush) await holdPush; pushes += 1; return "pushed"; },
 });
 stub("utils/storage", {
   getJSON: async (key: string, fallback: unknown) => (disk.has(key) ? JSON.parse(disk.get(key) as string) : fallback),

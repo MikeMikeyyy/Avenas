@@ -51,6 +51,12 @@ export function runStartDate(program: SavedProgram): string {
  * second day. Found by scripts/verify-training-months.ts. A resume the same
  * day as its pause is a hold of no days, kept for this (resumeProgram).
  */
+/** A week off with nothing logged puts the program on hold by itself
+ *  (utils/programPause.ts autoPauseIfIdle). Here, beside the count it's read
+ *  against, so the backup's merge (utils/syncMerge.ts undoStaleAutoPause) can
+ *  read it too without the storage and prompts of programPause. */
+export const AUTO_PAUSE_AFTER_DAYS = 7;
+
 export function idleDays(program: SavedProgram, workoutDates: string[], today: string = todayYMD()): number {
   const marks = [...workoutDates];
   const runStart = runStartYMD(program);

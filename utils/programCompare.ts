@@ -544,7 +544,8 @@ const bestReps = (q: ExerciseDataPoint) => q.sets.reduce((m, s) => (s.reps > m ?
  * (each one's Nth session, missed ones counted, so the number is the one on
  * the chart). By top set when both lifted a weight, by the best set's reps
  * when both were at bodyweight; null otherwise. `diff` is green's less blue's:
- * positive is ahead.
+ * positive is ahead. On an assisted exercise less help is ahead
+ * (utils/assisted.ts), so `diff` is blue's help less green's.
  */
 export function aheadAtSamePoint(
   green: readonly LiftSlot[],
@@ -554,7 +555,10 @@ export function aheadAtSamePoint(
     const g = green[k].point;
     const b = blue[k].point;
     if (!g || !b) continue;
-    if (g.topWeight > 0 && b.topWeight > 0) return { session: k + 1, diff: g.topWeight - b.topWeight, by: "weight" };
+    if (g.topWeight > 0 && b.topWeight > 0) {
+      const diff = g.isAssisted ? b.topWeight - g.topWeight : g.topWeight - b.topWeight;
+      return { session: k + 1, diff, by: "weight" };
+    }
     if (g.topWeight === 0 && b.topWeight === 0 && !g.isHold && !b.isHold) return { session: k + 1, diff: bestReps(g) - bestReps(b), by: "reps" };
     return null;
   }
@@ -562,11 +566,15 @@ export function aheadAtSamePoint(
 }
 
 /** A lift's change across a run, first session to `upTo` (all of them by
- *  default), by top set: null with fewer than two weighted sessions. */
+ *  default), by top set: null with fewer than two weighted sessions. An
+ *  assisted lift's gain is its help coming down (utils/assisted.ts), so its
+ *  change is the other way round, as its chart reads. */
 export function liftChange(points: readonly ExerciseDataPoint[], upTo: number = points.length): number | null {
   const drawn = points.slice(0, upTo).filter(q => drawsOn(q, "strength"));
   if (drawn.length < 2) return null;
-  return percentChange(chartValue(drawn[0], "strength"), chartValue(drawn[drawn.length - 1], "strength"));
+  const last = drawn[drawn.length - 1];
+  const pct = percentChange(chartValue(drawn[0], "strength"), chartValue(last, "strength"));
+  return pct !== null && last.isAssisted ? -pct : pct;
 }
 
 /**

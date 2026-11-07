@@ -1,8 +1,8 @@
-// Network layer: push local AsyncStorage data up to Supabase and report counts.
-// Online-first reads (cloud -> cache) come with the screen wiring; this module
-// is the write/sync half plus a count helper for the test screen.
+// Network layer: the account's backup (push, pull, and merging it with another
+// phone's), counts, the profile.
 //
-// RN-only (imports the Supabase client + AsyncStorage) — not for the node harness.
+// Imports the Supabase client and AsyncStorage: on the phone, and in the node
+// harness through its stand-ins (scripts/harness/app.ts).
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { signOutHere, supabase } from "./supabase";
@@ -16,13 +16,26 @@ import {
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
 import { CUSTOM_KEY, EXERCISE_MEDIA_UPLOADS_KEY, type CustomExercise } from "../constants/exercises";
 import { liveCustoms } from "../utils/customExercises";
+import { refreshAssisted } from "../utils/assistedStore";
 import {
   customFromRow,
-  journalFromRow,
+  journalFromRows,
   snapshotFromRows,
   toReplaceUserDataPayload,
 } from "./mappers";
-import type { CustomExerciseRow, JournalRow, ProgramRow, WorkoutRow } from "./database.types";
+import type {
+  BackupStateRow, CustomExerciseRow, JournalRow, MyBackupPayload, ProgramRow, WorkoutRow,
+} from "./database.types";
+import {
+  applyChanges, baseOfInSlices, datesAfter, droppedWithoutDelete, hashText, mergeSnapshots, sameBase, sameTombstones,
+  undoStaleAutoPause, type MergeResult, type SyncSnapshot, type Tombstone,
+} from "../utils/syncMerge";
+import {
+  SYNC_ACCOUNT_KEYS, addTombstones, clearAutoPause, clearSyncState, deviceId, readAutoPause, readLocalChangedAt,
+  readSyncState, readTombstones, writeSyncState,
+} from "../utils/syncLocal";
+import { emitSyncedDataChanged } from "../utils/syncEvents";
+import { AUTO_PAUSE_AFTER_DAYS } from "../utils/programHolds";
 import { ACCOUNT_TYPE_KEY, type AccountType } from "../contexts/AccountTypeContext";
 import { UNIT_KEY } from "../utils/units";
 import {
@@ -45,47 +58,18 @@ export type SyncCounts = {
 };
 
 /**
- * Replace this user's cloud data with whatever is currently in local storage —
- * an idempotent "push" (safe to run repeatedly; re-running just re-uploads).
+ * Make this phone's copy the account's backup, whatever another phone has
+ * backed up (Keep Device Data on the "Data found on this device" prompt, the
+ * test screen). Every other backup goes through syncBackup, which merges.
  *
- * Delegates to the replace_user_data RPC (migration 0004) so the whole replace
- * is ONE atomic transaction server-side: a network/insert failure rolls back
- * instead of leaving the cloud wiped or partial. The program → workout linkage
- * is carried as program_index (the program's position in the array) and the
- * server resolves it to the freshly-minted uuid — no client-side id remap.
+ * replace_user_data (migration 0004) replaces the whole copy in ONE
+ * transaction, so a failure rolls back instead of leaving it wiped or partial;
+ * workouts point at their program by its place in the list (program_index),
+ * which the server turns into the program row it mints.
  */
 export async function pushAllLocalDataToCloud(userId: string): Promise<SyncCounts> {
-  const [programs, history, journal, custom] = await Promise.all([
-    getJSON<SavedProgram[]>(PROGRAMS_KEY, []),
-    getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []),
-    getJSON<JournalEntry[]>(JOURNAL_KEY, []),
-    getJSON<CustomExercise[]>(CUSTOM_KEY, []),
-  ]);
-
-  // Safety net against data loss: never let an empty local cache overwrite a
-  // non-empty cloud. An empty local almost always means "not loaded yet" or
-  // "just cleared on an account switch" — NOT "the user deleted everything".
-  // replace_user_data wipes-then-writes, so pushing empty over real cloud data
-  // would destroy it. If local is empty but the cloud has data, skip the push.
-  const localTotal = programs.length + history.length + journal.length + custom.length;
-  if (localTotal === 0) {
-    const cloud = await cloudCounts(userId);
-    if (total(cloud) > 0) {
-      if (__DEV__) console.warn("[avenas] skipped empty push over non-empty cloud");
-      return cloud;
-    }
-  }
-
-  const payload = toReplaceUserDataPayload(programs, history, journal, custom, userId);
-  const { error } = await supabase.rpc("replace_user_data", payload);
-  if (error) throw new Error(`replace_user_data: ${error.message}`);
-
-  return {
-    programs: programs.length,
-    workouts: history.length,
-    journal: journal.length,
-    customExercises: liveCustoms(custom).length,
-  };
+  await syncBackup(userId, "replace");
+  return localCounts();
 }
 
 /** Row counts currently in the cloud for this user (Data & Sync, and whether
@@ -150,19 +134,14 @@ async function selectEvery(
 }
 
 /** Everything the cloud holds for one account, fetched but not yet written. */
-type CloudSnapshot = {
-  programs: SavedProgram[];
-  workouts: CompletedWorkout[];
-  journal: JournalEntry[];
-  custom: CustomExercise[];
-};
+type CloudSnapshot = SyncSnapshot;
 
 /**
- * Download every dataset for `userId`. Network only — throws on ANY failure
- * WITHOUT touching local storage, so callers get an all-or-nothing snapshot
- * and a failed download can never leave the device half-written or wiped.
+ * The account's backup table by table: a server without 0057, which has no
+ * get_my_backup. Network only, and throws on ANY failure without touching
+ * local storage.
  */
-async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
+async function fetchTables(userId: string): Promise<CloudSnapshot> {
   const { data: progRows, error: pe } = await supabase
     .from("programs").select("*").eq("user_id", userId)
     // Oldest-first, matching how local writes append to @avenas/programs (a
@@ -186,9 +165,22 @@ async function fetchAllFromCloud(userId: string): Promise<CloudSnapshot> {
   return {
     programs,
     workouts,
-    journal: (jRows as JournalRow[]).map(journalFromRow),
+    journal: journalFromRows(jRows as JournalRow[]),
     custom: ((cRows ?? []) as CustomExerciseRow[]).map(customFromRow),
   };
+}
+
+/**
+ * Download the account's whole backup: in one read with its version where
+ * the server has 0057 (`backup` is then what syncBackup needs to merge on top
+ * of it), table by table where it doesn't (`backup` null). Network only:
+ * throws on ANY failure WITHOUT touching local storage, so callers get an
+ * all-or-nothing snapshot and a failed download can never leave the device
+ * half-written or wiped.
+ */
+async function fetchAllFromCloud(userId: string): Promise<{ snap: CloudSnapshot; backup: Backup | null }> {
+  const backup = await fetchBackup();
+  return backup ? { snap: backup.snap, backup } : { snap: await fetchTables(userId), backup: null };
 }
 
 /** Overwrite the local cache with a fetched snapshot (cloud is the source of
@@ -202,6 +194,21 @@ async function writeSnapshotToLocal(snap: CloudSnapshot): Promise<void> {
   await setJSON(JOURNAL_KEY, snap.journal);
   await setJSON(CUSTOM_KEY, snap.custom);
   await relinkSharesAfterRestore();
+  // Which custom exercises are assisted, as restored (utils/assisted.ts).
+  await refreshAssisted();
+}
+
+/** After the phone took the backup whole (a restore, an account switch): it
+ *  has seen this version, and knows its deletions. With no version (a server
+ *  without 0057) there's nothing to merge on top of. */
+async function recordBackupTaken(userId: string, backup: Backup | null): Promise<void> {
+  if (!backup) {
+    await clearSyncState();
+    return;
+  }
+  await addTombstones(backup.deleted);
+  const { raw } = await readLocalCopy();
+  await writeSyncState({ uid: userId, version: backup.version, base: await baseOfInSlices(backup.snap), raw });
 }
 
 const snapshotCounts = (s: CloudSnapshot): SyncCounts => ({
@@ -217,8 +224,9 @@ const snapshotCounts = (s: CloudSnapshot): SyncCounts => ({
  * network failure mid-pull leaves local storage exactly as it was.
  */
 export async function pullAllFromCloud(userId: string): Promise<SyncCounts> {
-  const snap = await fetchAllFromCloud(userId);
+  const { snap, backup } = await fetchAllFromCloud(userId);
   await writeSnapshotToLocal(snap);
+  await recordBackupTaken(userId, backup);
   return snapshotCounts(snap);
 }
 
@@ -259,6 +267,362 @@ export async function syncOnLogin(
     return { direction: "pulled", counts: await pullAllFromCloud(userId) };
   }
   return { direction: "noop", counts: cloud };
+}
+
+// ── Two phones on one account (migration 0057) ─────────────────────────────────
+//
+// Every backup replaces the account's whole copy, and with two phones on one
+// account the copy used to be whichever left the app last, the other's new
+// workouts dropped from it (user decision, 2026-11-07: merge both phones). Now
+// the backup has a version, and a phone sends the one it last saw: refused if
+// another phone's backup landed since, it downloads that one, merges it with
+// its own copy (utils/syncMerge.ts) and sends the result. The other phone's
+// changes also come in when the app opens or comes back to the front ("check").
+// A phone alone on its account never merges: its own last backup is always
+// the latest, so each one goes straight through as before.
+
+/** Another phone backed up since this one last saw the backup. */
+export class StaleBackupError extends Error {
+  constructor() {
+    super("backup: another phone backed up since");
+    this.name = "StaleBackupError";
+  }
+}
+
+/** The server has no 0057 (no versions, no get_my_backup): backups replace
+ *  the copy as they always did. PostgREST names a missing function or table by
+ *  code; Postgres itself (the harness) by message. */
+function isMissing(e: { message?: string; code?: string } | null): boolean {
+  if (!e) return false;
+  if (e.code === "PGRST202" || e.code === "PGRST205" || e.code === "42883" || e.code === "42P01") return true;
+  return /could not find the (function|table)|does not exist/i.test(e.message ?? "");
+}
+
+/** The account's backup as the server holds it now: the version, the phone
+ *  that sent it, when that phone last changed something. */
+type Head = { version: number; device: string | null; changedAt: number };
+type Backup = Head & { snap: SyncSnapshot; deleted: Tombstone[] };
+
+/** One small row: has another phone backed up since? null on a server without 0057. */
+async function fetchBackupHead(userId: string): Promise<Head | null> {
+  const { data, error } = await supabase
+    .from("backup_state").select("version, device, changed_at, backed_up_at").eq("user_id", userId).maybeSingle();
+  if (error) {
+    if (isMissing(error)) return null;
+    throw new Error(`backup state: ${error.message}`);
+  }
+  const row = data as Pick<BackupStateRow, "version" | "device" | "changed_at" | "backed_up_at"> | null;
+  if (!row) return { version: 0, device: null, changedAt: 0 };
+  return {
+    version: Number(row.version) || 0,
+    device: row.device ?? null,
+    changedAt: Date.parse(row.changed_at ?? row.backed_up_at) || 0,
+  };
+}
+
+/** The whole backup and its version in one read (get_my_backup: one snapshot,
+ *  and no 1000-row cap). null on a server without 0057. */
+async function fetchBackup(): Promise<Backup | null> {
+  const { data, error } = await supabase.rpc("get_my_backup");
+  if (error) {
+    if (isMissing(error)) return null;
+    throw new Error(`pull backup: ${error.message}`);
+  }
+  const p = data as MyBackupPayload | null;
+  if (!p) throw new Error("pull backup: nothing came back");
+  // Each program and session under its own id (mappers.snapshotFromRows).
+  const { programs, workouts } = snapshotFromRows(p.programs ?? [], p.workouts ?? []);
+  return {
+    version: Number(p.version) || 0,
+    device: p.device ?? null,
+    changedAt: Date.parse(p.changed_at ?? p.backed_up_at ?? "") || 0,
+    deleted: Array.isArray(p.deleted) ? (p.deleted as Tombstone[]) : [],
+    snap: { programs, workouts, journal: journalFromRows(p.journal ?? []), custom: (p.custom ?? []).map(customFromRow) },
+  };
+}
+
+/**
+ * Send `snap` as the account's backup on top of `baseVersion`, the version
+ * this phone last saw. Refused with StaleBackupError when another phone's has
+ * landed since. Returns the new version, or null from a server without 0057,
+ * where it went the old way (replacing, unchecked).
+ */
+async function sendBackup(
+  userId: string,
+  snap: SyncSnapshot,
+  opts: { baseVersion: number; device: string; deleted: Tombstone[]; changedAt: number },
+): Promise<number | null> {
+  // Sent as whoever is signed in now: an account switched mid-backup must
+  // never be sent this account's copy.
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.user.id !== userId) throw new Error("backup: signed in as someone else");
+  const payload = toReplaceUserDataPayload(snap.programs, snap.workouts, snap.journal, snap.custom, userId);
+  const { data, error } = await supabase.rpc("replace_user_data", {
+    ...payload,
+    p_base_version: opts.baseVersion,
+    p_device: opts.device,
+    p_deleted: opts.deleted,
+    p_changed_at: new Date(opts.changedAt || Date.now()).toISOString(),
+  });
+  if (!error) return Number(data);
+  if (/stale backup/i.test(error.message)) throw new StaleBackupError();
+  if (!isMissing(error)) throw new Error(`replace_user_data: ${error.message}`);
+  const { error: old } = await supabase.rpc("replace_user_data", payload);
+  if (old) throw new Error(`replace_user_data: ${old.message}`);
+  return null;
+}
+
+/** Never let an empty copy replace a backup with things in it unless every
+ *  one of them was deleted: an empty phone almost always means "not loaded
+ *  yet" or "just cleared for another account", not "deleted everything". */
+async function emptyOverFull(userId: string, snap: SyncSnapshot, deleted: Tombstone[], backup: SyncSnapshot | null): Promise<boolean> {
+  if (snap.programs.length + snap.workouts.length + snap.journal.length + snap.custom.length > 0) return false;
+  if (backup) {
+    const gone = new Set(deleted.map(t => `${t.k}|${t.id}`));
+    const left = backup.programs.filter(p => !gone.has(`programs|${p.id}`)).length
+      + backup.workouts.filter(w => !gone.has(`workouts|${w.id}`)).length
+      + backup.journal.filter(j => !gone.has(`journal|${j.id}`)).length
+      + backup.custom.length;
+    return left > 0;
+  }
+  return total(await cloudCounts(userId)) > 0;
+}
+
+const LIST_KEYS = [PROGRAMS_KEY, WORKOUT_HISTORY_KEY, JOURNAL_KEY, CUSTOM_KEY] as const;
+
+function listFrom(raw: string | null): unknown[] {
+  if (!raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The four lists a backup holds, as this phone holds them now, with their
+ *  fingerprint (one hash of all four, so "nothing changed" is quick). An
+ *  unreadable list reads as empty: the merge then finds everything the backup
+ *  has gone with no delete, and writes it back. */
+async function readLocalCopy(): Promise<{ snap: SyncSnapshot; raw: string }> {
+  const raws: (string | null)[] = [];
+  for (const key of LIST_KEYS) raws.push(await AsyncStorage.getItem(key));
+  return {
+    snap: {
+      programs: listFrom(raws[0]) as SavedProgram[],
+      workouts: listFrom(raws[1]) as CompletedWorkout[],
+      journal: listFrom(raws[2]) as JournalEntry[],
+      custom: listFrom(raws[3]) as CustomExercise[],
+    },
+    raw: hashText(raws.map(r => r ?? "").join("\u0000")),
+  };
+}
+
+/** A merge's changes written on the phone. Each list is read again just
+ *  before it's written, and applyChanges leaves alone anything changed in the
+ *  meantime (a workout finished while the backup downloaded). The days
+ *  trained follow the sessions. Errors are thrown: the backup then fails and
+ *  is tried again, rather than going up without what it should have brought. */
+async function writeMergeHere(result: MergeResult): Promise<void> {
+  const c = result.changes;
+  const changed = (k: keyof typeof c) => c[k].put.size > 0 || c[k].drop.size > 0;
+  const write = (key: string, value: unknown) => AsyncStorage.setItem(key, JSON.stringify(value));
+  if (changed("programs")) {
+    await write(PROGRAMS_KEY, applyChanges("programs", await getJSON<SavedProgram[]>(PROGRAMS_KEY, []), c.programs));
+  }
+  if (changed("workouts")) {
+    const before = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+    const after = applyChanges("workouts", before, c.workouts);
+    await write(WORKOUT_HISTORY_KEY, after);
+    await write(WORKOUT_DATES_KEY, datesAfter(await getJSON<string[]>(WORKOUT_DATES_KEY, []), before, after));
+  }
+  if (changed("journal")) {
+    await write(JOURNAL_KEY, applyChanges("journal", await getJSON<JournalEntry[]>(JOURNAL_KEY, []), c.journal));
+  }
+  if (changed("custom")) {
+    await write(CUSTOM_KEY, applyChanges("custom", await getJSON<CustomExercise[]>(CUSTOM_KEY, []), c.custom));
+  }
+  // A program the other phone accepted from a trainer: which send it came
+  // from is the phone's own to know, learnt from its origin as after a restore.
+  if (changed("programs")) await relinkSharesAfterRestore();
+  // The other phone's Assisted switches, and the exercises its programs carry
+  // (utils/assisted.ts).
+  if (changed("custom") || changed("programs")) await refreshAssisted();
+}
+
+/** Why a sync runs. "push": send this phone's changes (merging first if it's
+ *  behind). "check": also ask whether another phone backed up, and take its
+ *  changes in (the app opening or coming back to the front, Back Up Now).
+ *  "replace": this phone's copy becomes the backup, unmerged. */
+export type SyncReason = "push" | "check" | "replace";
+/** "skipped": nothing could be decided (an import choice still open, a
+ *  server without 0057 with nothing owed). */
+export type SyncOutcome = "pushed" | "merged" | "upToDate" | "skipped";
+
+/** An account whose sign-in found unclaimed data on the phone and is waiting
+ *  on the person's choice (keepDeviceData / replaceWithCloudData): nothing is
+ *  merged or sent for it until they've chosen. */
+let choosing: string | null = null;
+
+let syncQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Bring this phone and the account's backup together, one sync at a time:
+ * send this phone's changes, and when another phone has backed up since, merge
+ * its copy in first. `owed` says this phone has changes the backup hasn't
+ * (lib/syncManager.ts BACKUP_OWED_KEY), for a "check" on a server without 0057,
+ * where only a backup can be sent.
+ */
+export function syncBackup(userId: string, reason: SyncReason, opts: { owed?: boolean } = {}): Promise<SyncOutcome> {
+  const run = syncQueue.then(() => runSync(userId, reason, opts.owed ?? false), () => runSync(userId, reason, opts.owed ?? false));
+  syncQueue = run.catch(() => {});
+  return run;
+}
+
+async function runSync(userId: string, reason: SyncReason, owed: boolean): Promise<SyncOutcome> {
+  if (choosing === userId) return "skipped";
+  const device = await deviceId();
+
+  /** The phone's copy as it stands, read in this order: the lists first, then
+   *  the deletions, so a delete landing between the two is seen as one (its
+   *  tombstone is written before the item goes, utils/syncLocal.ts noteDeleted). */
+  const readHere = async () => {
+    const copy = await readLocalCopy();
+    const deleted = await readTombstones();
+    return { ...copy, deleted, changedAt: await readLocalChangedAt() };
+  };
+
+  /** What's left once a backup this phone sent (or took) is the latest: the
+   *  version, and the copy it was, as the base for the next merge. */
+  const seen = async (version: number, snap: SyncSnapshot, raw: string) => {
+    await writeSyncState({ uid: userId, version, base: await baseOfInSlices(snap), raw });
+    await clearAutoPause();
+  };
+
+  if (reason === "replace") {
+    const here = await readHere();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const head = await fetchBackupHead(userId);
+      if (await emptyOverFull(userId, here.snap, here.deleted, null)) {
+        if (__DEV__) console.warn("[avenas] skipped empty backup over a full one");
+        return "skipped";
+      }
+      try {
+        const v = await sendBackup(userId, here.snap, { baseVersion: head?.version ?? 0, device, deleted: here.deleted, changedAt: here.changedAt });
+        if (v === null || !head) await clearSyncState();
+        else await seen(v, here.snap, here.raw);
+        return "pushed";
+      } catch (e) {
+        if (!(e instanceof StaleBackupError)) throw e;
+      }
+    }
+    throw new StaleBackupError();
+  }
+
+  // A backup refused because another phone's landed first: straight to merging.
+  let behind = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const state = await readSyncState(userId);
+    const here = await readHere();
+
+    // Changed since the backup this phone last saw? One hash says no.
+    const hereBase = state && here.raw === state.raw ? state.base : await baseOfInSlices(here.snap);
+    const unchanged = !!state && (hereBase === state.base || sameBase(hereBase, state.base));
+    // An item gone from the phone that no delete explains: something wrote an
+    // old list back. The backup still has it: merge, which brings it back.
+    let merge = behind || !state || (!unchanged && droppedWithoutDelete(here.snap, state.base, here.deleted) > 0);
+
+    if (!merge && reason === "check") {
+      const head = await fetchBackupHead(userId);
+      if (!head) return owed ? legacyPush(userId, here) : "skipped";
+      if (state && head.version !== state.version) merge = true;
+      else if (unchanged) return "upToDate";
+    }
+
+    if (!merge && state) {
+      if (unchanged) {
+        if (here.raw !== state.raw) await writeSyncState({ ...state, raw: here.raw });
+        return "upToDate";
+      }
+      try {
+        const v = await sendBackup(userId, here.snap, { baseVersion: state.version, device, deleted: here.deleted, changedAt: here.changedAt });
+        if (v === null) { await clearSyncState(); return "pushed"; }
+        await writeSyncState({ uid: userId, version: v, base: hereBase, raw: here.raw });
+        await clearAutoPause();
+        return "pushed";
+      } catch (e) {
+        if (!(e instanceof StaleBackupError)) throw e;
+        // Another phone backed up since: merge its copy in.
+      }
+    }
+
+    const backup = await fetchBackup();
+    if (!backup) return reason === "check" && !owed ? "skipped" : legacyPush(userId, here);
+    // The phone's data moved on to another account while this ran: leave it.
+    // No owner at all is a phone signed in since before the marker existed
+    // (an unclaimed one waiting on its import choice never gets here): its
+    // data is this account's, claimed as it merges.
+    const owner = await getCacheOwner();
+    if (owner !== null && owner !== userId) return "skipped";
+    if (owner === null) await setCacheOwner(userId);
+
+    // The backup is this phone's own (its answer lost on the way, or the state
+    // that recorded it): then it's what the phone's copy grew from.
+    const base = backup.device === device ? await baseOfInSlices(backup.snap) : state?.base ?? null;
+    const result = mergeSnapshots({
+      local: here.snap,
+      remote: backup.snap,
+      base,
+      localDeleted: here.deleted,
+      remoteDeleted: backup.deleted,
+      localChangedAt: here.changedAt,
+      remoteChangedAt: backup.changedAt,
+      // Sent by an app from before 0057 (it says no phone): what it holds
+      // differently is old, so only what it adds comes in.
+      remoteFromOlderApp: backup.device === null && base !== null,
+    });
+    undoStaleAutoPause(result, here.snap, backup.snap, await readAutoPause(), AUTO_PAUSE_AFTER_DAYS);
+    if (result.changedHere) await writeMergeHere(result);
+    await addTombstones(result.deleted);
+    if (result.changedHere) emitSyncedDataChanged();
+
+    // What goes up is the phone's copy as it is now, the merge in it.
+    const after = await readHere();
+    const afterBase = await baseOfInSlices(after.snap);
+    const backupBase = await baseOfInSlices(backup.snap);
+    if (sameBase(afterBase, backupBase) && sameTombstones(after.deleted, backup.deleted)) {
+      await writeSyncState({ uid: userId, version: backup.version, base: backupBase, raw: after.raw });
+      await clearAutoPause();
+      return "merged";
+    }
+    if (await emptyOverFull(userId, after.snap, after.deleted, backup.snap)) {
+      if (__DEV__) console.warn("[avenas] skipped empty backup over a full one");
+      return "skipped";
+    }
+    try {
+      const v = await sendBackup(userId, after.snap, { baseVersion: backup.version, device, deleted: after.deleted, changedAt: after.changedAt });
+      if (v === null) { await clearSyncState(); return "pushed"; }
+      await writeSyncState({ uid: userId, version: v, base: afterBase, raw: after.raw });
+      await clearAutoPause();
+      return "merged";
+    } catch (e) {
+      if (!(e instanceof StaleBackupError)) throw e;
+      // Yet another backup landed while this one merged: again.
+      behind = true;
+    }
+  }
+  throw new StaleBackupError();
+}
+
+/** A server without 0057: the whole copy replaces the backup, as before it. */
+async function legacyPush(userId: string, here: { snap: SyncSnapshot; deleted: Tombstone[]; changedAt: number }): Promise<SyncOutcome> {
+  if (await emptyOverFull(userId, here.snap, here.deleted, null)) {
+    if (__DEV__) console.warn("[avenas] skipped empty backup over a full one");
+    return "skipped";
+  }
+  await sendBackup(userId, here.snap, { baseVersion: 0, device: await deviceId(), deleted: here.deleted, changedAt: here.changedAt });
+  await clearSyncState();
+  return "pushed";
 }
 
 // Which user the local AsyncStorage cache currently belongs to. Used to detect
@@ -339,6 +703,10 @@ export async function clearLocalUserData(): Promise<void> {
     // What this account's imports added, to undo them: the next account's
     // history has none of it.
     removeKey(IMPORT_LOG_KEY),
+    // The backup this account was last merged with, its deletions, its last
+    // change, its last automatic hold (utils/syncLocal.ts). The install's own
+    // id stays: it's the phone's, not the account's.
+    ...SYNC_ACCOUNT_KEYS.map(removeKey),
     clearTrainerData(),
     clearChatData(),
     clearModerationData(),
@@ -356,18 +724,21 @@ export class AccountSwitchLoadError extends Error {
 }
 
 export type ReconcileResult =
-  | "kept"           // same account — local kept, any empty side seeded
+  | "kept"           // same account — local kept, merged with its backup
   | "replaced"       // different account — local replaced with its cloud data
   | "import_choice"; // unclaimed local data found — the UI must ask the user (see below)
 
 /**
  * Reconcile the local cache to the signed-in account:
- *   - same account as before → keep local edits, seed any empty side
+ *   - same account as before → keep local edits and merge them with the
+ *     account's backup (syncBackup "check"): what another phone backed up
+ *     meanwhile comes in, and an empty side is filled from the other
  *   - unclaimed local data (no cache owner yet: a pre-backend install or an
  *     upgrade from before the owner marker) → return "import_choice" WITHOUT
  *     touching anything. It may be months of this very user's offline training,
  *     so the caller asks whether to keep it (keepDeviceData) or replace it with
- *     the account's cloud copy (useCloudData). Never silently wiped.
+ *     the account's cloud copy (useCloudData). Never silently wiped, and
+ *     nothing is merged or backed up for the account until they've chosen.
  *   - any other account → download that account's cloud snapshot FIRST, and
  *     only then clear local and write it. A failed download throws
  *     AccountSwitchLoadError with the device untouched.
@@ -375,23 +746,25 @@ export type ReconcileResult =
 export async function reconcileOnSignIn(userId: string): Promise<ReconcileResult> {
   const owner = await getCacheOwner();
   if (owner === userId) {
-    await syncOnLogin(userId);
+    await syncBackup(userId, "check");
     return "kept";
   }
 
   if (owner === null && total(await localCounts()) > 0) {
+    choosing = userId;
     return "import_choice";
   }
 
-  let snap: CloudSnapshot;
+  let fetched: { snap: CloudSnapshot; backup: Backup | null };
   try {
-    snap = await fetchAllFromCloud(userId);
+    fetched = await fetchAllFromCloud(userId);
   } catch (e) {
     throw new AccountSwitchLoadError(e instanceof Error ? e.message : String(e));
   }
   await clearLocalUserData();
-  await writeSnapshotToLocal(snap);
+  await writeSnapshotToLocal(fetched.snap);
   await setCacheOwner(userId);
+  await recordBackupTaken(userId, fetched.backup);
   return "replaced";
 }
 
@@ -399,6 +772,7 @@ export async function reconcileOnSignIn(userId: string): Promise<ReconcileResult
  *  this account and uploads it, so the cloud mirrors what the user chose. */
 export async function keepDeviceData(userId: string): Promise<void> {
   await setCacheOwner(userId);
+  if (choosing === userId) choosing = null;
   await pushAllLocalDataToCloud(userId);
 }
 
@@ -406,10 +780,12 @@ export async function keepDeviceData(userId: string): Promise<void> {
  *  cloud copy. Fetch-first, so a failed download leaves the device untouched.
  *  (Not `use`-prefixed — it would read as a React hook.) */
 export async function replaceWithCloudData(userId: string): Promise<void> {
-  const snap = await fetchAllFromCloud(userId);
+  const { snap, backup } = await fetchAllFromCloud(userId);
   await clearLocalUserData();
   await writeSnapshotToLocal(snap);
   await setCacheOwner(userId);
+  await recordBackupTaken(userId, backup);
+  if (choosing === userId) choosing = null;
 }
 
 // ── per-account profile (name + role + unit) ───────────────────────────────────

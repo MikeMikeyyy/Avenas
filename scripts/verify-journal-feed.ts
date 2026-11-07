@@ -4,7 +4,7 @@
 //
 // Run: npx tsx scripts/verify-journal-feed.ts
 
-import { buildJournalFeed, sessionFeed, sessionNumbers } from "../utils/journalFeed";
+import { buildJournalFeed, RECENT_ACTIVITY_DAYS, sessionFeed, sessionNumbers } from "../utils/journalFeed";
 import type { CompletedWorkout } from "../constants/programs";
 import type { JournalEntry } from "../constants/journal";
 
@@ -60,8 +60,11 @@ eq(
 eq(
   ids(feed({ windowDays: 30, entries: [entry("in", daysAgo(29)), entry("out", daysAgo(31))] })),
   ["in"],
-  "the window is a parameter: a client's journal reaches back a month",
+  "the window is a parameter",
 );
+// Your Journal's Recent Activity and a client's reach back as far (user
+// request, 2026-11-07: a client's showed 30 days to your 14).
+eq(RECENT_ACTIVITY_DAYS, 14, "Recent Activity: 14 days, your Journal and a client's alike");
 eq(
   ids(feed({ entries: [entry("edge", new Date(NOW - 14 * 24 * 60 * 60 * 1000).toISOString())] })),
   ["edge"],

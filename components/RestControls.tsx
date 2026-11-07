@@ -109,14 +109,25 @@ export function RestDrainLine({ progress }: { progress: SharedValue<number> }) {
   );
 }
 
-/** The time left, with REST beside it on the same baseline. REST sat over
- *  the time in the bar's top left, where it looked squeezed into the corner. */
+/** Nunito's own line height, a hair over 1.364 of its size (its ascender and
+ *  descender, 1011 and 353 a thousandth). React Native centres a line's glyphs
+ *  in its line height only when that's at least the font's own: under it (the
+ *  time's was 1.22 of its size) iOS draws them off the middle of their box, so
+ *  centring the box doesn't centre the digits. */
+const FONT_LINE = 1.37;
+
+/** The time left with REST beside it, the two centred on one line: the line
+ *  the −15s, +15s and Skip beside them are centred on (user request,
+ *  2026-11-06: REST sat on the time's baseline, off the buttons' line, and
+ *  looked untidy beside them). Before that REST sat over the time in the
+ *  bar's top left, where it looked squeezed into the corner. The time's digits
+ *  and REST are both capital height, so centred they read as level. */
 export function RestTime({ seconds, size, isDark }: { seconds: number; size: number; isDark: boolean }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const label = formatRestTime(seconds);
   return (
     <View style={styles.time} accessible accessibilityLabel={`Rest, ${label} left`}>
-      <Text style={[styles.timeText, { color: t.tp, fontSize: size, lineHeight: Math.round(size * 1.22) }]}>{label}</Text>
+      <Text style={[styles.timeText, { color: t.tp, fontSize: size, lineHeight: Math.ceil(size * FONT_LINE) }]}>{label}</Text>
       <Text style={[styles.timeLabel, { color: t.ts }]}>REST</Text>
     </View>
   );
@@ -154,7 +165,7 @@ const styles = StyleSheet.create({
     shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 4,
   },
   drainFill: { flex: 1, borderRadius: 1.5 },
-  time:      { flex: 1, flexDirection: "row", alignItems: "baseline", gap: 6 },
+  time:      { flex: 1, flexDirection: "row", alignItems: "center", gap: 6 },
   timeText:  { fontFamily: FontFamily.bold, letterSpacing: 0.5, fontVariant: ["tabular-nums"] },
   timeLabel: { fontFamily: FontFamily.bold, fontSize: 11, letterSpacing: 1.2 },
   actions:   { flexDirection: "row", alignItems: "center", gap: 6 },

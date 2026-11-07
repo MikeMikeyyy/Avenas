@@ -29,7 +29,9 @@ export default function KeyboardDismissButton({ onPress }: {
   onPress?: () => void;
 } = {}) {
   const { isDark } = useTheme();
-  const [kbHeight, setKbHeight] = useState(0);
+  // From the keyboard already up, for a key that mounts under it (a sheet's
+  // Modal mounts its content as it opens).
+  const [kbHeight, setKbHeight] = useState(() => (Keyboard.isVisible() ? Keyboard.metrics()?.height ?? 0 : 0));
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardWillShow", e => setKbHeight(e.endCoordinates.height));

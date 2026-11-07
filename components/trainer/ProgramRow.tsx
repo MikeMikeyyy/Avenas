@@ -22,10 +22,13 @@ import BounceButton from "../BounceButton";
 import ChevronToggle from "../ChevronToggle";
 import ExpandReveal, { useReveal } from "../ExpandReveal";
 import TrashIcon from "../TrashIcon";
-import { ACCT, APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, DANGER, DANGER_BRIGHT, FontFamily, accentTextColor, dangerTextColor } from "../../constants/theme";
 import { cardButton, haloGlow, pillGlow, PILL_RADIUS } from "../../constants/buttons";
 import { CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, REVEAL_BLEED } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
+import { fmtAgo } from "../../utils/dates";
+import { shareStatus } from "../../utils/trainerLists";
+import type { SharedProgram } from "../../utils/trainerStore";
 
 /** A program's cycle, day by day: what a row shows once it's open. */
 export function CycleStrip({ cycle }: { cycle: string[] }) {
@@ -58,13 +61,14 @@ export function CycleStrip({ cycle }: { cycle: string[] }) {
 
 /** The green Accept on a row that's waiting on me, its own button: white
  *  words, as the app's other green buttons (user decision, 2026-10-21). On a
- *  gym user's Programs page and a trainer's. */
-export function AcceptButton({ onPress, accessibilityLabel }: { onPress: () => void; accessibilityLabel: string }) {
+ *  gym user's Programs page and a trainer's. `label` for another word in the
+ *  same place: Got it, on a review sent back with no changes. */
+export function AcceptButton({ onPress, accessibilityLabel, label = "Accept" }: { onPress: () => void; accessibilityLabel: string; label?: string }) {
   const { isDark } = useTheme();
   return (
     <BounceButton onPress={onPress} needsConnection accessibilityLabel={accessibilityLabel}>
       <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
-        <Text style={rowButtonStyles.text}>Accept</Text>
+        <Text style={rowButtonStyles.text}>{label}</Text>
       </View>
     </BounceButton>
   );
@@ -112,13 +116,47 @@ export function RowActions({ label, onOpen, onRemove, accessibilityLabel, remove
 }
 
 /** Where a program stands, as a small tinted pill: green once it's done (sent
- *  back, accepted), quiet while it waits. */
-export function StatusPill({ label, done }: { label: string; done: boolean }) {
+ *  back, accepted), quiet while it waits, red when it's been turned down
+ *  (`alert`: Rejected). */
+export function StatusPill({ label, done, alert = false }: { label: string; done: boolean; alert?: boolean }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   return (
-    <View style={[styles.statusPill, { backgroundColor: done ? `${ACCT}22` : t.div }]}>
-      <Text style={[styles.statusText, { color: done ? ACCT : t.ts }]}>{label}</Text>
+    <View style={[styles.statusPill, { backgroundColor: alert ? `${DANGER}22` : done ? `${ACCT}22` : t.div }]}>
+      <Text style={[styles.statusText, { color: alert ? dangerTextColor(isDark) : done ? ACCT : t.ts }]}>{label}</Text>
+    </View>
+  );
+}
+
+/** Who a program went to, a line each, in a hairline box: the sender's open
+ *  row on their Programs page and a group's. The circle by each name is green
+ *  once they've accepted it, red when they've turned it down (removed it
+ *  without accepting, or deleted the copy they'd accepted: user request,
+ *  2026-11-06, when it read Pending for good), empty while it waits. */
+export function RecipientList({ entries, nameFor }: { entries: SharedProgram[]; nameFor: (clientId: string) => string }) {
+  const { isDark } = useTheme();
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <View style={[styles.recipientList, { borderColor: t.div }]}>
+      {entries.map((e, i) => {
+        const status = shareStatus(e);
+        const mark = status === "accepted" ? ACCT : status === "rejected" ? DANGER : null;
+        const words = status === "accepted" ? `Accepted · ${fmtAgo(e.acceptedAtISO!)}`
+          : status === "rejected" ? `Rejected · ${fmtAgo(e.deletedByRecipientAtISO!)}`
+          : "Pending";
+        // Words on the light card: the card's ink for green and red.
+        const ink = status === "accepted" ? accentTextColor(isDark) : status === "rejected" ? dangerTextColor(isDark) : t.ts;
+        return (
+          <View
+            key={e.id}
+            style={[styles.recipientRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.div }]}
+          >
+            <View style={[styles.recipientDot, mark ? { backgroundColor: mark, borderColor: mark } : { borderColor: t.ts }]} />
+            <Text style={[styles.recipientName, { color: t.tp }]} numberOfLines={1}>{nameFor(e.clientId)}</Text>
+            <Text style={[styles.recipientStatus, { color: ink }]}>{words}</Text>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -166,12 +204,14 @@ export default function ProgramRow({ first, open, onToggle, accessibilityLabel, 
       >
         <View style={styles.rowTop}>
           {leading}
-          {/* One line each while shut, the whole of each once open (user
-              report, 2026-11-05: "Removed from [group] without a review"
-              ended in "…" with no way to read the rest). */}
+          {/* The whole of each, open or shut, never "…" (user request,
+              2026-11-06). They were one line each while shut and whole once
+              open, so a long name went onto a second line as the row opened
+              and the avatar, the pill and the chevron, centred on it, all
+              moved down. */}
           <View style={{ flex: 1 }}>
-            <Text style={[styles.rowTitle, { color: t.tp }]} numberOfLines={open ? undefined : 1}>{title}</Text>
-            <Text style={[styles.rowMeta, { color: t.ts }]} numberOfLines={open ? undefined : 1}>{meta}</Text>
+            <Text style={[styles.rowTitle, { color: t.tp }]}>{title}</Text>
+            <Text style={[styles.rowMeta, { color: t.ts }]}>{meta}</Text>
           </View>
           {trailing != null && (
             // Hidden, a tap where it was falls through to the row and closes it.
@@ -211,6 +251,11 @@ const styles = StyleSheet.create({
   rowMeta: { ...CARD_META },
   statusPill: { ...CARD_PILL },
   statusText: { ...CARD_PILL_TEXT },
+  recipientList: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10 },
+  recipientRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  recipientDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
+  recipientName: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 13 },
+  recipientStatus: { fontFamily: FontFamily.regular, fontSize: 11 },
   // No `gap` on the row: a closed ExpandReveal is a zero-height child, and a gap
   // would hold space open around it. The reveal's content carries its own top.
   revealBody: { gap: 10, paddingTop: 12 },

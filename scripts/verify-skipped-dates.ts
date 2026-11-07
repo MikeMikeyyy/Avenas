@@ -24,7 +24,7 @@ import {
   unskipDate,
 } from "../utils/skippedDates";
 import { cycleDrift } from "../utils/cycleDrift";
-import { formatStoredDate, parseStoredDate } from "../utils/dates";
+import { formatStoredDate, parseStoredDate, toYMD } from "../utils/dates";
 import { heldOn, idleDays, programAsOf, runStartYMD } from "../utils/programHolds";
 import { programsAfterPastLog, setWorkoutDay } from "../utils/programLifecycle";
 import { getEffectiveToday, getWorkoutForDate, resolveDayIndex, resolveWorkoutForDate, cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
@@ -413,7 +413,12 @@ eq(toggleSkippedDate(toggleSkippedDate(base, TUE), TUE).skippedDates, undefined,
 // pull rather than letting it delete the session.
 {
   const pulled = pullDate(base, WED);
-  eq(sessionCount(pulled), sessionCount(base) + 1, "pull: sessions only move earlier, none are deleted");
+  // Every session a day earlier, and the program finishing a day sooner: the
+  // same sessions. (Counted in a window past its end, this was one more, while
+  // the cycle ran on past the last day; nothing is scheduled there now:
+  // utils/workout.ts resolveDayIndex.)
+  eq(sessionCount(pulled), sessionCount(base), "pull: sessions only move earlier, none are deleted");
+  eq(toYMD(programFinishDate(pulled)!), plus(toYMD(programFinishDate(base)!), -1), "pull: ...and the program finishes a day sooner");
 
   // Now push in front of it. WED would hold "Lower" — a workout.
   const conflicted = { ...pushDate(pulled, MON) };

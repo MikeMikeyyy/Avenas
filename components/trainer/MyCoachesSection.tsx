@@ -35,7 +35,7 @@ import ProgramPickerSheet from "./ProgramPickerSheet";
 import SendForReviewSheet from "./SendForReviewSheet";
 import SimpleSheet from "./SimpleSheet";
 import SheetPill from "../SheetPill";
-import { RemoveCircleButton, RemoveModeBar } from "./RemoveMode";
+import { RemoveCircleButton, RemoveModeBar, RemoveModeButton } from "./RemoveMode";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { darkGlow, pill, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -329,12 +329,9 @@ export default function MyCoachesSection({ presenceById }: Props) {
           })}
         </View>
         {/* Quiet, at the foot: removing someone is rare, and the page's one
-            button is for connecting. Each card's own menu has it too. */}
-        {!removing && shownTrainers.length > 0 ? (
-          <BounceButton style={styles.removeRow} onPress={startRemoving} needsConnection accessibilityLabel="Remove a trainer">
-            <Text style={[styles.removeText, { color: t.ts }]}>Remove a trainer</Text>
-          </BounceButton>
-        ) : null}
+            button is for connecting. Each card's own menu has it too. Grey,
+            as on a gym user's My Trainers (RemoveModeButton). */}
+        {!removing && shownTrainers.length > 0 ? <RemoveModeButton onPress={startRemoving} /> : null}
         </>
       )}
 
@@ -419,9 +416,6 @@ const styles = StyleSheet.create({
   ctaText:      { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
 
   coachCard:    { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
-  // The gym user's My Trainers page's, value for value (MyTrainersSection).
-  removeRow:    { alignSelf: "center", marginTop: 14 },
-  removeText:   { fontFamily: FontFamily.bold, fontSize: 14, paddingHorizontal: 12, lineHeight: 44 },
   avatarText:   { fontFamily: FontFamily.bold, fontSize: 16 },
   coachLabel:   { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 1 },
   labelRow:     { flexDirection: "row", alignItems: "center", gap: 6 },

@@ -23,7 +23,7 @@
 
 import type { ExerciseMetricKey } from "../constants/progress";
 import {
-  BLOCK_GAP, BLOCK_RADIUS, CHART_HEIGHT, PLOT_TOP, barAxis, chartValue, drawsOn, exerciseChartAxis, slotX,
+  BLOCK_GAP, BLOCK_RADIUS, CHART_HEIGHT, PLOT_TOP, barAxis, chartValue, drawsOn, exerciseChartAxis, flippedAxis, slotX,
   valueY, type ExerciseChartAxis, type ExerciseChartGeometry,
 } from "./exerciseChartLayout";
 import type { LiftSlot } from "./programCompare";
@@ -85,7 +85,12 @@ export function compareWindowAxis(
     }
   }
   if (values.length === 0) return null;
-  return metric === "strength" ? exerciseChartAxis([...values, ...rings], true, values) : barAxis(values);
+  if (metric !== "strength") return barAxis(values);
+  const axis = exerciseChartAxis([...values, ...rings], true, values);
+  // An assisted exercise's Strength runs the other way up, the least help at
+  // the top, so stronger still climbs (user pick, 2026-11-07; utils/assisted.ts).
+  const assisted = [...green, ...blue].some(s => s.point?.isAssisted);
+  return assisted ? flippedAxis(axis) : axis;
 }
 
 /**

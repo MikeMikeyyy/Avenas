@@ -86,6 +86,14 @@ export function fmtChange(pct: number): { text: string; dir: "up" | "down" | "fl
   return { text: `${shown}%`, dir: pct > 0 ? "up" : "down" };
 }
 
+/** The change on a tab from one session to another: an assisted exercise's
+ *  Strength (utils/assisted.ts) goes up as its help comes down, as its chart
+ *  is drawn (flippedAxis), so 40 kg to 30 kg reads "▲ 25%". */
+function tabChange(from: ExerciseDataPoint, to: ExerciseDataPoint, metric: ExerciseMetricKey): number | null {
+  const pct = percentChange(chartValue(from, metric), chartValue(to, metric));
+  return pct !== null && metric === "strength" && to.isAssisted ? -pct : pct;
+}
+
 /** How a tab's sessions moved across the chart: the last one it draws against
  *  the first, and the date of the first. Null with fewer than two, and on
  *  Sets. */
@@ -94,7 +102,7 @@ export function chartChange(points: ExerciseDataPoint[], metric: ExerciseMetricK
   const drawn = points.filter(p => drawsOn(p, metric));
   if (drawn.length < 2) return null;
   const first = drawn[0];
-  const pct = percentChange(chartValue(first, metric), chartValue(drawn[drawn.length - 1], metric));
+  const pct = tabChange(first, drawn[drawn.length - 1], metric);
   return pct === null ? null : { pct, sinceYMD: first.date };
 }
 
@@ -106,7 +114,7 @@ export function changeFromPrevious(points: ChartRow, slot: number, metric: Exerc
   if (metric === "sets" || !p || !drawsOn(p, metric)) return null;
   for (let j = slot - 1; j >= 0; j--) {
     const q = points[j];
-    if (q && drawsOn(q, metric)) return percentChange(chartValue(q, metric), chartValue(p, metric));
+    if (q && drawsOn(q, metric)) return tabChange(q, p, metric);
   }
   return null;
 }
@@ -390,9 +398,23 @@ export type SetStack = {
   /** The top of the stack, and the centre of the weight written over it. */
   top: number;
   labelY: number;
-  /** The session's heaviest set, the weight over the stack (0: bodyweight). */
+  /** The session's heaviest set, the weight over the stack (0: bodyweight);
+   *  an assisted exercise's least help (hardestSetWeight). */
   heaviest: number;
 };
+
+/** A session's hardest set's weight: its heaviest, or for an assisted
+ *  exercise the least help (utils/assisted.ts). 0 for none (bodyweight). */
+export function hardestSetWeight(p: ExerciseDataPoint): number {
+  if (!p.isAssisted) return p.sets.reduce((m, s) => (s.weight > m ? s.weight : m), 0);
+  return p.sets.reduce((m, s) => (s.weight > 0 && (m === 0 || s.weight < m) ? s.weight : m), 0);
+}
+
+/** Whether a set at `weight` was easier than the session's hardest (a back-off
+ *  set, drawn paler on Sets): lighter, or for an assisted exercise more help. */
+export function easierSet(p: ExerciseDataPoint, weight: number, hardest: number): boolean {
+  return p.isAssisted ? hardest > 0 && weight > hardest + 1e-9 : weight < hardest - 1e-9;
+}
 
 /** Sets: each session's working sets stacked from the baseline, a block per
  *  set as tall as its reps (a hold's seconds). */
@@ -400,13 +422,13 @@ export function setStacks(points: ChartRow, g: ExerciseChartGeometry, axis: Exer
   const out: SetStack[] = [];
   points.forEach((p, slot) => {
     if (!p) return;
-    const heaviest = p.sets.reduce((m, s) => (s.weight > m ? s.weight : m), 0);
+    const heaviest = hardestSetWeight(p);
     let cum = 0;
     const blocks = p.sets.map((s, set): SetBlock => {
       const bottom = dotY(cum, axis);
       cum += s.reps;
       const y = dotY(cum, axis) + BLOCK_GAP;
-      return { set, weight: s.weight, reps: s.reps, y, h: Math.max(1, bottom - y), lighter: s.weight < heaviest - 1e-9 };
+      return { set, weight: s.weight, reps: s.reps, y, h: Math.max(1, bottom - y), lighter: easierSet(p, s.weight, heaviest) };
     });
     const top = dotY(cum, axis);
     out.push({ slot, point: p, x: slotX(g, slot), blocks, top, labelY: labelOver(top, STACK_LABEL_GAP), heaviest });
@@ -434,10 +456,12 @@ export function volumeBars(points: ChartRow, g: ExerciseChartGeometry, axis: Exe
 // brings other sessions on screen, the plot eases the axis to fit them on the
 // UI thread and every path follows it frame by frame (its labels fade across).
 
-/** Where `v` sits on an axis running `min`..`max`, from the top of the chart. */
+/** Where `v` sits on an axis running `min`..`max`, from the top of the chart:
+ *  `min` at the foot, `max` at the top. A flipped axis (flippedAxis: `min`
+ *  above `max`) draws the other way up. */
 export function valueY(v: number, min: number, max: number): number {
   "worklet";
-  if (!(max > min)) return PLOT_TOP + CHART_HEIGHT;
+  if (!(max !== min) || !Number.isFinite(max - min)) return PLOT_TOP + CHART_HEIGHT;
   return PLOT_TOP + CHART_HEIGHT - ((v - min) / (max - min)) * CHART_HEIGHT;
 }
 
@@ -825,6 +849,16 @@ export function exerciseChartAxis(values: number[], loads = false, stepsFrom: nu
   return axisFrom(0, step, 4);
 }
 
+/** The same axis the other way up: its least value at the top, its labels
+ *  read down from there. An assisted exercise's Strength (utils/assisted.ts):
+ *  less help is stronger, so the line still climbs as it gets stronger (user
+ *  pick, 2026-11-07). Everything is drawn through valueY with the axis' `min`
+ *  and `max`, which a swap of the two turns over; the labels sit by index from
+ *  the foot, so they're reversed to match. */
+export function flippedAxis(axis: ExerciseChartAxis): ExerciseChartAxis {
+  return { ...axis, min: axis.max, max: axis.min, labels: [...axis.labels].reverse() };
+}
+
 /** An axis for bars (Sets, Volume): from zero, so a bar's height is its
  *  value, with a tenth of the tallest's room over it for its label. */
 export function barAxis(values: number[]): ExerciseChartAxis {
@@ -841,5 +875,7 @@ export function windowAxis(points: ExerciseDataPoint[], metric: ExerciseMetricKe
     if (drawsOn(points[i], metric)) values.push(chartValue(points[i], metric));
   }
   if (values.length === 0) return null;
-  return metric === "strength" ? exerciseChartAxis(values, true) : barAxis(values);
+  if (metric !== "strength") return barAxis(values);
+  const axis = exerciseChartAxis(values, true);
+  return points.some(p => p.isAssisted) ? flippedAxis(axis) : axis;
 }

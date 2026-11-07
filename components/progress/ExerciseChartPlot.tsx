@@ -68,7 +68,7 @@ import type { ExerciseMetricKey } from "../../constants/progress";
 import {
   BAR_WIDTH, BLOCK_GAP, CHART_HEIGHT, CHART_TOTAL_H, DOT_R, GLINT_BANDS, LABEL_H, LINE_STROKE, PLOT_TOP, SESSION_SPACING,
   TOOLTIP_W, Y_AXIS_LABEL_WIDTH, areaPathD, barGlintD, barsPathD, blockGlintD, blocksPathD, changeFromPrevious, dateAxisLabels,
-  dotsPathD, drawsOn, exerciseChartAxis, exerciseChartGeometry, fmtChange, popupLeft, setStacks, slotX, sparkleD,
+  dotsPathD, drawsOn, easierSet, exerciseChartAxis, exerciseChartGeometry, fmtChange, hardestSetWeight, popupLeft, setStacks, slotX, sparkleD,
   strengthDots, strengthLabel, valueY, visibleSlots, volumeBars,
   type ExerciseChartGeometry,
 } from "../../utils/exerciseChartLayout";
@@ -80,14 +80,13 @@ import { MONTH_NAMES } from "../../utils/dates";
 import { trimNumber } from "../../utils/units";
 import { ordinal } from "../../utils/workoutSummary";
 import { useChartEntrance } from "./chartEntrance";
+import ChartScrollFade from "./ChartScrollFade";
 
 const AnimatedPath = Reanimated.createAnimatedComponent(Path);
 const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
 
 /** How long the axis takes to fit the sessions a scroll settled on. */
 const AXIS_MS = 260;
-/** The fade at an edge the row runs on past. */
-const FADE_W = 18;
 /** A dot's touch target reaches this far above and below it (a 48pt box,
  *  over Apple's 44pt minimum); across, it's the session's whole slot. */
 const HIT_HALF = 24;
@@ -272,14 +271,6 @@ function PlotBody({
     placed.current = true;
     if (initialX > 0) scrollRef.current?.scrollTo({ x: initialX, animated: false });
   }, [initialX, scrollRef]);
-  const maxScroll = g.maxScrollX;
-  const leftFade = useAnimatedStyle(() => ({
-    opacity: interpolate(sx.value, [0, FADE_W], [0, 1], Extrapolation.CLAMP),
-  }));
-  const rightFade = useAnimatedStyle(() => ({
-    opacity: interpolate(maxScroll - sx.value, [0, FADE_W], [0, 1], Extrapolation.CLAMP),
-  }));
-
   // ── What's drawn, as the paths take it ──────────────────────────────────
   // Values, not positions: the paths place them on the axis as it eases.
   const shapes = useMemo(() => {
@@ -314,13 +305,13 @@ function PlotBody({
           s.barVs.push(p.sessionVolume);
         }
       } else if (metric === "sets") {
-        const heaviest = p.sets.reduce((m, q) => (q.weight > m ? q.weight : m), 0);
+        const heaviest = hardestSetWeight(p);
         let cum = 0;
         p.sets.forEach((q, set) => {
           const block = [x, cum, cum + q.reps];
           cum += q.reps;
           if (records.mostReps && p.workoutId === records.mostReps.workoutId && set === records.mostReps.set) s.goldBlock = block;
-          else (q.weight < heaviest - 1e-9 ? s.lighterBlocks : s.blocks).push(...block);
+          else (easierSet(p, q.weight, heaviest) ? s.lighterBlocks : s.blocks).push(...block);
         });
       }
     });
@@ -553,7 +544,6 @@ function PlotBody({
   const focusedBlock = focusedStack?.blocks[focus?.set ?? 0] ?? null;
   const focusedDot = metric === "strength" && focus ? dots.find(d => d.slot === focus.slot) ?? null : null;
   const rules = Array.from({ length: axis.sections }, (_, i) => base - ((i + 1) / axis.sections) * CHART_HEIGHT);
-  const fade = isDark ? NEU_BG_DARK : NEU_BG;
   // The glint's bands over the gold bar or block, the faintest and widest
   // first, then the streak trailing it.
   const glint = [glintWideProps, glintMidProps, glintNarrowProps, glintTrailProps].map((animatedProps, i) => (
@@ -589,11 +579,17 @@ function PlotBody({
           </Text>
         ))}
       </Reanimated.View>
-      <Svg width={g.wrapperWidth} height={CHART_TOTAL_H} style={StyleSheet.absoluteFill} pointerEvents="none">
-        <Line x1={Y_AXIS_LABEL_WIDTH + 0.5} x2={Y_AXIS_LABEL_WIDTH + 0.5} y1={PLOT_TOP} y2={base} stroke={t.div} strokeWidth={1} />
-        <Line x1={Y_AXIS_LABEL_WIDTH} x2={g.wrapperWidth} y1={base + 0.5} y2={base + 0.5} stroke={t.div} strokeWidth={1} />
-      </Svg>
 
+      {/* The row, faded out at an edge it runs on past, its axis row never
+          (ChartScrollFade). */}
+      <ChartScrollFade
+        sx={sx}
+        maxScroll={g.maxScrollX}
+        width={g.viewportWidth}
+        height={CHART_TOTAL_H}
+        plotBottom={base + 3}
+        style={styles.scroller}
+      >
       <Reanimated.ScrollView
         ref={scrollRef}
         horizontal
@@ -603,7 +599,7 @@ function PlotBody({
         onScroll={onScroll}
         scrollEventThrottle={16}
         scrollEnabled={g.maxScrollX > 0}
-        style={[styles.scroller, { width: g.viewportWidth }]}
+        style={{ width: g.viewportWidth, height: CHART_TOTAL_H }}
       >
         <View style={{ width: g.contentWidth, height: CHART_TOTAL_H }}>
           {/* A tap anywhere that isn't on a session hides the pop-up (user
@@ -864,30 +860,14 @@ function PlotBody({
           </View>
         </View>
       </Reanimated.ScrollView>
+      </ChartScrollFade>
 
-      {/* Fades at an edge the row runs on past. */}
-      <Reanimated.View pointerEvents="none" style={[styles.edge, { left: Y_AXIS_LABEL_WIDTH + 1 }, leftFade]}>
-        <Svg width={FADE_W} height={CHART_TOTAL_H}>
-          <Defs>
-            <LinearGradient id="exerciseFadeL" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={fade} stopOpacity={1} />
-              <Stop offset="1" stopColor={fade} stopOpacity={0} />
-            </LinearGradient>
-          </Defs>
-          <Rect x={0} y={0} width={FADE_W} height={CHART_TOTAL_H} fill="url(#exerciseFadeL)" />
-        </Svg>
-      </Reanimated.View>
-      <Reanimated.View pointerEvents="none" style={[styles.edge, { left: g.wrapperWidth - FADE_W }, rightFade]}>
-        <Svg width={FADE_W} height={CHART_TOTAL_H}>
-          <Defs>
-            <LinearGradient id="exerciseFadeR" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={fade} stopOpacity={0} />
-              <Stop offset="1" stopColor={fade} stopOpacity={1} />
-            </LinearGradient>
-          </Defs>
-          <Rect x={0} y={0} width={FADE_W} height={CHART_TOTAL_H} fill="url(#exerciseFadeR)" />
-        </Svg>
-      </Reanimated.View>
+      {/* The axes, over the row so nothing scrolling covers them, and never
+          faded with it. */}
+      <Svg width={g.wrapperWidth} height={CHART_TOTAL_H} style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Line x1={Y_AXIS_LABEL_WIDTH + 0.5} x2={Y_AXIS_LABEL_WIDTH + 0.5} y1={PLOT_TOP} y2={base} stroke={t.div} strokeWidth={1} />
+        <Line x1={Y_AXIS_LABEL_WIDTH} x2={g.wrapperWidth} y1={base + 0.5} y2={base + 0.5} stroke={t.div} strokeWidth={1} />
+      </Svg>
 
       {popup}
     </Reanimated.View>
@@ -914,12 +894,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     top: 0,
-  },
-  edge: {
-    position: "absolute",
-    top: 0,
-    width: FADE_W,
-    height: CHART_TOTAL_H,
   },
   yLabel: {
     position: "absolute",

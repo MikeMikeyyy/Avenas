@@ -131,6 +131,21 @@ function workout(id: string, date: string, exercises: CompletedExercise[]): Comp
   eq(ordinal(0), "1st", "ordinal clamps below 1");
 }
 
+// ── assisted: less help is the record, and the only one (utils/assisted.ts) ─
+{
+  const prior = [workout("a0", "2026-07-01", [ex("Assisted Pull-Up", [set("35", "8"), set("40", "10")])])];
+  const better = workout("a1", "2026-07-08", [ex("Assisted Pull-Up", [set("30", "6")])]);
+  eq(computeSessionRecords(better, prior), [
+    { exerciseName: "Assisted Pull-Up", kind: "heaviest", valueKg: 30, prevKg: 35, assisted: true },
+  ], "assisted: less help is its record, marked assisted, and no 1RM or Best Set alongside");
+  const heavier = workout("a2", "2026-07-08", [ex("Assisted Pull-Up", [set("45", "12")])]);
+  eq(computeSessionRecords(heavier, prior), [], "assisted: more help, even with more reps, is no record");
+  const firstTime = workout("a3", "2026-07-08", [ex("Assisted Dip", [set("20", "8")])]);
+  eq(computeSessionRecords(firstTime, prior), [
+    { exerciseName: "Assisted Dip", kind: "heaviest", valueKg: 20, prevKg: null, assisted: true },
+  ], "assisted: a first time is a first, as any exercise's");
+}
+
 // ── report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ ${failures.length} failure(s), ${passed} passed:\n`);

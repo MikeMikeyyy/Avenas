@@ -22,8 +22,9 @@ import {
   buildPrevSetsLookup,
   buildPrevSessionNote,
   prevHintsForRows,
+  finishedSessionPrevSets,
 } from "../utils/workout";
-import { parseStoredDate, formatStoredDate, todayYMD, sessionTimeRange } from "../utils/dates";
+import { parseStoredDate, formatStoredDate, todayYMD, sessionTimeRange, fmtAgo, fmtDayDate } from "../utils/dates";
 import { stampSession, timeValFromDate } from "../utils/sessionTime";
 import {
   formatWeightForDisplay, parseWeightToKg, migrateWeightLbToKg, trimNumber,
@@ -144,6 +145,48 @@ check(parseStoredDate("01 Jan 2026") instanceof Date, "parseStoredDate valid -> 
   eq(sessionTimeRange(new Date(end).toISOString(), NaN), `${clock(end)} – ${clock(end)}`,
     "times: an unreadable duration counts as none");
   eq(sessionTimeRange("garbage", 3600), null, "times: an unreadable finish shows none");
+}
+
+// ── fmtAgo: how long ago, hours for the first day ─────────────────────────────
+// User report, 2026-11-06: a program sent at 8pm still read "Sent today" the
+// next morning, since anything under 24 hours was "today".
+{
+  const now = new Date(2026, 10, 6, 10, 0).getTime();
+  const at = (y: number, mo: number, d: number, h = 10, mi = 0) => new Date(y, mo - 1, d, h, mi).toISOString();
+  eq(fmtAgo(at(2026, 11, 5, 20, 0), now), "14 hours ago", "ago: sent at 8pm, the next morning it's 14 hours, not today");
+  eq(fmtAgo(new Date(now - 20_000).toISOString(), now), "just now", "ago: under a minute is just now");
+  eq(fmtAgo(new Date(now + 90_000).toISOString(), now), "just now", "ago: a moment ahead (another phone's clock) is just now");
+  eq(fmtAgo(new Date(now - 60_000).toISOString(), now), "1 minute ago", "ago: one minute, singular");
+  eq(fmtAgo(new Date(now - 45 * 60_000).toISOString(), now), "45 minutes ago", "ago: minutes in the first hour");
+  eq(fmtAgo(new Date(now - 60 * 60_000).toISOString(), now), "1 hour ago", "ago: one hour, singular");
+  eq(fmtAgo(new Date(now - (23 * 60 + 59) * 60_000).toISOString(), now), "23 hours ago", "ago: hours until a full day has gone");
+  eq(fmtAgo(new Date(now - 24 * 3_600_000).toISOString(), now), "1 day ago", "ago: 24 hours is a day");
+  eq(fmtAgo(new Date(now - 47 * 3_600_000).toISOString(), now), "1 day ago", "ago: ...and still a day until 48");
+  eq(fmtAgo(at(2026, 10, 31), now), "6 days ago", "ago: days in the first week");
+  eq(fmtAgo(at(2026, 10, 30), now), "1 week ago", "ago: seven days is a week");
+  eq(fmtAgo(at(2026, 10, 23), now), "2 weeks ago", "ago: two weeks");
+  eq(fmtAgo(at(2026, 10, 8), now), "4 weeks ago", "ago: 29 days is still weeks");
+  eq(fmtAgo(at(2026, 10, 7), now), "1 month ago", "ago: 30 days is a month");
+  eq(fmtAgo(at(2026, 9, 6), now), "2 months ago", "ago: months by the calendar");
+  eq(fmtAgo(at(2026, 8, 7), now), "2 months ago", "ago: ...a day short of three months is two");
+  eq(fmtAgo(at(2025, 11, 6), now), "1 year ago", "ago: twelve months is a year");
+  eq(fmtAgo(at(2023, 11, 7), now), "2 years ago", "ago: years");
+  eq(fmtAgo("garbage", now), "", "ago: an unreadable time says nothing");
+  const lastOfMonth = new Date(2026, 9, 31, 12).getTime();
+  eq(fmtAgo(at(2026, 9, 30, 12), lastOfMonth), "1 month ago", "ago: the 30th to the 31st a month on is one month");
+}
+
+// ── fmtDayDate: the day you're logging to, in full ────────────────────────────
+// User request, 2026-11-06: the Journal's Log a Workout sheet shows the day
+// tapped, so you can see it's the one you meant; Log Workout says it the same.
+{
+  const now = new Date(2026, 10, 6, 10, 0);
+  eq(fmtDayDate("2026-10-20", now), "Tuesday 20 October", "day date: weekday, day and month this year");
+  eq(fmtDayDate("2026-11-06", now), "Friday 6 November", "day date: today is its date too, never \"Today\"");
+  eq(fmtDayDate("2025-12-31", now), "Wednesday 31 December 2025", "day date: another year's day carries its year");
+  eq(fmtDayDate("2026-03-29", now), "Sunday 29 March", "day date: a daylight-saving day is still its own weekday");
+  eq(fmtDayDate("20 Nov 2026", now), null, "day date: anything but YYYY-MM-DD is none");
+  eq(fmtDayDate("", now), null, "day date: no date is none");
 }
 
 // ── stampSession: the real finish, from the wheels and the training day ──────
@@ -490,6 +533,38 @@ eq(buildPrevByName(tzHist, "2026-05-11")["bench"]?.working, ["100×5"], "prev be
     { swappedFrom: "Landmine Twist", swappedFromId: "cxA" }, "swapOrigin: a custom exercise's id is recorded with its name");
   eq(swapOrigin({ name: "Cable Twist", customId: "cxB", swappedFrom: "Landmine Twist", swappedFromId: "cxA" }, { name: "Landmine Twist", customId: "cxC" }),
     { swappedFrom: "Landmine Twist", swappedFromId: "cxA" }, "swapOrigin: a new exercise given the original's name is not the original");
+}
+
+// ── A finished session's "Previous" (finishedSessionPrevSets) ────────────────
+// User report, 2026-11-06: once today's workout was finished, the Workout
+// tab's cards read "—" under Previous. They keep the figures they were done
+// against, and next week this session is the day's Previous.
+{
+  type Kind = "warmup" | "working";
+  const sets = (...rows: [string, string, Kind?][]) =>
+    rows.map(([weight, reps, type = "working"]) => ({ type, weight, reps, done: true }));
+  const push = (id: string, date: string, bench: ReturnType<typeof sets>): CompletedWorkout => ({
+    id, date, completedAt: `${date}T18:00:00.000Z`, durationSeconds: 3600,
+    workoutName: "Push", programId: "prog", dayId: "d-push",
+    exercises: [{ name: "Bench Press", notes: "", sets: bench, programExerciseId: "pex_bench" }],
+  });
+  const lastWeek = push("fin-1", "2026-03-09", sets(["40", "10", "warmup"], ["100", "5"], ["100", "5"]));
+  const today = push("fin-2", "2026-03-16", sets(["40", "10", "warmup"], ["102.5", "5"], ["102.5", "4"]));
+  const history = [today, lastWeek];
+  eq(finishedSessionPrevSets(today, history), [["40×10", "100×5", "100×5"]],
+    "finished: today's cards still read last week's figures, row by row");
+  // Next week the day comes round: its Previous is what was logged today.
+  const nextWeek = buildPrevSetsLookup(history, undefined, prevDayScopeFor({ name: "Push", programId: "prog", dayId: "d-push" }));
+  eq(prevHintsForRows(nextWeek({ name: "Bench Press", programExerciseId: "pex_bench" }), ["warmup", "working", "working"]),
+    ["40×10", "102.5×5", "102.5×4"], "finished: next week's Previous is this session's figures");
+  // A session of the day finished after it doesn't become its Previous.
+  const later = { ...push("fin-3", "2026-03-16", sets(["110", "3"])), completedAt: "2026-03-16T20:00:00.000Z" };
+  eq(finishedSessionPrevSets(today, [later, today, lastWeek]), [["40×10", "100×5", "100×5"]],
+    "finished: one finished after it isn't its Previous");
+  eq(finishedSessionPrevSets(lastWeek, history), [["—", "—", "—"]], "finished: the day's first session reads — on every row");
+  // Only the day it was logged against: another day's bench never stands in.
+  const pull = { ...push("fin-p", "2026-03-15", sets(["90", "5"])), dayId: "d-pull", workoutName: "Pull" };
+  eq(finishedSessionPrevSets(today, [today, pull]), [["—", "—", "—"]], "finished: another day's figures aren't this day's Previous");
 }
 
 // ── Notes follow the DAY, not the date ─────────────────────────────────────────

@@ -39,26 +39,19 @@ import BackButton, { BACK_SIZE, BACK_TOP } from "../../components/BackButton";
 import OfflineBanner from "../../components/OfflineBanner";
 import SendIcon from "../../components/icons/SendIcon";
 import ProgramRow, { CycleStrip, RowActions } from "../../components/trainer/ProgramRow";
-import ReviewStatusPill, { REVIEW_STAGE_LABEL } from "../../components/trainer/ReviewStatusPill";
-import RemovalNote from "../../components/trainer/RemovalNote";
+import ReviewStatusPill, { reviewStatusLabel } from "../../components/trainer/ReviewStatusPill";
+import ReviewNote from "../../components/trainer/ReviewNote";
 import SendForReviewSheet from "../../components/trainer/SendForReviewSheet";
 import { ACCT, APP_DARK, APP_LIGHT, AWAITING_ORANGE, FontFamily } from "../../constants/theme";
 import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { EMPTY_GYM_HUB, fetchGymHub, peekGymHub, saveGymHub, type GymHubData } from "../../utils/trainerHub";
-import { removeSentProgram, type SentProgram } from "../../utils/trainerStore";
+import { acceptedChangesProgramId, removeSentProgram, type SentProgram } from "../../utils/trainerStore";
 import { firstName, reviewStage, sentForReviewList } from "../../utils/trainerLists";
 import { askRemoveReturned } from "../../utils/reviewRemoval";
 import { alertMessage } from "../../utils/errors";
-
-function fmtAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
+import { fmtAgo } from "../../utils/dates";
 
 export default function SentForReviewScreen() {
   const { isDark } = useTheme();
@@ -107,10 +100,15 @@ export default function SentForReviewScreen() {
   }, []);
 
   /** The line under a request: who has it and since when, or when I took the
-   *  changes. A group's name is looked up live, so a rename carries. */
+   *  changes (or, sent back with none, when it was reviewed). A group's name is
+   *  looked up live, so a rename carries. */
   const metaOf = useCallback((s: SentProgram) => {
     const stage = reviewStage(s);
-    if (stage === "accepted") return `Changes added ${fmtAgo(s.appliedAtISO ?? s.returnedAtISO ?? s.sentAtISO)}`;
+    if (stage === "accepted") {
+      return s.noChanges
+        ? `Reviewed with no changes · ${fmtAgo(s.returnedAtISO ?? s.sentAtISO)}`
+        : `Changes added ${fmtAgo(s.appliedAtISO ?? s.returnedAtISO ?? s.sentAtISO)}`;
+    }
     const group = s.groupId ? groups.find(g => g.group.id === s.groupId)?.group.name ?? "a group" : undefined;
     const to = !s.groupId && s.recipientId ? trainers.find(tr => tr.id === s.recipientId)?.name : undefined;
     if (stage === "removed") {
@@ -227,21 +225,24 @@ export default function SentForReviewScreen() {
                   first={i === 0}
                   open={openRows.has(s.id)}
                   onToggle={() => toggleRow(s.id)}
-                  accessibilityLabel={`${s.programName}, ${REVIEW_STAGE_LABEL[stage].toLowerCase()}, ${metaOf(s)}`}
+                  accessibilityLabel={`${s.programName}, ${reviewStatusLabel(s).toLowerCase()}, ${metaOf(s)}`}
                   title={s.programName}
                   meta={metaOf(s)}
                   trailing={<ReviewStatusPill review={s} />}
                 >
-                  {/* Why it wasn't reviewed, when the trainer said (0053). */}
-                  {s.removalNote ? <RemovalNote note={s.removalNote} /> : null}
+                  {/* Why it wasn't reviewed, when the trainer said (0053), or,
+                      once taken, the comments it came back with (0054), kept
+                      to re-read (user decision, 2026-11-06). */}
+                  <ReviewNote review={s} />
                   <CycleStrip cycle={s.programSnapshot?.cyclePattern ?? []} />
-                  {/* Once the changes are in, View is your own program, the one
-                      you train from; before, what you sent. */}
+                  {/* Once the changes are in, View is your own program with
+                      them (the new one, when you saved them apart); before,
+                      what you sent. */}
                   <RowActions
                     label="View"
-                    onOpen={() => router.navigate(
+                    onOpen={async () => router.navigate(
                       accepted
-                        ? { pathname: "/programs", params: { focus: s.programId } }
+                        ? { pathname: "/programs", params: { focus: await acceptedChangesProgramId(s) } }
                         : { pathname: "/program-view", params: { sentId: s.id } },
                     )}
                     onRemove={() => (accepted ? handleRemoveAccepted(s) : handleUnsend(s))}

@@ -38,6 +38,7 @@ import { buildWeekSchedule, weekStartFor, weekTotals, type WeekDayPlan } from ".
 import { applyRestDay, clearRestDay } from "../../utils/restDay";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../../components/journal/JournalWorkoutCard";
 import { useDayRollover } from "../../hooks/useDayRollover";
+import { useSyncedDataReload } from "../../hooks/useSyncedDataReload";
 import ActivityCalendar from "../../components/ActivityCalendar";
 import AchievementCard from "../../components/AchievementCard";
 import { EMPTY_ACHIEVEMENTS, type Achievement, type AchievementsState } from "../../constants/achievements";
@@ -321,6 +322,8 @@ function HomeScreen() {
   // Workout screen through the shared getEffectiveToday logic.
   useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
   useDayRollover(loadData);
+  // And when the account's other phone's changes merge in while Home is up.
+  useSyncedDataReload(loadData);
 
   const restDayQuote = useMemo(() => {
     const today = new Date();
@@ -627,7 +630,7 @@ function HomeScreen() {
           ))}
         </View>
 
-        <ActivityCalendar isDark={isDark} workoutDates={workoutDates} activeProgram={activeProgram} />
+        <ActivityCalendar isDark={isDark} workoutDates={workoutDates} activeProgram={activeProgram} programs={programs} workoutHistory={workoutHistory} />
 
         <InsightsCard isDark={isDark} />
 

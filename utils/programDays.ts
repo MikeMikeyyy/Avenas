@@ -222,32 +222,65 @@ export function canonicalizeWorkouts(
  *
  * Returns the input unchanged when the move is a no-op or out of range.
  */
-export function reorderCycleSlots(
-  from: number,
-  to: number,
-  cycle: {
-    cyclePattern: string[];
-    isTrainingDay: boolean[];
-    dayIds: string[];
-    workouts: WorkoutMap;
-  },
-): { cyclePattern: string[]; isTrainingDay: boolean[]; dayIds: string[]; workouts: WorkoutMap } {
+export function reorderCycleSlots(from: number, to: number, cycle: CycleSlots): CycleSlots {
   const length = cycle.cyclePattern.length;
   if (from === to || from < 0 || to < 0 || from >= length || to >= length) return cycle;
   const order = cycle.cyclePattern.map((_, i) => i);
   const [moved] = order.splice(from, 1);
   order.splice(to, 0, moved);
+  return permuteCycleSlots(order, cycle);
+}
 
-  const newIdxOf = new Map<number, number>();
-  order.forEach((oldIdx, newIdx) => newIdxOf.set(oldIdx, newIdx));
-  const workouts: WorkoutMap = {};
+/**
+ * Put the training days in a new order in the slots they're in, the rest days
+ * staying put: the builder's Go to Day Reorder (user request, 2026-11-07:
+ * Upper A and Upper B the other way round, which the Workout Summary's drag
+ * could only do by moving the rest days between them too). `slots` is the
+ * training days' slots in the order they're to be in: the first training slot
+ * takes the day now in `slots[0]`, and so on. Each day carries what
+ * `reorderCycleSlots` carries (its name, its Training/Rest flag, its stable id
+ * and its exercises), so it's a move as far as history goes: no fork, its
+ * sessions still its own.
+ *
+ * Returns the input unchanged unless `slots` is the training days' slots in a
+ * new order.
+ */
+export function arrangeTrainingDays(slots: number[], cycle: CycleSlots): CycleSlots {
+  const length = cycle.cyclePattern.length;
+  const training = cycle.isTrainingDay.flatMap((on, i) => (on && i < length ? [i] : []));
+  const sorted = [...slots].sort((a, b) => a - b);
+  const valid = slots.length === training.length && sorted.every((s, k) => s === training[k]);
+  if (!valid || slots.every((s, k) => s === training[k])) return cycle;
+  const order = cycle.cyclePattern.map((_, i) => i);
+  training.forEach((slot, k) => { order[slot] = slots[k]; });
+  return permuteCycleSlots(order, cycle);
+}
+
+/** A program's cycle, as the builder holds it: what moving a day moves. */
+export interface CycleSlots {
+  cyclePattern: string[];
+  isTrainingDay: boolean[];
+  dayIds: string[];
+  workouts: WorkoutMap;
+}
+
+/** The cycle with slot `order[i]`'s day in slot i, for both of the above.
+ *  The map is built in the new slot order: the builder's Workouts page lists
+ *  its days in the map's key order, and built in the old one a dragged day
+ *  showed out of place (slot 2 above slot 1) until Setup re-keyed the map. */
+function permuteCycleSlots(order: number[], cycle: CycleSlots): CycleSlots {
+  const keysAt = new Map<number, string[]>();
   for (const key of Object.keys(cycle.workouts)) {
     const parsed = parseDayKey(key);
     if (!parsed) continue;
-    const newIdx = newIdxOf.get(parsed.idx);
-    if (newIdx === undefined) continue;
-    workouts[workoutKey(newIdx, parsed.label)] = cycle.workouts[key] ?? [];
+    keysAt.set(parsed.idx, [...(keysAt.get(parsed.idx) ?? []), key]);
   }
+  const workouts: WorkoutMap = {};
+  order.forEach((oldIdx, newIdx) => {
+    for (const key of keysAt.get(oldIdx) ?? []) {
+      workouts[workoutKey(newIdx, parseDayKey(key)!.label)] = cycle.workouts[key] ?? [];
+    }
+  });
 
   return {
     cyclePattern: order.map(i => cycle.cyclePattern[i]),

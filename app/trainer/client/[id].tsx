@@ -20,6 +20,8 @@ import ProgressView from "../../../components/progress/ProgressView";
 import ClientJournalView from "../../../components/journal/ClientJournalView";
 import ProgramPickerSheet from "../../../components/trainer/ProgramPickerSheet";
 import SimpleSheet from "../../../components/trainer/SimpleSheet";
+import { StatusPill } from "../../../components/trainer/ProgramRow";
+import { shareStatus } from "../../../utils/trainerLists";
 import FavouriteStar, { useFavouriteGold } from "../../../components/FavouriteStar";
 import { loadFavouriteMemberIds, toggleFavouriteMember } from "../../../utils/groupStore";
 import ReportReasonSheet from "../../../components/trainer/ReportReasonSheet";
@@ -57,6 +59,7 @@ import UnreadBadge from "../../../components/UnreadBadge";
 import { loadThread, loadReads, countUnreadInThread } from "../../../utils/chatStore";
 import { loadHiddenMessageIds, blockContact, unaddContact, reportUser } from "../../../utils/moderation";
 import { getJSON } from "../../../utils/storage";
+import { fmtAgo } from "../../../utils/dates";
 import { allProgressRequest } from "../../../utils/progressSession";
 import { removeShareConfirm } from "../../../utils/removeShare";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
@@ -90,30 +93,16 @@ function TabDivider({ gap, pillX, segW, color }: {
   );
 }
 
-function fmtAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  if (days < 1) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
-
 /**
  * How long ago the client's phone last backed up, which is how current
  * everything on this page is. Their app backs up after every change and
  * whenever it leaves the foreground, so a long gap means they haven't opened
- * it, or it can't reach the server.
+ * it, or it can't reach the server. In the words every "ago" uses (fmtAgo):
+ * hours for the first day, then days, weeks and months.
  */
 function fmtSynced(iso: string): string | null {
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms)) return null;
-  const mins = Math.floor(ms / 60000);
-  if (mins < 1) return "Synced just now";
-  if (mins < 60) return `Synced ${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `Synced ${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return days === 1 ? "Synced yesterday" : `Synced ${days}d ago`;
+  const ago = fmtAgo(iso);
+  return ago ? `Synced ${ago}` : null;
 }
 
 export default function ClientDetailScreen() {
@@ -265,12 +254,12 @@ export default function ClientDetailScreen() {
   );
 
   const sharedForClient = useMemo(
-    // Hide entries the client has deleted from their library — the gym user can
-    // still re-accept them from their My Trainer page, but they shouldn't clutter
-    // the trainer's per-client view. Also exclude programs a coach sent ME: when
-    // that coach is a connected trainer (and thus in the roster) their incoming
-    // share would otherwise look like one I sent them.
-    () => shared.filter(s => (s.clientId === id || s.clientId === "all") && !s.deletedByRecipientAtISO && !s.receivedFromCoachId),
+    // Everything I've sent them, one they've turned down too (removed without
+    // accepting, or deleted their copy since), which reads Rejected in red:
+    // it used to vanish from here (user request, 2026-11-06). Not programs a
+    // coach sent ME: when that coach is a connected trainer (and thus in the
+    // roster) their incoming share would otherwise look like one I sent them.
+    () => shared.filter(s => (s.clientId === id || s.clientId === "all") && !s.receivedFromCoachId),
     [shared, id],
   );
 
@@ -650,24 +639,22 @@ export default function ClientDetailScreen() {
               </NeuCard>
             ) : (
               sharedForClient.map(s => {
-                const accepted = !!s.acceptedAtISO;
+                const status = shareStatus(s);
                 return (
                   <NeuCard key={s.id} dark={isDark} radius={16} style={{ marginBottom: 10 }}>
                     <View style={styles.itemRow}>
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.itemName, { color: t.tp }]} numberOfLines={1}>{s.programName}</Text>
+                        <Text style={[styles.itemName, { color: t.tp }]}>{s.programName}</Text>
                         <Text style={[styles.itemMeta, { color: t.ts }]}>
                           {s.clientId === "all" ? "Broadcast" : "Direct"} · Sent {fmtAgo(s.sentAtISO)}
                         </Text>
                       </View>
-                      <View style={[styles.statusPill, accepted
-                        ? { backgroundColor: `${ACCT}22` }
-                        : { backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)" },
-                      ]}>
-                        <Text style={[styles.statusText, { color: accepted ? ACCT : t.ts }]}>
-                          {accepted ? "Accepted" : "Pending"}
-                        </Text>
-                      </View>
+                      {/* Where it stands, as on the Programs page's sent list. */}
+                      <StatusPill
+                        label={status === "accepted" ? "Accepted" : status === "rejected" ? "Rejected" : "Pending"}
+                        done={status === "accepted"}
+                        alert={status === "rejected"}
+                      />
                       <TouchableOpacity
                         // Taking it back needs the server: dimmed offline, and says why.
                         onPress={offline ? alertOffline : () => handleUnshare(s)}
@@ -779,8 +766,6 @@ const styles = StyleSheet.create({
   itemRow:       { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   itemName:      { fontFamily: FontFamily.semibold, fontSize: 14 },
   itemMeta:      { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 2 },
-  statusPill:    { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
-  statusText:    { fontFamily: FontFamily.semibold, fontSize: 11, letterSpacing: 0.3 },
   shareBtn:      { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: PILL_RADIUS, paddingVertical: 14, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10 },
   shareBtnText:  { fontFamily: FontFamily.bold, fontSize: 15, color: "#fff" },
   // Options sheet — mirrors the chat screen's menu styles.

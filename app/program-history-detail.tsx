@@ -476,7 +476,7 @@ function WeekCard({ week, program, todayYMD, isDark, isKg, infoOf, onOpenWorkout
       {finished && (
         <View style={[styles.finishedRow, { borderTopColor: t.div }]}>
           <Ionicons name="ribbon" size={16} color={AURORA.aqua} />
-          <Text style={[styles.finishedText, { color: t.tp }]} numberOfLines={1}>Finished {program.name}</Text>
+          <Text style={[styles.finishedText, { color: t.tp }]}>Finished {program.name}</Text>
         </View>
       )}
     </NeuCard>
@@ -599,10 +599,11 @@ export default function ProgramHistoryDetailScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }]}
       >
-        {/* Page header */}
+        {/* Page header: the program's whole name, a long one on a second
+            line rather than cut short (user request, 2026-11-06). */}
         <View style={styles.header}>
           <View style={{ width: 66 }} />
-          <Text style={[styles.screenTitle, { color: t.tp }]} numberOfLines={1}>
+          <Text style={[styles.screenTitle, { color: t.tp }]}>
             {program?.name.toUpperCase() ?? ""}
           </Text>
           <View style={{ width: 66 }} />
@@ -662,7 +663,7 @@ const styles = StyleSheet.create({
   topGradient: { position: "absolute", left: 0, right: 0, zIndex: 5 },
   scroll: { paddingHorizontal: 20 },
 
-  header: { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
+  header: { flexDirection: "row", alignItems: "center", minHeight: BACK_SIZE, marginBottom: 24 },
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5, textAlign: "center", flex: 1 },
 
   // The program at a glance — Home's program card, plus totals.

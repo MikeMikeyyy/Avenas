@@ -46,10 +46,13 @@ import {
 } from "../constants/programs";
 import { programDays } from "../utils/programDays";
 import { getEffectiveToday, getWorkoutForDate } from "../utils/workout";
+import { fmtDayDate } from "../utils/dates";
 import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../utils/restDay";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
-import { buildJournalFeed, type JournalFeedItem } from "../utils/journalFeed";
+import { buildJournalFeed, RECENT_ACTIVITY_DAYS, type JournalFeedItem } from "../utils/journalFeed";
 import { scheduleCloudPush } from "../lib/syncManager";
+import { noteDeleted } from "../utils/syncLocal";
+import { useSyncedDataReload } from "../hooks/useSyncedDataReload";
 import { useTheme } from "../contexts/ThemeContext";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -193,8 +196,11 @@ function restActionFor(program: SavedProgram | null, ymd: string, history: Compl
   return getWorkoutForDate(program, ymd) ? "rest" : null;
 }
 
-function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restAction, onSelect, onRestDay, onClose }: {
+function WorkoutPickerSheet({ visible, isDark, date, activeProgram, programs, restAction, onSelect, onRestDay, onClose }: {
   visible: boolean; isDark: boolean;
+  /** The tapped day, "YYYY-MM-DD": shown under the title, so you can see it's
+   *  the day you meant before logging to it. */
+  date: string;
   activeProgram: SavedProgram | null; programs: SavedProgram[];
   /** What the Rest Day row does for the tapped date: "rest" marks a planned
    *  workout off, "undo" puts a marked-off one back, null offers neither. */
@@ -273,6 +279,8 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
   const activeWorkouts = activeProgram ? programDays(activeProgram) : [];
 
   const pick = (day: ProgramDayRef) => { dismiss(); onSelect(day.label, undefined, day.programId, day.dayId); };
+  // "Tuesday 20 October", as the Log Workout page it leads to says it.
+  const dateLabel = fmtDayDate(date);
 
   // ── Step header with back button ──
   function StepHeader({ title, onBack }: { title: string; onBack: () => void }) {
@@ -304,7 +312,10 @@ function WorkoutPickerSheet({ visible, isDark, activeProgram, programs, restActi
     if (step === "menu") {
       return (
         <View style={styles.pickerMenuContent}>
-          <Text style={[styles.pickerTitle, { color: t.tp }]}>Log a Workout</Text>
+          <View style={styles.pickerHead}>
+            <Text style={[styles.pickerTitle, { color: t.tp }]}>Log a Workout</Text>
+            {dateLabel ? <Text style={[styles.pickerDate, { color: t.ts }]}>{dateLabel}</Text> : null}
+          </View>
           <View style={styles.pickerList}>
             {activeProgram && (
               <SheetPill icon={c => <WorkoutIcon size={18} color={c} />} label="Active Program" onPress={() => setStep("active")} />
@@ -475,20 +486,23 @@ export default function JournalScreen() {
       .catch((e) => warnStorage("getItem", PROGRAMS_KEY, e)),
   []);
 
-  useFocusEffect(
-    useCallback(() => {
-      AsyncStorage.getItem(JOURNAL_KEY)
-        .then(raw => { if (raw) setEntries(JSON.parse(raw)); })
-        .catch((e) => warnStorage("getItem", JOURNAL_KEY, e));
-      AsyncStorage.getItem(WORKOUT_HISTORY_KEY)
-        .then(raw => { if (raw) setWorkoutHistory(JSON.parse(raw)); })
-        .catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
-      AsyncStorage.getItem(WORKOUT_DATES_KEY)
-        .then(raw => { if (raw) setWorkoutDates(JSON.parse(raw)); })
-        .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
-      loadPrograms();
-    }, [loadPrograms])
-  );
+  const loadAll = useCallback(() => {
+    AsyncStorage.getItem(JOURNAL_KEY)
+      .then(raw => { if (raw) setEntries(JSON.parse(raw)); })
+      .catch((e) => warnStorage("getItem", JOURNAL_KEY, e));
+    AsyncStorage.getItem(WORKOUT_HISTORY_KEY)
+      .then(raw => { if (raw) setWorkoutHistory(JSON.parse(raw)); })
+      .catch((e) => warnStorage("getItem", WORKOUT_HISTORY_KEY, e));
+    AsyncStorage.getItem(WORKOUT_DATES_KEY)
+      .then(raw => { if (raw) setWorkoutDates(JSON.parse(raw)); })
+      .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
+    loadPrograms();
+  }, [loadPrograms]);
+  useFocusEffect(loadAll);
+  // The entries are saved from the list held here: read again when the
+  // account's other phone's changes merge in while the Journal is open, or the
+  // next save would write them away.
+  useSyncedDataReload(loadAll);
 
   // Optimistic UI update with rollback on storage failure — keeps the list
   // responsive while ensuring AsyncStorage stays in sync. Previously the
@@ -558,11 +572,12 @@ export default function JournalScreen() {
   // the same card from the client's history.
   const workoutInfoOf = useJournalWorkoutInfo(workoutHistory, programs);
 
-  // Journal entries and completed workouts as one newest-first list. The merge
-  // lives in utils/journalFeed.ts, shared with the client-side journal a trainer
-  // reads — only the window differs (two weeks here, a month there).
+  // Journal entries and completed workouts as one newest-first list, over the
+  // last RECENT_ACTIVITY_DAYS. The merge and the window live in
+  // utils/journalFeed.ts, shared with the client journal a trainer reads, so
+  // the two show the same.
   const timeline = useMemo(
-    () => buildJournalFeed({ entries, workouts: workoutHistory, windowDays: 14 }),
+    () => buildJournalFeed({ entries, workouts: workoutHistory, windowDays: RECENT_ACTIVITY_DAYS }),
     [entries, workoutHistory],
   );
 
@@ -665,6 +680,7 @@ export default function JournalScreen() {
           workoutDates={workoutDates}
           workoutHistory={workoutHistory}
           activeProgram={activeProgram}
+          programs={programs}
           onDayPress={handleCalendarDayPress}
           initialMonth={openMonth}
         />
@@ -742,13 +758,20 @@ export default function JournalScreen() {
         visible={deleteTarget !== null}
         isDark={isDark}
         entryTitle={deleteTarget?.title ?? ""}
-        onConfirm={() => { if (deleteTarget) saveEntries(entries.filter(e => e.id !== deleteTarget.id)); }}
+        onConfirm={() => {
+          const target = deleteTarget;
+          if (!target) return;
+          // Recorded before it goes, so the delete reaches the account's other
+          // phone and no merge brings it back (utils/syncLocal.ts).
+          void noteDeleted("journal", [target]).then(() => saveEntries(entries.filter(e => e.id !== target.id)));
+        }}
         onClose={() => setDeleteTarget(null)}
       />
 
       <WorkoutPickerSheet
         visible={workoutPickerVisible}
         isDark={isDark}
+        date={selectedDate}
         activeProgram={activeProgram}
         programs={programs}
         restAction={restAction}
@@ -799,7 +822,11 @@ const styles = StyleSheet.create({
 
   // Workout picker sheet
   pickerSheet:       { borderTopLeftRadius: 28, borderTopRightRadius: 28 },
-  pickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, color: TP, paddingHorizontal: 24, paddingBottom: 12, textAlign: "center" },
+  // The title and the day under it, in the Log Workout page's sizes for its
+  // own date line (regular 15, 4 under).
+  pickerHead:        { paddingHorizontal: 24, paddingBottom: 14 },
+  pickerTitle:       { fontFamily: FontFamily.bold, fontSize: 20, color: TP, textAlign: "center" },
+  pickerDate:        { fontFamily: FontFamily.regular, fontSize: 15, color: TS, textAlign: "center", marginTop: 4 },
   pickerContent:     { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 },
   pickerSection:     { fontFamily: FontFamily.bold, fontSize: 13, letterSpacing: 0.8, color: TS, marginTop: 8, marginBottom: 4 },
   pickerList:        { gap: 12 },

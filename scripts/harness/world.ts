@@ -10,10 +10,11 @@ import { freshApp, connectDb, warnings, type Phone } from "./app";
 import { createDb } from "./db";
 import type * as TrainerStore from "../../utils/trainerStore";
 import type * as TrainerHub from "../../utils/trainerHub";
+import type * as ReviewRequest from "../../utils/reviewRequest";
 import { PROGRAMS_KEY, type SavedProgram } from "../../constants/programs";
 import type { PGlite } from "@electric-sql/pglite";
 
-export type App = typeof TrainerStore & Pick<typeof TrainerHub, "receivedFromTrainers">;
+export type App = typeof TrainerStore & Pick<typeof TrainerHub, "receivedFromTrainers"> & Pick<typeof ReviewRequest, "requestReview">;
 export type Person = Phone & { accountType: "pt" | "user"; app: App; programs: SavedProgram[] };
 
 const person = (uid: string, name: string, accountType: "pt" | "user"): Person => ({
@@ -23,6 +24,10 @@ const person = (uid: string, name: string, accountType: "pt" | "user"): Person =
     ...(require("../../utils/trainerStore") as typeof TrainerStore),
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     receivedFromTrainers: (require("../../utils/trainerHub") as typeof TrainerHub).receivedFromTrainers,
+    // Asking for a review, as every screen that asks does (My Programs, the
+    // Trainer tab, a group's page).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    requestReview: (require("../../utils/reviewRequest") as typeof ReviewRequest).requestReview,
   })),
 });
 

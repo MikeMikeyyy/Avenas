@@ -29,6 +29,7 @@ import {
 } from "../constants/achievements";
 import { computeSessionRecords } from "./workoutSummary";
 import { exerciseIdentity } from "./exerciseNames";
+import { isAssistedIdentity, liftBeats } from "./assisted";
 import { toDisplayWeight, trimNumber } from "./units";
 
 const DAY_MS = 86400000;
@@ -39,12 +40,21 @@ function positive(s: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+/** Of two weights an exercise has been done at, the better: the heavier, or
+ *  for an assisted exercise the less help (utils/assisted.ts). 0 is none. */
+function betterOf(a: number, b: number, assisted: boolean): number {
+  if (a <= 0) return b;
+  if (b <= 0) return a;
+  return liftBeats(a, b, assisted) ? a : b;
+}
+
 /**
- * The heaviest each exercise has been lifted in `history`, in kg, by identity
- * (exerciseIdentity): a working set ticked with its reps in, at a weight. It's
- * what a set has to beat to be a PR, the same best the PR card measures
- * (computePRs' heaviest). An exercise done only at bodyweight, or never, has
- * none: its first weighted set is a first, not a PR.
+ * The best each exercise has been lifted at in `history`, in kg, by identity
+ * (exerciseIdentity): a working set ticked with its reps in, at a weight. The
+ * heaviest, or for an assisted exercise the least assistance. It's what a set
+ * has to beat to be a PR, the same best the PR card measures (computePRs'
+ * heaviest). An exercise done only at bodyweight, or never, has none: its
+ * first weighted set is a first, not a PR.
  */
 export function bestLiftsBefore(history: readonly CompletedWorkout[]): Map<string, number> {
   const best = new Map<string, number>();
@@ -52,10 +62,12 @@ export function bestLiftsBefore(history: readonly CompletedWorkout[]): Map<strin
     for (const ex of w.exercises) {
       const key = ex.name ? exerciseIdentity(ex) : "";
       if (!key) continue;
+      const assisted = isAssistedIdentity(key);
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done || positive(s.reps) === 0) continue;
         const kg = positive(s.weight);
-        if (kg > (best.get(key) ?? 0)) best.set(key, kg);
+        const next = betterOf(kg, best.get(key) ?? 0, assisted);
+        if (next > 0) best.set(key, next);
       }
     }
   }
@@ -68,12 +80,14 @@ export type PrSetInput = { type: "warmup" | "working"; done: boolean; reps: stri
 
 /**
  * Whether one set beats its exercise's best from before this workout
- * (`bestKg`, bestLiftsBefore): a working set, ticked, with its reps in,
- * heavier than it. No best, none at all. Which of these wears the trophy is
- * prTrophySets': one per exercise.
+ * (`bestKg`, bestLiftsBefore): a working set, ticked, with its reps in, at a
+ * weight better than it: heavier, or for an `assisted` exercise less help. No
+ * best, none at all. Which of these wears the trophy is prTrophySets': one
+ * per exercise.
  */
-export function isPrSet(set: PrSetInput, bestKg: number | undefined): boolean {
-  return bestKg !== undefined && set.type === "working" && set.done && positive(set.reps) > 0 && set.weightKg > bestKg;
+export function isPrSet(set: PrSetInput, bestKg: number | undefined, assisted = false): boolean {
+  return bestKg !== undefined && set.type === "working" && set.done && positive(set.reps) > 0
+    && set.weightKg > 0 && liftBeats(set.weightKg, bestKg, assisted);
 }
 
 /**
@@ -83,6 +97,8 @@ export function isPrSet(set: PrSetInput, bestKg: number | undefined): boolean {
  * that weight only matches the record, and a heavier one takes the trophy
  * from it: 75 then 75 over a best of 70 is the first 75's, 75 then 78 the
  * 78's. So the trophies mark the records the session leaves, the PR card's.
+ * An assisted exercise's is the set at the least assistance (utils/assisted.ts):
+ * 25 then 20 over a best of 30 is the 20's.
  * By identity, so an exercise done on two cards is one. It was every set over
  * the old best until then, my call, never the user's. `bestOf`: an exercise's
  * best from before the session, undefined for none.
@@ -92,15 +108,17 @@ export function prTrophySets(
   bestOf: (identity: string) => number | undefined,
 ): boolean[][] {
   const bestOfEx = (identity: string) => (identity ? bestOf(identity) : undefined);
+  const prOf = (identity: string, s: PrSetInput) => isPrSet(s, bestOfEx(identity), isAssistedIdentity(identity));
   const top = new Map<string, number>();
   for (const ex of exercises) {
+    const assisted = isAssistedIdentity(ex.identity);
     for (const s of ex.sets) {
-      if (isPrSet(s, bestOfEx(ex.identity)) && s.weightKg > (top.get(ex.identity) ?? 0)) top.set(ex.identity, s.weightKg);
+      if (prOf(ex.identity, s)) top.set(ex.identity, betterOf(s.weightKg, top.get(ex.identity) ?? 0, assisted));
     }
   }
   const worn = new Set<string>();
   return exercises.map(ex => ex.sets.map(s => {
-    if (worn.has(ex.identity) || s.weightKg !== top.get(ex.identity) || !isPrSet(s, bestOfEx(ex.identity))) return false;
+    if (worn.has(ex.identity) || s.weightKg !== top.get(ex.identity) || !prOf(ex.identity, s)) return false;
     worn.add(ex.identity);
     return true;
   }));
@@ -137,12 +155,14 @@ export function prSetsOfWorkout(workout: CompletedWorkout, history: readonly Com
  * best (no trophies) and counts towards no other's. Undefined: nothing to beat.
  */
 export function bestBeforeEach(history: readonly CompletedWorkout[], identity: string): Map<string, number | undefined> {
+  // The heaviest, or for an assisted exercise the least help (bestLiftsBefore).
+  const assisted = isAssistedIdentity(identity);
   const ownBest = (w: CompletedWorkout): number => {
     let kg = 0;
     for (const ex of w.exercises) {
       if (!ex.name || exerciseIdentity(ex) !== identity) continue;
       for (const s of ex.sets) {
-        if (s.type === "working" && s.done && positive(s.reps) > 0) kg = Math.max(kg, positive(s.weight));
+        if (s.type === "working" && s.done && positive(s.reps) > 0) kg = betterOf(positive(s.weight), kg, assisted);
       }
     }
     return kg;
@@ -157,7 +177,7 @@ export function bestBeforeEach(history: readonly CompletedWorkout[], identity: s
     let j = i;
     while (j < timed.length && timed[j].at === timed[i].at) j++;
     for (let k = i; k < j; k++) out.set(timed[k].w.id, best > 0 ? best : undefined);
-    for (let k = i; k < j; k++) best = Math.max(best, ownBest(timed[k].w));
+    for (let k = i; k < j; k++) best = betterOf(ownBest(timed[k].w), best, assisted);
     i = j;
   }
   return out;
@@ -341,9 +361,14 @@ export function formatWeight(kg: number, isKg: boolean): string {
   return `${trimNumber(toDisplayWeight(kg, isKg), 1)} ${isKg ? "kg" : "lbs"}`;
 }
 
-/** One line per PR, for an expanded card: "100 kg, up from 97.5 kg". */
+/** One line per PR, for an expanded card: "100 kg, up from 97.5 kg". An
+ *  assisted exercise's record is LESS than the one it beat (utils/assisted.ts),
+ *  and that's how one is told: "20 kg assistance, down from 25 kg". The card
+ *  stores only the two weights, and a PR is never a tie, so they always say. */
 export function formatPRLine(pr: { valueKg: number; prevKg: number }, isKg: boolean): string {
-  return `${formatWeight(pr.valueKg, isKg)}, up from ${formatWeight(pr.prevKg, isKg)}`;
+  return pr.valueKg < pr.prevKg
+    ? `${formatWeight(pr.valueKg, isKg)} assistance, down from ${formatWeight(pr.prevKg, isKg)}`
+    : `${formatWeight(pr.valueKg, isKg)}, up from ${formatWeight(pr.prevKg, isKg)}`;
 }
 
 export function describeAchievement(a: Achievement, isKg: boolean): AchievementCopy {

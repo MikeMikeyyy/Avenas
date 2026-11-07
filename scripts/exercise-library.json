@@ -242,6 +242,7 @@
       "chest",
       "triceps"
     ],
+    "assisted": true,
     "secondaryMuscles": [
       "shoulders"
     ],
@@ -267,6 +268,7 @@
       "assisted chin up"
     ],
     "common": true,
+    "assisted": true,
     "secondaryMuscles": [
       "biceps",
       "core"

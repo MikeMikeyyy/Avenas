@@ -11,6 +11,9 @@
 //     scripts/exercise-photos/.
 // "hidden": true marks a retired exercise: never offered in the picker, kept so
 // workouts and programs that used it still resolve its muscles and steps.
+// "assisted": true marks one whose weight is help, not load (an assisted
+// pull-up machine's counterweight): less is harder, so less is its record
+// (utils/assisted.ts).
 //
 // Renaming an exercise: change its "name" and add the old name to its
 // "formerNames" (keep every earlier one too). Anything logged under the old
@@ -131,6 +134,7 @@ async function main() {
       ...(e.formerNames?.length ? { formerNames: e.formerNames } : {}),
       ...(e.searchTerms?.length ? { searchTerms: e.searchTerms } : {}),
       ...(e.common ? { common: true } : {}),
+      ...(e.assisted ? { assisted: true } : {}),
       secondaryMuscles: e.secondaryMuscles || [],
       instructions: e.instructions || [],
     });

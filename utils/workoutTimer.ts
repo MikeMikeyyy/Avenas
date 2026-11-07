@@ -494,9 +494,11 @@ export function upNextFrom(
 }
 
 /** The workout bar's line under a rest: "Barbell Bench Press", then "· Set 3
- *  of 4 · 80 kg × 8", the name the part that gives way. */
+ *  of 4", the name the part that gives way. Not the set's numbers (user
+ *  request, 2026-11-06: they took the room a long name needed); the timer's
+ *  card, where the name has its own line, still shows them. */
 export function upNextTail(u: UpNext): string {
-  return [u.setLabel, u.numbers].filter(Boolean).map(s => `· ${s}`).join(" ");
+  return u.setLabel ? `· ${u.setLabel}` : "";
 }
 
 /** Whether two up-nexts read the same (the bar redraws only on a change). */

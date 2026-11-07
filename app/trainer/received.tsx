@@ -34,6 +34,7 @@ import BackButton, { BACK_SIZE, BACK_TOP } from "../../components/BackButton";
 import OfflineBanner from "../../components/OfflineBanner";
 import NotebookIcon from "../../components/icons/NotebookIcon";
 import ProgramRow, { AcceptButton, CycleStrip, RowActions } from "../../components/trainer/ProgramRow";
+import ReviewNote from "../../components/trainer/ReviewNote";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily, compareBlue } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
@@ -41,25 +42,19 @@ import { scheduleCloudPush } from "../../lib/syncManager";
 import { EMPTY_GYM_HUB, fetchGymHub, peekGymHub, saveGymHub, type GymHubData } from "../../utils/trainerHub";
 import {
   acceptSharedProgramBatch,
-  applyReturnedProgram,
   batchKeyOf,
-  dismissKeyOf,
-  dismissSharedBatch,
+  removeReceivedShare,
+  ReviewChangedError,
   ShareUnavailableError,
   type SentProgram,
   type SharedProgram,
 } from "../../utils/trainerStore";
-import { firstName, fromTrainerLists, type FromTrainerItem } from "../../utils/trainerLists";
+import { takeFailedTitle, takeReturnedReview, type TakenReview } from "../../utils/reviewAccept";
+import { firstName, fromTrainerLists, shareRejected, type FromTrainerItem } from "../../utils/trainerLists";
+import { removeReceivedWords } from "../../utils/removeShare";
 import { askRemoveReturned } from "../../utils/reviewRemoval";
 import { alertMessage } from "../../utils/errors";
-
-function fmtAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
+import { fmtAgo } from "../../utils/dates";
 
 export default function ReceivedProgramsScreen() {
   const { isDark } = useTheme();
@@ -124,7 +119,9 @@ export default function ReceivedProgramsScreen() {
    *  reads correctly on old sends. */
   const programMeta = useCallback((s: SharedProgram) => {
     // Accepted once, then deleted from My Programs: Accept adds it back.
-    if (!s.acceptedAtISO && s.deletedByRecipientAtISO) return "Removed from your programs";
+    // Turned down (removed, or taken once and deleted since), on another phone
+    // or before a restore: Accept still takes it.
+    if (shareRejected(s)) return "You removed it";
     const when = fmtAgo(s.sentAtISO);
     if (s.groupId) return `${groupName(s.groupId)} · ${when}`;
     // A local entry carries no sender: it came from the trainer on the tab.
@@ -133,13 +130,15 @@ export default function ReceivedProgramsScreen() {
   }, [groupName, trainerName, pt]);
 
   /** The line under my own program, back reviewed: it's mine, back with their
-   *  changes, so it can't be mistaken for a new program they wrote. */
+   *  changes, so it can't be mistaken for a new program they wrote; or back
+   *  reviewed with none (only their comments: Got it). */
   const reviewMeta = useCallback((r: SentProgram) => {
     const when = fmtAgo(r.returnedAtISO ?? r.sentAtISO);
-    if (r.groupId) return `Back from ${groupName(r.groupId)} · ${when}`;
+    if (r.groupId) return `Back from ${groupName(r.groupId)}${r.noChanges ? ", no changes" : ""} · ${when}`;
     // Whoever it went to; a local entry from before that was recorded went to
     // the trainer on the tab. One since disconnected goes unnamed.
     const by = r.recipientId ? trainerName(r.recipientId) : pt?.name;
+    if (r.noChanges) return `Reviewed by ${by ? firstName(by) : "your trainer"}, no changes · ${when}`;
     return `Back with ${by ? `${firstName(by)}'s` : "your trainer's"} changes · ${when}`;
   }, [groupName, trainerName, pt]);
 
@@ -182,56 +181,68 @@ export default function ReceivedProgramsScreen() {
   const handleApplyReturned = useCallback(async (entry: SentProgram) => {
     if (entry.appliedAtISO || accepting.current.has(entry.id)) return;
     accepting.current.add(entry.id);
+    // The trainer's changes, into the program I sent or saved as a new one;
+    // or, sent back with none, Got it (utils/reviewAccept.ts).
+    let taken: TakenReview | null = null;
     try {
-      await applyReturnedProgram(entry.id);
+      taken = await takeReturnedReview(entry);
     } catch (e) {
-      Alert.alert("Couldn't update your program", alertMessage(e, "Check your connection and try again."));
+      Alert.alert(takeFailedTitle(entry), alertMessage(e, "Check your connection and try again."));
+      // Changes sent while this said Got it: show them.
+      if (e instanceof ReviewChangedError) void onRefresh();
       return;
     } finally {
       accepting.current.delete(entry.id);
     }
-    scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
+    if (!taken) return;
+    if (taken.programsChanged) scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
     const appliedAt = new Date().toISOString();
     setHub(h => h && { ...h, sent: h.sent.map(s => s.id === entry.id ? { ...s, appliedAtISO: appliedAt } : s) });
-    Alert.alert("Program Updated", `"${entry.programName}" in your programs was updated with your trainer's edits.`);
-  }, []);
+    if (taken.words) Alert.alert(taken.words.title, taken.words.body);
+  }, [onRefresh]);
 
   /**
    * Take a program someone sent me off this list.
    *
-   * It's a hide on my side only (see DISMISSED_SHARES_KEY): an accepted copy
-   * stays in My Programs, and the trainer still sees it as sent. The prompt
-   * says which of those applies, because the two cases lose different things:
-   * nothing at all once it's accepted, the chance to accept it if it isn't.
+   * One I've accepted only leaves the list, on this phone (DISMISSED_SHARES_KEY):
+   * my copy stays in My Programs, and the trainer still sees I have it. One I
+   * haven't, I've turned down, and the trainer sees it Rejected
+   * (removeReceivedShare; user request, 2026-11-06). The prompt says which,
+   * because the two lose different things: nothing at all once it's accepted,
+   * the chance to accept it (until an update) if it isn't.
    */
   const handleRemoveProgram = useCallback((entry: SharedProgram) => {
-    const accepted = !!entry.acceptedAtISO;
-    Alert.alert(
-      "Remove Program",
-      accepted
-        ? `Remove "${entry.programName}" from this list? It stays in your programs.`
-        : `Remove "${entry.programName}" without accepting it? It comes back if your trainer sends it again or updates it.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
-            const key = batchKeyOf(entry);
+    const from = entry.senderId ? trainerName(entry.senderId) : pt?.name;
+    const words = removeReceivedWords({
+      programName: entry.programName,
+      accepted: !!entry.acceptedAtISO,
+      sender: from ? firstName(from) : "Your trainer",
+    });
+    Alert.alert(words.title, words.body, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          const key = batchKeyOf(entry);
+          try {
             // Hides this version: a Send Update brings it back (dismissKeyOf).
-            await dismissSharedBatch(dismissKeyOf(entry));
-            // The group badges count from `shares` too, so a removed program
-            // stops counting as waiting on me straight away.
-            setHub(h => h && {
-              ...h,
-              received: h.received.filter(r => batchKeyOf(r) !== key),
-              shares: h.shares.filter(r => batchKeyOf(r) !== key),
-            });
-          },
+            await removeReceivedShare(entry);
+          } catch (e) {
+            Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+            return;
+          }
+          // The group badges count from `shares` too, so a removed program
+          // stops counting as waiting on me straight away.
+          setHub(h => h && {
+            ...h,
+            received: h.received.filter(r => batchKeyOf(r) !== key),
+            shares: h.shares.filter(r => batchKeyOf(r) !== key),
+          });
         },
-      ],
-    );
-  }, []);
+      },
+    ]);
+  }, [trainerName, pt]);
 
   const handleRemoveReview = useCallback((entry: SentProgram) => {
     askRemoveReturned(entry, key => {
@@ -262,20 +273,18 @@ export default function ReceivedProgramsScreen() {
           accessibilityLabel={`${r.programName}, your program back reviewed`}
           title={r.programName}
           meta={reviewMeta(r)}
-          trailing={<AcceptButton onPress={() => handleApplyReturned(r)} accessibilityLabel={`Accept the changes to ${r.programName}`} />}
+          trailing={r.noChanges
+            ? <AcceptButton label="Got it" onPress={() => handleApplyReturned(r)} accessibilityLabel={`Got it: ${r.programName} was reviewed with no changes`} />
+            : <AcceptButton onPress={() => handleApplyReturned(r)} accessibilityLabel={`Accept the changes to ${r.programName}`} />}
         >
-          {r.trainerComments ? (
-            <View style={[styles.commentBox, { borderColor: t.div }]}>
-              <Text style={[styles.commentLabel, { color: t.ts }]}>TRAINER COMMENTS</Text>
-              <Text style={[styles.commentBody, { color: t.tp }]}>{r.trainerComments}</Text>
-            </View>
-          ) : null}
+          {/* What the trainer wrote as they sent it back (Send Back's box). */}
+          <ReviewNote review={r} />
           <CycleStrip cycle={r.programSnapshot?.cyclePattern ?? []} />
           <RowActions
-            label="See Changes"
+            label={r.noChanges ? "View" : "See Changes"}
             onOpen={() => router.navigate({ pathname: "/program-view", params: { sentId: r.id } })}
             onRemove={() => handleRemoveReview(r)}
-            accessibilityLabel={`See the changes to ${r.programName}`}
+            accessibilityLabel={r.noChanges ? `View ${r.programName}` : `See the changes to ${r.programName}`}
             removeLabel={`Remove ${r.programName} from this list`}
             removeNeedsConnection={false}
           />
@@ -302,7 +311,9 @@ export default function ReceivedProgramsScreen() {
           onRemove={() => handleRemoveProgram(s)}
           accessibilityLabel={`View ${s.programName}`}
           removeLabel={`Remove ${s.programName} from this list`}
-          removeNeedsConnection={false}
+          // Not accepted: removing it turns it down, which the trainer has to
+          // hear (removeReceivedShare).
+          removeNeedsConnection
         />
       </ProgramRow>
     );
@@ -413,9 +424,6 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 18 },
   screenTitle: { fontFamily: FontFamily.bold, fontSize: 22, textAlign: "center", flex: 1 },
   sectionLabel: { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.6, marginTop: 24, marginBottom: 8, marginLeft: 4 },
-  commentBox: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, gap: 6 },
-  commentLabel: { fontFamily: FontFamily.semibold, fontSize: 10, letterSpacing: 0.8 },
-  commentBody: { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
   emptyInner: { padding: 28, alignItems: "center", gap: 10 },
   emptyIcon: { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   emptyTitle: { fontFamily: FontFamily.bold, fontSize: 17 },

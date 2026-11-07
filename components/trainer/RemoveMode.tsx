@@ -14,6 +14,23 @@ import { APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../../constants/
 import { haloGlow, pill, PILL_H_XS, PILL_SHADOW } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 
+/** "Remove a trainer" at the foot of the list, which starts remove mode: a
+ *  grey button (t.quietCtrl), quiet beside the page's white ones, since
+ *  removing someone is rare (user request, 2026-11-06: it was bare grey words
+ *  that didn't read as a button). Not red: this only shows the minuses. It
+ *  needs a connection, as each minus does. */
+export function RemoveModeButton({ onPress }: { onPress: () => void }) {
+  const { isDark } = useTheme();
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <BounceButton style={styles.startWrap} onPress={onPress} needsConnection accessibilityRole="button" accessibilityLabel="Remove a trainer">
+      <View style={[styles.start, { backgroundColor: t.quietCtrl }]}>
+        <Text style={[styles.startText, { color: t.tp }]}>Remove a trainer</Text>
+      </View>
+    </BounceButton>
+  );
+}
+
 /** Above the list while removing: what to do, and Done to stop. */
 export function RemoveModeBar({ isDark, onDone }: { isDark: boolean; onDone: () => void }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -49,6 +66,10 @@ const styles = StyleSheet.create({
   hint:     { flex: 1, fontFamily: FontFamily.semibold, fontSize: 13 },
   done:     { ...pill(PILL_H_XS), paddingHorizontal: 18 },
   doneText: { fontFamily: FontFamily.bold, fontSize: 14 },
+  // Done's size, centred under the list.
+  startWrap: { alignSelf: "center", marginTop: 16 },
+  start:     { ...pill(PILL_H_XS), paddingHorizontal: 18 },
+  startText: { fontFamily: FontFamily.bold, fontSize: 14 },
   circle:   { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   minus:    { width: 13, height: 2.5, borderRadius: 1.25, backgroundColor: "#fff" },
 });

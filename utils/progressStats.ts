@@ -20,6 +20,7 @@ import { customDayKey, historicalDays, markDayRefLabels, programDaysWithExtras }
 import { runStartYMD } from "./programHolds";
 import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
 import { currentExerciseName, exerciseIdentity, type ExerciseRef } from "./exerciseNames";
+import { isAssisted, liftBeats } from "./assisted";
 import type {
   ExerciseDataPoint,
   ExerciseSetPoint,
@@ -85,7 +86,9 @@ function calendarDaysBetween(a: Date, b: Date): number {
 export function computeWorkoutTonnage(w: CompletedWorkout): number {
   let total = 0;
   for (const ex of w.exercises) {
-    if (ex.isIsometric) continue;
+    // A hold moves no volume, and an assisted exercise's weight is help, not
+    // weight lifted (utils/assisted.ts).
+    if (ex.isIsometric || isAssisted(ex)) continue;
     for (const s of ex.sets) {
       if (s.type !== "working" || !s.done) continue;
       const wt = parsePositive(s.weight);
@@ -161,12 +164,15 @@ export function computeMuscleGroupStats(
 
       let exVolume = 0;
       let exSets = 0;
+      // A hold's "reps" are seconds, and an assisted exercise's weight is
+      // help (utils/assisted.ts): neither is volume.
+      const weighs = !ex.isIsometric && !isAssisted(ex);
       for (const s of ex.sets) {
         if (s.type !== "working" || !s.done) continue;
         const wt = parsePositive(s.weight);
         const r = parsePositive(s.reps);
         exSets += 1; // a completed working set, regardless of weight (e.g. BW)
-        if (wt > 0 && r > 0 && !ex.isIsometric) exVolume += wt * r; // a hold's "reps" are seconds
+        if (wt > 0 && r > 0 && weighs) exVolume += wt * r;
       }
       if (exSets === 0) continue; // no completed working sets → didn't train anything
 
@@ -191,6 +197,58 @@ export function computeMuscleGroupStats(
 
 export function getRangeOption(range: RangeKey): RangeOption {
   return RANGE_OPTIONS.find(r => r.key === range) ?? RANGE_OPTIONS[0];
+}
+
+/**
+ * The week the page's charts open on when the range hasn't been picked (user
+ * request, 2026-11-06): this week once it has a session in it, and last week
+ * until then, so a Monday doesn't open on an empty chart. But only when last
+ * week has one to show: with neither week trained it stays on this week (user
+ * follow-up, the same day), as an empty last week is no better than an empty
+ * this week and reads as if the page had gone back on its own for nothing.
+ * `sessions` are the ones the charts read (the program picked at the top); a
+ * session counts by its date, the day it was trained (before 3am is the day
+ * before), within the week's window (this week's up to today).
+ */
+export function autoWeekRange(sessions: readonly { date: string }[], today: Date): "thisWeek" | "lastWeek" {
+  const inWeek = (range: "thisWeek" | "lastWeek") => {
+    const { startYMD, endYMD } = rangeWindow(range, today);
+    return sessions.some(w => w.date >= startYMD && w.date <= endYMD);
+  };
+  if (inWeek("thisWeek")) return "thisWeek";
+  return inWeek("lastWeek") ? "lastWeek" : "thisWeek";
+}
+
+/**
+ * The range View Progress on My Programs opens a program not running on (user
+ * decision, 2026-11-07: "reach back to it"), as the page's pick: null for
+ * automatic. `sessions` are the program's, `picked` the page's pick as it
+ * stands. The range it would show stays when it holds the program's last
+ * session, or there's none to hold; otherwise the shortest that holds it, at
+ * most Last Year, so a program finished months ago doesn't open on empty
+ * charts. A range automatic would show anyway is left automatic, as a pick of
+ * it is (pickRange).
+ */
+export function rangeHoldingLast(
+  sessions: readonly { date: string }[],
+  picked: RangeKey | null,
+  today: Date,
+): RangeKey | null {
+  if (sessions.length === 0) return picked;
+  let first = sessions[0].date;
+  let last = first;
+  for (const w of sessions) {
+    if (w.date < first) first = w.date;
+    if (w.date > last) last = w.date;
+  }
+  const holds = (range: RangeKey) => {
+    const { startYMD, endYMD } = rangeWindow(range, today, first);
+    return last >= startYMD && last <= endYMD;
+  };
+  const auto = autoWeekRange(sessions, today);
+  if (holds(picked ?? auto)) return picked;
+  const reach = RANGE_OPTIONS.find(o => holds(o.key))?.key ?? "year";
+  return reach === auto ? null : reach;
 }
 
 /** Monday (00:00 local) of the ISO-style week containing `d`. Sunday is treated
@@ -565,7 +623,9 @@ export function collectExerciseHistory(
   exercise: string | ExerciseRef,
   day?: ProgramDayRef,
 ): ExerciseDataPoint[] {
-  const want = exerciseIdentity(typeof exercise === "string" ? { name: exercise } : exercise);
+  const ref = typeof exercise === "string" ? { name: exercise } : exercise;
+  const want = exerciseIdentity(ref);
+  const assisted = isAssisted(ref);
   const points: ExerciseDataPoint[] = [];
   for (const w of workouts) {
     if (day && !workoutMatchesDay(w, day)) continue;
@@ -597,6 +657,12 @@ export function collectExerciseHistory(
         // Every set, in the order done, for the Sets tab's blocks.
         sets.push({ weight: wt, reps: r });
         if (wt === 0) continue; // bodyweight: reps, and nothing to weigh
+        if (assisted) {
+          // Assistance: the least is the best set, and it's help, not weight
+          // lifted, so no volume and no estimated 1RM (utils/assisted.ts).
+          if (topWeight === 0 || wt < topWeight || (wt === topWeight && r > topReps)) { topWeight = wt; topReps = r; }
+          continue;
+        }
         if (ex.isIsometric) {
           // A hold's load is its weight, and its "reps" are seconds: a
           // heaviest, but no volume.
@@ -648,6 +714,7 @@ export function collectExerciseHistory(
       totalReps,
       sets,
       ...(isHold ? { isHold: true as const } : {}),
+      ...(assisted ? { isAssisted: true as const } : {}),
     });
   }
   points.sort((a, b) => a.completedAt.localeCompare(b.completedAt));
@@ -682,9 +749,14 @@ function epley(weight: number, reps: number): number {
  * chart's Sets tab draws gold.
  */
 export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWorkout[], exercise: string | ExerciseRef, day?: ProgramDayRef): PRs {
+  const ref = typeof exercise === "string" ? { name: exercise } : exercise;
+  // An assisted exercise's record is its LEAST assistance (utils/assisted.ts):
+  // `heaviest` holds it, the pages calling it Least Assistance. It has no
+  // volume and no 1RM, so those come out null.
+  const assisted = isAssisted(ref);
   const heaviest = history.reduce<{ p: ExerciseDataPoint; reps: number } | null>((acc, p) => {
     if (p.topWeight <= 0) return acc;
-    if (!acc || p.topWeight > acc.p.topWeight) return { p, reps: p.topReps };
+    if (!acc || liftBeats(p.topWeight, acc.p.topWeight, assisted)) return { p, reps: p.topReps };
     return acc;
   }, null);
   const bestSet = history.reduce<ExerciseDataPoint | null>((acc, p) => {
@@ -698,23 +770,26 @@ export function computePRs(history: ExerciseDataPoint[], workouts: CompletedWork
     return acc;
   }, null);
   // The most reps in one set; of those, the heaviest (the most done at the
-  // biggest weight, never the first light set that reached the count); then
-  // the earliest. A hold's "reps" are seconds: its longest hold.
+  // biggest weight, never the first light set that reached the count), or
+  // for an assisted exercise the least help; then the earliest. A hold's
+  // "reps" are seconds: its longest hold.
+  const outweighs = (a: number, b: number) =>
+    assisted ? a > 0 && (b === 0 || a < b) : a > b;
   let most: { p: ExerciseDataPoint; i: number } | null = null;
   for (const p of history) {
     for (let i = 0; i < p.sets.length; i++) {
       const s = p.sets[i];
       const best = most ? most.p.sets[most.i] : null;
-      if (!best || s.reps > best.reps || (s.reps === best.reps && s.weight > best.weight)) most = { p, i };
+      if (!best || s.reps > best.reps || (s.reps === best.reps && outweighs(s.weight, best.weight))) most = { p, i };
     }
   }
 
   // 1RM walks raw sets. Same optional day scoping as collectExerciseHistory —
   // `history` arrives already day-filtered, so the raw walk must match or a
   // set from the other day's session could take the 1RM crown.
-  const want = exerciseIdentity(typeof exercise === "string" ? { name: exercise } : exercise);
+  const want = exerciseIdentity(ref);
   let oneRm: { value: number; workoutId: string; date: string; weight: number; reps: number; completedAt: string } | null = null;
-  for (const w of workouts) {
+  for (const w of assisted ? [] : workouts) {
     if (day && !workoutMatchesDay(w, day)) continue;
     for (const ex of w.exercises) {
       // A hold's "reps" are seconds: no rep max to estimate.
@@ -809,6 +884,18 @@ function inLegacyWindow(date: string, window: { from: string | null; to: string 
  */
 export function isCustomSession(w: CompletedWorkout, programs: readonly SavedProgram[]): boolean {
   return !programs.some(p => workoutBelongsToProgram(w, p));
+}
+
+/** The programs with a session logged on them, any run (by
+ *  workoutBelongsToProgram, the rule the Progress page scopes by): the ones My
+ *  Programs offers View Progress on, besides the one running. */
+export function programIdsWithSessions(
+  programs: readonly SavedProgram[],
+  history: readonly CompletedWorkout[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const p of programs) if (history.some(w => workoutBelongsToProgram(w, p))) out.add(p.id);
+  return out;
 }
 
 /**

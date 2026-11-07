@@ -1,12 +1,16 @@
 // components/trainer/RemoveReviewSheet.tsx
 //
 // What Remove on a review opens for its trainer, on their Programs page and a
-// group's: Archive or Delete, as the prompt it replaced offered, and, while the
-// review hasn't been sent back, a box to tell the person who asked why (user
-// request, 2026-11-05: "Not reviewed" reached them with no reason, and there
-// was nowhere to give one). The message is optional and goes with either
-// choice (utils/trainerStore.ts saveReviewRemovalNote, migration 0053); they
-// see it on their request while it reads Not reviewed.
+// group's: Remove, for good, and, while the review hasn't been sent back, a box
+// to tell the person who asked why (user request, 2026-11-05: "Not reviewed"
+// reached them with no reason, and there was nowhere to give one). The message
+// is optional (utils/trainerStore.ts saveReviewRemovalNote, migration 0053);
+// they see it on their request, which reads Not reviewed.
+//
+// A review is reviewed or removed: there's no archive for one (user decision,
+// 2026-11-05). Archive sat beside Delete here, but the person who asked saw
+// the same Not reviewed either way, so it only kept a to-do on the trainer's
+// side that nobody was going to do.
 //
 // The box and the buttons are the sheet's pinned footer, so they stay above
 // the keyboard however small the phone.
@@ -16,6 +20,7 @@ import { StyleSheet, Text, TextInput, View } from "react-native";
 
 import SimpleSheet from "./SimpleSheet";
 import SheetPill from "../SheetPill";
+import { removeReviewNote } from "./ReviewStatusPill";
 import { APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { SentProgram } from "../../utils/trainerStore";
@@ -25,17 +30,22 @@ const NOTE_MAX = 500;
 // The box grows to about four lines, then scrolls inside.
 const NOTE_MAX_H = 88;
 
-export default function RemoveReviewSheet({ review, body, askerName, onArchive, onDelete, onClose }: {
+/** Where removing it reaches, then what it leaves the person who asked with.
+ *  A group review leaves the group's queue for all its trainers (the same row
+ *  is on each one's list); a 1:1 one leaves mine. */
+function removeBody(r: SentProgram): string {
+  const from = r.groupId ? "the group's review list, for all its trainers" : "your list";
+  return `"${r.programName}" comes off ${from}. ${removeReviewNote(r)}`;
+}
+
+export default function RemoveReviewSheet({ review, askerName, onRemove, onClose }: {
   /** The review being removed; null keeps the sheet down. */
   review: SentProgram | null;
-  /** What each choice reaches, from the page (it differs by page). */
-  body: string;
   /** Who asked, for the box's prompt; "them" when unknown. */
   askerName?: string;
-  /** Each with the message, trimmed, or null for none. The sheet has already
+  /** With the message, trimmed, or null for none. The sheet has already
    *  started sliding away. */
-  onArchive: (note: string | null) => void;
-  onDelete: (note: string | null) => void;
+  onRemove: (note: string | null) => void;
   onClose: () => void;
 }) {
   const { isDark } = useTheme();
@@ -71,15 +81,14 @@ export default function RemoveReviewSheet({ review, body, askerName, onArchive, 
               />
             </View>
           ) : null}
-          <SheetPill label="Archive" onPress={() => { const m = message(); close(); onArchive(m); }} />
-          <SheetPill label="Delete" variant="danger" onPress={() => { const m = message(); close(); onDelete(m); }} />
+          <SheetPill label="Remove" variant="danger" onPress={() => { const m = message(); close(); onRemove(m); }} />
           <SheetPill label="Cancel" variant="cancel" onPress={close} />
         </View>
       )}
     >
       <View style={styles.head}>
         <Text style={[styles.title, { color: t.tp }]}>Remove Program</Text>
-        <Text style={[styles.body, { color: t.ts }]}>{body}</Text>
+        <Text style={[styles.body, { color: t.ts }]}>{review ? removeBody(review) : ""}</Text>
       </View>
     </SimpleSheet>
   );

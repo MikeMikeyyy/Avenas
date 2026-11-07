@@ -37,7 +37,7 @@ import Reanimated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Pattern, Rect, Stop } from "react-native-svg";
+import Svg, { Circle, Defs, G, Line, Path, Pattern } from "react-native-svg";
 import * as Haptics from "expo-haptics";
 import {
   ACCT, APP_DARK, APP_LIGHT, COMPARE_BLUE_DARK, CUE_INK, CUE_INK_DARK, FontFamily, NEU_BG, NEU_BG_DARK,
@@ -47,7 +47,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import type { ExerciseDataPoint, ExerciseMetricKey } from "../../constants/progress";
 import {
   CHART_HEIGHT, CHART_TOTAL_H, DOT_R, LABEL_H, LINE_STROKE, PLOT_TOP, SESSION_SPACING, Y_AXIS_LABEL_WIDTH,
-  dotsPathD, drawsOn, exerciseChartAxis, exerciseChartGeometry, setsTotal, slotX, valueY, visibleSlots,
+  dotsPathD, drawsOn, easierSet, exerciseChartAxis, exerciseChartGeometry, hardestSetWeight, setsTotal, slotX, valueY, visibleSlots,
   type ExerciseChartGeometry,
 } from "../../utils/exerciseChartLayout";
 import {
@@ -58,6 +58,7 @@ import type { LiftSlot } from "../../utils/programCompare";
 import { MONTH_NAMES } from "../../utils/dates";
 import { trimNumber } from "../../utils/units";
 import { useChartEntrance } from "./chartEntrance";
+import ChartScrollFade from "./ChartScrollFade";
 import { ordinal } from "../../utils/workoutSummary";
 
 const AnimatedPath = Reanimated.createAnimatedComponent(Path);
@@ -65,8 +66,6 @@ const AnimatedPath = Reanimated.createAnimatedComponent(Path);
 /** How long the axis takes to fit the sessions a scroll settled on (the
  *  exercise chart's). */
 const AXIS_MS = 260;
-/** The fade at an edge the row runs on past. */
-const FADE_W = 18;
 /** The pop-up: a near-black card, the same in both themes. */
 const TOOLTIP_BG = "#1C1D24";
 const FOCUSED_DOT = 16;
@@ -200,14 +199,6 @@ function PlotBody({
     placed.current = true;
     if (initialX > 0) scrollRef.current?.scrollTo({ x: initialX, animated: false });
   }, [initialX, scrollRef]);
-  const maxScroll = g.maxScrollX;
-  const leftFade = useAnimatedStyle(() => ({
-    opacity: interpolate(sx.value, [0, FADE_W], [0, 1], Extrapolation.CLAMP),
-  }));
-  const rightFade = useAnimatedStyle(() => ({
-    opacity: interpolate(maxScroll - sx.value, [0, FADE_W], [0, 1], Extrapolation.CLAMP),
-  }));
-
   // ── What's drawn, as values the paths place on the easing axis ──────────
   const shapes = useMemo(() => {
     const gl = strengthLine(green, g);
@@ -218,12 +209,12 @@ function PlotBody({
       slots.forEach(({ point: p }, slot) => {
         if (!p) return;
         const x = slotX(g, slot) + offset;
-        const heaviest = p.sets.reduce((m, q) => (q.weight > m ? q.weight : m), 0);
+        const heaviest = hardestSetWeight(p);
         let cum = 0;
         p.sets.forEach(q => {
           const block = [x, cum, cum + q.reps];
           cum += q.reps;
-          (q.weight < heaviest - 1e-9 ? lighter : full).push(...block);
+          (easierSet(p, q.weight, heaviest) ? lighter : full).push(...block);
         });
       });
       return { full, lighter };
@@ -371,7 +362,6 @@ function PlotBody({
 
   // ── Drawing ──────────────────────────────────────────────────────────────
   const rules = Array.from({ length: axis.sections }, (_, i) => base - ((i + 1) / axis.sections) * CHART_HEIGHT);
-  const fade = isDark ? NEU_BG_DARK : NEU_BG;
   const focusX = focus !== null ? slotX(g, focus) : null;
   const focusPoint = (slots: LiftSlot[]): ExerciseDataPoint | undefined => (focus !== null ? slots[focus]?.point : undefined);
   const fg = focusPoint(green);
@@ -429,11 +419,17 @@ function PlotBody({
           </Text>
         ))}
       </Reanimated.View>
-      <Svg width={g.wrapperWidth} height={CHART_TOTAL_H} style={StyleSheet.absoluteFill} pointerEvents="none">
-        <Line x1={Y_AXIS_LABEL_WIDTH + 0.5} x2={Y_AXIS_LABEL_WIDTH + 0.5} y1={PLOT_TOP} y2={base} stroke={t.div} strokeWidth={1} />
-        <Line x1={Y_AXIS_LABEL_WIDTH} x2={g.wrapperWidth} y1={base + 0.5} y2={base + 0.5} stroke={t.div} strokeWidth={1} />
-      </Svg>
 
+      {/* The row, faded out at an edge it runs on past, its axis row never
+          (ChartScrollFade, the Progress page chart's own). */}
+      <ChartScrollFade
+        sx={sx}
+        maxScroll={g.maxScrollX}
+        width={g.viewportWidth}
+        height={CHART_TOTAL_H}
+        plotBottom={base + 3}
+        style={styles.scroller}
+      >
       <Reanimated.ScrollView
         ref={scrollRef}
         horizontal
@@ -443,7 +439,7 @@ function PlotBody({
         onScroll={onScroll}
         scrollEventThrottle={16}
         scrollEnabled={g.maxScrollX > 0}
-        style={[styles.scroller, { width: g.viewportWidth }]}
+        style={{ width: g.viewportWidth, height: CHART_TOTAL_H }}
       >
         <View style={{ width: g.contentWidth, height: CHART_TOTAL_H }}>
           <Pressable accessible={false} onPress={clearFocus} style={StyleSheet.absoluteFill} />
@@ -571,29 +567,14 @@ function PlotBody({
           </View>
         </View>
       </Reanimated.ScrollView>
+      </ChartScrollFade>
 
-      <Reanimated.View pointerEvents="none" style={[styles.edge, { left: Y_AXIS_LABEL_WIDTH + 1 }, leftFade]}>
-        <Svg width={FADE_W} height={CHART_TOTAL_H}>
-          <Defs>
-            <LinearGradient id="compareFadeL" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={fade} stopOpacity={1} />
-              <Stop offset="1" stopColor={fade} stopOpacity={0} />
-            </LinearGradient>
-          </Defs>
-          <Rect x={0} y={0} width={FADE_W} height={CHART_TOTAL_H} fill="url(#compareFadeL)" />
-        </Svg>
-      </Reanimated.View>
-      <Reanimated.View pointerEvents="none" style={[styles.edge, { left: g.wrapperWidth - FADE_W }, rightFade]}>
-        <Svg width={FADE_W} height={CHART_TOTAL_H}>
-          <Defs>
-            <LinearGradient id="compareFadeR" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={fade} stopOpacity={0} />
-              <Stop offset="1" stopColor={fade} stopOpacity={1} />
-            </LinearGradient>
-          </Defs>
-          <Rect x={0} y={0} width={FADE_W} height={CHART_TOTAL_H} fill="url(#compareFadeR)" />
-        </Svg>
-      </Reanimated.View>
+      {/* The axes, over the row so nothing scrolling covers them, and never
+          faded with it. */}
+      <Svg width={g.wrapperWidth} height={CHART_TOTAL_H} style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Line x1={Y_AXIS_LABEL_WIDTH + 0.5} x2={Y_AXIS_LABEL_WIDTH + 0.5} y1={PLOT_TOP} y2={base} stroke={t.div} strokeWidth={1} />
+        <Line x1={Y_AXIS_LABEL_WIDTH} x2={g.wrapperWidth} y1={base + 0.5} y2={base + 0.5} stroke={t.div} strokeWidth={1} />
+      </Svg>
 
       {popup}
     </Reanimated.View>
@@ -620,12 +601,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     top: 0,
-  },
-  edge: {
-    position: "absolute",
-    top: 0,
-    width: FADE_W,
-    height: CHART_TOTAL_H,
   },
   yLabel: {
     position: "absolute",

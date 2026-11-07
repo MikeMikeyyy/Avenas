@@ -47,6 +47,11 @@ export type CustomExercise = {
   steps?: string[];
   /** Legacy single-paragraph description. Kept for exercises saved before steps existed. */
   description?: string;
+  /** Its weight is help, not load (a machine-assisted exercise): less is
+   *  harder, so less is its record (utils/assisted.ts). Create Exercise's
+   *  Assisted switch. Synced as `custom_exercises.assisted` (migration 0058),
+   *  and carried with programs in `customDetails`. */
+  assisted?: boolean;
 };
 
 /**
@@ -98,4 +103,7 @@ export type Exercise = {
    *  an exercise just as close ("squat" puts Barbell Back Squat above Band
    *  Squat; utils/exerciseSearch.ts). */
   common?: boolean;
+  /** Its weight is help, not load (an assisted pull-up machine's
+   *  counterweight): less is harder, so less is its record (utils/assisted.ts). */
+  assisted?: boolean;
 };

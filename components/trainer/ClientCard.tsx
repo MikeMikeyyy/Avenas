@@ -76,7 +76,7 @@ export default function ClientCard({ client, activeProgramName, badge, badgeColo
           {activeProgramName ? (
             <View style={styles.programRow}>
               <Text style={[styles.programLabel, { color: t.ts }]}>ACTIVE PROGRAM</Text>
-              <Text style={[styles.programName, { color: t.tp }]} numberOfLines={1}>{activeProgramName}</Text>
+              <Text style={[styles.programName, { color: t.tp }]}>{activeProgramName}</Text>
             </View>
           ) : (
             <Text style={[styles.sub, { color: t.ts }]} numberOfLines={1}>No active program</Text>

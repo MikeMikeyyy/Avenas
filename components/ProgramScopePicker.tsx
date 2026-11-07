@@ -101,14 +101,19 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
   const activeProgram = useMemo(() => programs.find(p => p.status === "active") ?? null, [programs]);
 
   const currentLabel = useMemo(() => {
-    if (scope.kind === "current") {
-      return activeProgram ? activeProgram.name : "Current program";
-    }
+    // The words, not the program's name: always one line, the range pill's
+    // height (user request, 2026-11-06: a long name took the pill to two
+    // lines, taller than the range beside it).
+    if (scope.kind === "current") return "Current program";
     if (scope.kind === "all") return "All programs";
     if (scope.kind === "custom") return CUSTOM_WORKOUTS_NAME;
     const found = programs.find(p => p.id === scope.programId);
     return found?.name ?? "Program";
-  }, [scope, programs, activeProgram]);
+  }, [scope, programs]);
+  // Whether the label runs past one line at the pill's own size, as measured
+  // for it (the unseen copy below), so it steps down to the range pill's size.
+  const [fit, setFit] = useState<{ label: string; long: boolean } | null>(null);
+  const fitted = fit !== null && fit.label === currentLabel;
 
   const isSelected = (s: ProgramScope): boolean => {
     if (s.kind !== scope.kind) return false;
@@ -144,6 +149,9 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
           from the left, the chevron sits at the far end. */}
       <GlassButton
         pill
+        // A long program name wraps onto a second line, the pill growing with
+        // it, never "…" (user request, 2026-11-06).
+        grow
         size={PILL_H_XS}
         onPress={() => setOpen(true)}
         style={style}
@@ -152,9 +160,30 @@ export default function ProgramScopePicker({ scope, programs, onChange, hasCusto
         accessibilityLabel={`Select program scope, currently ${currentLabel}`}
       >
         <View style={[styles.dot, { backgroundColor: scope.kind === "all" || scope.kind === "custom" ? t.ts : ACCT }]} />
-        <Text style={[styles.pillText, { color: t.tp }]} numberOfLines={1}>
-          {currentLabel}
-        </Text>
+        {/* On one line where it can be: at its own size, else at the size of
+            the range pill beside it, and only a name too long even for that
+            on two, never "…" (user request, 2026-11-06). Measured unseen at
+            its own size first, so it never shows a size it then leaves. */}
+        <View style={styles.labelSlot}>
+          <Text
+            style={[styles.pillText, styles.measure]}
+            onTextLayout={e => {
+              const long = e.nativeEvent.lines.length > 1;
+              setFit(f => (f && f.label === currentLabel && f.long === long ? f : { label: currentLabel, long }));
+            }}
+            accessible={false}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {currentLabel}
+          </Text>
+          <Text
+            style={[styles.pillText, fitted && fit.long ? styles.pillTextSmall : null, { color: t.tp }, !fitted && styles.unmeasured]}
+            numberOfLines={fitted ? undefined : 1}
+          >
+            {currentLabel}
+          </Text>
+        </View>
         <ChevronDown color={t.ts} />
       </GlassButton>
 
@@ -287,9 +316,12 @@ const styles = StyleSheet.create({
   // What's on the compact pill (PILL_H_XS), a step down from the full-size one
   // it was (user request, 2026-10-21: the page's two filters stood too tall
   // under its title). DropdownPicker's "bar" beside it matches.
+  // The range pill's own padding and about its gap, which leaves the label
+  // room for "Current program" on one line on the narrowest phones (at 15
+  // there, 17 from a 6.1" phone up).
   trigger: {
-    gap: 10,
-    paddingHorizontal: 18,
+    gap: 8,
+    paddingHorizontal: 16,
   },
   dot: {
     width: 8,
@@ -298,11 +330,18 @@ const styles = StyleSheet.create({
   },
   // flex: 1 takes the pill's spare width, so the name starts at the left
   // after the dot and pushes the chevron to the right edge.
+  labelSlot: { flex: 1 },
   pillText: {
     fontFamily: FontFamily.bold,
     fontSize: 17,
-    flex: 1,
   },
+  // A name too long for one line at 17: the range pill's size beside it
+  // (DropdownPicker's bar), no smaller.
+  pillTextSmall: { fontSize: 15 },
+  // The copy measured at 17, unseen and taking no room.
+  measure: { position: "absolute", left: 0, right: 0, top: 0, opacity: 0 },
+  // Until it's measured: there, holding its line, not yet seen.
+  unmeasured: { opacity: 0 },
 
   sheetWrap: {
     ...StyleSheet.absoluteFill,

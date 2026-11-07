@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions, type ScrollViewInstance } from "react-native";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { View, Text, StyleSheet, ScrollView, Pressable, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions, type AccessibilityActionEvent, type ScrollViewInstance } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
@@ -15,14 +15,21 @@ import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
+import { noteDeleted } from "../utils/syncLocal";
+import { useSyncedDataReload } from "../hooks/useSyncedDataReload";
 import { awardProgramAchievement } from "../utils/achievementStore";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE, DANGER_BRIGHT } from "../constants/theme";
-import { darkGlow, glowOpacity, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { cardButton, darkGlow, glowOpacity, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { PROGRESS_ICON } from "../constants/tabIcons";
+import DrawnIcon from "../components/DrawnIcon";
+import { programIdsWithSessions } from "../utils/progressStats";
+import { programProgressParams } from "../utils/progressSession";
+import { CARD_SHADOW_ROOM } from "../constants/cards";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GlassButton from "../components/GlassButton";
 import SheetPill from "../components/SheetPill";
-import { SHEET_DIM, SHEET_TOP_ROW, SHEET_TOP_ROW_H, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
+import { SHEET_DIM, SHEET_TOP_GAP, SHEET_TOP_ROW, SHEET_TOP_ROW_H, SheetBackButton, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
 import SquarePenIcon from "../components/SquarePenIcon";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
@@ -37,7 +44,15 @@ import { activateProgram, completeProgram, deactivateProgram, setWorkoutDay } fr
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
 import { useAccountType } from "../contexts/AccountTypeContext";
-import { appendSentProgram, loadAssignedPT, removeSharedProgramByLocalId, type AssignedPT, type SentProgram } from "../utils/trainerStore";
+import { loadAssignedPT, removeSharedProgramByLocalId } from "../utils/trainerStore";
+import { requestReview, reviewSentWords, type ReviewTo } from "../utils/reviewRequest";
+import { reviewTargets, type ReviewTargets } from "../utils/trainerLists";
+import { fetchGymHub, fetchPTHub, hubKindFor, hydrateTrainerHub, peekGymHub, peekPTHub } from "../utils/trainerHub";
+import { useAuth } from "../contexts/AuthContext";
+import { alertOffline, useOffline } from "../contexts/ConnectivityContext";
+import PersonRow, { PERSON_AVATAR } from "../components/trainer/PersonRow";
+import GroupAvatar from "../components/trainer/GroupAvatar";
+import SendIcon from "../components/icons/SendIcon";
 import { alertMessage } from "../utils/errors";
 import { archiveProgram } from "../utils/programArchive";
 import { keepDeletedProgramName } from "../utils/programDelete";
@@ -245,15 +260,46 @@ function DateChip({ icon, label, isDark, accent }: { icon: "calendar" | "flag"; 
   );
 }
 
+// ─── View Progress ─────────────────────────────────────────────────────────────
+
+/** A card's way to its progress (user request and pick, 2026-11-07): the
+ *  Progress tab on this program, at the card's foot. On the running program,
+ *  and on any other with a session logged on it. The in-card button look
+ *  (cardButton), with the Progress tab's own icon. */
+function ViewProgressButton({ name, isDark, onPress }: { name: string; isDark: boolean; onPress: () => void }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <BounceButton onPress={onPress} accessibilityLabel={`View progress for ${name}`} accessibilityRole="button">
+      <View style={[styles.viewProgressBtn, cardButton(t)]}>
+        <DrawnIcon drawing={PROGRESS_ICON} size={15} color={t.tp} />
+        <Text style={[styles.viewProgressText, { color: t.tp }]}>View Progress</Text>
+      </View>
+    </BounceButton>
+  );
+}
+
+/** The pill as an action on its card, for VoiceOver: a card is one element to
+ *  it, so the pill inside can't be reached on its own. */
+function viewProgressAction(onViewProgress: (() => void) | undefined) {
+  if (!onViewProgress) return {};
+  return {
+    accessibilityActions: [{ name: "viewProgress", label: "View Progress" }],
+    onAccessibilityAction: (e: AccessibilityActionEvent) => {
+      if (e.nativeEvent.actionName === "viewProgress") onViewProgress();
+    },
+  };
+}
+
 // ─── Active Program Card ───────────────────────────────────────────────────────
 
 interface ActiveProgramCardProps {
   program: SavedProgram;
   isDark: boolean;
   onOpenActions: () => void;
+  onViewProgress: () => void;
 }
 
-const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onOpenActions }: ActiveProgramCardProps) {
+const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDark, onOpenActions, onViewProgress }: ActiveProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   // A held program is still status "active", so everything here has to key off
   // pausedAt or it reads as running: green bars and an "Active" badge.
@@ -265,10 +311,18 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
 
   return (
     <NeuCard dark={isDark} style={styles.activeProgramCard}>
-      <TouchableOpacity activeOpacity={0.8} onPress={onOpenActions} accessibilityLabel={`${program.name} options`} accessibilityRole="button">
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={onOpenActions}
+        accessibilityLabel={`${program.name} options`}
+        accessibilityRole="button"
+        // VoiceOver reads the card as one element, the pill inside it too.
+        {...viewProgressAction(onViewProgress)}
+      >
         <View style={styles.activeProgramInner}>
           <View style={styles.rowBetween}>
-            <Text style={[styles.activeProgramName, { color: t.tp }]} numberOfLines={1}>
+            {/* The whole name, wrapping, never "…" (user request, 2026-11-06). */}
+            <Text style={[styles.activeProgramName, { color: t.tp }]}>
               {program.name}
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -322,6 +376,9 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
               );
             })}
           </View>
+
+          {/* Always here on the running program, sessions logged or not. */}
+          <ViewProgressButton name={program.name} isDark={isDark} onPress={onViewProgress} />
         </View>
       </TouchableOpacity>
     </NeuCard>
@@ -336,6 +393,8 @@ interface ProgramCardProps {
   /** Hide everything below the header row. The header itself stays mounted. */
   collapsed?: boolean;
   onOpenActions: () => void;
+  /** Given when it has sessions logged on it: View Progress at its foot. */
+  onViewProgress?: () => void;
 }
 
 // Collapsing does NOT swap in a different component. The header row (name,
@@ -343,7 +402,7 @@ interface ProgramCardProps {
 // shift position — only the detail beneath it is added and removed. An earlier
 // version rendered a separate compact card, and its slightly different paddings
 // and gaps made everything jump on every toggle.
-const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed, onOpenActions }: ProgramCardProps) {
+const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed, onOpenActions, onViewProgress }: ProgramCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
 
   const computedWeek = getCurrentWeek(program);
@@ -359,10 +418,16 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
 
   return (
     <NeuCard dark={isDark} style={styles.programCard}>
-      <TouchableOpacity activeOpacity={0.8} onPress={onOpenActions} accessibilityLabel={`${program.name} options`} accessibilityRole="button">
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={onOpenActions}
+        accessibilityLabel={`${program.name} options`}
+        accessibilityRole="button"
+        {...viewProgressAction(collapsed ? undefined : onViewProgress)}
+      >
         <Reanimated.View style={styles.programCardInner} layout={CARD_LAYOUT}>
           <View style={styles.rowBetween}>
-            <Text style={[styles.programName, { color: t.tp }]} numberOfLines={1}>{program.name}</Text>
+            <Text style={[styles.programName, { color: t.tp }]}>{program.name}</Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View style={[styles.statusBadge, { backgroundColor: isDark ? `${statusColor}22` : `${statusColor}18` }]}>
                 <Text style={[styles.statusBadgeText, { color: statusColor }]}>{statusLabel}</Text>
@@ -408,6 +473,9 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
               );
             })}
           </View>
+          {onViewProgress ? (
+            <ViewProgressButton name={program.name} isDark={isDark} onPress={onViewProgress} />
+          ) : null}
           </Reanimated.View>
           )}
         </Reanimated.View>
@@ -431,19 +499,30 @@ interface ProgramAction {
   primary?: boolean;      // filled accent button
   destructive?: boolean;  // red icon + text
   tint?: string;          // custom icon/text colour
+  /** Opens a next step of this sheet instead of closing it (Send for Review's
+   *  who to send it to): a sheet's interactions are steps of one sheet. */
+  step?: "send";
 }
 
-function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
+function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendTargets, onSend }: {
   visible: boolean;
   program: SavedProgram | null;
   actions: ProgramAction[];
   isDark: boolean;
   onClose: () => void;
+  /** Who Send for Review offers: my trainers, and the groups I can ask in. */
+  sendTargets: ReviewTargets;
+  /** Send for Review's pick, run once the sheet has gone. */
+  onSend: (program: SavedProgram, to: ReviewTo) => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
+  const offline = useOffline();
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
+  // The actions, or Send for Review's second step: who it goes to. Back to
+  // the actions as the sheet goes, so it opens on them next time.
+  const [step, setStep] = useState<"actions" | "send">("actions");
 
   const panResponder = useRef(
     PanResponder.create({
@@ -460,7 +539,7 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
           Animated.parallel([
             Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
             Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); });
+          ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setStep("actions"); onClose(); });
         } else {
           Animated.parallel([
             Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
@@ -477,7 +556,7 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
     Animated.parallel([
       Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); onClose(); after?.(); });
+    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setStep("actions"); onClose(); after?.(); });
   };
 
   useEffect(() => {
@@ -491,9 +570,20 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
 
   if (!program) return null;
 
+  // A pick sends once the sheet has gone, so the result's alert comes up over
+  // the page; offline, it says so and stays (CLAUDE.md, needsConnection by hand).
+  const pick = (to: ReviewTo) => {
+    if (offline) { alertOffline(); return; }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    close(() => onSend(program, to));
+  };
+  const sending = step === "send";
+
   return (
-    <Modal visible={visible} animationType="none" transparent onRequestClose={() => close()}>
-      <View style={styles.swBackdrop}>
+    <Modal visible={visible} animationType="none" transparent onRequestClose={() => (sending ? setStep("actions") : close())}>
+      {/* Never past the status bar: a long list of trainers and groups shrinks
+          the sheet and scrolls inside it, as a SimpleSheet's does. */}
+      <View style={[styles.swBackdrop, { paddingTop: insets.top + SHEET_TOP_GAP }]}>
         <TouchableWithoutFeedback onPress={() => close()}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
         </TouchableWithoutFeedback>
@@ -506,21 +596,83 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose }: {
             {/* Its plain × that sat on this row is the glass X above now
                 (SheetCloseButton, as every pop-up's). */}
             <View style={[styles.paHeader, { borderBottomColor: t.div }]}>
-              <Text style={[styles.paTitle, { color: t.tp }]} numberOfLines={1}>{program.name}</Text>
+              <Text style={[styles.paTitle, { color: t.tp }]}>{sending ? "Send for Review" : program.name}</Text>
             </View>
           </View>
-          <View style={styles.paList}>
-            {actions.map((a) => (
-              <SheetPill
-                key={a.key}
-                label={a.label}
-                variant={a.primary ? "primary" : a.destructive ? "danger" : "default"}
-                tint={a.tint}
-                icon={c => typeof a.icon === "function" ? a.icon(c) : <Ionicons name={a.icon} size={16} color={c} />}
-                onPress={() => close(a.onPress)}
-              />
-            ))}
-          </View>
+          {sending ? (
+            <ScrollView
+              style={styles.paScroll}
+              // Room under the last card for its shadow, which the scroll's
+              // edge cut off in a line (CARD_SHADOW_ROOM).
+              contentContainerStyle={styles.paScrollBody}
+              alwaysBounceVertical={false}
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={[styles.sendHint, { color: t.ts }]}>
+                {`Who should look at "${program.name}"? They'll send it back with their changes.`}
+              </Text>
+              {offline ? (
+                <Text style={[styles.sendHint, { color: t.ts }]}>{"You're offline. Sending needs a connection."}</Text>
+              ) : null}
+              {sendTargets.trainers.length > 0 ? (
+                <>
+                  <Text style={[styles.sendSection, { color: t.ts }]}>YOUR TRAINERS</Text>
+                  <View style={[styles.sendCard, offline && styles.sendOffline]}>
+                    <NeuCard dark={isDark} radius={16}>
+                      {sendTargets.trainers.map((tr, i) => (
+                        <PersonRow
+                          key={tr.id}
+                          person={tr}
+                          first={i === 0}
+                          tags={[]}
+                          end={<Ionicons name="chevron-forward" size={16} color={t.ts} />}
+                          onPress={() => pick({ kind: "trainer", trainer: tr })}
+                          accessibilityLabel={`Send ${program.name} to ${tr.name} for review`}
+                        />
+                      ))}
+                    </NeuCard>
+                  </View>
+                </>
+              ) : null}
+              {sendTargets.groups.length > 0 ? (
+                <>
+                  <Text style={[styles.sendSection, { color: t.ts }]}>GROUPS</Text>
+                  <Text style={[styles.sendSectionHint, { color: t.ts }]}>{"Its trainers pick it up, and it shows on the group's Programs page."}</Text>
+                  <View style={[styles.sendCard, offline && styles.sendOffline]}>
+                    <NeuCard dark={isDark} radius={16}>
+                      {sendTargets.groups.map((g, i) => (
+                        <PersonRow
+                          key={g.id}
+                          person={{ id: g.id, name: g.name }}
+                          leading={<GroupAvatar uri={g.photoUri} size={PERSON_AVATAR} isDark={isDark} colorKey={g.id} />}
+                          first={i === 0}
+                          tags={[]}
+                          end={<Ionicons name="chevron-forward" size={16} color={t.ts} />}
+                          onPress={() => pick({ kind: "group", group: g })}
+                          accessibilityLabel={`Send ${program.name} to the trainers in ${g.name} for review`}
+                        />
+                      ))}
+                    </NeuCard>
+                  </View>
+                </>
+              ) : null}
+            </ScrollView>
+          ) : (
+            <View style={styles.paList}>
+              {actions.map((a) => (
+                <SheetPill
+                  key={a.key}
+                  label={a.label}
+                  variant={a.primary ? "primary" : a.destructive ? "danger" : "default"}
+                  tint={a.tint}
+                  icon={c => typeof a.icon === "function" ? a.icon(c) : <Ionicons name={a.icon} size={16} color={c} />}
+                  onPress={() => (a.step ? setStep(a.step) : close(a.onPress))}
+                />
+              ))}
+            </View>
+          )}
+          {/* The step after the actions faces its way back to them. */}
+          {sending ? <SheetBackButton onPress={() => setStep("actions")} /> : null}
           <SheetCloseButton onPress={() => close()} />
         </Animated.View>
       </View>
@@ -539,9 +691,17 @@ export default function ProgramsScreen() {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isRunning, isPaused, discardWorkout } = useWorkoutTimer();
   const { accountType } = useAccountType();
-  const [assignedPT, setAssignedPT] = useState<AssignedPT | null>(null);
+  const { userId } = useAuth();
+  // Who a program can go to for review from here (user request, 2026-11-06: a
+  // fast way to send one to your trainer or a group's trainers without going
+  // to the Trainer tab).
+  const [sendTargets, setSendTargets] = useState<ReviewTargets>({ trainers: [], groups: [] });
 
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
+  // The sessions logged, read with the programs: which cards offer View
+  // Progress. The actions read their own fresh copy when they need one.
+  const [history, setHistory] = useState<CompletedWorkout[]>([]);
+  const withSessions = useMemo(() => programIdsWithSessions(programs, history), [programs, history]);
   const [setWorkoutOpen, setSetWorkoutOpen] = useState(false);
   const [actionsProgram, setActionsProgram] = useState<SavedProgram | null>(null);
   // Transient, like the trainer hub's collapsible sections — not persisted.
@@ -584,8 +744,10 @@ export default function ProgramsScreen() {
   const makeActive = async (program: SavedProgram) => {
     // A fresh run from today, the outgoing program demoted by the week it
     // reached (utils/programLifecycle.ts, shared with the builder's "set it as
-    // your active program").
-    const { programs: updated, finished } = activateProgram(programs, program.id, todayFormatted());
+    // your active program"). The history says whether a run in its first week
+    // has anything in it to keep.
+    const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+    const { programs: updated, finished } = activateProgram(programs, program.id, todayFormatted(), Array.isArray(history) ? history : []);
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     // A same-day change-day override belongs to the PREVIOUS active program —
@@ -598,14 +760,16 @@ export default function ProgramsScreen() {
     if (finished) void awardProgramAchievement(finished.program, finished.week);
   };
 
-  // Deactivate the active program without completing it — drops it back to paused
-  // (or "created" if it never got past week 1) so no program is active.
+  // Deactivate the active program without completing it: shelved ("paused";
+  // "created" only when nothing was logged in its first week, as if it never
+  // started) so no program is active.
   //
   // Clears any hold: "inactive" and "on hold" are different states, and a
   // program can't be both. Once it's out of the active slot the hold is
   // meaningless, and activating it later must give a clean run.
   const handleMakeInactive = async (program: SavedProgram) => {
-    const updated = deactivateProgram(programs, program.id);
+    const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+    const updated = deactivateProgram(programs, program.id, Array.isArray(history) ? history : []);
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     // A day picked for today belonged to the run that just stopped. Left
@@ -718,6 +882,9 @@ export default function ProgramsScreen() {
       onDelete: async () => {
         // Its sessions keep its name, to say whose they were (utils/programDelete.ts).
         await keepDeletedProgramName(program);
+        // Recorded before it goes, so the delete reaches the account's other
+        // phone and no merge brings it back (utils/syncLocal.ts).
+        await noteDeleted("programs", [program]);
         const updated = programs.filter(p => p.id !== program.id);
         setPrograms(updated);
         await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
@@ -819,8 +986,10 @@ export default function ProgramsScreen() {
     return () => { cancelled = true; clearTimeout(t); };
   }, [focus, programs, insets.top, router]);
 
-  useFocusEffect(useCallback(() => {
-    loadAssignedPT().then(setAssignedPT).catch(() => {});
+  // Every action here saves the list this page holds, so it must hold the
+  // latest: read on focus, and again when the account's other phone's changes
+  // merge in while it's open (or the next save writes them away).
+  const loadPrograms = useCallback(() => {
     AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
       if (!raw) { setPrograms([]); return; }
       try {
@@ -828,7 +997,34 @@ export default function ProgramsScreen() {
         if (Array.isArray(parsed)) setPrograms(parsed as SavedProgram[]);
       } catch { setPrograms([]); }
     }).catch(() => {});
-  }, []));
+    getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []).then(h => setHistory(Array.isArray(h) ? h : []));
+  }, []);
+  useSyncedDataReload(loadPrograms);
+
+  // Who Send for Review offers: the Trainer tab's saved copy of my trainers and
+  // groups (kept current by the tab and the prefetch after launch), so it's
+  // there at once; the tab's own load only when this phone has never saved
+  // one. With no trainer listed, the one picked for the tab stands in.
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    const owner = userId ?? "";
+    if (owner) {
+      const kind = hubKindFor(accountType);
+      void (async () => {
+        await hydrateTrainerHub(kind, owner);
+        const saved = kind === "pt" ? peekPTHub(owner) : peekGymHub(owner);
+        const hub = saved ?? (kind === "pt" ? await fetchPTHub(owner) : await fetchGymHub(owner));
+        let targets = reviewTargets(hub);
+        if (kind === "gym" && targets.trainers.length === 0) {
+          const picked = await loadAssignedPT().catch(() => null);
+          if (picked) targets = { ...targets, trainers: [picked] };
+        }
+        if (!cancelled) setSendTargets(targets);
+      })();
+    }
+    loadPrograms();
+    return () => { cancelled = true; };
+  }, [accountType, userId, loadPrograms]));
 
   const activeProgram = programs.find((p) => p.status === "active") ?? null;
   // Everything under the All Programs heading — the active one has its own
@@ -838,38 +1034,29 @@ export default function ProgramsScreen() {
   // programs you ran.
   const otherPrograms = programs.filter((p) => p.status !== "active" && !p.archivedAt);
   const hasArchived = programs.some(p => !!p.archivedAt);
-  const canSendToPT = accountType === "gym_user" && assignedPT !== null;
+  // Send for Review shows when there's anyone to send to.
+  const canSendForReview = sendTargets.trainers.length > 0 || sendTargets.groups.length > 0;
 
-  const handleSendToPT = (program: SavedProgram) => {
-    if (!assignedPT) return;
-    Alert.alert(
-      "Send to Trainer",
-      `Send "${program.name}" to ${assignedPT.name} for review?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Send",
-          onPress: async () => {
-            const entry: SentProgram = {
-              id: `sent_${Date.now()}`,
-              programId: program.id,
-              programName: program.name,
-              sentAtISO: new Date().toISOString(),
-              status: "sent",
-              programSnapshot: program,
-            };
-            try {
-              // Real trainers (uuid id) receive through the cloud; mock stays local.
-              await appendSentProgram(entry, assignedPT.id);
-            } catch (e) {
-              Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
-              return;
-            }
-            Alert.alert("Sent", `"${program.name}" was sent to ${assignedPT.name}.`);
-          },
-        },
-      ]
-    );
+  // The sheet's second step picked who: the request every place that asks
+  // makes (utils/reviewRequest.ts), so the trainer, or the group's trainers,
+  // get it on their Programs page as from the Trainer tab.
+  const handleSendForReview = async (program: SavedProgram, to: ReviewTo) => {
+    try {
+      await requestReview(program, to);
+    } catch (e) {
+      Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
+      return;
+    }
+    const done = reviewSentWords(program, to);
+    Alert.alert(done.title, done.body);
+  };
+
+  // View Progress (user request, 2026-11-07): the Progress tab on this
+  // program (utils/progressSession.ts). This page sits over the tabs, so
+  // dismissTo goes back to them rather than push a second copy, as Exercise
+  // History's See All Progress does.
+  const viewProgress = (program: SavedProgram) => {
+    router.dismissTo({ pathname: "/(tabs)/progress", params: programProgressParams(program.id) });
   };
   const totalCount = programs.length;
   const weeksTrained = programs.reduce((sum, p) =>
@@ -882,7 +1069,17 @@ export default function ProgramsScreen() {
     const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: c => <SquarePenIcon size={16} color={c} />, onPress: () => router.navigate({ pathname: "/new-program", params: { id: program.id } }) };
     const duplicateAction: ProgramAction = { key: "duplicate", label: "Duplicate Program", icon: "copy-outline", onPress: () => handleDuplicateProgram(program) };
     const deleteAction: ProgramAction = { key: "remove", label: "Remove", icon: "trash-outline", destructive: true, onPress: () => handleRemoveProgram(program) };
-    const sendAction: ProgramAction | null = canSendToPT ? { key: "send", label: "Send to Trainer", icon: "paper-plane-outline", tint: ACCT, onPress: () => handleSendToPT(program) } : null;
+    // Near the top, under Edit (user pick, 2026-11-06): it opens the sheet's
+    // next step, who it goes to, rather than closing. In the page's ink, as
+    // Edit and Duplicate are (user request, 2026-11-06: it was green).
+    const sendAction: ProgramAction | null = canSendForReview
+      ? { key: "send", label: "Send for Review", icon: c => <SendIcon size={16} color={c} />, step: "send", onPress: () => {} }
+      : null;
+    const withSend = (list: ProgramAction[], after: string): ProgramAction[] => {
+      if (!sendAction) return list;
+      const i = list.findIndex(a => a.key === after);
+      return i < 0 ? [...list, sendAction] : [...list.slice(0, i + 1), sendAction, ...list.slice(i + 1)];
+    };
 
     let list: ProgramAction[];
     if (program.status === "active") {
@@ -921,8 +1118,8 @@ export default function ProgramsScreen() {
         deleteAction,
       ];
     }
-    if (sendAction) list.push(sendAction);
-    return list;
+    // Under Edit; a finished program, which has no Edit, under Duplicate.
+    return withSend(list, program.status === "completed" ? "duplicate" : "edit");
   };
 
   return (
@@ -986,6 +1183,7 @@ export default function ProgramsScreen() {
                 program={activeProgram}
                 isDark={isDark}
                 onOpenActions={() => setActionsProgram(activeProgram)}
+                onViewProgress={() => viewProgress(activeProgram)}
               />
             </View>
           </>
@@ -1044,6 +1242,7 @@ export default function ProgramsScreen() {
                 isDark={isDark}
                 collapsed={collapsedAll}
                 onOpenActions={() => setActionsProgram(p)}
+                onViewProgress={withSessions.has(p.id) ? () => viewProgress(p) : undefined}
               />
             </Reanimated.View>
           ))
@@ -1056,6 +1255,8 @@ export default function ProgramsScreen() {
         actions={actionsProgram ? buildActions(actionsProgram) : []}
         isDark={isDark}
         onClose={() => setActionsProgram(null)}
+        sendTargets={sendTargets}
+        onSend={(program, to) => void handleSendForReview(program, to)}
       />
 
       {activeProgram && setWorkoutOpen && (
@@ -1130,15 +1331,30 @@ const styles = StyleSheet.create({
   cardActions:        { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 0 },
   deleteBtnText:      { fontFamily: FontFamily.bold, fontSize: 14, color: DANGER_BRIGHT, letterSpacing: 0.2 },
 
+  // View Progress at a card's foot: the archive cards' in-card button size.
+  viewProgressBtn:    { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 12, minHeight: 38, borderRadius: PILL_RADIUS },
+  viewProgressText:   { fontFamily: FontFamily.bold, fontSize: 14 },
+
   cycleGrid:          { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   cycleChip:          { alignItems: "center", paddingVertical: 6, paddingHorizontal: 8, borderRadius: 8, minWidth: 60 },
   cycleChipText:      { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
 
   // Program Actions Sheet
-  paSheet:            { borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden" },
+  paSheet:            { borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden", flexShrink: 1 },
   paHeader:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   paTitle:            { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },
   paList:             { paddingHorizontal: 20, paddingTop: 16, gap: 10 },
+  // Send for Review's step: as tall as its people until the sheet reaches the
+  // top, then it scrolls (the sheet shrinks, paSheet's flexShrink).
+  paScroll:           { flexGrow: 0 },
+  paScrollBody:       { paddingBottom: CARD_SHADOW_ROOM },
+  sendHint:           { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18, paddingHorizontal: 24, paddingTop: 14 },
+  // The recipient picker's labels over its cards (RecipientPickerSheet).
+  sendSection:        { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, paddingHorizontal: 24, marginTop: 18, marginBottom: 8 },
+  sendSectionHint:    { fontFamily: FontFamily.regular, fontSize: 12, lineHeight: 17, paddingHorizontal: 24, marginTop: -4, marginBottom: 8 },
+  sendCard:           { paddingHorizontal: 20 },
+  // Offline: the lines fade as a needsConnection button's do; a tap says why.
+  sendOffline:        { opacity: 0.4 },
 
   // Set Workout Picker
   swBackdrop:         { flex: 1, justifyContent: "flex-end" },

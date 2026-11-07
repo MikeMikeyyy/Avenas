@@ -55,7 +55,7 @@ export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProg
           <NeuCard dark={isDark} style={styles.activeProgramCard}>
             <View style={styles.apCardInner}>
               <View style={styles.apNameRow}>
-                <Text style={[styles.apName, { color: t.tp, flex: 1 }]} numberOfLines={1}>{activeProgram.name}</Text>
+                <Text style={[styles.apName, { color: t.tp, flex: 1 }]}>{activeProgram.name}</Text>
                 <ActiveBadge />
                 <Ionicons name="chevron-forward" size={16} color={t.ts} style={{ marginLeft: 6 }} />
               </View>

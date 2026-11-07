@@ -244,7 +244,7 @@ export default function ProgramHistoryScreen() {
                   <View style={styles.cardTop}>
                     <View style={{ flex: 1 }}>
                       <View style={styles.cardNameRow}>
-                        <Text style={[styles.progName, { color: t.tp, flex: 1 }]} numberOfLines={1}>{prog.name}</Text>
+                        <Text style={[styles.progName, { color: t.tp, flex: 1 }]}>{prog.name}</Text>
                         {/* The active one wears the pulsing pill the Journal and
                             My Programs give it, so it's the same program in all
                             three places; the rest keep their quiet status tag. */}

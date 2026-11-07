@@ -18,16 +18,17 @@ import { on, type Phone } from "../app";
 import { getJSON, removeKey, setJSON } from "../../../utils/storage";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY,
-  normaliseSets, programFinishDate,
+  getCurrentWeek, normaliseSets,
   type CompletedExercise, type CompletedWorkout, type Exercise, type PlannedExercise, type ProgramSet, type SavedProgram,
 } from "../../../constants/programs";
 import { planOf } from "../../../utils/exerciseChanges";
 import { LB_PER_KG, UNIT_KEY, parseWeightToKg, trimNumber } from "../../../utils/units";
-import { addDaysYMD, formatStoredDate, toYMD } from "../../../utils/dates";
+import { addDaysYMD, formatStoredDate, parseStoredDate, toYMD } from "../../../utils/dates";
 import { getEffectiveToday, getWorkoutForDate, resolveWorkoutForDate, swapOrigin, type DayOverride } from "../../../utils/workout";
 import { applyRestDay } from "../../../utils/restDay";
-import { autoPauseIfIdle, pauseProgram, resumeWithPrompt } from "../../../utils/programPause";
+import { pauseProgram, resumeWithPrompt, settleActiveProgram } from "../../../utils/programPause";
 import { activateProgram, completeProgram, deactivateProgram, programsAfterPastLog } from "../../../utils/programLifecycle";
+import { completeIfFinished, reopenIfUnfinished } from "../../../utils/programFinish";
 import { awardProgramAchievement, awardWorkoutAchievements } from "../../../utils/achievementStore";
 import { stampSession, timeValFromDate } from "../../../utils/sessionTime";
 import { programDays } from "../../../utils/programDays";
@@ -115,6 +116,9 @@ export type AfterSave = {
   ledger: LedgerSession;
   /** History as it was before this session was saved. */
   prior: CompletedWorkout[];
+  /** The programs as the save left them: the day the session was logged
+   *  against is read in its own program (prevDayScopeFor). */
+  programs: SavedProgram[];
 };
 
 const pressStartingWith = (prefix: string): Chooser => (_t, buttons) => buttons.find(b => b.startsWith(prefix)) ?? null;
@@ -256,7 +260,8 @@ export class Lifter {
     const id = this.rotation[this.next % this.rotation.length];
     this.next += 1;
     const programs = await this.readPrograms();
-    const { programs: updated, finished } = activateProgram(programs, id, formatStoredDate(new Date()));
+    const history = await this.readHistory();
+    const { programs: updated, finished } = activateProgram(programs, id, formatStoredDate(new Date()), history);
     await this.run(async () => {
       await setJSON(PROGRAMS_KEY, updated);
       await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
@@ -311,11 +316,15 @@ export class Lifter {
     const back = this.holiday && date === this.holiday.to;
     if (back) this.holiday = null;
 
-    // Morning: the app opens (app/_layout.tsx autoPauseIfIdle), which holds
-    // the program by itself after a week with nothing logged.
+    // Morning: the app opens (app/_layout.tsx settleActiveProgram), which
+    // completes a program whose run has finished (its last session done, or
+    // its last day gone by) and holds it by itself after a week with nothing
+    // logged.
     setClock(y, m, d, 7, 0);
-    const before = (await this.readPrograms()).find(p => p.status === "active");
-    await this.run(() => autoPauseIfIdle());
+    const opening = await this.readPrograms();
+    const before = opening.find(p => p.status === "active");
+    await this.run(() => settleActiveProgram());
+    await this.noteEnds(date, opening);
     const after = (await this.readPrograms()).find(p => p.status === "active");
     if (after?.pausedAt && !before?.pausedAt) {
       this.holds.push({ programId: after.id, from: after.pausedAt });
@@ -387,14 +396,40 @@ export class Lifter {
     }
   }
 
-  /** Finishing, switching and re-running programs (My Programs). */
+  /** The app ending the active program by itself, or picking one back up
+   *  when the session that ended it is deleted (utils/programFinish.ts): the
+   *  run it was on ends there, or goes on, as the ledger keeps it. `before` is
+   *  the programs as they were. */
+  private async noteEnds(date: string, before: SavedProgram[]) {
+    const after = await this.readPrograms();
+    for (const p of after) {
+      const was = before.find(b => b.id === p.id);
+      if (!was || was.status === p.status) continue;
+      const run = [...this.runs].reverse().find(r => r.programId === p.id);
+      if (!run) continue;
+      if (was.status === "active" && p.status === "completed") {
+        const done = parseStoredDate(p.completedDate);
+        run.endYMD = done ? toYMD(done) : date;
+        run.finished = true;
+        this.note(date, `${p.name} finished by itself on ${run.endYMD}`);
+      } else if (was.status === "completed" && p.status === "active") {
+        run.endYMD = undefined;
+        run.finished = undefined;
+        this.note(date, `${p.name} picked back up (the session that ended it deleted)`);
+      }
+    }
+  }
+
+  /** Finishing, switching and re-running programs (My Programs). A program
+   *  ends by itself (noteEnds); with none active, the next one starts. */
   private async managePrograms(date: string) {
     const programs = await this.readPrograms();
     const active = programs.find(p => p.status === "active") ?? null;
     if (!active) { await this.activateNext(date); return; }
     if (active.pausedAt) return;
-    const finish = programFinishDate(active);
-    if (finish && date > toYMD(finish) && this.chance(0.6)) {
+    // In its last week, now and then it's ended early to move on: Mark
+    // Complete (which is what it's for now), or the next one made active.
+    if (getCurrentWeek(active) >= active.totalWeeks && this.chance(0.1)) {
       if (this.chance(0.5)) {
         // Mark Complete, then the next one.
         const { programs: done, weekReached } = completeProgram(programs, active.id, formatStoredDate(new Date()));
@@ -412,8 +447,9 @@ export class Lifter {
     }
     // Now and then a program is shelved mid-run for another.
     if (this.chance(0.004)) {
+      const history = await this.readHistory();
       await this.run(async () => {
-        await setJSON(PROGRAMS_KEY, deactivateProgram(programs, active.id));
+        await setJSON(PROGRAMS_KEY, deactivateProgram(programs, active.id, history));
         await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
       });
       this.note(date, `shelves ${active.name}`);
@@ -638,6 +674,8 @@ export class Lifter {
       sessionNote: this.chance(0.2) ? this.pick(["good session", "tired today", "gym was packed"]) : "",
       plan,
     });
+    // finalizeComplete: the program's last session ends it.
+    await this.thenEnds(date, () => completeIfFinished());
     for (const c of cards) if (!c.swappedFrom) this.progress(c.name);
     const fewer = cards.flatMap((c, i) => (shorts[i] ? [`${c.name} a ${shorts[i] === "warmup" ? "warm-up" : "working set"} short`] : []));
     this.note(date, `logs ${day.name}${day.dayId ? ` (${day.dayId})` : ""} on ${tab.today}, done ${hm(finish)}${cards.some(c => c.swappedFrom) ? `, swapped ${cards.filter(c => c.swappedFrom).map(c => `${c.swappedFrom}→${c.name}`).join(", ")}` : ""}${reordered.length ? `, ${reordered.join(", ")}` : ""}${fewer.length ? `, ${fewer.join(", ")}` : ""}`);
@@ -674,6 +712,8 @@ export class Lifter {
       }
       await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
     });
+    // finalizeComplete: after it's made the program's own, whether it ended it.
+    await this.thenEnds(date, () => completeIfFinished());
     for (const n of CUSTOM_WORKOUT.exercises) this.progress(n);
     this.note(date, `logs a custom "${name}" on ${tab.today}${add ? ", added to the program" : ""}`);
   }
@@ -706,6 +746,8 @@ export class Lifter {
       // log-workout reads the plan off the program as it saves (planForDay).
       plan: day.dayId ? planOf(day.exercises) : undefined,
     });
+    // doSave: a program's last session, logged after the fact, ends it.
+    if (day.programId) await this.thenEnds(toYMD(new Date()), () => completeIfFinished());
     for (const e of day.exercises) this.progress(e.name);
     this.note(toYMD(new Date()), `logs ${day.name} for ${date} from the Journal${withTime ? `, done ${hm(end)}${late ? " that night" : ""}` : " (no time)"}`);
   }
@@ -799,24 +841,37 @@ export class Lifter {
       ...(s.plan ? { plan: s.plan } : {}),
     };
     this.sessions.push(ledger);
-    this.hooks.afterSave?.({ lifter: this, saved: completed, ledger, prior });
+    const programs = await this.readPrograms();
+    this.hooks.afterSave?.({ lifter: this, saved: completed, ledger, prior, programs });
   }
 
-  /** workout-detail's Delete (or the Workout tab's Delete & Redo). */
+  /** workout-detail's Delete (or the Workout tab's Delete & Redo); and the
+   *  program the session ended, picked back up while its last day hasn't gone
+   *  by (reopenIfUnfinished). */
   private async deleteSession(date: string, id: string) {
     const target = this.sessions.find(s => s.id === id);
     if (!target) return;
-    await this.run(async () => {
+    await this.thenEnds(date, async () => {
       const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+      const deleted = history.find(w => w.id === id);
       const updated = history.filter(w => w.id !== id);
       await setJSON(WORKOUT_HISTORY_KEY, updated);
       if (!updated.some(w => w.date === target.date)) {
         const dates = await getJSON<string[]>(WORKOUT_DATES_KEY, []);
         await setJSON(WORKOUT_DATES_KEY, dates.filter(d => d !== target.date));
       }
+      if (deleted) await reopenIfUnfinished(deleted);
     });
     this.sessions.splice(this.sessions.indexOf(target), 1);
     this.note(date, `deletes ${target.workoutName} of ${target.date}`);
+  }
+
+  /** An app write that can end the program, or pick it back up: run on this
+   *  phone, then the runs as the ledger keeps them (noteEnds). */
+  private async thenEnds(date: string, write: () => Promise<unknown>) {
+    const before = await this.readPrograms();
+    await this.run(write);
+    await this.noteEnds(date, before);
   }
 
   /** The clock to `date` at `hour`, for a check to read the screens then. */

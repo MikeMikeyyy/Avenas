@@ -36,7 +36,8 @@ export const APP_LIGHT = {
   nav:  "#ffffff",  // floating tab bar — see the note on APP_DARK.nav
   navEdge: "rgba(0,0,0,0.06)",
   field: "rgba(0,0,0,0.04)",  // a search field on the page — see the note on APP_DARK.field
-  sheetLine: "rgba(30,39,56,0.12)",  // a line between rows on a sheet — see the note on APP_DARK.sheetLine
+  sheetLine: "rgba(30,39,56,0.2)",  // a line between rows on a sheet — see the note on APP_DARK.sheetLine
+  quietCtrl: "rgba(30,39,56,0.1)",  // a grey button on the page — see the note on APP_DARK.quietCtrl
 } as const;
 
 // Graphite (dark): a near-black page under charcoal cards, neutral rather than
@@ -86,11 +87,21 @@ export const APP_DARK = {
   // a place to type rather than a button (user decision, 2026-10-22).
   field: "rgba(255,255,255,0.06)",
   // A line between rows on a sheet (the reorder sheet's exercises, the exercise
-  // picker's): stronger
-  // than div, which is pitched for a solid card and all but vanished on a
-  // glass sheet (user report, 2026-10-30: the lines between exercises had
-  // gone). Light mode's is the ink at 12%, so it shows on glass and page alike.
-  sheetLine: "rgba(255,255,255,0.16)",
+  // picker's, the program picker's programs, a Workout Summary's days):
+  // stronger than div, which is pitched for a solid card and all but vanished
+  // on a glass sheet (user report, 2026-10-30: the lines between exercises had
+  // gone). Made stronger again (user request, 2026-11-06: lines between the
+  // programs to send and the days of a program, for clarity, where the last
+  // weight read as none): light mode's is the ink at 20%, so it shows on glass
+  // and page alike.
+  sheetLine: "rgba(255,255,255,0.22)",
+  // A grey button on the page, flat, a step back from the white control pills:
+  // for a rare action at the foot of a list (Remove a trainer; user request,
+  // 2026-11-06: it was bare grey words). Light mode's is the ink at 10%, a grey
+  // darker than the page (div is all but the page's own colour there); here
+  // it's ctrl's, which is already a grey. No shadow: through a see-through
+  // fill it reads as a smudge.
+  quietCtrl: "rgba(255,255,255,0.12)",
 } as const;
 
 export type AppTheme = typeof APP_LIGHT;

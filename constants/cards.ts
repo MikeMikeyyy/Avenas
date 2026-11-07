@@ -40,6 +40,18 @@ export const CARD_PAD = 14;
  * offset plus a 10pt radius) and 10pt to either side.
  */
 export const REVEAL_BLEED = CARD_PAD;
+
+/**
+ * How far a NeuCard's shadow reaches below it (its drop shadow: an 8pt offset
+ * and a 12pt radius, in both themes). A scroll area clips at its edge, so one
+ * that ends at a card leaves at least this much under it: the pop-ups listing
+ * people and groups in white cards (My Programs' Send for Review step, Send a
+ * Program's recipients, New message) ended at the last card, which cut its
+ * shadow off in a hard, faint line (user report, 2026-11-06). The sides need
+ * 18 (a 6pt offset and the radius), which those sheets' 20pt gutter covers.
+ */
+export const CARD_SHADOW_ROOM = 20;
+
 export const CARD_TITLE_LINE = 22;
 export const CARD_PILL_H = 22;
 

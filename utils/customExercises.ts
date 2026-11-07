@@ -153,6 +153,8 @@ export function tombstoneOf(c: CustomExercise, today: string): CustomExercise {
     muscles: c.muscles,
     ...(c.steps && c.steps.length > 0 ? { steps: c.steps } : {}),
     ...(c.description ? { description: c.description } : {}),
+    // Its sessions are still read the way up it was (utils/assisted.ts).
+    ...(c.assisted ? { assisted: true } : {}),
     deletedAt: today,
   };
 }

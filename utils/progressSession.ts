@@ -24,7 +24,11 @@ import type { ExerciseRef } from "./exerciseNames";
 
 export type ProgressSelections = {
   scope: ProgramScope;
-  range: RangeKey;
+  /** The charts' time range as picked, or null (the default) for automatic:
+   *  this week once it has a session, last week until then if last week has
+   *  one, else this week (autoWeekRange; user requests, 2026-11-06). Picking
+   *  what automatic shows keeps it automatic. */
+  range: RangeKey | null;
   /** The Volume chart's metric (Volume / Reps / Duration). */
   metric: MetricKey;
   /** The Strength radar's metric. */
@@ -54,11 +58,14 @@ export type ProgressSelections = {
   /** The last "See All Progress" the page took (its `at`): each is taken
    *  once, the page remounting included. */
   allProgressAt: string | null;
+  /** The last View Progress from My Programs the page took (its `at`), the
+   *  same way. */
+  programProgressAt: string | null;
 };
 
 export const DEFAULT_PROGRESS_SELECTIONS: ProgressSelections = {
   scope: { kind: "current" },
-  range: "thisWeek",
+  range: null,
   metric: "volume",
   strengthMetric: "load",
   selectedExercise: null,
@@ -70,6 +77,7 @@ export const DEFAULT_PROGRESS_SELECTIONS: ProgressSelections = {
   compareSpan: "same",
   compareLift: null,
   allProgressAt: null,
+  programProgressAt: null,
 };
 
 /**
@@ -96,6 +104,27 @@ export function allProgressParams(ex: ExerciseRef): AllProgressParams {
 export function allProgressRequest(p: AllProgressParams): AllProgressRequest | null {
   if (!p.allProgress || !p.allProgressAt) return null;
   return { name: p.allProgress, ...(p.allProgressId ? { customId: p.allProgressId } : {}), at: p.allProgressAt };
+}
+
+/**
+ * View Progress on a My Programs card (user request, 2026-11-07): the Progress
+ * page opens on that program, Current program when it's the one running. As
+ * "See All Progress" does, it rides on the navigation with an `at` new on
+ * every tap, and the page takes each once (`programProgressAt`).
+ */
+export type ProgramProgressRequest = { programId: string; at: string };
+
+type ProgramProgressParams = { programProgress?: string; programProgressAt?: string };
+
+/** The route params asking for program `programId`'s progress. */
+export function programProgressParams(programId: string): ProgramProgressParams {
+  return { programProgress: programId, programProgressAt: String(Date.now()) };
+}
+
+/** The request a page's route params carry, or null when they carry none. */
+export function programProgressRequest(p: ProgramProgressParams): ProgramProgressRequest | null {
+  if (!p.programProgress || !p.programProgressAt) return null;
+  return { programId: p.programProgress, at: p.programProgressAt };
 }
 
 const sessions = new Map<string, ProgressSelections>();

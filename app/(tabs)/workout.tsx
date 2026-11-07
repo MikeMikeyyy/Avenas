@@ -54,12 +54,13 @@ import { tabScreen } from "../../components/TabScreen";
 import type { LiveActivityTickAction } from "../../modules/avenas-live-activity";
 import { CUSTOM_KEY, type CustomExercise } from "../../constants/exercises";
 import { sessionTimeRange, todayYMD } from "../../utils/dates";
-import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, swapOrigin, type DayOverride } from "../../utils/workout";
+import { getEffectiveToday, resolveWorkoutForDate, buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, finishedSessionPrevSets, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, swapOrigin, type DayOverride } from "../../utils/workout";
 import { lastTimeCues, planForDay, planOf, sessionChanges, type LastTimeCue, type SessionCue } from "../../utils/exerciseChanges";
 import { LastTimeCueLine, SessionCueLine, SkippedRow } from "../../components/ChangeCue";
 import { keepsHeldSession } from "../../utils/heldSession";
 import { completedExercises, draftIsOver, hasEnteredSets, lastActivityAt, sessionSpan, type WorkoutDraft } from "../../utils/unfinishedSession";
 import { addExtraWorkout, fileStaleDraft, loadSavedClock, saveSessionToHistory } from "../../utils/unfinishedSessionStore";
+import { completeIfFinished, reopenIfUnfinished } from "../../utils/programFinish";
 import { deleteCustomExercise as deleteCustomEverywhere } from "../../utils/customExerciseStore";
 import { resumeWithPrompt } from "../../utils/programPause";
 import { exercisePageParams, exerciseSummaryParams } from "../../utils/customExerciseDetails";
@@ -69,6 +70,8 @@ import { bestLiftsBefore, prSetsOfWorkout, prTrophySets } from "../../utils/achi
 import { exerciseIdentity } from "../../utils/exerciseNames";
 import PrTrophy from "../../components/PrTrophy";
 import { scheduleCloudPush } from "../../lib/syncManager";
+import { noteDeleted } from "../../utils/syncLocal";
+import { useSyncedDataReload } from "../../hooks/useSyncedDataReload";
 import { useDayRollover } from "../../hooks/useDayRollover";
 import WorkoutTimerScreen from "../../components/WorkoutTimerScreen";
 import { upNextFrom, type UpNext } from "../../utils/workoutTimer";
@@ -1644,6 +1647,10 @@ function WorkoutScreen() {
     }
   }, [discardCount, loadData, endUpTo, clearDraft]);
 
+  // The account's other phone's changes merged in while the tab is open: read
+  // again as a return to the tab does, which keeps a session under way.
+  useSyncedDataReload(() => { if (draftRestored) loadData(); });
+
   useFocusEffect(useCallback(() => {
     if (draftRestored) loadData();
 
@@ -2139,11 +2146,23 @@ function WorkoutScreen() {
     // tick — persistence runs in the background.
     setTodaysCompletedWorkout(completed);
     setSummaryWorkout(completed);
-    void persistCompletedWorkout(completed);
-    if (isFreeWorkout && freeWorkoutAddToProgram && activeProgram && workoutInfo) {
-      addExtraWorkout(activeProgram.id, workoutInfo.name)
-        .catch((e) => warnStorage("addExtraWorkout", PROGRAMS_KEY, e));
-    }
+    const addTo = isFreeWorkout && freeWorkoutAddToProgram && activeProgram && workoutInfo
+      ? { programId: activeProgram.id, name: workoutInfo.name }
+      : null;
+    // One after the other, each reading what the one before wrote (CLAUDE.md:
+    // serialize read→write on shared keys): the session, the custom workout
+    // made one of the program's own, then whether it was the program's last
+    // session, which ends it (utils/programFinish.ts; user decision,
+    // 2026-11-05). Ended, the tab reads the programs again: the completed
+    // view stays, drawn from the session.
+    void (async () => {
+      await persistCompletedWorkout(completed);
+      if (addTo) {
+        await addExtraWorkout(addTo.programId, addTo.name)
+          .catch((e) => warnStorage("addExtraWorkout", PROGRAMS_KEY, e));
+      }
+      if (await completeIfFinished()) loadData();
+    })();
     if (isFreeWorkout) {
       // A finished custom workout shouldn't leave its name as a day-override —
       // otherwise the page could resurface that (now empty) custom day instead of
@@ -2224,16 +2243,20 @@ function WorkoutScreen() {
           text: "Delete & Redo", style: "destructive",
           onPress: () => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            const targetId = todaysCompletedWorkout?.id;
+            const target = todaysCompletedWorkout;
+            const targetId = target?.id;
             // Clean up workout_dates for the deleted session's own day, not for
             // "now" — they can differ for a late-night session.
-            const targetDate = todaysCompletedWorkout?.date ?? effectiveTodayRef.current;
+            const targetDate = target?.date ?? effectiveTodayRef.current;
             // Serialize the read→write pairs with sequential awaits (the contract
             // for mutating shared keys — mirrors persistCompletedWorkout and the
             // workout-detail delete). The UI teardown below stays synchronous so
             // the view flips instantly while this commits in the background.
             void (async () => {
               try {
+                // Recorded first, so the delete reaches the account's other
+                // phone and no merge brings it back (utils/syncLocal.ts).
+                if (target) await noteDeleted("workouts", [target]);
                 const raw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
                 const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
                 const updated = history.filter(w => w.id !== targetId);
@@ -2248,6 +2271,9 @@ function WorkoutScreen() {
                 // "previous" (persistCompletedWorkout had set them on finish).
                 setPrevHistory(updated);
                 scheduleCloudPush();
+                // The program's last session, which ended it: picked back up,
+                // or there'd be nothing to redo it in ("No Active Program").
+                if (target) await reopenIfUnfinished(target);
                 // The redo starts from the program, in its own order, like any
                 // new session: a reorder or swap made in the deleted one was
                 // that session's. Once the delete is written, or the reload
@@ -2382,6 +2408,18 @@ function WorkoutScreen() {
       return [...warm, ...work];
     });
   }, [todaysCompletedWorkout, prevHistory]);
+  // And its "Previous" column: what the cards read while the session ran, the
+  // day's last session before it (utils/workout.ts finishedSessionPrevSets),
+  // in the unit on screen. It went blank once the workout was finished (user
+  // report, 2026-11-06). Index-aligned with lockedData's cards.
+  const lockedPrevSets = useMemo(() => {
+    if (!todaysCompletedWorkout) return null;
+    const src = todaysCompletedWorkout.programId
+      ? allPrograms.find(p => p.id === todaysCompletedWorkout.programId) ?? null
+      : null;
+    return finishedSessionPrevSets(todaysCompletedWorkout, prevHistory, src)
+      .map(hints => hints.map(h => formatPrevHint(h, isKg)));
+  }, [todaysCompletedWorkout, prevHistory, allPrograms, isKg]);
   // Each card's rows by kind, warm-ups first (rowTypesOf), which last time's
   // sets are lined up with. Kept by what it reads, as one string: typing
   // changes no row, so the hints below aren't rebuilt as you type.
@@ -3073,6 +3111,7 @@ function WorkoutScreen() {
                   numberBadge={i + 1}
                   sessionCue={lockedChanges?.cues[i]}
                   prFlags={lockedPrFlags?.[i]}
+                  prevSets={lockedPrevSets?.[i]}
                   onUpdateSet={() => {}} onToggleDone={() => {}}
                   exNotes={lockedData.log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={() => {}} onOpenOptions={() => {}}

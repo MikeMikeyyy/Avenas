@@ -36,8 +36,9 @@ import {
 } from "../constants/programs";
 import { planForDay } from "../utils/exerciseChanges";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
-import { MONTH_FULL } from "../utils/dates";
+import { fmtDayDate } from "../utils/dates";
 import { programsAfterPastLog } from "../utils/programLifecycle";
+import { completeIfFinished } from "../utils/programFinish";
 import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, prevHintsForRows, swapOrigin, type PrevExerciseKey, type PrevSets } from "../utils/workout";
 import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
@@ -58,14 +59,6 @@ import { useSheetDrag } from "../hooks/useSheetDrag";
 const WARMUP_ORANGE = "#ffbf0f";
 /** The floating +, a size up from the round buttons beside it and at the top. */
 const ADD_SIZE = 44;
-
-const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-
-function formatDate(ymd: string): string {
-  const [y, m, d] = ymd.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  return `${DAY_FULL[date.getDay()]} ${d} ${MONTH_FULL[m - 1]}`;
-}
 
 type WorkingSet = { type: "warmup" | "working"; weight: string; reps: string; done: boolean; programSet?: ProgramSet };
 type LogExercise = {
@@ -1159,6 +1152,10 @@ export default function LogWorkoutScreen() {
           workoutName: workoutName ?? "",
         });
         if (changed) await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+        // Its last session, logged after the fact, ends it as one done on the
+        // day does (utils/programFinish.ts). After the write above: both
+        // write the programs.
+        await completeIfFinished();
       }
 
       // Draft has been committed to history — clear it so reopening this date+workout
@@ -1191,7 +1188,8 @@ export default function LogWorkoutScreen() {
     }
   };
 
-  const dateLabel = date ? formatDate(date) : "";
+  // As the Journal's Log a Workout sheet showed the day picked (utils/dates.ts).
+  const dateLabel = (date && fmtDayDate(date)) || "";
 
   return (
     <FadeScreen style={{ backgroundColor: t.bg }}>

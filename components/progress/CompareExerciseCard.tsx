@@ -19,12 +19,13 @@ import NeuCard from "../NeuCard";
 import SegmentedControl from "../SegmentedControl";
 import DumbbellIcon from "../DumbbellIcon";
 import CompareChartPlot from "./CompareChartPlot";
-import RecordsHeading from "./RecordsHeading";
+import RecordsHeading, { RecordMarker } from "./RecordsHeading";
 import {
   ACCT, APP_DARK, APP_LIGHT, CUE_INK, CUE_INK_DARK, FontFamily, compareBlue, compareBlueText,
 } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import { EXERCISE_METRIC_OPTIONS, type ExerciseMetricKey, type PRSet, type PRs } from "../../constants/progress";
+import { ASSISTED_METRIC_OPTIONS, EXERCISE_METRIC_OPTIONS, type ExerciseMetricKey, type PRSet, type PRs } from "../../constants/progress";
+import { isAssisted } from "../../utils/assisted";
 import { chartChange, drawsOn, fmtChange } from "../../utils/exerciseChartLayout";
 import { aheadAtSamePoint, type CompareLift, type LiftSlot } from "../../utils/programCompare";
 import { missedBarValue } from "../../utils/compareChartLayout";
@@ -60,7 +61,7 @@ const fmtTotal = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n).toL
 
 type Cell = { value: string; suffix?: string; sub: string; workoutId: string } | null;
 
-export default function CompareExerciseCard({ lift, slots, names, prs, metric, onMetricChange, unit, clientId, seriesKey }: Props) {
+export default function CompareExerciseCard({ lift, slots, names, prs, metric: pageMetric, onMetricChange, unit, clientId, seriesKey }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const router = useRouter();
@@ -71,6 +72,10 @@ export default function CompareExerciseCard({ lift, slots, names, prs, metric, o
   const fmtW =(w: number) => trimNumber(w, unit === "kg" ? 2 : 1);
 
   const hold = [...lift.green, ...lift.blue].every(p => p.isHold);
+  // An assisted lift (utils/assisted.ts): its record is the least help, and
+  // it moves no volume, so no Volume tab (the page's metric reads as Strength).
+  const assisted = isAssisted({ name: lift.name, customId: lift.customId });
+  const metric: ExerciseMetricKey = assisted && pageMetric === "volume" ? "strength" : pageMetric;
   const changeG = chartChange(lift.green, metric);
   const changeB = chartChange(lift.blue, metric);
   const ahead = metric === "strength" ? aheadAtSamePoint(slots.green, slots.blue) : null;
@@ -139,16 +144,19 @@ export default function CompareExerciseCard({ lift, slots, names, prs, metric, o
     if (kind === "volume") return { value: `${fmtTotal(pr.value)} ${unit}`, sub: fmtShortDate(pr.date), workoutId: pr.workoutId };
     return { value: `${fmtW(Math.round(pr.value))} ${unit}`, sub: `from ${fmtW(pr.weight ?? 0)} × ${pr.reps ?? 0}`, workoutId: pr.workoutId };
   };
-  const recordRows: { key: string; label: string; g: Cell; b: Cell }[] = [
-    { key: "heaviest", label: "Heaviest", g: cell(prs.green?.heaviest ?? null, "heaviest"), b: cell(prs.blue?.heaviest ?? null, "heaviest") },
+  // Each with the Progress page's mark before its name (RecordMarker): gold
+  // for a record lifted, a ring for the estimate (user request, 2026-11-06).
+  const recordRows: { key: string; label: string; marker: "gold" | "ring"; g: Cell; b: Cell }[] = [
+    { key: "heaviest", label: assisted ? "Least Assistance" : "Heaviest", marker: "gold" as const, g: cell(prs.green?.heaviest ?? null, "heaviest"), b: cell(prs.blue?.heaviest ?? null, "heaviest") },
     {
       key: "reps",
       label: prs.green?.mostReps?.hold || prs.blue?.mostReps?.hold ? "Longest hold" : "Most reps",
+      marker: "gold" as const,
       g: cell(prs.green?.mostReps ?? null, "reps"),
       b: cell(prs.blue?.mostReps ?? null, "reps"),
     },
-    { key: "volume", label: "Most volume", g: cell(prs.green?.bestSessionVolume ?? null, "volume"), b: cell(prs.blue?.bestSessionVolume ?? null, "volume") },
-    { key: "e1rm", label: "Estimated 1RM", g: cell(prs.green?.oneRepMax ?? null, "e1rm"), b: cell(prs.blue?.oneRepMax ?? null, "e1rm") },
+    { key: "volume", label: "Most volume", marker: "gold" as const, g: cell(prs.green?.bestSessionVolume ?? null, "volume"), b: cell(prs.blue?.bestSessionVolume ?? null, "volume") },
+    { key: "e1rm", label: "Estimated 1RM", marker: "ring" as const, g: cell(prs.green?.oneRepMax ?? null, "e1rm"), b: cell(prs.blue?.oneRepMax ?? null, "e1rm") },
   ].filter(r => r.g || r.b);
 
   const recordCell = (c: Cell, ink: string, programName: string, label: string) => (
@@ -254,7 +262,7 @@ export default function CompareExerciseCard({ lift, slots, names, prs, metric, o
           )}
 
           <SegmentedControl<ExerciseMetricKey>
-            options={EXERCISE_METRIC_OPTIONS}
+            options={assisted ? ASSISTED_METRIC_OPTIONS : EXERCISE_METRIC_OPTIONS}
             value={metric}
             onChange={onMetricChange}
             style={{ marginTop: 16 }}
@@ -282,7 +290,10 @@ export default function CompareExerciseCard({ lift, slots, names, prs, metric, o
               </View>
               {recordRows.map(r => (
                 <View key={r.key} style={[styles.recordRow, { borderTopColor: t.div }]}>
-                  <Text style={[styles.recordLabel, { color: t.tp }]} numberOfLines={2}>{r.label}</Text>
+                  <View style={styles.recordName}>
+                    <RecordMarker kind={r.marker} />
+                    <Text style={[styles.recordLabel, { color: t.tp }]} numberOfLines={2}>{r.label}</Text>
+                  </View>
                   {recordCell(r.g, gInk, names.green, r.label)}
                   {recordCell(r.b, bInk, names.blue, r.label)}
                 </View>
@@ -331,7 +342,9 @@ const styles = StyleSheet.create({
   recordHead: { width: COL, marginLeft: GAP, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 5 },
   recordHeadText: { flexShrink: 1, fontFamily: FontFamily.semibold, fontSize: 12, lineHeight: 16 },
   recordRow: { flexDirection: "row", alignItems: "center", minHeight: 62, borderTopWidth: 1 },
-  recordLabel: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 15, lineHeight: 20 },
+  // The mark and the name, the Progress page's record row's spacing between.
+  recordName: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
+  recordLabel: { flexShrink: 1, fontFamily: FontFamily.semibold, fontSize: 15, lineHeight: 20 },
   cell: { width: COL, marginLeft: GAP, alignItems: "flex-end", paddingVertical: 8 },
   cellValue: { fontFamily: FontFamily.bold, fontSize: 16, lineHeight: 21 },
   cellSuffix: { fontFamily: FontFamily.semibold, fontSize: 12 },

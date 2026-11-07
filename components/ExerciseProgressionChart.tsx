@@ -8,9 +8,9 @@ import BounceButton from "./BounceButton";
 import SegmentedControl from "./SegmentedControl";
 import DumbbellIcon from "./DumbbellIcon";
 import ExerciseChartPlot, { type ChartRecords } from "./progress/ExerciseChartPlot";
-import RecordsHeading from "./progress/RecordsHeading";
+import RecordsHeading, { RecordMarker } from "./progress/RecordsHeading";
 import { displayWorkoutName } from "../utils/programDays";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { darkGlow, pill, pillGlow } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
 import { MONTH_NAMES } from "../utils/dates";
@@ -19,7 +19,8 @@ import { chartChange, drawsOn, fmtChange, isExerciseMetric } from "../utils/exer
 import { exercisePageParams } from "../utils/customExerciseDetails";
 import type { ChartSlot } from "../utils/exerciseDaySlots";
 import type { ExerciseDataPoint, ExerciseMetricKey, PRs } from "../constants/progress";
-import { EXERCISE_METRIC_OPTIONS } from "../constants/progress";
+import { ASSISTED_METRIC_OPTIONS, EXERCISE_METRIC_OPTIONS } from "../constants/progress";
+import { isAssisted } from "../utils/assisted";
 
 interface Props {
   exerciseName: string;
@@ -134,11 +135,15 @@ export default function ExerciseProgressionChart({
 }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const gold = isDark ? GOLD_DARK : GOLD;
   const router = useRouter();
+  // An assisted exercise's weight is help (utils/assisted.ts): it moves no
+  // volume, so it has no Volume tab, and its Heaviest is its least help.
+  const assisted = isAssisted({ name: exerciseName, customId });
   // A tab from before the tabs were renamed, kept in memory by the page across
-  // a reload in development, reads as Strength.
-  const metric: ExerciseMetricKey = isExerciseMetric(rawMetric) ? rawMetric : "strength";
+  // a reload in development, reads as Strength; so does Volume on an assisted
+  // exercise, which has none.
+  const metric: ExerciseMetricKey =
+    isExerciseMetric(rawMetric) && !(assisted && rawMetric === "volume") ? rawMetric : "strength";
   const fmtW = (w: number) => trimNumber(w, unit === "kg" ? 2 : 1);
   const hold = history.length > 0 && history.every(p => p.isHold);
 
@@ -184,7 +189,7 @@ export default function ExerciseProgressionChart({
   if (prs.heaviest) {
     rows.push({
       key: "heaviest",
-      label: "Heaviest",
+      label: assisted ? "Least Assistance" : "Heaviest",
       value: `${fmtW(prs.heaviest.value)} ${unit}`,
       suffix: prs.heaviest.reps ? (hold ? ` for ${prs.heaviest.reps}s` : ` × ${prs.heaviest.reps}`) : undefined,
       sub: fmtShortDate(prs.heaviest.date),
@@ -297,7 +302,7 @@ export default function ExerciseProgressionChart({
             the same control as VolumeBarChart's metric row so the two charts
             feel consistent. */}
         <SegmentedControl<ExerciseMetricKey>
-          options={EXERCISE_METRIC_OPTIONS}
+          options={assisted ? ASSISTED_METRIC_OPTIONS : EXERCISE_METRIC_OPTIONS}
           value={metric}
           onChange={onMetricChange}
           style={{ marginTop: 16 }}
@@ -320,14 +325,7 @@ export default function ExerciseProgressionChart({
                   accessibilityRole="button"
                   accessibilityLabel={`${r.label}: ${r.value}${r.suffix ?? ""}, ${r.sub}. Opens the workout.`}
                 >
-                  <View
-                    style={[
-                      styles.marker,
-                      r.marker === "gold"
-                        ? { backgroundColor: gold, shadowColor: gold, shadowOpacity: isDark ? 0.45 : 0.6 }
-                        : { borderWidth: 1.5, borderColor: t.ts },
-                    ]}
-                  />
+                  <RecordMarker kind={r.marker} />
                   <Text style={[styles.recordLabel, { color: t.tp }]} numberOfLines={1}>{r.label}</Text>
                   <View style={styles.recordValues}>
                     <Text style={[styles.recordValue, { color: t.tp }]} numberOfLines={1}>
@@ -404,13 +402,6 @@ const styles = StyleSheet.create({
   recordsInner: { paddingHorizontal: 16 },
   recordRow: { flexDirection: "row", alignItems: "center", height: 58, gap: 10 },
   recordDivider: { height: 1 },
-  marker: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    shadowOffset: { width: 0, height: 0 },
-    shadowRadius: 3,
-  },
   recordLabel: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 15 },
   recordValues: { alignItems: "flex-end" },
   recordValue: { fontFamily: FontFamily.bold, fontSize: 17, lineHeight: 22 },

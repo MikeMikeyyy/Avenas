@@ -53,6 +53,8 @@ import {
 } from "../constants/programs";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { scheduleCloudPush } from "../lib/syncManager";
+import { noteDeleted } from "../utils/syncLocal";
+import { reopenIfUnfinished } from "../utils/programFinish";
 import { useUnit } from "../contexts/UnitContext";
 import { useClientUnit } from "../hooks/useClientUnit";
 import { formatWeightForDisplay, parseWeightToKg, unitLabel, unitOf } from "../utils/units";
@@ -461,6 +463,9 @@ export default function WorkoutDetailScreen() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
+            // Recorded first, so the delete reaches the account's other phone
+            // and no merge brings the session back (utils/syncLocal.ts).
+            await noteDeleted("workouts", [workout]);
             const raw = await AsyncStorage.getItem(WORKOUT_HISTORY_KEY);
             const history: CompletedWorkout[] = raw ? JSON.parse(raw) : [];
             const updated = history.filter(w => w.id !== workout.id);
@@ -471,6 +476,9 @@ export default function WorkoutDetailScreen() {
               await AsyncStorage.setItem(WORKOUT_DATES_KEY, JSON.stringify(dates.filter(d => d !== workout.date)));
             }
             scheduleCloudPush();
+            // The program's last session, which ended it: picked back up while
+            // its last day hasn't gone by (utils/programFinish.ts).
+            await reopenIfUnfinished(workout);
             router.back();
           },
         },

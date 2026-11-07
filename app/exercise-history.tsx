@@ -67,6 +67,7 @@ import {
   type TopSetChange,
 } from "../utils/exerciseHistory";
 import { collectExerciseHistory, computePRs } from "../utils/progressStats";
+import { isAssisted } from "../utils/assisted";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { carriedExercises, customToShow, exercisePageParams, knownCustomExercises } from "../utils/customExerciseDetails";
 import { allProgressParams } from "../utils/progressSession";
@@ -251,7 +252,9 @@ export default function ExerciseHistoryScreen() {
       const h = prs.heaviest;
       out.push({
         key: "heaviest",
-        label: "Heaviest",
+        // An assisted exercise's record is its least help, and it has no 1RM,
+        // so Most reps stands beside it (utils/assisted.ts).
+        label: isAssisted(ref) ? "Least Assistance" : "Heaviest",
         value: `${fmtW(h.value)} ${unit}`,
         suffix: h.reps ? (hold ? ` for ${h.reps}s` : ` × ${h.reps}`) : undefined,
         sub: fmtSessionDate(h.date),
@@ -396,6 +399,9 @@ export default function ExerciseHistoryScreen() {
             page's program pill, full width. */}
         <GlassButton
           pill
+          // Programs' names in full, the pill growing for a second line, never
+          // "…" (user request, 2026-11-06).
+          grow
           size={PILL_H_XS}
           onPress={() => setFilterOpen(true)}
           style={styles.filterWrap}
@@ -404,7 +410,7 @@ export default function ExerciseHistoryScreen() {
           accessibilityLabel={`Filter: ${scopeLabel}, ${rangeOption.label}. Tap to change.`}
         >
           <Ionicons name="options-outline" size={18} color={t.tp} />
-          <Text style={[styles.filterText, { color: t.tp }]} numberOfLines={1}>
+          <Text style={[styles.filterText, { color: t.tp }]}>
             {scopeLabel}
             <Text style={[styles.filterRange, { color: t.ts }]}>{` · ${rangeOption.label}`}</Text>
           </Text>
@@ -564,7 +570,7 @@ function SessionCard({
               <Text style={[styles.cardDate, { color: t.tp }]} numberOfLines={1}>
                 {row.displayDate}
               </Text>
-              <Text style={[styles.cardMeta, { color: t.ts }]} numberOfLines={1}>
+              <Text style={[styles.cardMeta, { color: t.ts }]}>
                 {`${row.programName} · ${displayWorkoutName(row.workoutName)}`}
               </Text>
             </View>

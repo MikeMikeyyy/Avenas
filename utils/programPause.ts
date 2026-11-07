@@ -26,9 +26,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert } from "react-native";
 import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { formatStoredDate, parseStoredDate, todayYMD } from "./dates";
-import { marksAfterHold } from "./skippedDates";
-import { idleDays } from "./programHolds";
+import { todayYMD } from "./dates";
+import { AUTO_PAUSE_AFTER_DAYS, idleDays } from "./programHolds";
+import { noteAutoPause } from "./syncLocal";
+import { completeIfFinished } from "./programFinish";
+import { resumedFrom, type ResumeMode } from "./programLifecycle";
 import { getEffectiveToday, resolveDayIndex } from "./workout";
 
 /** Days a program has been held, as of `asOfYMD`. 0 when not paused. */
@@ -71,17 +73,29 @@ export function pauseProgram(
   });
 }
 
-/** How a resumed program should pick the cycle back up. */
-export type ResumeMode =
-  /** Today's workout is whatever the cycle would naturally be had you not paused. */
-  | "today"
-  /** Carry on from the day you were on when you paused. */
-  | "whereILeftOff";
+/** How a resumed program should pick the cycle back up (utils/programLifecycle.ts). */
+export type { ResumeMode } from "./programLifecycle";
 
 /**
  * Take `programId` off hold. Both modes shift startDate forward by the paused
  * days so the remaining weeks are preserved; "today" additionally bumps
- * cycleOffset to cancel the cycle shift that comes with it.
+ * cycleOffset to cancel the cycle shift that comes with it. The step itself is
+ * resumedFrom (utils/programLifecycle.ts), which a finished program carried on
+ * takes too.
+ *
+ * An unparseable startDate just clears the hold rather than trapping the user
+ * in it, leaving the dates for the resolvers' own null handling to catch. The
+ * hold itself is kept: the shift re-dates every day before it, and this is
+ * what lets a past date be read as it was and the run's first day be found
+ * again (utils/programHolds.ts). Kept for a same-day resume too, a hold of no
+ * days, which moves nothing: it's still the last time the program came back,
+ * and the week-idle auto-pause counts from that (idleDays). Left out, a program
+ * the auto-pause held after a week off and resumed the same day held itself
+ * again the next time the app opened, and after every resume until a workout
+ * was logged (user report, 2026-10-13). The rest days and moves around the hold
+ * are settled for the shifted timeline (marksAfterHold): what the hold
+ * swallowed goes, and each move still standing keeps a rest day, so it picks up
+ * exactly where it was on the pause day and still finishes on time.
  */
 export function resumeProgram(
   programs: SavedProgram[],
@@ -89,42 +103,7 @@ export function resumeProgram(
   mode: ResumeMode,
   onYMD: string = todayYMD(),
 ): SavedProgram[] {
-  return programs.map(p => {
-    if (p.id !== programId || !p.pausedAt) return p;
-    const held = Math.max(0, daysBetween(p.pausedAt, onYMD));
-    const start = parseStoredDate(p.startDate);
-    // Unparseable startDate: clear the hold rather than trapping the user in it,
-    // and leave the dates alone for the resolvers' own null handling to catch.
-    if (!start) return { ...p, pausedAt: undefined };
-
-    const shifted = new Date(start);
-    shifted.setDate(shifted.getDate() + held);
-
-    const offset =
-      mode === "today"
-        ? (((p.cycleOffset ?? 0) + held) % p.cycleDays + p.cycleDays) % p.cycleDays
-        : p.cycleOffset;
-
-    // The hold itself, kept: the shift above re-dates every day before it, and
-    // this is what lets a past date be read as it was and the run's first day
-    // be found again (utils/programHolds.ts). Kept for a same-day resume too, a
-    // hold of no days, which moves nothing: it's still the last time the
-    // program came back, and the week-idle auto-pause counts from that
-    // (idleDays). Left out, a program the auto-pause held after a week off and
-    // resumed the same day held itself again the next time the app opened, and
-    // after every resume until a workout was logged (user report, 2026-10-13).
-    const holds = [...(p.holds ?? []), { from: p.pausedAt, to: onYMD, shift: held, offsetShift: mode === "today" ? held : 0 }];
-
-    // The rest days and moves around the hold, settled for the shifted
-    // timeline (marksAfterHold): what the hold swallowed goes, and each move
-    // still standing keeps a rest day, so it picks up exactly where it was on
-    // the pause day and still finishes on time.
-    return marksAfterHold(
-      { ...p, pausedAt: undefined, startDate: formatStoredDate(shifted), cycleOffset: offset, holds },
-      p.pausedAt,
-      onYMD,
-    );
-  });
+  return programs.map(p => (p.id !== programId || !p.pausedAt ? p : resumedFrom(p, p.pausedAt, mode, onYMD)));
 }
 
 /**
@@ -212,8 +191,21 @@ export async function resumeWithPrompt(programId: string): Promise<SavedProgram[
   });
 }
 
+/**
+ * What the active program needs as the app opens or comes back to the front
+ * (app/_layout.tsx): completed if its run finished while the app was away
+ * (utils/programFinish.ts), then held after a week with nothing logged
+ * (autoPauseIfIdle). In that order, one after the other, as both write the
+ * programs: a run that finished before the week went by is finished, not on
+ * hold. Never throws.
+ */
+export async function settleActiveProgram(): Promise<void> {
+  await completeIfFinished();
+  await autoPauseIfIdle();
+}
+
 /** A week off with nothing logged puts the program on hold by itself. */
-export const AUTO_PAUSE_AFTER_DAYS = 7;
+export { AUTO_PAUSE_AFTER_DAYS } from "./programHolds";
 
 /**
  * Pause the active program when a full week has gone by with no workouts.
@@ -243,7 +235,12 @@ export async function autoPauseIfIdle(): Promise<SavedProgram | null> {
     // inside the hold.
     const updated = pauseProgram(programs, active.id, getEffectiveToday(active, dates.map(date => ({ date }))));
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
-    return updated.find(p => p.id === active.id) ?? null;
+    const held = updated.find(p => p.id === active.id) ?? null;
+    // Marked as the app's own: on a phone that was behind (the account's other
+    // phone trained meanwhile), the next merge with the backup undoes it
+    // (utils/syncMerge.ts undoStaleAutoPause).
+    if (held?.pausedAt) await noteAutoPause({ programId: held.id, pausedAt: held.pausedAt });
+    return held;
   } catch (err) {
     if (__DEV__) console.warn("[avenas] autoPauseIfIdle", err);
     return null;

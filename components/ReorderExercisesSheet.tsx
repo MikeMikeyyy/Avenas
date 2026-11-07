@@ -30,6 +30,7 @@ import DeleteCircleButton, { DELETE_CIRCLE_SIZE } from "./DeleteCircleButton";
 import { GuideBody, GuideDemo, GuideGotIt, GuideOverlay, GuideTitle } from "./GuideCard";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { CARD_META, CARD_TITLE } from "../constants/cards";
 import { REORDER_GUIDE_KEY } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
 import { getJSON, setJSON } from "../utils/storage";
@@ -53,10 +54,12 @@ const SLIDE = { useNativeDriver: false, damping: 20, stiffness: 280 } as const;
 /** A place up (-1) or down (1) to make room for the held row, or none. */
 type Shift = -1 | 0 | 1;
 
-function ReorderRow({ index, count, name, active, shift, divider, onHold, onOver, onLetGo, onChange, onRemove }: {
+function ReorderRow({ index, count, name, meta, active, shift, divider, onHold, onOver, onLetGo, onChange, onRemove }: {
   index: number;
   count: number;
   name: string;
+  /** A line under the name (a day's exercises and sets). */
+  meta?: string;
   /** This is the row being held. */
   active: boolean;
   shift: Shift;
@@ -66,8 +69,10 @@ function ReorderRow({ index, count, name, active, shift, divider, onHold, onOver
   onOver: (index: number) => void;
   /** `commit` false when the touch was taken away rather than let go. */
   onLetGo: (commit: boolean) => void;
-  onChange: () => void;
-  onRemove: () => void;
+  /** Left out, the row has no Change pill or delete circle (Go to Day's
+   *  days, which only move). */
+  onChange?: () => void;
+  onRemove?: () => void;
 }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -132,30 +137,41 @@ function ReorderRow({ index, count, name, active, shift, divider, onHold, onOver
           <DragHandleIcon color={t.ts} />
         </View>
         <NumberBadge n={index + 1} isDark={isDark} />
-        <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{name}</Text>
+        {meta ? (
+          <View style={styles.nameCol}>
+            <Text style={[styles.metaName, { color: t.tp }]} numberOfLines={1}>{name}</Text>
+            <Text style={[styles.meta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
+          </View>
+        ) : (
+          <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{name}</Text>
+        )}
       </View>
       {/* Another exercise in this one's place, keeping its sets. Its only way
           in from here: the name moves the row now. */}
-      <TouchableOpacity
-        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChange(); }}
-        activeOpacity={0.7}
-        hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-        style={[styles.changeBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}
-        accessibilityRole="button"
-        accessibilityLabel={`Change ${name}`}
-      >
-        <Ionicons name="swap-horizontal" size={14} color={t.tp} />
-        <Text style={[styles.changeText, { color: t.tp }]}>Change</Text>
-      </TouchableOpacity>
-      <DeleteCircleButton
-        onPress={() =>
-          Alert.alert("Remove Exercise", `Remove "${name}"?`, [
-            { text: "Cancel", style: "cancel" },
-            { text: "Remove", style: "destructive", onPress: onRemove },
-          ])
-        }
-        accessibilityLabel={`Remove ${name}`}
-      />
+      {onChange ? (
+        <TouchableOpacity
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onChange(); }}
+          activeOpacity={0.7}
+          hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+          style={[styles.changeBtn, { backgroundColor: t.ctrl }, PILL_SHADOW]}
+          accessibilityRole="button"
+          accessibilityLabel={`Change ${name}`}
+        >
+          <Ionicons name="swap-horizontal" size={14} color={t.tp} />
+          <Text style={[styles.changeText, { color: t.tp }]}>Change</Text>
+        </TouchableOpacity>
+      ) : null}
+      {onRemove ? (
+        <DeleteCircleButton
+          onPress={() =>
+            Alert.alert("Remove Exercise", `Remove "${name}"?`, [
+              { text: "Cancel", style: "cancel" },
+              { text: "Remove", style: "destructive", onPress: onRemove },
+            ])
+          }
+          accessibilityLabel={`Remove ${name}`}
+        />
+      ) : null}
     </Animated.View>
   );
 }
@@ -165,17 +181,23 @@ export interface ReorderExerciseListProps<T> {
   /** A key of its own for each exercise (its id), which its row keeps as it moves. */
   keyOf: (item: T, index: number) => string;
   nameOf: (item: T) => string;
+  /** A line under each name: the builder's Go to Day shows a day's exercises
+   *  and sets there. */
+  metaOf?: (item: T) => string;
   onReorder: (items: T[]) => void;
-  /** Change Exercise for a row: its name or its Change pill. */
-  onChange: (item: T, index: number) => void;
+  /** Change Exercise for a row: its name or its Change pill. Left out (and
+   *  `onRemove`), the rows only move: the builder's Go to Day reorders days
+   *  with them (user request, 2026-11-07: "like our move exercises"). */
+  onChange?: (item: T, index: number) => void;
   /** A row's delete circle, once "Remove Exercise" is confirmed. */
-  onRemove: (item: T, index: number) => void;
+  onRemove?: (item: T, index: number) => void;
   /** True while a row is held, so whatever scrolls the list holds still. */
   onDragStateChange?: (dragging: boolean) => void;
 }
 
-/** The rows on their own, for a sheet of its own (the builder's Workout Summary). */
-export function ReorderExerciseList<T>({ items, keyOf, nameOf, onReorder, onChange, onRemove, onDragStateChange }: ReorderExerciseListProps<T>) {
+/** The rows on their own, for a sheet of its own (the builder's Workout
+ *  Summary, its Go to Day). */
+export function ReorderExerciseList<T>({ items, keyOf, nameOf, metaOf, onReorder, onChange, onRemove, onDragStateChange }: ReorderExerciseListProps<T>) {
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
   // The same, for the touch handlers, which may run before a redraw has
   // caught up with the last place passed.
@@ -228,21 +250,25 @@ export function ReorderExerciseList<T>({ items, keyOf, nameOf, onReorder, onChan
           index={i}
           count={items.length}
           name={nameOf(item)}
+          meta={metaOf?.(item)}
           active={drag?.from === i}
           shift={shiftOf(i)}
           divider={i < items.length - 1}
           onHold={hold}
           onOver={over}
           onLetGo={letGo}
-          onChange={() => onChange(item, i)}
-          onRemove={() => onRemove(item, i)}
+          onChange={onChange ? () => onChange(item, i) : undefined}
+          onRemove={onRemove ? () => onRemove(item, i) : undefined}
         />
       ))}
     </>
   );
 }
 
-export default function ReorderExercisesSheet<T>({ visible, subtitle, closeOnRemove = false, onClose, onChange, onRemove, ...list }: Omit<ReorderExerciseListProps<T>, "onDragStateChange"> & {
+export default function ReorderExercisesSheet<T>({ visible, subtitle, closeOnRemove = false, onClose, onChange, onRemove, ...list }: Omit<ReorderExerciseListProps<T>, "onDragStateChange" | "onChange" | "onRemove"> & {
+  /** Change and Remove, required on the exercises' own sheet. */
+  onChange: (item: T, index: number) => void;
+  onRemove: (item: T, index: number) => void;
   visible: boolean;
   /** Under the title: the day, or the workout's name. */
   subtitle?: string;
@@ -352,6 +378,10 @@ const styles = StyleSheet.create({
   dragArea:   { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   handle:     { padding: 4, justifyContent: "center", alignItems: "center" },
   name:       { fontFamily: FontFamily.regular, fontSize: 15, flex: 1 },
+  // A name with a line under it (metaOf): a day's, as on Go to Day's rows.
+  nameCol:    { flex: 1, minWidth: 0 },
+  metaName:   { ...CARD_TITLE },
+  meta:       { ...CARD_META },
   // The guide's picture of a row, moving.
   demoRow:    { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8, paddingLeft: 12, paddingRight: 14, borderRadius: 14 },
   demoName:   { fontFamily: FontFamily.semibold, fontSize: 15 },

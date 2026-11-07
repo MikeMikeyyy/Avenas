@@ -22,7 +22,7 @@
 // scripts/verify-trainer-lists.ts can run it.
 
 import type { SentProgram, SharedProgram } from "./trainerStore";
-import { batchKeyOf, reviewStage } from "./trainerLists";
+import { batchKeyOf, reviewStage, shareRejected } from "./trainerLists";
 
 /** One send to the group: one `shared_programs` row per member it went to,
  *  collapsed onto the batch key they share (the Trainer tab's own key). */
@@ -32,6 +32,8 @@ export type GroupBatch = {
   sentAtISO: string;
   entries: SharedProgram[];
   acceptedCount: number;
+  /** How many turned it down (shareRejected), red on a coach's list. */
+  rejectedCount: number;
 };
 
 /** Something waiting on me to accept: a group program sent to me, or my own
@@ -72,6 +74,7 @@ export function groupBatches(shares: readonly SharedProgram[], iCoachGroup: bool
       sentAtISO: entries[0].sentAtISO,
       entries,
       acceptedCount: entries.filter(e => e.acceptedAtISO).length,
+      rejectedCount: entries.filter(shareRejected).length,
     }))
     .sort((a, b) => (a.sentAtISO < b.sentAtISO ? 1 : -1));
 }

@@ -23,6 +23,7 @@ import {
   withMilestoneCardMoved,
 } from "../utils/achievements";
 import { exerciseIdentity } from "../utils/exerciseNames";
+import { isAssisted, isAssistedIdentity, noteAssistedCustoms } from "../utils/assisted";
 
 let passed = 0;
 const failures: string[] = [];
@@ -320,6 +321,66 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
     const page = prTrophySets([{ identity: bp, sets: w.exercises[0].sets.map(x => ({ ...x, weightKg: parseFloat(x.weight) || 0 })) }], () => each.get(w.id))[0];
     eq(page, prSetsOfWorkout(w, all)[0], `each ${w.id}: the history page's trophies are its Journal page's`);
   }
+}
+
+// ─── Assisted exercises: less help is the record (utils/assisted.ts) ────────
+{
+  const on = (id: string, completedAt: string, name: string, sets: CompletedSet[], customId?: string): CompletedWorkout =>
+    ({ ...workout([{ ...ex(name, sets), ...(customId ? { customId } : {}) }], id), completedAt });
+  const ap = exerciseIdentity({ name: "Assisted Pull-Up" });
+  eq(isAssistedIdentity(ap), true, "assisted: the catalogue's Assisted Pull-Up is");
+  eq(isAssisted({ name: "assisted pull-up" }), true, "assisted: by its name in any case");
+  eq(isAssisted({ name: "Assisted Dip" }), true, "assisted: the catalogue's Assisted Dip is");
+  eq(isAssisted({ name: "Pull-Up" }), false, "assisted: a plain pull-up isn't");
+  eq(isAssisted({ name: "Suspension Assisted Squat" }), false, "assisted: a strap squat isn't (no counterweight)");
+
+  const first = on("a1", "2026-09-01T10:00:00.000Z", "Assisted Pull-Up", [set("40", "8"), set("35", "6")]);
+  const prior = [first];
+  const best = bestLiftsBefore(prior);
+  eq(best.get(ap), 35, "assisted best: the least help, not the most");
+
+  const lift = (weightKg: number, extra: Partial<PrSetInput> = {}): PrSetInput => ({ type: "working", done: true, reps: "5", weightKg, ...extra });
+  eq(isPrSet(lift(30), 35, true), true, "assisted trophy: less help than the best");
+  eq(isPrSet(lift(40), 35, true), false, "assisted trophy: more help is never a PR (the bug: a heavier set got it)");
+  eq(isPrSet(lift(35), 35, true), false, "assisted trophy: a tie isn't");
+  eq(isPrSet(lift(0), 35, true), false, "assisted trophy: no weight typed isn't a PR");
+  const worn = (sets: PrSetInput[]) => prTrophySets([{ identity: ap, sets }], id => best.get(id));
+  eq(worn([lift(30), lift(25)]), [[false, true]], "assisted trophy: the least help that session wears it");
+  eq(worn([lift(25), lift(30)]), [[true, false]], "assisted trophy: more help after the record doesn't take it");
+  eq(worn([lift(45), lift(50)]), [[false, false]], "assisted trophy: none when every set needed more help");
+
+  // The PR card: less help, and it says so.
+  const better = on("a2", "2026-09-08T10:00:00.000Z", "Assisted Pull-Up", [set("30", "6")]);
+  const heavier = on("a3", "2026-09-08T10:00:00.000Z", "Assisted Pull-Up", [set("50", "10")]);
+  const card = detectWorkoutAchievements(better, prior, EMPTY_ACHIEVEMENTS, NOW);
+  eq(categories(card), ["pr"], "assisted card: less help than ever is a PR");
+  if (card[0]?.category === "pr") {
+    eq(card[0].prs, [{ exerciseName: "Assisted Pull-Up", valueKg: 30, prevKg: 35 }], "assisted card: records the new and beaten help");
+    eq(describeAchievement(card[0], true).detail, "30 kg assistance, down from 35 kg", "assisted card: reads as help coming down");
+  }
+  eq(categories(detectWorkoutAchievements(heavier, prior, EMPTY_ACHIEVEMENTS, NOW)), [], "assisted card: more help is no PR");
+  eq(prSetsOfWorkout(better, [first, better]), [[true]], "assisted saved: the Journal page's trophy");
+  eq(prSetsOfWorkout(heavier, [first, heavier]), [[false]], "assisted saved: no trophy on more help");
+  const each = bestBeforeEach([first, better, heavier], ap);
+  eq([each.get("a1"), each.get("a2")], [undefined, 35], "assisted each: the history page's best before is the least help");
+
+  // A custom exercise with its Assisted switch on, and then off again: all its
+  // sessions read the new way, never half of them.
+  const custom = { id: "cx_gravitron", name: "Gravitron", muscles: ["Back" as const], assisted: true };
+  const g1 = on("g1", "2026-09-01T10:00:00.000Z", "Gravitron", [set("40", "8")], custom.id);
+  const g2 = on("g2", "2026-09-08T10:00:00.000Z", "Gravitron", [set("30", "8")], custom.id);
+  noteAssistedCustoms("own", [custom]);
+  eq(prSetsOfWorkout(g2, [g1, g2]), [[true]], "custom assisted: less help is its PR");
+  noteAssistedCustoms("own", [{ ...custom, assisted: false }]);
+  eq(prSetsOfWorkout(g2, [g1, g2]), [[false]], "custom switched off: reads as weight again");
+  // Your own definition wins over one carried with a program.
+  noteAssistedCustoms("carried", [custom]);
+  eq(isAssisted({ name: "Gravitron", customId: custom.id }), false, "custom: your own switch wins over a carried copy");
+  noteAssistedCustoms("own", []);
+  eq(isAssisted({ name: "Gravitron", customId: custom.id }), true, "custom: a carried one is read by its own switch");
+  noteAssistedCustoms("carried", []);
+  // Back to normal for the bench press: nothing above changed its direction.
+  eq(isPrSet(lift(110), 100), true, "normal: heavier is still a PR");
 }
 
 if (failures.length > 0) {

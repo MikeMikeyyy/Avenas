@@ -14,6 +14,7 @@ import {
 } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { awardWorkoutAchievements } from "./achievementStore";
+import { completeIfFinished } from "./programFinish";
 import { UNIT_KEY } from "./units";
 import { getEffectiveToday } from "./workout";
 import {
@@ -160,10 +161,12 @@ async function fileStaleDraftNow(now: Date): Promise<{ stale: boolean; filed: Co
       await AsyncStorage.setItem(UNFINISHED_NOTICE_KEY, JSON.stringify(noticeFor(filed)));
     }
     await AsyncStorage.multiRemove([WORKOUT_DRAFT_KEY, WORKOUT_TIMER_START_KEY, WORKOUT_TIMER_PAUSED_KEY]);
-    // As Finish does for a custom workout started to be added to the program.
+    // As Finish does for a custom workout started to be added to the program,
+    // and then: the program's last session ends it (utils/programFinish.ts).
     if (filed && draft.isFreeWorkout && draft.freeWorkoutAddToProgram && active) {
       await addExtraWorkout(active.id, filed.workoutName);
     }
+    if (filed) await completeIfFinished();
     if (filed) filedListeners.forEach(l => l());
     return { stale: true, filed };
   } catch (e) {

@@ -415,7 +415,7 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
   const held = buildSessionTracks(history, [{ ...program, pausedAt: "2026-09-24" }], MON_W6);
   eq([held.missedById["w3"], held.doneById["w3"]], [[2], [1, 3]], "on hold: the weeks since the hold aren't missed");
 
-  const inactive = buildSessionTracks(history, deactivateProgram([program], "P"), MON_W6);
+  const inactive = buildSessionTracks(history, deactivateProgram([program], "P", history), MON_W6);
   eq([inactive.missedById["w3"], inactive.doneById["w3"]], [[2], [1, 3]],
     "made inactive: the weeks since its last session aren't missed, the one before still is");
   eq(inactive.numberById["w3"], 3, "and its sessions keep their numbers");
@@ -433,8 +433,8 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
 // count, and the cards of the run before stay as they were.
 {
   const finishedEarly: SavedProgram = { ...program, status: "completed", completedDate: "25 Sep 2026", currentWeek: 3 };
-  const { programs: [again] } = activateProgram([finishedEarly], "P", "5 Oct 2026");
   const history = [session("w1", MON_W1), session("w3", MON_W3), session("n1", MON_W5), session("n2", MON_W6)];
+  const { programs: [again] } = activateProgram([finishedEarly], "P", "5 Oct 2026", history);
   const tracks = buildSessionTracks(history, [again], MON_W6);
   eq([tracks.numberById["w3"], tracks.missedById["w3"], tracks.doneById["w3"]], [3, [2], [1, 3]],
     "the earlier run's cards stay where they were");
@@ -474,7 +474,7 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
 
   // A program made inactive: its last session deleted, the weeks after it
   // simply never came round; done again, it's back.
-  const shelved = deactivateProgram([program], "P");
+  const shelved = deactivateProgram([program], "P", [session("w1", MON_W1), session("w3", MON_W3)]);
   const shelvedAll = all([session("w4", MON_W4)], shelved, MON_W6);
   const shelvedDeleted = all([], shelved, MON_W6);
   eq([shelvedAll.missedById["w1"], shelvedDeleted.missedById["w1"]], [[2], [2]], "made inactive: deleting its last session marks nothing missed");
@@ -482,7 +482,7 @@ const MON_W4 = "2026-09-28", MON_W5 = "2026-10-05", MON_W6 = "2026-10-12";
 
   // Run again: deleting from the run before leaves the new run alone.
   const finishedEarly: SavedProgram = { ...program, status: "completed", completedDate: "25 Sep 2026", currentWeek: 3 };
-  const { programs: runAgain } = activateProgram([finishedEarly], "P", "5 Oct 2026");
+  const { programs: runAgain } = activateProgram([finishedEarly], "P", "5 Oct 2026", [session("w1", MON_W1), session("w3", MON_W3)]);
   const newRun = [session("n1", MON_W5), session("n2", MON_W6)];
   const both = buildSessionTracks([session("w1", MON_W1), session("w3", MON_W3), ...newRun], runAgain, MON_W6);
   const oldDeleted = buildSessionTracks([session("w1", MON_W1), ...newRun], runAgain, MON_W6);

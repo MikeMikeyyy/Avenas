@@ -24,9 +24,11 @@
 // Run:  npx tsx scripts/verify-trainer-lists.ts
 
 import type { Client, SentProgram, SharedProgram } from "../utils/trainerStore";
+import type { GymHubData, PTHubData } from "../utils/trainerHub";
 import type { SavedProgram } from "../constants/programs";
 import {
   batchKeyOf,
+  reviewTargets,
   firstName,
   fromLine,
   fromTrainerLists,
@@ -312,6 +314,24 @@ eq(myTrainersBadge({}, [], null, 0), 0, "pill: nothing waiting");
   const lists = groupProgramLists({ groupShares: [], groupReviews: [mineDropped], iCoachGroup: false, myUid: "me" });
   eq(lists.sentForReview.map(r => r.id), ["gx"], "group, member: my request a coach removed stays under Sent for Review");
   eq(groupProgramsTile(lists, false), { line: "1 not reviewed", tone: "alert" }, "group tile, member: removed without a review, in red");
+}
+
+// Who My Programs' Send for Review offers (user request, 2026-11-06): my
+// trainers once each, the one on the tab first, and every group I'm in but
+// don't own, read off the Trainer tab's saved copy.
+{
+  const jordan = { id: "t-jordan", name: "Jordan", initials: "J" };
+  const sam = { id: "t-sam", name: "Sam", initials: "S" };
+  const grp = (id: string, isOwner: boolean) => ({ id, name: id, ownerId: isOwner ? "me" : "o", isOwner, memberCount: 3, createdAtISO: T1 });
+  const row = (g: ReturnType<typeof grp>) => ({ group: g, lastText: "", lastAtISO: "", unreadCount: 0 });
+  const gym = (over: object) => ({ pt: jordan, trainers: [jordan, sam, jordan], groups: [row(grp("joined", false)), row(grp("mine", true))], ...over }) as unknown as GymHubData;
+  const targets = reviewTargets(gym({}));
+  eq(targets.trainers.map(t => t.id), ["t-jordan", "t-sam"], "send for review: each trainer once, the one on the tab first");
+  eq(targets.groups.map(g => g.id), ["joined"], "send for review: a group I'm in, never one I own");
+  eq(reviewTargets(gym({ trainers: undefined })).trainers.map(t => t.id), ["t-jordan"], "send for review: an older copy with no trainer list has the one on the tab");
+  eq(reviewTargets(gym({ pt: null, trainers: undefined, groups: [] })), { trainers: [], groups: [] }, "send for review: no trainer and no group, nobody to offer");
+  const pt = { trainers: [sam], groups: [grp("coached", false), grp("owned", true)] } as unknown as PTHubData;
+  eq(reviewTargets(pt), { trainers: [sam], groups: [grp("coached", false)] }, "send for review, trainer: my own trainers, and the groups I'm in but don't own");
 }
 
 console.log(`${passed} passed, ${failed} failed`);

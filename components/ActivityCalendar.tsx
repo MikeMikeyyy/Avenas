@@ -4,9 +4,10 @@ import { useRouter } from "expo-router";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, NEU_BG, NEU_BG_DARK } from "../constants/theme";
 import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
-import type { SavedProgram } from "../constants/programs";
+import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { toYMD } from "../utils/dates";
 import { getWorkoutForDate } from "../utils/workout";
+import { pastPlanFrom, type PastPlan } from "../utils/journalCalendar";
 
 const MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTH_NAMES  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -18,6 +19,11 @@ interface Props {
   isDark: boolean;
   workoutDates: string[];   // YYYY-MM-DD strings
   activeProgram: SavedProgram | null;
+  /** Every program, ended or not, and the history: a day gone by reads as the
+   *  run going on it planned it, as on the Journal's calendar
+   *  (utils/journalCalendar.ts pastPlanFrom). */
+  programs: SavedProgram[];
+  workoutHistory: CompletedWorkout[];
 }
 
 function buildMonthCells(
@@ -26,6 +32,7 @@ function buildMonthCells(
   todayStr: string,
   workoutSet: Set<string>,
   prog: SavedProgram | null,
+  pastPlan: PastPlan,
 ): CellState[] {
   const totalDays = new Date(year, month + 1, 0).getDate();
   const firstDow  = new Date(year, month, 1).getDay(); // 0=Sun
@@ -41,8 +48,13 @@ function buildMonthCells(
     } else if (ds > todayStr) {
       cells.push("future");
     } else {
+      // The run that was going on the day, ended since or not (pastPlanFrom):
+      // a finished program's skipped last workout still reads missed.
+      const planned = pastPlan(ds);
       if (workoutSet.has(ds)) {
         cells.push("workout");
+      } else if (planned) {
+        cells.push(planned === "workout" ? "missed" : "rest");
       } else if (prog && getWorkoutForDate(prog, ds) === null) {
         // Through the shared resolver, so this agrees with the week strip above
         // it. It used to hand-roll the cycle formula, which meant it knew
@@ -125,12 +137,13 @@ function MonthSection({
   );
 }
 
-export default function ActivityCalendar({ isDark, workoutDates, activeProgram }: Props) {
+export default function ActivityCalendar({ isDark, workoutDates, activeProgram, programs, workoutHistory }: Props) {
   const router   = useRouter();
   const today    = new Date();
   const todayStr = toYMD(today);
 
   const workoutSet = useMemo(() => new Set(workoutDates), [workoutDates]);
+  const pastPlan = useMemo(() => pastPlanFrom(programs, workoutHistory), [programs, workoutHistory]);
 
   const curYear  = today.getFullYear();
   const curMonth = today.getMonth();
@@ -138,12 +151,12 @@ export default function ActivityCalendar({ isDark, workoutDates, activeProgram }
   const prevYear  = curMonth === 0 ? curYear - 1 : curYear;
 
   const prevCells = useMemo(
-    () => buildMonthCells(prevYear, prevMonth, todayStr, workoutSet, activeProgram),
-    [prevYear, prevMonth, todayStr, workoutSet, activeProgram],
+    () => buildMonthCells(prevYear, prevMonth, todayStr, workoutSet, activeProgram, pastPlan),
+    [prevYear, prevMonth, todayStr, workoutSet, activeProgram, pastPlan],
   );
   const curCells = useMemo(
-    () => buildMonthCells(curYear, curMonth, todayStr, workoutSet, activeProgram),
-    [curYear, curMonth, todayStr, workoutSet, activeProgram],
+    () => buildMonthCells(curYear, curMonth, todayStr, workoutSet, activeProgram, pastPlan),
+    [curYear, curMonth, todayStr, workoutSet, activeProgram, pastPlan],
   );
 
   return (

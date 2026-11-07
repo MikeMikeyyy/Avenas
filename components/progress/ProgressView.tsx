@@ -24,7 +24,7 @@ import ExerciseProgressionChart from "../ExerciseProgressionChart";
 import DumbbellIcon from "../DumbbellIcon";
 import KeyboardDismissButton from "../KeyboardDismissButton";
 import AllExercisesList from "./AllExercisesList";
-import CompareButton from "./CompareButton";
+import CompareButton, { COMPARE_HIT, COMPARE_SIZE } from "./CompareButton";
 import CompareHeader from "./CompareHeader";
 import CompareSheet, { type CompareSheetSide } from "./CompareSheet";
 import CompareGlanceCard from "./CompareGlanceCard";
@@ -34,7 +34,6 @@ import CompareExerciseCard from "./CompareExerciseCard";
 import { RevealOnScrollContext, type RevealWatcher } from "./revealOnScroll";
 
 import { APP_DARK, APP_LIGHT, FontFamily, accentTextColor } from "../../constants/theme";
-import { PILL_H_XS } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
@@ -44,7 +43,7 @@ import { sameExercise, type ExerciseRef } from "../../utils/exerciseNames";
 import { type CustomExercise, type SelectableMuscle } from "../../constants/exercises";
 import type { ExerciseDataPoint, LoggedExerciseRow, MuscleGroupStat, PRs, RangeKey } from "../../constants/progress";
 import { RANGE_OPTIONS } from "../../constants/progress";
-import { progressSessionKey, type AllProgressRequest } from "../../utils/progressSession";
+import { progressSessionKey, type AllProgressRequest, type ProgramProgressRequest } from "../../utils/progressSession";
 import { muscleCardOf } from "../../utils/allExercises";
 import { useProgressSelection } from "../../hooks/useProgressSelection";
 import { useSectionSearch } from "../../hooks/useSectionSearch";
@@ -64,6 +63,8 @@ import {
   getRangeOption,
   isCustomSession,
   previousComparableWindow,
+  autoWeekRange,
+  rangeHoldingLast,
   rangeWindow,
   yearBarCount,
   scopedProgramDays,
@@ -156,6 +157,10 @@ export interface ProgressViewProps {
   /** "See All Progress" from Exercise History (utils/progressSession.ts): All
    *  programs, with this exercise charted. */
   show?: AllProgressRequest | null;
+  /** View Progress on My Programs (utils/progressSession.ts): that program.
+   *  Handed over only once the sessions and programs were read after the tap,
+   *  so a program just made active scopes as Current program. */
+  showProgram?: ProgramProgressRequest | null;
 }
 
 const NO_CUSTOM: CustomExercise[] = [];
@@ -188,6 +193,7 @@ function ProgressBody({
   refreshControl,
   clientId,
   show,
+  showProgram,
   sessionKey,
 }: ProgressViewProps & { sessionKey: string }) {
   const { isDark } = useTheme();
@@ -199,7 +205,8 @@ function ProgressBody({
   // Every selection on the page survives it unmounting (another tab, a pushed
   // screen, a trainer's client page closed and reopened) until the app closes.
   const [scope, setScope] = useProgressSelection(sessionKey, "scope");
-  const [range, setRange] = useProgressSelection(sessionKey, "range");
+  // The range as picked, or null: automatic (`range` below).
+  const [rangePick, setRangePick] = useProgressSelection(sessionKey, "range");
   const [metric, setMetric] = useProgressSelection(sessionKey, "metric");
   const [strengthMetric, setStrengthMetric] = useProgressSelection(sessionKey, "strengthMetric");
   // Day-qualified: the same exercise on two days (lateral raises on Push and
@@ -217,6 +224,7 @@ function ProgressBody({
   const [compareSpan, setCompareSpan] = useProgressSelection(sessionKey, "compareSpan");
   const [compareLift, setCompareLift] = useProgressSelection(sessionKey, "compareLift");
   const [allProgressAt, setAllProgressAt] = useProgressSelection(sessionKey, "allProgressAt");
+  const [programProgressAt, setProgramProgressAt] = useProgressSelection(sessionKey, "programProgressAt");
   const [scopeFallbackNote, setScopeFallbackNote] = useState<string | null>(null);
 
   const scrollRef = useRef<any>(null);
@@ -230,6 +238,9 @@ function ProgressBody({
   // selection remembered from the last visit never bumps it, so the page comes
   // back as it was left.
   const [chartScrollRequest, setChartScrollRequest] = useState(0);
+  // Bumped by View Progress from My Programs: the page goes back to its top,
+  // where the program's charts are, and puts the search away.
+  const [topScrollRequest, setTopScrollRequest] = useState(0);
 
   // What covers the foot of the page: the tab bar, and above it, while a
   // workout's on, the workout bar (taller with a rest inside it). Read as the
@@ -286,6 +297,16 @@ function ProgressBody({
     return min;
   }, [scopedWorkouts]);
 
+  // Unpicked, the charts show this week once it has a session in it, and last
+  // week until then (user request, 2026-11-06: a new week opened on empty
+  // charts). From the sessions the charts read, so it moves to this week as
+  // soon as a workout's done, the page reloading them on every focus.
+  const autoRange = useMemo(() => autoWeekRange(scopedWorkouts, new Date()), [scopedWorkouts]);
+  const range: RangeKey = rangePick ?? autoRange;
+  // Picking what automatic shows keeps it automatic, so a tap on the week it's
+  // already on doesn't pin it there for when the next week comes.
+  const pickRange = useCallback((k: RangeKey) => setRangePick(k === autoRange ? null : k), [autoRange, setRangePick]);
+
   // The page's time range, picked beside the program, sets the window for BOTH
   // charts: the Volume bars and the Strength radar read the same dates, so the
   // two cards always describe the same stretch of training. It reads today's
@@ -341,6 +362,27 @@ function ProgressBody({
     setAllExercise(show.customId ? { name: show.name, customId: show.customId } : { name: show.name });
     setExpandedMuscle(muscleCardOf(show, knownCustoms));
     setChartScrollRequest(n => n + 1);
+  }
+  // View Progress on a My Programs card (user request, 2026-11-07): that
+  // program at the top, Current program when it's the one running (the picker
+  // lists the running one only as that), a comparison put away and the page
+  // at its top. A program not running opens on a range that holds its last
+  // session (user decision, the same day); the running one keeps the range.
+  // Each request once, as See All Progress.
+  if (showProgram && loaded && showProgram.at !== programProgressAt) {
+    setProgramProgressAt(showProgram.at);
+    const target = programs.find(p => p.id === showProgram.programId);
+    if (target) {
+      const running = target.status === "active";
+      setScope(running ? { kind: "current" } : { kind: "program", programId: target.id });
+      setScopeFallbackNote(null);
+      setCompare(null);
+      setCompareLift(null);
+      if (!running) {
+        setRangePick(rangeHoldingLast(history.filter(w => workoutBelongsToProgram(w, target)), rangePick, new Date()));
+      }
+      setTopScrollRequest(n => n + 1);
+    }
   }
   const { muscleStats, prevMuscleStats, radarWindowDays } = useMemo(() => {
     const { startYMD, endYMD } = dateWindow;
@@ -498,6 +540,14 @@ function ProgressBody({
     open: searchOpen, query, setQuery, toggle: toggleSearch, close: closeSearch, onKeyboardDown, picked: pickedFromSearch,
     inputRef: searchInputRef, extraPadding: searchPadding,
   } = useSectionSearch({ scrollRef, headingRef: exerciseHeadingRef, topInset: withTopInset ? insets.top : 0, shown: allList });
+  // View Progress from My Programs: back to the top, the search put away as
+  // another scope picked puts it away. Not animated: the page is coming into
+  // view on the tab switch.
+  useEffect(() => {
+    if (!topScrollRequest) return;
+    closeSearch();
+    scrollRef.current?.scrollTo?.({ y: 0, animated: false });
+  }, [topScrollRequest, closeSearch]);
   const onSelectAllExercise = useCallback((ex: ExerciseRef) => {
     // Picked from the search: the page goes on down to the chart.
     pickedFromSearch();
@@ -775,7 +825,9 @@ function ProgressBody({
   }, []);
 
   const showNoActiveProgramHint = scope.kind === "current" && !hasActiveProgram;
-  const topPad = withTopInset ? insets.top + 50 : 16;
+  // A client's page starts right under its Progress / Journal / Programs
+  // switch, its Compare row the first thing (see below).
+  const topPad = withTopInset ? insets.top + 50 : title === "" ? 0 : 16;
   // Clear of the workout bar too while it shows (constants/floatingBars.ts).
   const botPad = scrollEndPadding(bottomPadding ?? (insets.bottom + 140), barsReach);
 
@@ -821,18 +873,29 @@ function ProgressBody({
         scrollEventThrottle={16}
         refreshControl={refreshControl}
       >
-        {title !== "" && (
+        {title !== "" ? (
           <View style={[styles.titleRow, styles.titleRowSplit]}>
             <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
             {!comparing ? <CompareButton onPress={startComparing} /> : null}
           </View>
-        )}
+        ) : !comparing ? (
+          // A trainer's client page has no title: Compare has the title row's
+          // place to itself, at its right, close under the page's switch, and
+          // the filters below are the Progress tab's (user requests,
+          // 2026-11-06, after trying the program pill on a row of its own and
+          // then as wide as its name). Comparing, the header's ✕ takes the
+          // same place.
+          <View style={styles.compareRow}>
+            <CompareButton onPress={startComparing} />
+          </View>
+        ) : null}
 
         {/* Comparing under the page title, the header is pulled up: its label
             row is as tall as the ✕'s 44pt touch area, which left "Comparing"
-            well below the title (user report, 2026-10-28). Not on a client's
-            page, which has no title above it. */}
-        <View style={{ marginTop: comparing ? (title !== "" ? -4 : 10) : 18 }}>
+            well below the title (user report, 2026-10-28). On a client's page
+            it starts where the Compare row was, its ✕ where Compare was, and
+            the filters sit close under that row. */}
+        <View style={{ marginTop: title !== "" ? (comparing ? -4 : 18) : (comparing ? 0 : 10) }}>
           {comparing && greenView && blueView ? (
             // Comparing: the two programs in place of the filters. Each
             // program is read whole, so there's no time range. A finished
@@ -859,14 +922,11 @@ function ProgressBody({
               <DropdownPicker<RangeKey>
                 value={range}
                 options={RANGE_OPTIONS}
-                onChange={setRange}
+                onChange={pickRange}
                 sheetTitle="Time range"
                 size="bar"
                 leadingIcon="calendar-outline"
               />
-              {/* No title on a trainer's client page: the button sits here, the
-                  filters' height (PILL_H_XS). */}
-              {title === "" ? <CompareButton onPress={startComparing} size={PILL_H_XS} /> : null}
             </View>
           )}
           {scopeFallbackNote && !comparing ? (
@@ -1086,6 +1146,10 @@ const styles = StyleSheet.create({
   titleRow: { paddingHorizontal: 20, marginBottom: 8 },
   titleRowSplit: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: 16 },
   filterRow: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20 },
+  // A client's page's Compare, alone at the right: its touch area pulled out
+  // by its spare so the circle ends 20 in, over the time range's end (as the
+  // Comparing header's ✕ does).
+  compareRow: { flexDirection: "row", justifyContent: "flex-end", marginRight: 20 - (COMPARE_HIT - COMPARE_SIZE) / 2 },
   title: { fontFamily: FontFamily.bold, fontSize: 28, marginTop: 2 },
   sectionHeaderRow: { paddingHorizontal: 20, marginTop: 28 },
   sectionHeader: { fontFamily: FontFamily.bold, fontSize: 24 },

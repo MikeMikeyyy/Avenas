@@ -16,6 +16,12 @@
 // On iOS 26 it's a floating glass sheet with a glass X in its top right
 // corner, as every pop-up is (components/SheetChrome.tsx; user request,
 // 2026-10-30).
+//
+// With the keyboard up it has the keyboard's down key every text screen
+// floats (user report, 2026-11-05: typing why a review was removed, nothing
+// put the keyboard away, a many-line box's return key being a new line). The
+// page's own key can't show over the sheet's Modal, so the sheet draws one,
+// and stands clear of it as any field does (ABOVE_KEYBOARD_TOOLS).
 
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -23,12 +29,11 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ABOVE_KEYBOARD_TOOLS } from "../../constants/floatingBars";
 import { APP_DARK, APP_LIGHT } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
-import { SHEET_DIM, SHEET_TOP_ROW, SheetBackButton, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
-
-/** The least of the page left showing above a sheet, under the status bar. */
-const SHEET_TOP_GAP = 12;
+import KeyboardDismissButton from "../KeyboardDismissButton";
+import { SHEET_DIM, SHEET_TOP_GAP, SHEET_TOP_ROW, SheetBackButton, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../SheetChrome";
 
 interface Props {
   visible: boolean;
@@ -72,7 +77,7 @@ export default function SimpleSheet({ visible, onClose, onBack, children, footer
   // The home-indicator inset is dead space behind the keyboard — drop it while
   // the keyboard is up so input rows (e.g. the message composer) sit snug above
   // the keys. Sheets without text inputs never raise the keyboard, so unaffected.
-  const [kbVisible, setKbVisible] = useState(false);
+  const [kbVisible, setKbVisible] = useState(() => Keyboard.isVisible());
   useEffect(() => {
     const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
@@ -129,6 +134,9 @@ export default function SimpleSheet({ visible, onClose, onBack, children, footer
   // scrolling part, so the last button's shadow has room before the edge
   // that clips it; with one, it's under the footer.
   const bottomGap = kbVisible ? 12 : sheetFootGap(insets.bottom) + 12;
+  // The down key floats over the keyboard on iOS only (Android has its own),
+  // so only there does the sheet stand above it.
+  const overKeyboardTools = kbVisible && Platform.OS === "ios";
 
   return (
     <Modal visible={visible} animationType="none" transparent onRequestClose={dismiss}>
@@ -139,7 +147,7 @@ export default function SimpleSheet({ visible, onClose, onBack, children, footer
               than the status bar and SHEET_TOP_GAP: a taller sheet gives way
               instead (it shrinks, `flexShrink`, and its content scrolls). */}
           <TouchableOpacity style={{ flex: 1, minHeight: insets.top + SHEET_TOP_GAP }} activeOpacity={1} onPress={dismiss} />
-          <Animated.View style={[styles.sheet, sheetSurface(t.bg), { paddingBottom: footer ? bottomGap : 0, transform: [{ translateY: slideY }] }]}>
+          <Animated.View style={[styles.sheet, sheetSurface(t.bg), overKeyboardTools ? styles.overKeyboardTools : null, { paddingBottom: footer ? bottomGap : 0, transform: [{ translateY: slideY }] }]}>
             {/* The glass is the sheet's surface, behind everything on it. It
                 slides with the sheet; nothing above it ever fades (glass draws
                 wrongly under any opacity), the dim being its own layer. */}
@@ -165,6 +173,8 @@ export default function SimpleSheet({ visible, onClose, onBack, children, footer
           </Animated.View>
         </View>
       </KeyboardAvoidingView>
+      {/* Under the sheet, over the keyboard, where every page has it. */}
+      <KeyboardDismissButton />
       {over}
     </Modal>
   );
@@ -173,6 +183,9 @@ export default function SimpleSheet({ visible, onClose, onBack, children, footer
 const styles = StyleSheet.create({
   backdrop:    { backgroundColor: SHEET_DIM },
   sheet:       { borderTopLeftRadius: 28, borderTopRightRadius: 28, flexShrink: 1 },
+  // Standing on the keyboard's tools: off the foot, so round there too (the
+  // glass sheet is round all over already).
+  overKeyboardTools: { marginBottom: ABOVE_KEYBOARD_TOOLS, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
   body:        { flexGrow: 0 },
   handle:      { width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(128,128,128,0.4)" },
 });

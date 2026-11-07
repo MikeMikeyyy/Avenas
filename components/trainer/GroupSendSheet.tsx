@@ -19,7 +19,8 @@ import ProgramPickerSheet from "./ProgramPickerSheet";
 import { useUnit } from "../../contexts/UnitContext";
 import { fetchPeopleUnits } from "../../lib/clientTraining";
 import { unitLabel, unitOf } from "../../utils/units";
-import { appendSentProgram, appendSharedPrograms, type SentProgram, type SharedProgram } from "../../utils/trainerStore";
+import { appendSharedPrograms, type SharedProgram } from "../../utils/trainerStore";
+import { requestReview, reviewSentWords, type ReviewTo } from "../../utils/reviewRequest";
 import { alertMessage } from "../../utils/errors";
 import type { SavedProgram } from "../../constants/programs";
 
@@ -92,25 +93,19 @@ export default function GroupSendSheet({ mode, onClose, groupId, groupName, owne
       Alert.alert("Group unavailable", "Reopen the group and try again.");
       return;
     }
-    const entry: SentProgram = {
-      id: `sent_${Date.now()}`,
-      programId: program.id,
-      programName: program.name,
-      sentAtISO: new Date().toISOString(),
-      status: "sent",
-      programSnapshot: program,
-      // What makes this the GROUP's to review rather than the owner's, even
-      // though the owner is the addressed recipient.
-      groupId,
-    };
+    // The one request every place that asks makes (utils/reviewRequest.ts):
+    // the group's to review rather than its owner's, though it's addressed
+    // to the owner.
+    const to: ReviewTo = { kind: "group", group: { id: groupId, name: groupName, ownerId } };
     try {
-      await appendSentProgram(entry, ownerId);
+      await requestReview(program, to);
     } catch (e) {
       Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
     await onSent();
-    Alert.alert("Sent for Review", `"${program.name}" was sent to the trainers in ${groupName}. It's under Sent for Review on the group's Programs page.`);
+    const done = reviewSentWords(program, to);
+    Alert.alert(done.title, done.body);
   }, [onClose, ownerId, groupId, groupName, onSent]);
 
   return (

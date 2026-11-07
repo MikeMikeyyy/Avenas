@@ -16,7 +16,8 @@
 //
 // And the same for a gym user's Trainer tab (components/trainer/MyPTHome.tsx):
 // what its Programs and Sent for Review pages list, the two tiles' numbers and
-// lines, and the count on its My Trainers pill.
+// lines, and the count on its My Trainers pill. And who My Programs' Send for
+// Review offers (reviewTargets).
 //
 // Pure (types only from the stores), so scripts/verify-trainer-lists.ts can
 // hold it to those rules. sortByFavourite, batchKeyOf, sentKeyOf,
@@ -24,9 +25,32 @@
 // re-exported where they always were (utils/groupStore.ts,
 // utils/trainerStore.ts, ReviewStatusPill).
 
-import type { GroupRole } from "../constants/groups";
+import type { Group, GroupRole } from "../constants/groups";
 import type { SavedProgram } from "../constants/programs";
-import type { Client, SentProgram, SharedProgram } from "./trainerStore";
+import type { AssignedPT, Client, SentProgram, SharedProgram } from "./trainerStore";
+import type { GymHubData, PTHubData } from "./trainerHub";
+
+/** Who My Programs' Send for Review offers: my trainers, and the groups I can
+ *  ask in. */
+export type ReviewTargets = { trainers: AssignedPT[]; groups: Group[] };
+
+/**
+ * Who one of my programs can go to for review from My Programs (user request,
+ * 2026-11-06: send one to your trainer or a group's trainers without going to
+ * the Trainer tab), from the Trainer tab's saved copy of my hub: each trainer
+ * I'm connected with, once (for a gym user, the one on the tab first; a copy
+ * saved before every trainer was listed has that one), and each group I'm in
+ * that isn't mine, as a group's page offers its Send a Program for Review to
+ * everyone but its owner. The same for a trainer, whose trainers are the ones
+ * on their My Trainers page.
+ */
+export function reviewTargets(hub: GymHubData | PTHubData): ReviewTargets {
+  const listed = "pt" in hub ? hub.trainers ?? (hub.pt ? [hub.pt] : []) : hub.trainers ?? [];
+  const seen = new Set<string>();
+  const trainers = listed.filter(t => (seen.has(t.id) ? false : (seen.add(t.id), true)));
+  const groups = ("pt" in hub ? hub.groups.map(r => r.group) : hub.groups).filter(g => !g.isOwner);
+  return { trainers, groups };
+}
 
 /**
  * Starred items first, OLDEST favourite at the top; everything else in the
@@ -125,6 +149,38 @@ export function reviewStage(r: SentProgram): ReviewStage {
   return r.appliedAtISO ? "accepted" : "returned";
 }
 
+/** What a trainer wrote on my request, as I read it on its card and page:
+ *  their comments on what they sent back (Send Back's box, migration 0054),
+ *  before I accept it and after (user decision, 2026-11-06: re-read while
+ *  training it), or why it was removed without a review (0053). */
+export type ReviewNote = { kind: "comments" | "removed"; note: string };
+
+export function reviewNoteOf(r: SentProgram): ReviewNote | null {
+  const stage = reviewStage(r);
+  if (stage === "removed") return r.removalNote ? { kind: "removed", note: r.removalNote } : null;
+  if ((stage === "returned" || stage === "accepted") && r.trainerComments) return { kind: "comments", note: r.trainerComments };
+  return null;
+}
+
+/**
+ * Whether the person a program was sent to has turned the version they have
+ * down (user request, 2026-11-06: the trainer read Pending for good): removed
+ * it without accepting it, or accepted it and deleted their copy since, which
+ * the trainer reads the same (user decision, 2026-11-06). Both are the row's
+ * deleted_by_recipient_at; accepting clears it, and so does the trainer's Send
+ * Update, which re-offers it (migration 0055).
+ */
+export function shareRejected(s: SharedProgram): boolean {
+  return !s.acceptedAtISO && !!s.deletedByRecipientAtISO;
+}
+
+/** Where one person stands on a program sent to them, as the sender's lists
+ *  show it: the circle by their name (green, red, or empty) and its words. */
+export type ShareStatus = "accepted" | "rejected" | "pending";
+export function shareStatus(s: SharedProgram): ShareStatus {
+  return s.acceptedAtISO ? "accepted" : shareRejected(s) ? "rejected" : "pending";
+}
+
 /** One send: everyone a program went to at one moment, and who's taken it. */
 export type SendBatch = {
   key: string;
@@ -136,6 +192,8 @@ export type SendBatch = {
   groupId?: string;
   entries: SharedProgram[];
   acceptedCount: number;
+  /** How many turned it down (shareRejected). */
+  rejectedCount: number;
   total: number;
   allAccepted: boolean;
 };
@@ -168,6 +226,7 @@ export function sendBatches(sharedOut: SharedProgram[]): SendBatch[] {
       groupId: head.groupId,
       entries,
       acceptedCount,
+      rejectedCount: entries.filter(shareRejected).length,
       total: entries.length,
       allAccepted: entries.length > 0 && acceptedCount === entries.length,
     };
@@ -240,7 +299,7 @@ export function programsSummary(
 ): { newPrograms: number; notReviewed: number; toReview: number; sent: number } {
   const mine = trainerProgramLists(sharedOut, myRequests, dismissed);
   return {
-    newPrograms: mine.toAccept.filter(i => i.kind === "review" || !i.share.deletedByRecipientAtISO).length,
+    newPrograms: mine.toAccept.filter(i => i.kind === "review" || !shareRejected(i.share)).length,
     notReviewed: mine.sentForReview.filter(r => reviewStage(r) === "removed").length,
     toReview: receivedReviews(reviews, groupReviews).filter(r => reviewStage(r) === "awaiting").length,
     sent: sendBatches(sharedOut).length,
@@ -391,9 +450,11 @@ export function gymTileCounts(
   const from = fromTrainerLists(received, sent, dismissed);
   const asked = sentForReviewList(sent, dismissed);
   return {
-    // Not a program accepted once and deleted since: nothing new came, and it
-    // would count as new for as long as it stays on the list.
-    newPrograms: from.waiting.filter(i => i.kind === "review" || !i.share.deletedByRecipientAtISO).length,
+    // Not a program I turned down (removed without accepting, or accepted
+    // once and deleted since): nothing new came, and it would count as new for
+    // as long as it stays on the list. An update since re-offers it, and it's
+    // new again.
+    newPrograms: from.waiting.filter(i => i.kind === "review" || !shareRejected(i.share)).length,
     fromTotal: from.waiting.length + from.added.length,
     awaiting: asked.filter(s => reviewStage(s) === "awaiting").length,
     notReviewed: asked.filter(s => reviewStage(s) === "removed").length,

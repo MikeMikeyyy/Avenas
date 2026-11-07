@@ -15,6 +15,7 @@ import Avatar from "../Avatar";
 import SendIcon from "../icons/SendIcon";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { darkGlow, glowOpacity } from "../../constants/buttons";
+import { CARD_SHADOW_ROOM } from "../../constants/cards";
 import { useTheme } from "../../contexts/ThemeContext";
 import type { ChatContact } from "../../constants/chat";
 
@@ -181,7 +182,9 @@ const styles = StyleSheet.create({
   title:        { fontFamily: FontFamily.bold, fontSize: 20 },
   allWrap:      { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 14 },
   section:      { fontFamily: FontFamily.semibold, fontSize: 13, letterSpacing: 1.2, textTransform: "uppercase", paddingHorizontal: 24, marginBottom: 10 },
-  list:         { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
+  // Under the last person's card, the room for all of its shadow (it has 10
+  // of its own below it), which the list's edge cut off in a line.
+  list:         { paddingHorizontal: 20, paddingTop: 4, paddingBottom: CARD_SHADOW_ROOM - 10 },
   empty:        { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 24 },
   row:          { flexDirection: "row", alignItems: "center", gap: 12, padding: 14 },
   rowTitle:     { fontFamily: FontFamily.semibold, fontSize: 15 },

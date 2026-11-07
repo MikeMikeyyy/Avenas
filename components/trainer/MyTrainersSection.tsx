@@ -30,7 +30,7 @@ import Avatar from "../Avatar";
 import UnreadBadge from "../UnreadBadge";
 import SearchField from "../SearchField";
 import PeopleIcon from "../icons/PeopleIcon";
-import { RemoveCircleButton, RemoveModeBar } from "./RemoveMode";
+import { RemoveCircleButton, RemoveModeBar, RemoveModeButton } from "./RemoveMode";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../../constants/theme";
 import { darkGlow, pill, pillGlow, PILL_H_SM } from "../../constants/buttons";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -259,12 +259,8 @@ export default function MyTrainersSection({ presenceById, unreadByPerson }: {
             })}
           </View>
           {/* Quiet, at the foot: removing someone is rare, and the page's one
-              button is for adding. */}
-          {!removing && shown.length > 0 ? (
-            <BounceButton style={styles.removeRow} onPress={startRemoving} needsConnection accessibilityLabel="Remove a trainer">
-              <Text style={[styles.removeText, { color: t.ts }]}>Remove a trainer</Text>
-            </BounceButton>
-          ) : null}
+              button is for adding. Grey, not bare words (RemoveModeButton). */}
+          {!removing && shown.length > 0 ? <RemoveModeButton onPress={startRemoving} /> : null}
         </>
       )}
 
@@ -352,6 +348,4 @@ const styles = StyleSheet.create({
   trainerLine:  { fontFamily: FontFamily.semibold, fontSize: 12, marginTop: 2 },
   primaryTag:   { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   primaryTagText: { fontFamily: FontFamily.bold, fontSize: 9, letterSpacing: 0.5 },
-  removeRow:    { alignSelf: "center", marginTop: 14 },
-  removeText:   { fontFamily: FontFamily.bold, fontSize: 14, paddingHorizontal: 12, lineHeight: 44 },
 });

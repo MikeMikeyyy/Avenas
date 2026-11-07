@@ -33,11 +33,11 @@ import OfflineBanner from "../../../../components/OfflineBanner";
 import Avatar from "../../../../components/Avatar";
 import SendIcon from "../../../../components/icons/SendIcon";
 import NotebookIcon from "../../../../components/icons/NotebookIcon";
-import ProgramRow, { CycleStrip, RowActions, StatusPill, rowButtonStyles } from "../../../../components/trainer/ProgramRow";
-import ReviewStatusPill, { REVIEW_STAGE_LABEL, removeReviewNote, reviewStage } from "../../../../components/trainer/ReviewStatusPill";
+import ProgramRow, { CycleStrip, RecipientList, RowActions, StatusPill, rowButtonStyles } from "../../../../components/trainer/ProgramRow";
+import ReviewStatusPill, { reviewStage, reviewStatusLabel } from "../../../../components/trainer/ReviewStatusPill";
 import GroupSendSheet, { type GroupSendMode } from "../../../../components/trainer/GroupSendSheet";
 import RemoveReviewSheet from "../../../../components/trainer/RemoveReviewSheet";
-import RemovalNote from "../../../../components/trainer/RemovalNote";
+import ReviewNote from "../../../../components/trainer/ReviewNote";
 import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../../../constants/theme";
 import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM, PILL_SHADOW } from "../../../../constants/buttons";
 import { scrollEndPadding } from "../../../../constants/floatingBars";
@@ -57,24 +57,26 @@ import {
 } from "../../../../utils/groupPage";
 import { groupProgramLists, myEntry, type GroupBatch } from "../../../../utils/groupPrograms";
 import {
+  acceptedChangesProgramId,
   acceptSharedProgramBatch,
-  applyReturnedProgram,
-  dismissKeyOf,
   dismissSharedBatch,
   loadGroupReviewPrograms,
   loadGroupSharedPrograms,
   removeGroupSharedProgramBatch,
+  removeReceivedShare,
   removeSentProgram,
   returnedKeyOf,
+  ReviewChangedError,
   setSendBatchArchived,
   type SentProgram,
 } from "../../../../utils/trainerStore";
+import { takeFailedTitle, takeReturnedReview, type TakenReview } from "../../../../utils/reviewAccept";
 import { firstName } from "../../../../utils/trainerLists";
 import { removeReviewForTrainer } from "../../../../utils/reviewRemoval";
 import { scheduleCloudPush } from "../../../../lib/syncManager";
 import { getJSON } from "../../../../utils/storage";
 import { fmtAgo } from "../../../../utils/dates";
-import { archiveShareChoice, removeShareConfirm } from "../../../../utils/removeShare";
+import { archiveShareChoice, removeReceivedWords, removeShareConfirm } from "../../../../utils/removeShare";
 import { askArchiveOrDelete } from "../../../../utils/archiveChoice";
 import { alertMessage } from "../../../../utils/errors";
 
@@ -114,7 +116,7 @@ function ReviewRequestRow({ review, sender, from, first, open, onToggle, onOpen,
       first={first}
       open={open}
       onToggle={onToggle}
-      accessibilityLabel={`${review.programName}, ${from}, ${REVIEW_STAGE_LABEL[reviewStage(review)].toLowerCase()}`}
+      accessibilityLabel={`${review.programName}, ${from}, ${reviewStatusLabel(review).toLowerCase()}`}
       leading={<MemberFace member={sender} />}
       title={review.programName}
       meta={`${from} · ${fmtAgo(review.sentAtISO)}`}
@@ -163,18 +165,22 @@ function BatchRow({ batch, kind, myUid, iCoachGroup, from, nameFor, first, open,
   onDismiss: () => void;
 }) {
   const { isDark } = useTheme();
-  const t = isDark ? APP_DARK : APP_LIGHT;
   const mine = myEntry(batch, myUid);
   // The sender can always take their own send back out of the group, trainer
   // role or not; anyone else who isn't a coach takes it off their own list.
   const iSent = !!myUid && batch.entries.some(e => e.senderId === myUid);
   const canRemoveForAll = iCoachGroup || iSent;
   const allAccepted = batch.acceptedCount === batch.entries.length;
+  // A coach's one member who turned it down: Rejected, in red (user request,
+  // 2026-11-06); with more, the red circles inside say who.
+  const rejected = iCoachGroup && !mine?.acceptedAtISO && batch.entries.length === 1 && batch.rejectedCount === 1;
   // The count is only the truth for a coach, who's served the whole send; a
   // member sees their own row alone.
   const status = mine?.acceptedAtISO
     ? "Accepted"
-    : iCoachGroup ? (allAccepted ? "Accepted" : `${batch.acceptedCount}/${batch.entries.length} accepted`) : "Shared";
+    : iCoachGroup
+      ? (allAccepted ? "Accepted" : rejected ? "Rejected" : `${batch.acceptedCount}/${batch.entries.length} accepted`)
+      : "Shared";
   const done = !!mine?.acceptedAtISO || (iCoachGroup && allAccepted);
   const meta = kind === "sent"
     ? `${from} · Sent ${fmtAgo(batch.sentAtISO)} · ${plural(batch.entries.length, "member")}`
@@ -195,35 +201,20 @@ function BatchRow({ batch, kind, myUid, iCoachGroup, from, nameFor, first, open,
           </View>
         </BounceButton>
       ) : (
-        <StatusPill label={status} done={done} />
+        <StatusPill label={status} done={done} alert={rejected} />
       )}
     >
       <CycleStrip cycle={batch.entries[0]?.programSnapshot?.cyclePattern ?? []} />
-      {/* Who has it and who hasn't: a coach is served the whole send. */}
-      {kind === "sent" ? (
-        <View style={[styles.recipientList, { borderColor: t.div }]}>
-          {batch.entries.map((e, i) => {
-            const accepted = !!e.acceptedAtISO;
-            return (
-              <View
-                key={e.id}
-                style={[styles.recipientRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.div }]}
-              >
-                <View style={[styles.recipientDot, accepted ? { backgroundColor: ACCT, borderColor: ACCT } : { borderColor: t.ts }]} />
-                <Text style={[styles.recipientName, { color: t.tp }]} numberOfLines={1}>{nameFor(e.clientId)}</Text>
-                <Text style={[styles.recipientStatus, { color: t.ts }]}>
-                  {accepted ? `Accepted · ${fmtAgo(e.acceptedAtISO!)}` : "Pending"}
-                </Text>
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
+      {/* Who has it, who turned it down and who hasn't answered: a coach is
+          served the whole send. */}
+      {kind === "sent" ? <RecipientList entries={batch.entries} nameFor={nameFor} /> : null}
       <RowActions
         label="View"
         onOpen={() => onView((mine ?? batch.entries[0]).id)}
         onRemove={canRemoveForAll ? onRemove : onDismiss}
-        removeNeedsConnection={canRemoveForAll}
+        // Taking one I haven't accepted off my list turns it down, which the
+        // server has to hear (removeReceivedShare); one I have is a hide here.
+        removeNeedsConnection={canRemoveForAll || !mine?.acceptedAtISO}
         accessibilityLabel={`View ${batch.programName}`}
         removeLabel={canRemoveForAll ? `Remove ${batch.programName} from the group` : `Remove ${batch.programName} from your list`}
       />
@@ -249,37 +240,45 @@ function MyRequestRow({ review, first, open, onToggle, onAccept, onView, onRemov
   const stage = reviewStage(review);
   const back = stage === "returned";
   const removed = stage === "removed";
+  // Back with no changes, only reviewed (and maybe commented): Got it.
+  const asIs = back && !!review.noChanges;
   return (
     <ProgramRow
       first={first}
       open={open}
       onToggle={onToggle}
-      accessibilityLabel={`${review.programName}, ${back ? "back from review, to accept" : REVIEW_STAGE_LABEL[stage].toLowerCase()}`}
+      accessibilityLabel={`${review.programName}, ${asIs ? "reviewed with no changes" : back ? "back from review, to accept" : reviewStatusLabel(review).toLowerCase()}`}
       title={review.programName}
-      meta={back ? `Back from review · ${fmtAgo(review.returnedAtISO ?? review.sentAtISO)}`
+      meta={back ? `Back from review${asIs ? ", no changes" : ""} · ${fmtAgo(review.returnedAtISO ?? review.sentAtISO)}`
         : removed ? `Removed without a review · ${fmtAgo(review.removedUnreviewedAtISO ?? review.sentAtISO)}`
         : `Sent ${fmtAgo(review.sentAtISO)}`}
       trailing={back ? (
-        <BounceButton onPress={onAccept} needsConnection accessibilityLabel={`Accept the trainer's changes to ${review.programName}`}>
+        <BounceButton
+          onPress={onAccept}
+          needsConnection
+          accessibilityLabel={asIs ? `Got it: ${review.programName} was reviewed with no changes` : `Accept the trainer's changes to ${review.programName}`}
+        >
           <View style={[rowButtonStyles.pill, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
-            <Text style={rowButtonStyles.text}>Accept</Text>
+            <Text style={rowButtonStyles.text}>{asIs ? "Got it" : "Accept"}</Text>
           </View>
         </BounceButton>
       ) : (
         <ReviewStatusPill review={review} />
       )}
     >
-      {review.removalNote ? <RemovalNote note={review.removalNote} /> : null}
+      {/* The comments it came back with, before it's taken and after, or why
+          it wasn't reviewed. */}
+      <ReviewNote review={review} />
       <CycleStrip cycle={review.programSnapshot?.cyclePattern ?? []} />
       {stage !== "awaiting" ? (
         <RowActions
-          label={back ? "See Changes" : "View"}
+          label={back && !asIs ? "See Changes" : "View"}
           onOpen={onView}
           onRemove={onRemove}
           // Clearing one not reviewed deletes it (the server's); the others
           // are a hide on this phone.
           removeNeedsConnection={removed}
-          accessibilityLabel={back ? `See the changes to ${review.programName}` : `View ${review.programName}`}
+          accessibilityLabel={back && !asIs ? `See the changes to ${review.programName}` : `View ${review.programName}`}
           removeLabel={`Remove ${review.programName} from your list`}
         />
       ) : null}
@@ -394,51 +393,58 @@ export default function GroupProgramsScreen() {
   const viewShared = useCallback((sharedId: string) => {
     router.navigate({ pathname: "/program-view", params: { sharedId } });
   }, [router]);
-  /** What came back on my own request: my program once the changes are in it;
-   *  the returned version until then, through this group (a trainer's own
-   *  sent list doesn't hold it). */
-  const viewReturned = useCallback((r: SentProgram) => {
+  /** What came back on my own request: my program with the changes once
+   *  they're in (the new one, when I saved them apart); the returned version
+   *  until then, through this group (a trainer's own sent list doesn't hold
+   *  it). */
+  const viewReturned = useCallback(async (r: SentProgram) => {
     router.navigate(r.appliedAtISO
-      ? { pathname: "/programs", params: { focus: r.programId } }
+      ? { pathname: "/programs", params: { focus: await acceptedChangesProgramId(r) } }
       : { pathname: "/program-view", params: { sentId: r.id, groupId } });
   }, [router, groupId]);
 
-  /** Take a review out of the group's queue, for every coach: RemoveReviewSheet's
-   *  Archive (back from the archive, top right) or Delete (what Mark Done
-   *  was), with a message to the member who asked while it hasn't been sent
-   *  back. */
+  /** Take a review out of the group's queue for good, for every coach:
+   *  RemoveReviewSheet's Remove (what Mark Done was; a review has no archive,
+   *  user decision, 2026-11-05), with a message to the member who asked while
+   *  it hasn't been sent back. */
   const [removingReview, setRemovingReview] = useState<SentProgram | null>(null);
   const handleCompleteReview = useCallback((entry: SentProgram) => setRemovingReview(entry), []);
-  const removeReview = useCallback(async (entry: SentProgram, how: "archive" | "delete", note: string | null) => {
-    if (!(await removeReviewForTrainer(entry, how, note))) return;
+  const removeReview = useCallback(async (entry: SentProgram, note: string | null) => {
+    if (!(await removeReviewForTrainer(entry, note))) return;
     setPage(p => p && { ...p, groupReviews: p.groupReviews.filter(r => r.id !== entry.id) });
   }, []);
   const removingAsker = removingReview ? members.find(m => m.id === removingReview.senderId) : undefined;
 
-  /** A member taking a send off THEIR list (a hide on this phone): an accepted
-   *  copy stays in My Programs, and the coach still sees it as sent. */
+  /** A member taking a send off THEIR list. Accepted, a hide on this phone:
+   *  their copy stays in My Programs, and the coach still sees they have it.
+   *  Not accepted, they've turned it down, and its sender sees that, Rejected
+   *  (removeReceivedShare; user request, 2026-11-06). */
   const handleDismissBatch = useCallback((batch: GroupBatch) => {
-    const mine = myEntry(batch, myUid);
-    const accepted = !!mine?.acceptedAtISO;
-    Alert.alert(
-      "Remove Program",
-      accepted
-        ? `Remove "${batch.programName}" from this list? It stays in your programs.`
-        : `Remove "${batch.programName}" without accepting it? It comes back if it's sent again or updated.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
+    const mine = myEntry(batch, myUid) ?? batch.entries[0];
+    const senderId = mine?.senderId;
+    const words = removeReceivedWords({
+      programName: batch.programName,
+      accepted: !!mine?.acceptedAtISO,
+      sender: senderId ? firstName(members.find(m => m.id === senderId)?.name ?? "") || "The trainer who sent it" : "The trainer who sent it",
+    });
+    Alert.alert(words.title, words.body, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          try {
             // Hides this version: a Send Update brings it back (dismissKeyOf).
-            await dismissSharedBatch(dismissKeyOf(mine ?? batch.entries[0]));
-            await refreshPrograms();
-          },
+            await removeReceivedShare(mine);
+          } catch (e) {
+            Alert.alert("Couldn't remove it", alertMessage(e, "Check your connection and try again."));
+            return;
+          }
+          await refreshPrograms();
         },
-      ],
-    );
-  }, [myUid, refreshPrograms]);
+      },
+    ]);
+  }, [myUid, members, refreshPrograms]);
 
   /** Take a send out of the group, for everyone. A coach gets Archive beside
    *  Delete; a sender who has since lost the trainer role has no archive here
@@ -509,26 +515,33 @@ export default function GroupProgramsScreen() {
     Alert.alert("Program Added", `"${batch.programName}" is now in your programs.`);
   }, [refreshPrograms]);
 
-  /** Take a trainer's changes to my own request: they go over my original
-   *  program, as from a gym user's Programs page. */
+  /** Take what came back on my own request: a trainer's changes, into my
+   *  original program or saved as a new one, or Got it on one sent back with
+   *  none (utils/reviewAccept.ts), as from a gym user's Programs page. */
   const handleAcceptReturned = useCallback(async (entry: SentProgram) => {
     if (entry.appliedAtISO || accepting.current.has(entry.id)) return;
     accepting.current.add(entry.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    let taken: TakenReview | null = null;
     try {
-      await applyReturnedProgram(entry.id);
+      taken = await takeReturnedReview(entry);
     } catch (e) {
-      Alert.alert("Couldn't update your program", alertMessage(e, "Check your connection and try again."));
+      Alert.alert(takeFailedTitle(entry), alertMessage(e, "Check your connection and try again."));
+      // Changes sent while this said Got it: show them.
+      if (e instanceof ReviewChangedError) void onRefresh();
       return;
     } finally {
       accepting.current.delete(entry.id);
     }
-    scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
+    if (!taken) return;
     const appliedAt = new Date().toISOString();
     setPage(p => p && { ...p, groupReviews: p.groupReviews.map(r => (r.id === entry.id ? { ...r, appliedAtISO: appliedAt } : r)) });
-    setMyPrograms(await loadMyPrograms());
-    Alert.alert("Program Updated", `"${entry.programName}" in your programs was updated with your trainer's edits.`);
-  }, [loadMyPrograms]);
+    if (taken.programsChanged) {
+      scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
+      setMyPrograms(await loadMyPrograms());
+    }
+    if (taken.words) Alert.alert(taken.words.title, taken.words.body);
+  }, [loadMyPrograms, onRefresh]);
 
   /** Take my own returned request off this list (this version only: an
    *  update from the trainer brings it back). The coaches' queue is theirs. */
@@ -742,12 +755,8 @@ export default function GroupProgramsScreen() {
       />
       <RemoveReviewSheet
         review={removingReview}
-        body={removingReview
-          ? `Archive "${removingReview.programName}" to take it off the group's review list until you restore it, or delete it. ${removeReviewNote(removingReview)}`
-          : ""}
         askerName={removingAsker ? firstName(removingAsker.name) : undefined}
-        onArchive={note => { if (removingReview) void removeReview(removingReview, "archive", note); }}
-        onDelete={note => { if (removingReview) void removeReview(removingReview, "delete", note); }}
+        onRemove={note => { if (removingReview) void removeReview(removingReview, note); }}
         onClose={() => setRemovingReview(null)}
       />
     </FadeScreen>
@@ -769,11 +778,6 @@ const styles = StyleSheet.create({
   // The Programs page's section labels, value for value.
   sectionLabel: { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 0.6, marginTop: 24, marginBottom: 8, marginLeft: 4 },
   avatarText: { fontFamily: FontFamily.bold, fontSize: 13 },
-  recipientList: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10 },
-  recipientRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  recipientDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
-  recipientName: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 13 },
-  recipientStatus: { fontFamily: FontFamily.regular, fontSize: 11 },
   emptyInner: { padding: 28, alignItems: "center", gap: 10 },
   emptyIcon: { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   emptyTitle: { fontFamily: FontFamily.bold, fontSize: 17 },

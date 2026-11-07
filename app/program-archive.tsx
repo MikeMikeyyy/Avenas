@@ -6,12 +6,20 @@
 //
 //   programs  My Programs. Your own programs (SavedProgram.archivedAt), local
 //             and backed up like any other program edit.
-//   trainer   The Trainer tab. Sends you made (Programs Sent) and reviews
-//             archived off Programs Received (loadTrainerArchive).
+//   trainer   The Trainer tab. Sends you made (Programs Sent)
+//             (loadTrainerArchive).
 //   group     One group's page, for its trainers. Its archived Group Programs,
-//             whoever sent them, and its archived Programs Received
-//             (loadGroupArchive). Needs `groupId`; `groupName` is the caption.
+//             whoever sent them (loadGroupArchive). Needs `groupId`;
+//             `groupName` is the caption.
 //
+// A program someone asked you to review is never here: it's reviewed or
+// removed (user decision, 2026-11-05). Reviews were archived here until then,
+// with Restore; one archived before reads Not reviewed to the person who
+// asked, as a removed one does, and is gone from the trainers' lists for good.
+//
+// Summary shows what's in a program without putting it back: its Workout
+// Summary, every cycle day and its exercises' names (components/
+// ProgramSummarySheet.tsx, as on a program's page; user request, 2026-11-06).
 // Restore puts a program back where it came from: an archived send reappears
 // for everyone it went to, except a recipient who removed it themselves. Delete
 // is what Delete on the source page does, asked once more because it's the last
@@ -33,17 +41,19 @@ import FadeScreen from "../components/FadeScreen";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import OfflineBanner from "../components/OfflineBanner";
+import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import TrashIcon from "../components/TrashIcon";
 import ArchiveIcon from "../components/icons/ArchiveIcon";
 import BackButton, { BACK_SIZE, BACK_TOP } from "../components/BackButton";
-import ReviewStatusPill, { removeReviewNote } from "../components/trainer/ReviewStatusPill";
 import { APP_DARK, APP_LIGHT, ACCT, DANGER_BRIGHT, FontFamily } from "../constants/theme";
-import { haloGlow, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { cardButton, haloGlow, pillGlow, PILL_RADIUS } from "../constants/buttons";
 import { CARD_INNER, CARD_META, CARD_PILL, CARD_PILL_TEXT, CARD_TITLE, CARD_TOP } from "../constants/cards";
 import { PROGRAMS_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
 import { scheduleCloudPush } from "../lib/syncManager";
+import { noteDeleted } from "../utils/syncLocal";
+import { useSyncedDataReload } from "../hooks/useSyncedDataReload";
 import { fmtAgo, formatStoredDate, fromYMD } from "../utils/dates";
 import { getJSON, setJSON } from "../utils/storage";
 import { alertMessage } from "../utils/errors";
@@ -55,18 +65,13 @@ import { peekPTHub } from "../utils/trainerHub";
 import { peekGroupPage } from "../utils/groupPage";
 import {
   batchKeyOf,
-  dismissReceivedReview,
   loadGroupArchive,
   loadTrainerArchive,
   removeGroupSharedProgramBatch,
   removeSharedProgramBatch,
   removeSharedProgramByLocalId,
-  saveReviewRemovalNote,
-  setGroupReviewDone,
-  setReviewArchived,
   setSendBatchArchived,
   type ProgramArchive,
-  type SentProgram,
   type SharedProgram,
 } from "../utils/trainerStore";
 
@@ -105,19 +110,23 @@ function CycleStrip({ cycle, isDark }: { cycle: string[]; isDark: boolean }) {
 
 /**
  * The one card every archive draws: name, where it stands, its cycle, and
- * Restore beside Delete at the same width. Always open: this page is only
- * for acting on what's in it, so nothing sits behind a tap.
+ * Summary, Restore and Delete at the same width: the white button, the green
+ * and the red, in the order of a trainer page's open row (View, Accept,
+ * Remove). Always open: this page is only for acting on what's in it, so
+ * nothing sits behind a tap.
  */
-function ArchiveCard({ name, meta, pill, cycle, isDark, onRestore, onDelete, needsConnection }: {
+function ArchiveCard({ name, meta, pill, cycle, isDark, onSummary, onRestore, onDelete, needsConnection }: {
   name: string;
   meta: string;
   pill?: ReactNode;
   cycle: string[];
   isDark: boolean;
+  /** Omitted when there's no program to show (a send kept without its copy). */
+  onSummary?: () => void;
   onRestore: () => void;
   onDelete: () => void;
   /** The Trainer tab's and a group's archives act on the server; My Programs'
-   *  is all on this phone. */
+   *  is all on this phone. Summary needs neither: it shows what's loaded. */
   needsConnection?: boolean;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -126,13 +135,21 @@ function ArchiveCard({ name, meta, pill, cycle, isDark, onRestore, onDelete, nee
       <View style={styles.cardInner}>
         <View style={styles.cardTop}>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.cardName, { color: t.tp }]} numberOfLines={1}>{name}</Text>
-            <Text style={[styles.cardMeta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
+            {/* Whole, wrapping, never "…" (user request, 2026-11-06). */}
+            <Text style={[styles.cardName, { color: t.tp }]}>{name}</Text>
+            <Text style={[styles.cardMeta, { color: t.ts }]}>{meta}</Text>
           </View>
           {pill}
         </View>
         <CycleStrip cycle={cycle} isDark={isDark} />
         <View style={styles.actionRow}>
+          {onSummary ? (
+            <BounceButton style={{ flex: 1 }} onPress={onSummary} accessibilityLabel={`Summary of ${name}`}>
+              <View style={[styles.actionBtn, cardButton(t)]}>
+                <Text style={[styles.actionText, { color: t.tp }]}>Summary</Text>
+              </View>
+            </BounceButton>
+          ) : null}
           <BounceButton style={{ flex: 1 }} onPress={onRestore} needsConnection={needsConnection} accessibilityLabel={`Restore ${name}`}>
             <View style={[styles.actionBtn, { backgroundColor: ACCT, ...pillGlow(ACCT, 0.4, isDark) }]}>
               <Ionicons name="arrow-undo" size={15} color="#fff" />
@@ -166,12 +183,15 @@ export default function ProgramArchiveScreen() {
   // My Programs: the whole list, since a restore or delete writes it back.
   const [programs, setPrograms] = useState<SavedProgram[]>([]);
   // The Trainer tab / a group: what the server has archived there.
-  const [archive, setArchive] = useState<ProgramArchive>({ sends: [], reviews: [] });
+  const [archive, setArchive] = useState<ProgramArchive>({ sends: [] });
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   // One action at a time: a second tap while a card is on its way out would
   // act on it twice.
   const busy = useRef(false);
+  // The program whose Summary is up. The sheet is the page's one RN Modal,
+  // mounted only while it shows.
+  const [summaryOf, setSummaryOf] = useState<SavedProgram | null>(null);
 
   const load = useCallback(async (isCancelled: () => boolean) => {
     if (scope === "programs") {
@@ -194,6 +214,9 @@ export default function ProgramArchiveScreen() {
     void load(() => cancelled);
     return () => { cancelled = true; };
   }, [load]));
+  // My Programs' archive saves the list it holds: read it again when the
+  // account's other phone's changes merge in while it's open.
+  useSyncedDataReload(() => { if (scope === "programs") void load(() => false); });
 
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
@@ -267,6 +290,9 @@ export default function ProgramArchiveScreen() {
       onDelete: () => void run("Couldn't delete it", async () => {
         // Its sessions keep its name, to say whose they were (utils/programDelete.ts).
         await keepDeletedProgramName(p);
+        // Recorded before it goes, so the delete reaches the account's other
+        // phone and no merge brings it back (utils/syncLocal.ts).
+        await noteDeleted("programs", [p]);
         await writePrograms(programs.filter(x => x.id !== p.id));
         // The same clean-up as My Programs' Delete: a received program's card
         // stops pointing at a copy that's gone.
@@ -301,44 +327,16 @@ export default function ProgramArchiveScreen() {
     });
   };
 
-  // ── Reviews ───────────────────────────────────────────────────────────────
-
-  const dropReview = (id: string) =>
-    setArchive(a => ({ ...a, reviews: a.reviews.filter(r => r.id !== id) }));
-
-  const restoreReview = (r: SentProgram) => {
-    void run("Couldn't restore it", async () => {
-      await setReviewArchived(r.id, false);
-      // Back to Awaiting review, so the message saying why it wasn't goes too
-      // (0053). After the restore, so a failed one leaves the reason with it;
-      // a removal writes its own anyway (removeReviewForTrainer).
-      await saveReviewRemovalNote(r.id, null).catch(() => undefined);
-      dropReview(r.id);
-    });
-  };
-
-  const deleteReview = (r: SentProgram) => {
-    confirmDeleteArchived({
-      name: r.programName,
-      note: removeReviewNote(r),
-      // What Delete does on Programs Received: a group review leaves the
-      // group's queue for every trainer, a 1:1 one leaves my inbox.
-      onDelete: () => void run("Couldn't delete it", async () => {
-        if (r.groupId) await setGroupReviewDone(r.id, true);
-        else await dismissReceivedReview(r.id);
-        dropReview(r.id);
-      }),
-    });
-  };
-
   // ── Page ──────────────────────────────────────────────────────────────────
 
   const caption = scope === "programs" ? "My Programs" : scope === "trainer" ? "Trainer" : (params.groupName || "Group");
-  const isEmpty = scope === "programs" ? archivedMine.length === 0 : batches.length === 0 && archive.reviews.length === 0;
+  const isEmpty = scope === "programs" ? archivedMine.length === 0 : batches.length === 0;
+  // Only programs sent out are archived on a trainer's or a group's page (a
+  // program sent for review is reviewed or removed), so the words say sent.
   const emptyBody =
     scope === "programs" ? "Programs you archive from My Programs are kept here. Restore one to put it back in your list."
-    : scope === "trainer" ? "Programs you archive from the Trainer tab are kept here. Restore one to put it back, for your clients too."
-    : "Programs archived from this group are kept here. Restore one to put it back in the group.";
+    : scope === "trainer" ? "Programs you've sent and then archived are kept here. Restore one to put it back, for the people you sent it to as well."
+    : "Programs sent to this group and then archived are kept here. Restore one to put it back in the group.";
 
   const weekText = (p: SavedProgram) =>
     p.status === "completed" ? `Completed ${p.currentWeek} of ${p.totalWeeks} weeks`
@@ -417,6 +415,7 @@ export default function ProgramArchiveScreen() {
                 }
                 cycle={p.cyclePattern}
                 isDark={isDark}
+                onSummary={() => setSummaryOf(p)}
                 onRestore={() => restoreMine(p)}
                 onDelete={() => deleteMine(p)}
               />
@@ -424,59 +423,49 @@ export default function ProgramArchiveScreen() {
           })
         ) : (
           <>
-            {batches.length > 0 && (
-              <>
-                {sectionHeading(scope === "group" ? "Group Programs" : "Programs Sent")}
-                {batches.map(b => {
-                  const all = b.accepted === b.total;
-                  const sentTo = scope === "group"
-                    ? `${memberName(b.head.senderId)} · Sent ${fmtAgo(b.head.sentAtISO)} · ${b.total} member${b.total === 1 ? "" : "s"}`
-                    : b.head.groupId
-                      ? `Sent ${fmtAgo(b.head.sentAtISO)} · ${groupNameFor(b.head.groupId)} · ${b.total} member${b.total === 1 ? "" : "s"}`
-                      : `Sent ${fmtAgo(b.head.sentAtISO)} · ${b.total} client${b.total === 1 ? "" : "s"}`;
-                  return (
-                    <ArchiveCard
-                      key={b.key}
-                      name={b.head.programName}
-                      meta={sentTo}
-                      pill={
-                        <View style={[styles.pill, { backgroundColor: all ? `${ACCT}22` : t.div }]}>
-                          <Text style={[styles.pillText, { color: all ? ACCT : t.ts }]}>
-                            {all ? "Accepted" : `${b.accepted}/${b.total} accepted`}
-                          </Text>
-                        </View>
-                      }
-                      cycle={b.head.programSnapshot?.cyclePattern ?? []}
-                      isDark={isDark}
-                      onRestore={() => restoreBatch(b)}
-                      onDelete={() => deleteBatch(b)}
-                      needsConnection
-                    />
-                  );
-                })}
-              </>
-            )}
-            {archive.reviews.length > 0 && (
-              <>
-                {sectionHeading("Programs Received")}
-                {archive.reviews.map(r => (
-                  <ArchiveCard
-                    key={r.id}
-                    name={r.programName}
-                    meta={`${scope === "group" ? memberName(r.senderId) : r.groupId ? groupNameFor(r.groupId) : "From a client"} · Sent ${fmtAgo(r.sentAtISO)}`}
-                    pill={<ReviewStatusPill review={r} />}
-                    cycle={r.programSnapshot?.cyclePattern ?? []}
-                    isDark={isDark}
-                    onRestore={() => restoreReview(r)}
-                    onDelete={() => deleteReview(r)}
-                    needsConnection
-                  />
-                ))}
-              </>
-            )}
+            {sectionHeading(scope === "group" ? "Group Programs" : "Programs Sent")}
+            {batches.map(b => {
+              const all = b.accepted === b.total;
+              // The program as it was sent, the copy its recipients got.
+              const snap = b.head.programSnapshot;
+              const sentTo = scope === "group"
+                ? `${memberName(b.head.senderId)} · Sent ${fmtAgo(b.head.sentAtISO)} · ${b.total} member${b.total === 1 ? "" : "s"}`
+                : b.head.groupId
+                  ? `Sent ${fmtAgo(b.head.sentAtISO)} · ${groupNameFor(b.head.groupId)} · ${b.total} member${b.total === 1 ? "" : "s"}`
+                  : `Sent ${fmtAgo(b.head.sentAtISO)} · ${b.total} client${b.total === 1 ? "" : "s"}`;
+              return (
+                <ArchiveCard
+                  key={b.key}
+                  name={b.head.programName}
+                  meta={sentTo}
+                  pill={
+                    <View style={[styles.pill, { backgroundColor: all ? `${ACCT}22` : t.div }]}>
+                      <Text style={[styles.pillText, { color: all ? ACCT : t.ts }]}>
+                        {all ? "Accepted" : `${b.accepted}/${b.total} accepted`}
+                      </Text>
+                    </View>
+                  }
+                  cycle={snap?.cyclePattern ?? []}
+                  isDark={isDark}
+                  onSummary={snap ? () => setSummaryOf(snap) : undefined}
+                  onRestore={() => restoreBatch(b)}
+                  onDelete={() => deleteBatch(b)}
+                  needsConnection
+                />
+              );
+            })}
           </>
         )}
       </ScrollView>
+
+      {summaryOf ? (
+        <ProgramSummarySheet
+          visible
+          snapshot={summaryOf}
+          isDark={isDark}
+          onClose={() => setSummaryOf(null)}
+        />
+      ) : null}
     </FadeScreen>
   );
 }
@@ -506,8 +495,13 @@ const styles = StyleSheet.create({
   cycleChip:     { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
   cycleChipText: { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },
   actionRow:     { flexDirection: "row", gap: 10, paddingTop: 14 },
-  // The trainer cards' action pills (PTHome's sharedActionBtnInner), so a
-  // card's buttons match the page it was archived from.
-  actionBtn:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, minHeight: 38, borderRadius: PILL_RADIUS, ...PILL_SHADOW },
+  // A trainer page's row buttons (components/trainer/ProgramRow.tsx), so a
+  // card's buttons match the page it was archived from: Summary the card's
+  // button (cardButton, no shadow), Restore and Delete their own glows. The
+  // padding is only the label's least room before it wraps, since three
+  // buttons share the width and centre their labels: on a 375pt-wide phone a
+  // button is 96pt, Restore with its arrow 73 of it, and 14 a side would
+  // leave it 68 and wrap it.
+  actionBtn:     { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 8, minHeight: 38, borderRadius: PILL_RADIUS },
   actionText:    { fontFamily: FontFamily.bold, fontSize: 14, color: "#fff" },
 });

@@ -36,6 +36,7 @@ import SquarePenIcon from "../components/SquarePenIcon";
 import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import TrashIcon from "../components/TrashIcon";
 import RecipientPickerSheet from "../components/trainer/RecipientPickerSheet";
+import { NOTE_LABEL } from "../components/trainer/ReviewNote";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER, DANGER_BRIGHT, dangerTextColor } from "../constants/theme";
 import { darkGlow, pill, PILL_H_SM } from "../constants/buttons";
 import { useTheme } from "../contexts/ThemeContext";
@@ -45,9 +46,9 @@ import { getMyUid } from "../lib/chat";
 import { fetchGroupMembers } from "../lib/groups";
 import { canCoachGroup, type GroupRole } from "../constants/groups";
 import {
+  acceptedChangesProgramId,
   acceptSharedProgram,
   appendSharedPrograms,
-  applyReturnedProgram,
   batchKeyOf,
   loadGroupReviewPrograms,
   loadGroupSharedPrograms,
@@ -57,14 +58,16 @@ import {
   loadSharedPrograms,
   removeGroupSharedProgramBatch,
   removeSharedProgram,
+  ReviewChangedError,
   setSendBatchArchived,
   type Client,
   type SentProgram,
   type SharedProgram,
 } from "../utils/trainerStore";
+import { takeFailedTitle, takeReturnedReview, type TakenReview } from "../utils/reviewAccept";
 import { getJSON } from "../utils/storage";
 import { resolveTrainerRoster } from "../utils/roster";
-import { sentToSummary, shareEntriesFor, type RecipientChoice } from "../utils/trainerLists";
+import { reviewNoteOf, sentToSummary, shareEntriesFor, type RecipientChoice } from "../utils/trainerLists";
 import { archiveShareChoice, removeShareConfirm } from "../utils/removeShare";
 import { askArchiveOrDelete } from "../utils/archiveChoice";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
@@ -220,6 +223,7 @@ export default function ProgramViewScreen() {
   const isSent = !!sent;
   const sentReturned = !!sent && sent.status === "returned";
   const sentApplied = !!sent?.appliedAtISO;
+  const sentNote = sent ? reviewNoteOf(sent) : null;
 
   // Two states surface a floating bottom Accept button instead of inline
   // header/footer ones: (1) trainer-shared program the user hasn't accepted
@@ -230,6 +234,13 @@ export default function ProgramViewScreen() {
   const showFloatingAcceptProgram = !isOutgoing && !isSent && !!share && !accepted;
   const showFloatingAcceptChanges = sentReturned && !sentApplied;
   const showFloatingAccept = showFloatingAcceptProgram || showFloatingAcceptChanges;
+  // Got it, on my program back reviewed with no changes: nothing to accept.
+  const floatingAcceptLabel = !showFloatingAcceptChanges ? "Accept program" : sent?.noChanges ? "Got it" : "Accept changes";
+  // See Changes (my program back from a review) has no Summary: its page is
+  // the program as it came back, day by day, and the Summary said the same
+  // again (user request, 2026-11-06). Nor a builder (it isn't mine to edit
+  // until I take the changes), so no pair at all.
+  const showFabs = !!snapshot && !sentReturned;
   // Accept and the pair above it (or the pair alone) stand on the workout bar
   // while it shows, the lowest of them setting how far.
   const { lift: pinnedLift, liftStyle: pinnedStyle } = usePinnedLift(insets.bottom + (showFloatingAccept ? 16 : 24));
@@ -261,17 +272,23 @@ export default function ProgramViewScreen() {
     if (!sent || sentApplied || accepting.current) return;
     accepting.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // The trainer's changes, into the program I sent or saved as a new one;
+    // or, sent back with none, Got it (utils/reviewAccept.ts).
+    let taken: TakenReview | null = null;
     try {
-      await applyReturnedProgram(sent.id);
+      taken = await takeReturnedReview(sent);
     } catch (e) {
-      Alert.alert("Couldn't update your program", alertMessage(e, "Check your connection and try again."));
+      Alert.alert(takeFailedTitle(sent), alertMessage(e, "Check your connection and try again."));
+      // Changes sent while this said Got it: show them.
+      if (e instanceof ReviewChangedError) await reload();
       return;
     } finally {
       accepting.current = false;
     }
-    scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
+    if (!taken) return;
+    if (taken.programsChanged) scheduleCloudPush(); // applyReturnedProgram wrote @avenas/programs (a synced key)
     await reload();
-    Alert.alert("Program Updated", `"${sent.programName}" in your programs was updated with your trainer's edits.`);
+    if (taken.words) Alert.alert(taken.words.title, taken.words.body);
   }, [sent, sentApplied, reload]);
 
   const handleEdit = useCallback(() => {
@@ -447,9 +464,12 @@ export default function ProgramViewScreen() {
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: insets.top + BACK_TOP,
-          // Clears whichever floats above it: the Builder/Summary pills always,
-          // plus the Accept CTA below them when that's showing.
-          paddingBottom: scrollEndPadding(insets.bottom + (showFloatingAccept ? 170 : 100) + pinnedLift, barsReach),
+          // Clears whichever floats over its foot: the Builder/Summary pills,
+          // the Accept CTA (under them when both show), or nothing at all.
+          paddingBottom: scrollEndPadding(
+            insets.bottom + (showFabs ? (showFloatingAccept ? 170 : 100) : (showFloatingAccept ? 100 : 40)) + pinnedLift,
+            barsReach,
+          ),
         }}
       >
         {/* A screen title in the review screen's style, with the program's name
@@ -489,23 +509,16 @@ export default function ProgramViewScreen() {
                   snapshot={snapshot}
                   isDark={isDark}
                   afterCycle={
-                    /* Trainer comments on a returned SentProgram — surfaced near the
-                       top because the user is here specifically to consider those
-                       edits before applying them. */
-                    sentReturned && sent?.trainerComments ? (
+                    /* What the trainer wrote: the comments it came back with
+                       (Send Back's box, 0054), surfaced near the top because
+                       this is where the changes are weighed up, and kept once
+                       they're taken; or why it was removed without a review
+                       (0053). As on the request's card (reviewNoteOf). */
+                    sentNote ? (
                       <NeuCard dark={isDark} radius={14} style={{ marginBottom: 18 }}>
                         <View style={styles.commentBox}>
-                          <Text style={[styles.commentLabel, { color: t.ts }]}>TRAINER COMMENTS</Text>
-                          <Text style={[styles.commentBody, { color: t.tp }]}>{sent.trainerComments}</Text>
-                        </View>
-                      </NeuCard>
-                    ) : sent?.removalNote ? (
-                      // Removed without a review, and the trainer said why
-                      // (0053; user request, 2026-11-05).
-                      <NeuCard dark={isDark} radius={14} style={{ marginBottom: 18 }}>
-                        <View style={styles.commentBox}>
-                          <Text style={[styles.commentLabel, { color: t.ts }]}>{"WHY IT WASN'T REVIEWED"}</Text>
-                          <Text style={[styles.commentBody, { color: t.tp }]}>{sent.removalNote}</Text>
+                          <Text style={[styles.commentLabel, { color: t.ts }]}>{NOTE_LABEL[sentNote.kind]}</Text>
+                          <Text style={[styles.commentBody, { color: t.tp }]}>{sentNote.note}</Text>
                         </View>
                       </NeuCard>
                     ) : null
@@ -524,7 +537,9 @@ export default function ProgramViewScreen() {
                     sentReturned ? (
                       <BounceButton
                         style={{ flex: 1 }}
-                        onPress={() => router.navigate({ pathname: "/programs", params: { focus: sent!.programId } })}
+                        // The program with the changes: the new one, when I
+                        // saved them apart.
+                        onPress={async () => router.navigate({ pathname: "/programs", params: { focus: await acceptedChangesProgramId(sent!) } })}
                       >
                         <View style={[styles.primaryBtn, { backgroundColor: ACCT, shadowColor: ACCT }, darkGlow(styles.primaryBtn, isDark)]}>
                           <Text style={styles.primaryBtnText}>Open in My Programs</Text>
@@ -581,10 +596,11 @@ export default function ProgramViewScreen() {
           pointerEvents="box-none"
           style={[styles.floatingBtnWrap, { bottom: insets.bottom + 16 }, pinnedStyle]}
         >
-          {/* Slate, not green: it sits directly under the green Summary pill,
-              and two green buttons stacked read as one cluster with no clear
+          {/* Slate, not green: where it sits directly under the green Summary
+              pill, two green buttons stacked read as one cluster with no clear
               primary. Slate is the app's other primary colour, the same as
-              the builder's Create pill and "Open in Builder". */}
+              the builder's Create pill and "Open in Builder", so it stays
+              slate on See Changes too, where it stands alone. */}
           <GlassButton
             pill
             size={PILL_H_SM}
@@ -592,17 +608,18 @@ export default function ProgramViewScreen() {
             onPress={showFloatingAcceptChanges ? handleApplyReturned : handleAccept}
             needsConnection
             solidStyle={styles.slateLift}
-            accessibilityLabel={showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
+            accessibilityLabel={floatingAcceptLabel}
           >
             <Text style={[styles.primaryBtnText, { color: isDark ? APP_DARK.bg : "#fff" }]}>
-              {showFloatingAcceptChanges ? "Accept changes" : "Accept program"}
+              {floatingAcceptLabel}
             </Text>
           </GlassButton>
         </Reanimated.View>
       )}
 
-      {/* Builder + Summary, sitting above the Accept CTA when there is one. */}
-      {snapshot && (
+      {/* Builder + Summary, sitting above the Accept CTA when there is one;
+          none on See Changes (showFabs). */}
+      {showFabs && (
         <ProgramActionFabs
           bottom={insets.bottom + (showFloatingAccept ? 80 : 24)}
           liftStyle={pinnedStyle}

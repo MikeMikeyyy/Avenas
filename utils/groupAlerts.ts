@@ -23,6 +23,7 @@
 // Pure: no RN imports, so `scripts/verify-group-alerts.ts` can run it.
 
 import type { SharedProgram, SentProgram } from "./trainerStore";
+import { shareRejected } from "./trainerLists";
 
 export type GroupAlertInput = {
   /** groupId → unread message count, from `loadGroupRows`. */
@@ -37,14 +38,15 @@ export type GroupAlertInput = {
 
 /**
  * A program is waiting on me when it was shared INTO this group, addressed to
- * me, and I haven't accepted it. `deletedByRecipientAtISO` means I accepted it
- * once and later deleted my copy, which is an answer, not a pending decision.
+ * me, and I haven't accepted it. One I've turned down (removed without
+ * accepting it, or accepted once and deleted my copy since: shareRejected) is
+ * an answer, not a pending decision, until an update re-offers it.
  */
 function isPendingForMe(s: SharedProgram, groupId: string, myUid: string): boolean {
   return s.groupId === groupId
     && s.clientId === myUid
     && !s.acceptedAtISO
-    && !s.deletedByRecipientAtISO;
+    && !shareRejected(s);
 }
 
 /** groupId → how many things in it are waiting on me. Groups with nothing

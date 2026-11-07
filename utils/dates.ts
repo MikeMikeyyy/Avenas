@@ -124,6 +124,24 @@ export function relativeDayLabel(d: Date): string {
   return d.getFullYear() === today.getFullYear() ? base : `${base}, ${d.getFullYear()}`;
 }
 
+const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/**
+ * A "YYYY-MM-DD" day in full: "Tuesday 20 October", with its year when it
+ * isn't this one ("Thursday 20 November 2025"). Null when it isn't that shape.
+ *
+ * The day you're logging a workout for: under the Journal's Log a Workout, so
+ * you can see it's the day you meant to tap (user request, 2026-11-06), and on
+ * the Log Workout page it leads to, so the two read the same. Always the date,
+ * never "Today", since the point is to check it. `now` is for tests.
+ */
+export function fmtDayDate(ymd: string, now: Date = new Date()): string | null {
+  const d = fromYMD(ymd);
+  if (!d) return null;
+  const base = `${DAY_FULL[d.getDay()]} ${d.getDate()} ${MONTH_FULL[d.getMonth()]}`;
+  return d.getFullYear() === now.getFullYear() ? base : `${base} ${d.getFullYear()}`;
+}
+
 /**
  * Format an elapsed duration in seconds.
  * Matches the shipped semantics shared by home / workout / journal / workout-detail:
@@ -134,21 +152,40 @@ export function relativeDayLabel(d: Date): string {
  * Negative / NaN inputs are clamped to 0.
  */
 /**
- * How long ago an ISO timestamp was, in the trainer pages' wording:
- * "today" / "yesterday" / "3d ago" / "2w ago".
+ * How long ago an ISO timestamp was, by the time gone since (user request,
+ * 2026-11-06): "just now", "5 minutes ago", "3 hours ago" for the first day,
+ * then "1 day ago" once 24 hours have passed, "2 weeks ago", "3 months ago",
+ * "1 year ago". When a program was sent, sent back, taken or removed, on every
+ * trainer page and a client's page; the line it's in starts its own sentence
+ * ("Sent 3 hours ago", "Accepted · 2 days ago").
  *
- * The trainer screens each grew their own copy of this (four of them, differing
- * only in whether "today" is capitalised). New call sites use this one; the
- * existing copies are left where they are rather than retrofitted, in keeping
- * with how the other shared helpers were introduced.
+ * It said "today" for anything under 24 hours: a program sent at 8pm still
+ * read "Sent today" at 10am the next morning. The hours say how long it's
+ * really been, so it never claims a day it can't be sure of. The trainer
+ * screens each had their own copy of the old one; they all use this now.
+ * `now` is for the verify scripts.
  */
-export function fmtAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  if (!Number.isFinite(days)) return "";
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
+export function fmtAgo(iso: string, now: number = Date.now()): string {
+  const then = new Date(iso).getTime();
+  const ms = now - then;
+  if (!Number.isFinite(ms)) return "";
+  const ago = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+  // A moment from now (another phone's clock a little ahead) is just now.
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return ago(mins, "minute");
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return ago(hours, "hour");
+  const days = Math.floor(hours / 24);
+  if (days < 7) return ago(days, "day");
+  if (days < 30) return ago(Math.floor(days / 7), "week");
+  // Months by the calendar, so the 31st to the 1st two months on is one month,
+  // never fewer than one once 30 days have gone.
+  const a = new Date(then);
+  const b = new Date(now);
+  const months = Math.max(1, (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth() - (b.getDate() < a.getDate() ? 1 : 0));
+  if (months < 12) return ago(months, "month");
+  return ago(Math.floor(months / 12), "year");
 }
 
 export function fmtDuration(secs: number): string {

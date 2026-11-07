@@ -97,7 +97,7 @@ export function GlassSurface({ tint, interactive = false, shown, style, solidSty
 }
 
 export default function GlassButton({
-  onPress, tint, pill = false, size = PILL_H_XS, disabled = false, needsConnection = false,
+  onPress, tint, pill = false, grow = false, size = PILL_H_XS, disabled = false, needsConnection = false,
   style, contentStyle, solidStyle, badge, children,
   accessibilityLabel, accessibilityRole = "button", accessibilityState,
 }: {
@@ -105,6 +105,10 @@ export default function GlassButton({
   tint?: string;
   /** Sizes to what's inside, `size` tall (Start), rather than a `size` circle. */
   pill?: boolean;
+  /** A pill whose words may wrap: `size` tall at least, taller for a second
+   *  line, its ends keeping their round (a program's name, never cut short
+   *  with "…": user request, 2026-11-06). */
+  grow?: boolean;
   size?: number;
   /** Faded and inert (the builder's Next before the program has a name). */
   disabled?: boolean;
@@ -128,9 +132,9 @@ export default function GlassButton({
   const offline = useOffline();
   const blocked = needsConnection && offline;
   const shape = pill
-    ? { height: size, borderRadius: size / 2 }
+    ? (grow ? { minHeight: size, borderRadius: size / 2 } : { height: size, borderRadius: size / 2 })
     : { width: size, height: size, borderRadius: size / 2 };
-  const content = pill ? styles.pillContent : styles.circleContent;
+  const content = pill ? (grow ? [styles.pillGrowContent, { minHeight: size }] : styles.pillContent) : styles.circleContent;
 
   if (!GLASS) {
     return (
@@ -175,5 +179,7 @@ export default function GlassButton({
 const styles = StyleSheet.create({
   circleContent: { flex: 1, alignItems: "center", justifyContent: "center" },
   pillContent: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
+  // Its height from what's on it, so a second line makes the pill taller.
+  pillGrowContent: { flexGrow: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: 16, paddingVertical: 6 },
   dim: { opacity: DIM_OPACITY },
 });

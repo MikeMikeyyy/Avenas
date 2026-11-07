@@ -135,6 +135,10 @@ export type ExerciseDataPoint = {
   /** A timed hold (CompletedExercise.isIsometric): `totalReps` and `topReps`
    *  are seconds held, and it moves no volume. */
   isHold?: true;
+  /** An assisted exercise (utils/assisted.ts): its weights are help, so
+   *  `topWeight` is the session's LEAST assistance (the best set), and it moves
+   *  no volume and has no estimated 1RM. */
+  isAssisted?: true;
 };
 
 // Which tab the per-exercise chart is showing.
@@ -155,6 +159,11 @@ export const EXERCISE_METRIC_OPTIONS: ExerciseMetricOption[] = [
   { key: "sets",     label: "Sets"     },
   { key: "volume",   label: "Volume"   },
 ];
+
+/** An assisted exercise's tabs (utils/assisted.ts): no Volume, since its
+ *  weight is help, not weight lifted. */
+export const ASSISTED_METRIC_OPTIONS: ExerciseMetricOption[] =
+  EXERCISE_METRIC_OPTIONS.filter(o => o.key !== "volume");
 
 // Sliding-window time range shared between the per-exercise progression chart
 // and the per-exercise history page. `days` is the cutoff = today − N days.

@@ -2,9 +2,10 @@
 // Cole, the group's other trainer, gets a row too and can archive or delete
 // it). From then on: Tara archives, restores, deletes, sends an update or
 // takes it back from one client; Cole does what a group trainer can; Cara
-// and Cody accept (from the list or the program's page), remove the card,
-// and delete / archive / restore their copy; Cara restores her backup onto a
-// new phone.
+// and Cody accept (from the list or the program's page), remove the card
+// (which, never accepted, turns it down: Rejected to Tara, user request
+// 2026-11-06), and delete / archive / restore their copy; Cara restores her
+// backup onto a new phone.
 
 import { on } from "../app";
 import { OK, pressed, type Action, type Flow, type Outcome, type Press, type View } from "../explore";
@@ -12,6 +13,7 @@ import { restoreOntoNewPhone } from "../restore";
 import { CARA, CARA_OWN, CODY, COLE, db, GROUP, resetWorld, TARA, type Person } from "../world";
 import type { SharedProgram } from "../../../utils/trainerStore";
 import { groupAlertCounts } from "../../../utils/groupAlerts";
+import { shareRejected, shareStatus } from "../../../utils/trainerLists";
 import { archiveProgram, restoreProgram } from "../../../utils/programArchive";
 import { getJSON, setJSON } from "../../../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../../../constants/programs";
@@ -48,8 +50,11 @@ type Recipient = {
    *  Tara. A restore learns it again from the copy, for an accept that still
    *  stands (an update since reads like a send never accepted). */
   linked: boolean;
-  /** They accepted once and deleted their copy since (deleted_by_recipient_at). */
-  deletedCopy: boolean;
+  /** They've turned the version they have down (deleted_by_recipient_at):
+   *  removed its card without accepting it, or accepted it and deleted their
+   *  copy since. Tara reads it as Rejected (user decision, 2026-11-06); an
+   *  accept clears it, and so does her update, which re-offers it. */
+  rejected: boolean;
   /** The version they removed the card at, or null. */
   removedAt: number | null;
   copy: Copy;
@@ -71,21 +76,25 @@ function expected(m: Model): View {
   const groupCards: Record<string, unknown> = {};
   const copies: Record<string, unknown> = {};
   const badges: Record<string, number> = {};
-  const clientPage: Record<string, boolean> = {};
+  const clientPage: Record<string, unknown> = {};
   for (const c of CLIENTS) {
     const r = m.r[c.name];
-    const card = cardShows(m, c.name) ? { accepted: r.accepted, deletedCopy: !r.accepted && r.deletedCopy } : null;
+    const card = cardShows(m, c.name) ? { accepted: r.accepted, rejected: !r.accepted && r.rejected } : null;
     cards[c.name] = card;
     copies[c.name] = r.copy === "none" ? null : { count: 1, archived: r.copy === "archived", version: r.copyVersion };
     if (m.kind === "group") {
       groupCards[c.name] = card;
-      badges[c.name] = cardShows(m, c.name) && !r.accepted && !r.deletedCopy ? 1 : 0;
+      badges[c.name] = cardShows(m, c.name) && !r.accepted && !r.rejected ? 1 : 0;
     } else {
-      clientPage[c.name] = r.row && !m.archived && !r.deletedCopy;
+      // Tara's page for the client: every send she has a row for, and where
+      // it stands, a turned-down one too (it used to vanish from here).
+      clientPage[c.name] = r.row && !m.archived ? (r.accepted ? "accepted" : r.rejected ? "rejected" : "pending") : null;
     }
   }
   const present = rows(m);
-  const listed = present.length > 0 && !m.archived ? { total: present.length, accepted: present.filter(r => r.accepted).length } : null;
+  const listed = present.length > 0 && !m.archived
+    ? { total: present.length, accepted: present.filter(r => r.accepted).length, rejected: present.filter(r => !r.accepted && r.rejected).length }
+    : null;
   const archived = present.length > 0 && m.archived ? { total: present.length } : null;
   const v: View = { cards, copies, trainerSent: listed, trainerArchive: archived };
   if (m.kind === "group") {
@@ -105,12 +114,12 @@ async function observe(kind: Kind): Promise<View> {
   const groupCards: Record<string, unknown> = {};
   const copies: Record<string, unknown> = {};
   const badges: Record<string, number> = {};
-  const clientPage: Record<string, boolean> = {};
+  const clientPage: Record<string, unknown> = {};
   for (const c of CLIENTS) {
     await on(c, async () => {
       const shares = await c.app.loadSharedPrograms();
       const card = c.app.receivedFromTrainers(shares, c.uid).find(inBatch);
-      cards[c.name] = card ? { accepted: !!card.acceptedAtISO, deletedCopy: !card.acceptedAtISO && !!card.deletedByRecipientAtISO } : null;
+      cards[c.name] = card ? { accepted: !!card.acceptedAtISO, rejected: shareRejected(card) } : null;
       const mine = (await getJSON<SavedProgram[]>(PROGRAMS_KEY, [])).filter(p => p.name === BLOCK.name);
       copies[c.name] = mine.length === 0 ? null : {
         count: mine.length,
@@ -122,21 +131,27 @@ async function observe(kind: Kind): Promise<View> {
         const sent = (await c.app.loadGroupSharedPrograms(GROUP)).filter(s => inBatch(s) && s.senderId !== c.uid);
         const own = sent.find(s => s.clientId === c.uid);
         groupCards[c.name] = sent.length === 0 ? null
-          : { accepted: !!own?.acceptedAtISO, deletedCopy: !own?.acceptedAtISO && !!own?.deletedByRecipientAtISO };
+          : { accepted: !!own?.acceptedAtISO, rejected: !!own && shareRejected(own) };
         badges[c.name] = groupAlertCounts({ unreadByGroup: {}, shares, reviews: await c.app.loadMyGroupReviews(), myUid: c.uid })[GROUP] ?? 0;
       }
     });
   }
   const v: View = { cards, copies };
   await on(TARA, async () => {
-    // PTHome's Programs Sent: my sends, one card per batch.
+    // PTHome's Programs Sent: my sends, one card per batch, each person's
+    // circle green, red (Rejected) or empty.
     const mine = (await TARA.app.loadSharedPrograms()).filter(s => inBatch(s) && !s.receivedFromCoachId);
-    v.trainerSent = mine.length ? { total: mine.length, accepted: mine.filter(s => s.acceptedAtISO).length } : null;
+    v.trainerSent = mine.length
+      ? { total: mine.length, accepted: mine.filter(s => s.acceptedAtISO).length, rejected: mine.filter(shareRejected).length }
+      : null;
     const arch = (await TARA.app.loadTrainerArchive())?.sends.filter(inBatch) ?? [];
     v.trainerArchive = arch.length ? { total: arch.length } : null;
     if (kind === "direct") {
-      // A client's page, as app/trainer/client/[id].tsx filters it.
-      for (const c of CLIENTS) clientPage[c.name] = mine.some(s => s.clientId === c.uid && !s.deletedByRecipientAtISO);
+      // A client's page, as app/trainer/client/[id].tsx lists it.
+      for (const c of CLIENTS) {
+        const own = mine.find(s => s.clientId === c.uid);
+        clientPage[c.name] = own ? shareStatus(own) : null;
+      }
     }
   });
   if (kind === "group") {
@@ -145,7 +160,9 @@ async function observe(kind: Kind): Promise<View> {
     for (const t of [TARA, COLE]) {
       await on(t, async () => {
         const page = (await t.app.loadGroupSharedPrograms(GROUP)).filter(inBatch);
-        groupPage[t.name] = page.length ? { total: page.length, accepted: page.filter(s => s.acceptedAtISO).length } : null;
+        groupPage[t.name] = page.length
+          ? { total: page.length, accepted: page.filter(s => s.acceptedAtISO).length, rejected: page.filter(shareRejected).length }
+          : null;
         const arch = (await t.app.loadGroupArchive(GROUP))?.sends.filter(inBatch) ?? [];
         groupArchive[t.name] = arch.length ? { total: arch.length } : null;
       });
@@ -171,7 +188,7 @@ function clientActions(c: Person): Action<Model>[] {
     if (!r.row || m.archived) return "refused";
     r.accepted = true;
     r.linked = true;
-    r.deletedCopy = false;
+    r.rejected = false;
     r.copy = "present";
     r.copyVersion = m.version;
     return OK;
@@ -197,6 +214,7 @@ function clientActions(c: Person): Action<Model>[] {
       apply: accept,
     },
     {
+      // Its Remove (removeReceivedShare), on any page that lists it.
       label: `${c.name} removes the card`,
       kinds: ["direct", "group"],
       enabled: m => cardShows(m, c.name),
@@ -204,10 +222,19 @@ function clientActions(c: Person): Action<Model>[] {
         // The card on screen, as the list drew it: it holds the version it
         // was drawn at, and that's what its Remove hides.
         const card = await on(c, async () => (await c.app.loadSharedPrograms()).find(s => inBatch(s) && s.clientId === c.uid));
-        return () => on(c, async () => { if (card) await c.app.dismissSharedBatch(c.app.dismissKeyOf(card)); return OK; });
+        return () => on(c, () => pressed(async () => { if (card) await c.app.removeReceivedShare(card); }));
       },
-      // It hides the version the card showed; a newer one still comes back.
-      apply: (m, drawn) => { me(m).removedAt = drawn.version; return OK; },
+      apply: (m, drawn) => {
+        const r = me(m);
+        // Never accepted when its card was drawn, nor since, and still that
+        // version: turned down, which Tara reads as Rejected. An update since
+        // leaves the new version theirs to decide on; an accept since (a
+        // screen drawn before it) leaves nothing to turn down.
+        if (!drawn.r[c.name].accepted && r.row && !r.accepted && m.version === drawn.version) r.rejected = true;
+        // It hides the version the card showed; a newer one still comes back.
+        r.removedAt = drawn.version;
+        return OK;
+      },
     },
     {
       label: `${c.name} deletes their copy`,
@@ -226,7 +253,9 @@ function clientActions(c: Person): Action<Model>[] {
         const r = me(m);
         if (r.copy === "none") return OK; // gone already (another screen)
         r.copy = "none";
-        if (r.row && r.linked) { r.deletedCopy = true; r.accepted = false; }
+        // Deleting the copy they'd accepted reads Rejected to Tara as well
+        // (user decision, 2026-11-06).
+        if (r.row && r.linked) { r.rejected = true; r.accepted = false; }
         r.linked = false;
         return OK;
       },
@@ -315,14 +344,17 @@ const trainerActions: Action<Model>[] = [
     apply: m => {
       if (!live(m)) return OK;
       m.version += 1;
-      for (const r of Object.values(m.r)) if (r.row) r.accepted = false;
+      // A new version for everyone to decide on: Accept again, and a turn-down
+      // of the one before doesn't count (migration 0055).
+      for (const r of Object.values(m.r)) if (r.row) { r.accepted = false; r.rejected = false; }
       return OK;
     },
   },
   ...CLIENTS.map((c): Action<Model> => ({
+    // On her page for the client, a turned-down one too (Rejected).
     label: `Tara takes it back from ${c.name} (client page)`,
     kinds: ["direct"],
-    enabled: m => m.r[c.name].row && !m.archived && !m.r[c.name].deletedCopy,
+    enabled: m => m.r[c.name].row && !m.archived,
     draw: async () => {
       const row = await rowOf(c);
       return () => on(TARA, async () => { await TARA.app.removeSharedProgram(row!.id); return OK; });
@@ -392,7 +424,7 @@ export function sendFlow(kind: Kind): Flow<Model> {
     },
     fresh: () => {
       const r: Record<string, Recipient> = {};
-      for (const p of recipientsOf(kind)) r[p.name] = { row: true, accepted: false, linked: false, deletedCopy: false, removedAt: null, copy: "none", copyVersion: 0 };
+      for (const p of recipientsOf(kind)) r[p.name] = { row: true, accepted: false, linked: false, rejected: false, removedAt: null, copy: "none", copyVersion: 0 };
       return { kind, archived: false, version: 0, r };
     },
     expected,
@@ -416,6 +448,12 @@ export function sendFlow(kind: Kind): Flow<Model> {
         "Cara restores onto a new phone", "Cara deletes their copy"],
       // A card removed on the old phone is back on the new one.
       ["Cara removes the card", "Cara restores onto a new phone", "Cara accepts on the program's page"],
+      // Turned down (user request, 2026-11-06): Rejected to Tara, red on her
+      // lists and her page for Cara; an update re-offers it (Pending again),
+      // and Cara turning that down too reads Rejected again.
+      ["Cara removes the card", "Tara sends an update", "Cara removes the card", "Cody accepts", "Cody deletes their copy"],
+      // Rejected, then taken after all on a new phone.
+      ["Cody removes the card", "Cara removes the card", "Cara restores onto a new phone", "Cara accepts"],
       ...(kind === "group" ? [
         // Two trainers of the group taking turns.
         ["Cole archives it (group page)", "Tara restores it (group archive)", "Cara accepts", "Tara archives it (Trainer tab)",

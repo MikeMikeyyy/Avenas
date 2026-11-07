@@ -27,7 +27,7 @@ import { useUnit } from "../../contexts/UnitContext";
 import type { CompletedWorkout, SavedProgram } from "../../constants/programs";
 import type { JournalEntry } from "../../constants/journal";
 import type { Achievement } from "../../constants/achievements";
-import { buildJournalFeed, type JournalFeedItem } from "../../utils/journalFeed";
+import { buildJournalFeed, RECENT_ACTIVITY_DAYS, type JournalFeedItem } from "../../utils/journalFeed";
 import { deriveClientAchievements } from "../../utils/clientAchievements";
 
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -149,11 +149,11 @@ export default function ClientJournalView({
     [workoutHistory],
   );
 
-  // Same merge as the user's own journal (utils/journalFeed.ts), over a longer
-  // window: a trainer opening a client is catching up on a month, not reviewing
-  // the fortnight they've just lived through.
+  // The user's own journal's merge and its window (utils/journalFeed.ts), so
+  // a client's Recent Activity shows what theirs does (user request,
+  // 2026-11-07: it reached back 30 days to their 14).
   const timeline = useMemo(
-    () => buildJournalFeed({ entries, workouts: workoutHistory, windowDays: 30 }),
+    () => buildJournalFeed({ entries, workouts: workoutHistory, windowDays: RECENT_ACTIVITY_DAYS }),
     [entries, workoutHistory],
   );
 
@@ -216,6 +216,7 @@ export default function ClientJournalView({
         workoutDates={workoutDates}
         workoutHistory={workoutHistory}
         activeProgram={activeProgram}
+        programs={programs}
         onDayPress={onDayPress}
       />
 

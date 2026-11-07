@@ -251,7 +251,9 @@ export default function WorkoutSummarySheet({
             <View style={styles.recordLeft}>
               <Text style={[styles.recordName, { color: t.tp }]} numberOfLines={1}>{r.exerciseName}</Text>
               <Text style={[styles.recordKind, { color: t.ts }]} numberOfLines={1}>
-                {RECORD_LABELS[r.kind]}
+                {/* An assisted exercise's "heaviest" is its least help
+                    (utils/assisted.ts). */}
+                {r.assisted && r.kind === "heaviest" ? "Least Assistance" : RECORD_LABELS[r.kind]}
               </Text>
             </View>
             <Text style={styles.recordValue} numberOfLines={1}>{fmtRecordValue(r)}</Text>

@@ -19,22 +19,41 @@ import {
   forkChangedDayIds,
   normalizeDayIds,
   programDays,
+  arrangeTrainingDays,
   reorderCycleSlots,
   workoutKey,
 } from "../utils/programDays";
-import { buildPrevByName, prevDayScopeFor } from "../utils/workout";
+import { buildPrevByName, getWorkoutForDate, prevDayScopeFor } from "../utils/workout";
 import {
   collectExerciseHistory,
   collectLoggedExercisesForDay,
   sessionCountForDay,
   workoutMatchesDay,
 } from "../utils/progressStats";
-import type {
-  CompletedWorkout,
-  Exercise,
-  SavedProgram,
-  WorkoutMap,
+import {
+  getCurrentWeek,
+  programFinishDate,
+  type CompletedWorkout,
+  type Exercise,
+  type SavedProgram,
+  type WorkoutMap,
 } from "../constants/programs";
+import { addDaysYMD, formatStoredDate, fromYMD, toYMD } from "../utils/dates";
+import { marksAfterEdit, planDoItTomorrow, skipDate } from "../utils/skippedDates";
+import { buildSessionTracks } from "../utils/sessionTrack";
+import { buildProgramHistory } from "../utils/programHistory";
+import { calendarWeeks, pastPlanFrom } from "../utils/journalCalendar";
+import {
+  carryOnProgram,
+  completeFinishedRun,
+  completeProgram,
+  lastWorkoutDate,
+  minTotalWeeks,
+  programsAfterDeletedSession,
+  runFinishedOn,
+  sentTotalWeeks,
+  withTotalWeeks,
+} from "../utils/programLifecycle";
 
 let passed = 0;
 const failures: string[] = [];
@@ -350,6 +369,55 @@ function checkUpperB(label: string, after: SavedProgram, slot: number, expectAtt
   eq(reorderCycleSlots(2, 2, cycle).dayIds, cycle.dayIds, "I reorder no-op: unchanged");
   eq(reorderCycleSlots(0, 9, cycle).dayIds, cycle.dayIds, "I reorder out of range: unchanged");
   eq(new Set(there.dayIds).size, there.dayIds.length, "I reorder: ids stay unique");
+  // The builder's Workouts page lists days in the map's key order.
+  eq(Object.keys(there.workouts), ["0:Upper", "1:Upper", "2:Lower", "4:Lower"], "I reorder: the map is in slot order");
+}
+
+// ─── I2. reorder the training days, rest days staying (Go to Day's Reorder) ──
+{
+  // Upper/Lower A/B: Upper A (slot 0) and Upper B (slot 3) the other way round.
+  const cycle = {
+    cyclePattern: ["Upper A", "Lower A", "Rest", "Upper B", "Lower B", "Rest"],
+    isTrainingDay: baseTraining,
+    dayIds: program.dayIds!,
+    workouts: {
+      "0:Upper A": baseWorkouts["0:Upper"],
+      "1:Lower A": baseWorkouts["1:Lower"],
+      "3:Upper B": baseWorkouts["3:Upper"],
+      "4:Lower B": baseWorkouts["4:Lower"],
+    },
+  };
+  const swapped = arrangeTrainingDays([3, 1, 0, 4], cycle);
+  eq(swapped.cyclePattern, ["Upper B", "Lower A", "Rest", "Upper A", "Lower B", "Rest"], "I2 swap: the two days trade places");
+  eq(swapped.isTrainingDay, baseTraining, "I2 swap: the Training/Rest pattern is untouched");
+  eq(swapped.dayIds, ["d3", "d1", "d2", "d0", "d4", "d5"], "I2 swap: ids travel with their day, the rest stay");
+  eq(swapped.workouts["0:Upper B"]?.map(e => e.name), ["Incline Press", "Lat Pulldown", "Curl"], "I2 swap: Upper B's exercises came with it");
+  eq(swapped.workouts["3:Upper A"]?.map(e => e.name), ["Bench Press", "Barbell Row", "Curl"], "I2 swap: Upper A's exercises came with it");
+  eq(Object.keys(swapped.workouts), ["0:Upper B", "1:Lower A", "3:Upper A", "4:Lower B"], "I2 swap: the map is in slot order");
+  eq(arrangeTrainingDays([3, 1, 0, 4], swapped), cycle, "I2 swap twice: back as it was");
+
+  // Upper A dragged from first to third: the days between move up a place,
+  // the rest day between them staying where it is.
+  const moved = arrangeTrainingDays([1, 3, 0, 4], cycle);
+  eq(moved.cyclePattern, ["Lower A", "Upper B", "Rest", "Upper A", "Lower B", "Rest"], "I2 move: Upper A third, the others up a place");
+  eq(moved.dayIds, ["d1", "d3", "d2", "d0", "d4", "d5"], "I2 move: ids travel with their day, the rest day's stays");
+  eq(moved.workouts["1:Upper B"]?.map(e => e.name), ["Incline Press", "Lat Pulldown", "Curl"], "I2 move: Upper B's exercises came with it");
+
+  eq(arrangeTrainingDays([0, 1, 3, 4], cycle), cycle, "I2 same order: unchanged");
+  eq(arrangeTrainingDays([0, 2, 3, 4], cycle), cycle, "I2 a rest slot in the order: unchanged");
+  eq(arrangeTrainingDays([3, 1, 0], cycle), cycle, "I2 a day left out: unchanged");
+
+  // The same edit on the fixture's two same-named Upper days, through the save.
+  const fixture = {
+    cyclePattern: program.cyclePattern,
+    isTrainingDay: baseTraining,
+    dayIds: program.dayIds!,
+    workouts: program.workouts,
+  };
+  const after = save(program, arrangeTrainingDays([UPPER_B, 1, UPPER_A, 4], fixture));
+  eq(after.dayIds![UPPER_A], "d3", "I2 swap: Upper B's id survives the save in Upper A's slot (no fork)");
+  checkUpperB("I2 swap", after, UPPER_A);
+  eq(JSON.stringify(history), historyBefore, "I2 swap: logged sessions untouched");
 }
 
 // ─── J. a mid-session swap/reorder is a session edit, never a program edit ───
@@ -450,6 +518,176 @@ function checkUpperB(label: string, after: SavedProgram, slot: number, expectAtt
     4,
     "L trainer view: ...even though the sessions themselves are still there",
   );
+}
+
+// ─── M. the program's length, and its run ending ─────────────────────────────
+//
+// Extended or shortened mid-run, at its end, or once finished (user request,
+// 2026-11-05): the week it's in, its finish date, every session's number and
+// its page hold, it never goes shorter than its run has reached, it ends by
+// itself once its last session is done, and adding weeks to a finished one
+// carries it on (utils/programLifecycle.ts). Read against the real clock: the
+// program is laid out back from today.
+{
+  const TODAY = toYMD(new Date());
+  const CYCLE = ["Push", "Pull", "Legs", "Rest", "Upper", "Lower", "Rest"];
+  const run = (over: Partial<SavedProgram>, daysAgo: number): SavedProgram => {
+    const workouts: WorkoutMap = {};
+    CYCLE.forEach((n, i) => { if (n !== "Rest") workouts[workoutKey(i, n)] = [ex(`m${i}`, "Bench Press")]; });
+    return {
+      id: "L", name: "Length", totalWeeks: 8, currentWeek: 1, status: "active",
+      startDate: formatStoredDate(fromYMD(addDaysYMD(TODAY, -daysAgo))!),
+      trainingDays: 5, cycleDays: 7, cyclePattern: CYCLE, dayIds: CYCLE.map((_, i) => `l${i}`), workouts, ...over,
+    };
+  };
+  const session = (p: SavedProgram, ymd: string, programId = p.id): CompletedWorkout => {
+    const w = getWorkoutForDate(p, ymd);
+    return { id: `s${ymd}`, date: ymd, completedAt: `${ymd}T09:00:00.000Z`, workoutName: w?.name ?? "Custom", durationSeconds: 3600, exercises: [], programId, dayId: w?.dayId };
+  };
+  /** A session on every workout day from `fromAgo` days ago to `toAgo`. */
+  const trained = (p: SavedProgram, fromAgo: number, toAgo: number): CompletedWorkout[] => {
+    const out: CompletedWorkout[] = [];
+    for (let d = fromAgo; d >= toAgo; d--) {
+      const ymd = addDaysYMD(TODAY, -d);
+      if (getWorkoutForDate(p, ymd)) out.push(session(p, ymd));
+    }
+    return out;
+  };
+  const finishOf = (p: SavedProgram) => toYMD(programFinishDate(p)!);
+  // The builder's save of a new length (new-program.tsx doUpdate).
+  const lengthen = (p: SavedProgram, weeks: number) => marksAfterEdit(p, { ...withTotalWeeks(p, weeks) });
+  const numbers = (p: SavedProgram, h: CompletedWorkout[]) => {
+    const tracks = buildSessionTracks(h, [p], TODAY);
+    return h.map(w => tracks.numberById[w.id]);
+  };
+  const shared = (p: SavedProgram, h: CompletedWorkout[]) => {
+    const tracks = buildSessionTracks(h, [p], TODAY);
+    return h.length - new Set(h.map(w => `${w.dayId}#${tracks.numberById[w.id]}`)).size;
+  };
+
+  // Mid-run, in week 5 of 8 with every workout trained.
+  const mid = run({}, 30);
+  const midHistory = trained(mid, 30, 1);
+  const midPage = buildProgramHistory(mid, midHistory, TODAY);
+  for (const weeks of [10, 6, 5]) {
+    const edited = lengthen(mid, weeks);
+    eq(edited.totalWeeks, weeks, `M ${weeks} weeks mid-run: saved as asked`);
+    eq(getCurrentWeek(edited), getCurrentWeek(mid), `M ${weeks} weeks mid-run: still in the week it was in`);
+    eq(finishOf(edited), addDaysYMD(finishOf(mid), (weeks - 8) * 7), `M ${weeks} weeks mid-run: the finish moves a week a week`);
+    eq(numbers(edited, midHistory), numbers(mid, midHistory), `M ${weeks} weeks mid-run: every session keeps its number`);
+    eq(buildSessionTracks(midHistory, [edited], TODAY).totalById[midHistory[0].id], weeks, `M ${weeks} weeks mid-run: a day's dots are its weeks`);
+    eq(buildProgramHistory(edited, midHistory, TODAY), midPage, `M ${weeks} weeks mid-run: its page reads the same`);
+    eq(getWorkoutForDate(edited, TODAY)?.dayId, getWorkoutForDate(mid, TODAY)?.dayId, `M ${weeks} weeks mid-run: today's workout stays`);
+  }
+
+  // Never shorter than its run has reached (user decision, 2026-11-05).
+  eq(minTotalWeeks(mid), 5, "M floor: a run in week 5 can't be shorter than 5 weeks");
+  eq(withTotalWeeks(mid, 3).totalWeeks, 5, "M floor: asked for 3, it stays 5");
+  eq(shared(lengthen(mid, 3), midHistory), 0, "M floor: so no session shares a number with another");
+  eq(minTotalWeeks(run({ pausedAt: addDaysYMD(TODAY, -10), currentWeek: 4 }, 35)), 4, "M floor: on hold, the week it was held in");
+  eq(minTotalWeeks(run({ status: "paused", currentWeek: 6 }, 40)), 6, "M floor: shelved, the week it stopped in");
+  eq(minTotalWeeks(run({ status: "completed", currentWeek: 8, completedDate: "01 Oct 2026" }, 60)), 8, "M floor: finished, the weeks it ran");
+  eq(minTotalWeeks(run({ status: "created", currentWeek: 0 }, 0)), 1, "M floor: never run, a week");
+  eq(sentTotalWeeks(mid, 3), 5, "M sent: a trainer's shorter version stops at the week the run is in");
+  eq(sentTotalWeeks(mid, 10), 10, "M sent: ...and a longer one is taken");
+  eq(sentTotalWeeks(run({ status: "completed", currentWeek: 8, completedDate: "01 Oct 2026" }, 60), 10), 8, "M sent: a finished copy keeps the length it ran");
+
+  // Past its end, still active (from before programs ended by themselves):
+  // more weeks and the week counts on, every session on its own number.
+  const over = run({}, 62);
+  const overHistory = trained(over, 62, 1);
+  const extended = lengthen(over, 10);
+  eq(getCurrentWeek(extended), 9, "M past the end: more weeks and the week counts on");
+  eq(shared(extended, overHistory), 0, "M past the end: every session on its own number");
+
+  // Nothing is scheduled past the last day: Home's week, the reminders and the
+  // calendars stop where the run does.
+  const last = finishOf(mid);
+  ok([1, 2, 3, 4, 5, 6, 7].every(d => getWorkoutForDate(mid, addDaysYMD(last, d)) === null), "M end: nothing scheduled after the last day");
+  ok(getWorkoutForDate(mid, lastWorkoutDate(mid)!) !== null, "M end: the last workout day still is one");
+
+  // The last workout: the last day the run schedules one on, moves and rests
+  // included. A program 50 days in is in its last week.
+  const closing = run({}, 50);
+  const lastDay = lastWorkoutDate(closing)!;
+  ok(lastDay <= finishOf(closing) && getWorkoutForDate(closing, lastDay) !== null, "M last: a workout on or before the finish");
+  ok([1, 2, 3].every(d => addDaysYMD(lastDay, d) > finishOf(closing) || getWorkoutForDate(closing, addDaysYMD(lastDay, d)) === null), "M last: ...with none after it");
+  const restedLast = skipDate(closing, lastDay);
+  eq(lastWorkoutDate(restedLast), lastDay, "M last: the last workout made a rest day, it's still the last (resting isn't finishing)");
+  const movedLast = planDoItTomorrow(closing, lastDay).program;
+  eq(lastWorkoutDate(movedLast), addDaysYMD(lastDay, 1), "M last: the last workout moved on a day, it's last there");
+
+  // Ending by itself (user decision, 2026-11-05).
+  const before = trained(closing, 50, 1).filter(w => w.date < lastDay);
+  eq(runFinishedOn(closing, before, addDaysYMD(lastDay, -1)), null, "M ends: not before its last session");
+  eq(runFinishedOn(closing, [...before, session(closing, lastDay)], lastDay), lastDay, "M ends: on the day its last session is done");
+  eq(runFinishedOn(closing, before, lastDay), null, "M ends: its last day, not done yet, it runs");
+  const dayAfterEnd = addDaysYMD(finishOf(closing), 1);
+  eq(runFinishedOn(closing, [...before, { ...session(closing, dayAfterEnd), date: dayAfterEnd }], dayAfterEnd), dayAfterEnd, "M ends: the last session done a day late, that day");
+  eq(runFinishedOn(closing, before, finishOf(closing)), null, "M ends: missed, it runs through its last day");
+  eq(runFinishedOn(closing, before, dayAfterEnd), finishOf(closing), "M ends: missed, it finishes on its last day once that's gone by");
+  eq(runFinishedOn({ ...closing, pausedAt: lastDay }, before, addDaysYMD(finishOf(closing), 10)), null, "M ends: never while held");
+  eq(runFinishedOn(closing, [...before, session(closing, lastDay, "")], lastDay), null, "M ends: a custom workout in no program isn't its last session");
+  eq(runFinishedOn(restedLast, before, lastDay), null, "M ends: its last workout made a rest day, it runs on (that day can be put back)");
+  eq(runFinishedOn(restedLast, before, dayAfterEnd), finishOf(closing), "M ends: ...and finishes once its last day has gone by");
+  const done = completeFinishedRun([closing], [...before, session(closing, lastDay)], lastDay);
+  const ended = done.programs[0];
+  eq([ended.status, ended.currentWeek, ended.completedDate], ["completed", 8, formatStoredDate(fromYMD(lastDay)!)], "M ends: complete, all its weeks, that day");
+  eq(done.finished?.week, 8, "M ends: ran its full length, so it earns the achievement");
+  eq(getCurrentWeek(ended), 8, "M ends: reads Completed 8 of 8");
+  eq(completeFinishedRun([closing], before, lastDay).programs[0], closing, "M ends: nothing to finish, nothing changes");
+
+  // Its last workout skipped, it ends once its last day has gone by, and that
+  // workout reads missed on the calendars from then on (user decision,
+  // 2026-11-06): read against the run that was going that day, not the
+  // program active now (none, or the next one).
+  {
+    const skipped = completeFinishedRun([closing], before, dayAfterEnd).programs;
+    eq(skipped[0].status, "completed", "M missed last: complete once its last day has gone by");
+    const trainedDates = new Set(before.map(w => w.date));
+    const dayOn = (programs: SavedProgram[], ymd: string) => {
+      const [y, m] = ymd.split("-").map(Number);
+      return calendarWeeks(y, m - 1, dayAfterEnd, trainedDates, programs.find(p => p.status === "active") ?? null, pastPlanFrom(programs, before))
+        .flatMap(w => w.days).find(d => d?.date === ymd)?.state;
+    };
+    eq(dayOn(skipped, lastDay), "missed", "M missed last: the calendar shows it missed, with no program active");
+    const next: SavedProgram = { ...closing, id: "next", startDate: formatStoredDate(fromYMD(dayAfterEnd)!), runs: undefined };
+    eq(dayOn([...skipped, next], lastDay), "missed", "M missed last: ...and once the next program is active");
+    const restDay = [1, 2, 3, 4, 5, 6].map(d => addDaysYMD(lastDay, -d)).find(d => !trainedDates.has(d) && getWorkoutForDate(closing, d) === null);
+    if (restDay) eq(dayOn([...skipped, next], restDay), "rest", "M missed last: a rest day of the finished program still reads rest");
+  }
+
+  // Delete & Redo on the session that ended it: picked back up.
+  const finalSession = session(closing, lastDay);
+  const lastDayNoon = new Date(`${lastDay}T12:00:00`);
+  const reopened = programsAfterDeletedSession([ended], finalSession, before, lastDayNoon)[0];
+  eq([reopened.status, reopened.completedDate], ["active", undefined], "M redo: deleting the session that ended it picks it back up");
+  eq(programsAfterDeletedSession([ended], finalSession, [...before, { ...finalSession, id: "again" }], lastDayNoon)[0], ended, "M redo: another session on its last day, it stays ended");
+  eq(programsAfterDeletedSession([ended, { ...mid, id: "other" }], finalSession, before, lastDayNoon)[0], ended, "M redo: another program active since, it stays ended");
+  const early = { ...completeProgram([closing], closing.id, formatStoredDate(fromYMD(addDaysYMD(lastDay, -2))!)).programs[0] };
+  eq(programsAfterDeletedSession([early], session(closing, addDaysYMD(lastDay, -2)), before, lastDayNoon)[0], early, "M redo: ended early with Mark Complete, it stays ended");
+  eq(programsAfterDeletedSession([ended], finalSession, before, new Date(`${addDaysYMD(finishOf(closing), 1)}T12:00:00`))[0], ended, "M redo: its last day gone by, it stays ended");
+
+  // Carried on: more weeks on a finished program (user decision, 2026-11-05).
+  // Finished on its last session, carried on 9 days later at 10 weeks.
+  const finishedHistory = [...before, finalSession];
+  const later = addDaysYMD(lastDay, 9);
+  const carry = carryOnProgram([{ ...ended, totalWeeks: 10 }, { ...mid, id: "other" }], ended.id, finishedHistory, later);
+  const carried = carry.programs[0];
+  eq(carried.status, "active", "M carry on: it's the active program again");
+  eq(carry.programs[1].status, "paused", "M carry on: the one active till then is shelved where it was");
+  eq(carried.holds?.at(-1), { from: addDaysYMD(lastDay, 1), to: later, shift: 8, offsetShift: 0 }, "M carry on: the days since it ended read as a hold");
+  eq(getCurrentWeek(carried, new Date(`${later}T12:00:00`)), getCurrentWeek(closing, new Date(`${addDaysYMD(lastDay, 1)}T12:00:00`)), "M carry on: today is the day after the one it ended on");
+  eq(getWorkoutForDate(carried, later)?.dayId, getWorkoutForDate(closing, addDaysYMD(lastDay, 1))?.dayId, "M carry on: ...and schedules what that day did");
+  eq(finishOf(carried), addDaysYMD(finishOf(closing), 8 + 14), "M carry on: the finish is the two weeks on, past the days held");
+  eq(numbers(carried, finishedHistory), numbers(closing, finishedHistory), "M carry on: every session keeps its number");
+  const gap = buildProgramHistory(carried, finishedHistory, later).weeks.flatMap(w => w.days).filter(d => d.ymd > lastDay && d.ymd < later);
+  ok(gap.length > 0 && gap.every(d => d.state === "held" || d.state === "rest"), "M carry on: nothing in the days it was done reads as missed");
+  // Trained on past its end before programs ended by themselves, then ended
+  // by the update: carried on from its last session, the days trained its own.
+  const kept = { ...session(closing, addDaysYMD(lastDay, 3)), date: addDaysYMD(lastDay, 3), id: "kept" };
+  const legacy = carryOnProgram([{ ...ended, totalWeeks: 10 }], ended.id, [...finishedHistory, kept], later).programs[0];
+  eq(legacy.holds?.at(-1)?.from, addDaysYMD(lastDay, 4), "M carry on: from the last session logged after it ended");
 }
 
 if (failures.length > 0) {

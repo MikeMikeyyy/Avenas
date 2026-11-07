@@ -33,6 +33,11 @@ export const SHEET_CLOSE_SIZE = 36;
  *  (user request, 2026-10-30: at 10 and 12 it was jammed up in the corner). */
 const SHEET_CLOSE_INSET = 18;
 
+/** The least of the page left showing above a sheet, under the status bar: a
+ *  taller sheet shrinks and its content scrolls (SimpleSheet, and the hand-built
+ *  ones whose lists can run long). */
+export const SHEET_TOP_GAP = 12;
+
 /** The dim behind a pop-up: lighter under glass, so the page shows through. */
 export const SHEET_DIM = GLASS ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.45)";
 

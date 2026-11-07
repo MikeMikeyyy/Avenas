@@ -8,9 +8,11 @@
 //
 // What each import added is kept on this phone (IMPORT_LOG_KEY) so it can be
 // undone (user request, 2026-10-23): each session by its day, finish and name,
-// which a restore keeps (it gives every session a new id). An imported session
-// edited since keeps its place if its finish or name changed. Never synced: a
-// new phone has nothing to undo.
+// which every restore keeps (one from a backup made before 0057 gave each
+// session a new id). An imported session edited since keeps its place if its
+// finish or name changed. Never synced: a new phone has nothing to undo. An
+// undo's sessions are deletions like any other (utils/syncLocal.ts
+// noteDeleted), so the account's other phone loses them too.
 //
 // Read and written in one go, with what was there put back if any write fails,
 // so an import or an undo happens whole or not at all, and fails out loud
@@ -22,6 +24,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { IMPORT_LOG_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout } from "../constants/programs";
 import { getJSON } from "./storage";
+import { noteDeleted } from "./syncLocal";
 import type { ImportSource, ParsedImport } from "./workoutImport";
 
 export type ImportRecord = {
@@ -133,12 +136,17 @@ export async function undoImport(at: number): Promise<number> {
   // As many of each as it added: the same session twice comes out twice.
   const owed = new Map<string, number>();
   for (const w of record.workouts) owed.set(keyOf(w), (owed.get(keyOf(w)) ?? 0) + 1);
+  const removed: CompletedWorkout[] = [];
   const kept = history.list.filter(w => {
     const n = owed.get(keyOf(w)) ?? 0;
     if (n === 0) return true;
     owed.set(keyOf(w), n - 1);
+    removed.push(w);
     return false;
   });
+  // Recorded before they go, so the undo reaches the account's other phone and
+  // no merge brings them back (utils/syncLocal.ts).
+  await noteDeleted("workouts", removed);
   const dates = await readList<string>(WORKOUT_DATES_KEY);
   const stillLogged = new Set(kept.map(w => w.date));
   const freed = new Set(record.workouts.map(w => w.date).filter(d => !stillLogged.has(d)));

@@ -10,12 +10,9 @@
 
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
 
 import SimpleSheet from "./trainer/SimpleSheet";
-import BounceButton from "./BounceButton";
 import { APP_DARK, APP_LIGHT, FontFamily, ACCT } from "../constants/theme";
-import { pill, PILL_H_SM } from "../constants/buttons";
 import { workoutKey } from "../utils/programDays";
 import type { SavedProgram } from "../constants/programs";
 
@@ -26,7 +23,10 @@ export default function ProgramSummarySheet({ visible, snapshot, isDark, onClose
   onClose: () => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const divider = isDark ? "rgba(255,255,255,0.12)" : t.div;
+  // The lines between the days, and under the header: a sheet's (t.sheetLine).
+  // In light mode they were t.div, which all but vanishes on a glass sheet, so
+  // the days ran together (user request, 2026-11-06).
+  const divider = t.sheetLine;
 
   const days = snapshot.cyclePattern.map((dayName, i) => {
     const isRest = !dayName || dayName.toLowerCase() === "rest";
@@ -97,18 +97,8 @@ export default function ProgramSummarySheet({ visible, snapshot, isDark, onClose
           </View>
         ))}
       </ScrollView>
-
-      <View style={styles.doneRow}>
-        <BounceButton
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onClose(); }}
-          accessibilityLabel="Done"
-          accessibilityRole="button"
-        >
-          <View style={[styles.doneBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" }]}>
-            <Text style={[styles.doneText, { color: t.tp }]}>Done</Text>
-          </View>
-        </BounceButton>
-      </View>
+      {/* No Done: the glass X and a drag down close it, as every pop-up
+          (user request, 2026-11-06). */}
     </SimpleSheet>
   );
 }
@@ -127,7 +117,4 @@ const styles = StyleSheet.create({
   exerciseList: { marginTop: 6, paddingLeft: 36, gap: 2 },
   exercise:     { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 19 },
   empty:        { fontFamily: FontFamily.regular, fontSize: 13, fontStyle: "italic", marginTop: 6, paddingLeft: 36 },
-  doneRow:      { paddingHorizontal: 20, paddingTop: 10 },
-  doneBtn:      { ...pill(PILL_H_SM) },
-  doneText:     { fontFamily: FontFamily.bold, fontSize: 15 },
 });

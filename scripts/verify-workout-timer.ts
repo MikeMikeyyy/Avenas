@@ -451,7 +451,10 @@ eq(upNextFrom(undefined, ["a"], "kg"), null, "up next: no set left, none");
 
   tick("bench", "working", 0);
   const third = upNext();
-  eq(third && [third.setLabel, third.dot, upNextTail(third)], ["Set 2 of 3", 1, "· Set 2 of 3 · 80 kg × 8"], "up next: the card moves on only with a tick");
+  eq(third && [third.setLabel, third.dot, third.numbers], ["Set 2 of 3", 1, "80 kg × 8"], "up next: the card moves on only with a tick");
+  // The bar's line is the set alone, the numbers left to the timer's card, so
+  // a long name has the room (user request, 2026-11-06).
+  eq(third && upNextTail(third), "· Set 2 of 3", "up next: the bar's line leaves the numbers out");
   eq(third?.setDone, [true, false, false], "up next: the set done shows filled");
   sameAsPage("after set 1");
 
@@ -476,7 +479,7 @@ eq(upNextFrom(undefined, ["a"], "kg"), null, "up next: no set left, none");
 
   eq(upNextFrom({ ...buildLiveActivityQueue(exercises, { bench: { warmup: [], working: [set("a")] } }, () => []).queue[0], exId: "gone" }, ids, "kg")?.exerciseNumber, 1,
     "up next: an exercise no longer on the page still reads as a number, never 0");
-  eq(upNextTail({ ...first!, numbers: "" }), "· Warmup 1", "up next: the bar's line with nothing to go on is just the set");
+  eq(upNextTail(first!), "· Warmup 1", "up next: a warmup with numbers is just the set on the bar too");
 }
 
 {

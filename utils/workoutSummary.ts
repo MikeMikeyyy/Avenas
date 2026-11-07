@@ -8,6 +8,7 @@
 import type { CompletedWorkout } from "../constants/programs";
 import { collectExerciseHistory, computePRs } from "./progressStats";
 import { exerciseIdentity } from "./exerciseNames";
+import { isAssisted, liftBeats } from "./assisted";
 
 export type SessionRecordKind = "heaviest" | "oneRepMax" | "bestSetVolume";
 
@@ -20,6 +21,9 @@ export type SessionRecord = {
    *  × 8" rather than the product (canonical kg). */
   weightKg?: number;
   reps?: number;
+  /** An assisted exercise (utils/assisted.ts): its "heaviest" is its LEAST
+   *  assistance, which the summary calls so. */
+  assisted?: true;
 };
 
 /**
@@ -60,14 +64,18 @@ export function computeSessionRecords(
     // nothing ticked) → nothing measurable to compare.
     if (!session.heaviest) continue;
 
+    // An assisted exercise's record is its least assistance; it has no 1RM
+    // or set volume, so computePRs gives it none (utils/assisted.ts).
+    const assisted = isAssisted(ex);
+    const flag = assisted ? { assisted: true as const } : {};
     const prior = computePRs(collectExerciseHistory(priorHistory, ex), priorHistory, ex);
     if (!prior.heaviest) {
-      records.push({ exerciseName: ex.name, kind: "heaviest", valueKg: session.heaviest.value, prevKg: null });
+      records.push({ exerciseName: ex.name, kind: "heaviest", valueKg: session.heaviest.value, prevKg: null, ...flag });
       continue;
     }
 
-    if (session.heaviest.value > prior.heaviest.value) {
-      records.push({ exerciseName: ex.name, kind: "heaviest", valueKg: session.heaviest.value, prevKg: prior.heaviest.value });
+    if (liftBeats(session.heaviest.value, prior.heaviest.value, assisted)) {
+      records.push({ exerciseName: ex.name, kind: "heaviest", valueKg: session.heaviest.value, prevKg: prior.heaviest.value, ...flag });
     }
     if (session.oneRepMax && prior.oneRepMax && session.oneRepMax.value > prior.oneRepMax.value) {
       records.push({ exerciseName: ex.name, kind: "oneRepMax", valueKg: session.oneRepMax.value, prevKg: prior.oneRepMax.value });

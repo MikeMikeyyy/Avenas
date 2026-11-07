@@ -9,7 +9,8 @@
 // Run: npx tsx scripts/verify-program-compare.ts
 
 import type { CompletedExercise, CompletedWorkout, SavedProgram } from "../constants/programs";
-import { activateProgram } from "../utils/programLifecycle";
+import { activateProgram, deactivateProgram } from "../utils/programLifecycle";
+import { addDaysYMD, formatStoredDate, fromYMD, toYMD } from "../utils/dates";
 import { endingRun, programRunViews, sameRun, type RunRef } from "../utils/programRuns";
 import {
   aheadAtSamePoint, compareCandidates, compareFirstPicks, compareLifts, compareReadiness, compareStartGreen, glanceStats, greenRunFor, liftChange, liftSlots, missedDates, type LiftSlot,
@@ -348,6 +349,11 @@ eq(sqB.map(s => (s.point ? "done" : "missed")), ["done", "done", "done", "done",
   eq(aheadAtSamePoint(sqG.slice(0, 3), sqB), { session: 2, diff: 2.5, by: "weight" }, "green missed its latest: the latest place both did");
   const bw = (reps: number) => ({ point: { ...bench.green[0], topWeight: 0, sets: [{ weight: 0, reps }] } });
   eq(aheadAtSamePoint([bw(10)], [bw(12)]), { session: 1, diff: -2, by: "reps" }, "at bodyweight: by reps, behind");
+  // An assisted lift: less help is ahead (utils/assisted.ts).
+  const helped = (kg: number) => ({ point: { ...bench.green[0], topWeight: kg, isAssisted: true as const } });
+  eq(aheadAtSamePoint([helped(25)], [helped(30)]), { session: 1, diff: 5, by: "weight" }, "assisted: 5 kg less help is 5 kg ahead");
+  eq(aheadAtSamePoint([helped(35)], [helped(30)]), { session: 1, diff: -5, by: "weight" }, "assisted: more help is behind");
+  near(liftChange([helped(40).point, helped(30).point]) ?? NaN, 25, "assisted: 40 kg to 30 kg of help is a 25% gain");
 }
 near(liftChange(bench.green), (87.5 / 80 - 1) * 100, "green's bench, first to last");
 {
@@ -361,7 +367,7 @@ near(liftChange(bench.green), (87.5 / 80 - 1) * 100, "green's bench, first to la
 // ─── runs ────────────────────────────────────────────────────────────────────
 {
   // Upper Lower run again: its finished run is kept, and the program starts over.
-  const { programs: next } = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, UL], "UL", "15 Oct 2026");
+  const { programs: next } = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, UL], "UL", "15 Oct 2026", history);
   const ul = next.find(p => p.id === "UL")!;
   eq(ul.runs?.length, 1, "making a finished program active again keeps its run");
   eq(ul.runs?.[0] && { start: ul.runs[0].startDate, status: ul.runs[0].status, end: ul.runs[0].endDate, week: ul.runs[0].currentWeek },
@@ -383,12 +389,13 @@ near(liftChange(bench.green), (87.5 / 80 - 1) * 100, "green's bench, first to la
     next.map(p => (p.id === "UL" ? { ...p, status: "completed" as const, completedDate: "10 Dec 2026", currentWeek: 8 } : p)),
     "UL",
     "11 Dec 2026",
+    history,
   );
   eq(third.find(p => p.id === "UL")!.runs?.map(r => r.endDate), ["2026-07-26", "2026-12-10"], "every earlier run, oldest first");
 
   // A shelved run is kept too, ending the day before it starts again; it
   // isn't offered to compare with (only finished ones are).
-  const shelved = activateProgram([{ ...PPL, status: "paused", currentWeek: 3, holds: [{ from: "2026-09-25", to: "2026-09-27", shift: 2, offsetShift: 0 }] }], "PPL", "20 Oct 2026").programs[0];
+  const shelved = activateProgram([{ ...PPL, status: "paused", currentWeek: 3, holds: [{ from: "2026-09-25", to: "2026-09-27", shift: 2, offsetShift: 0 }] }], "PPL", "20 Oct 2026", history).programs[0];
   eq(shelved.runs?.[0] && [shelved.runs[0].status, shelved.runs[0].endDate, shelved.runs[0].holds?.length], ["paused", "2026-10-19", 1],
     "a shelved run ends the day before the new one, its holds with it");
   eq(compareCandidates([shelved], history, null).length, 0, "a shelved run isn't offered");
@@ -396,13 +403,42 @@ near(liftChange(bench.green), (87.5 / 80 - 1) * 100, "green's bench, first to la
   // A run that came back from a hold: its startDate moved on by the days
   // held, but its sessions from before the hold are still that run's.
   const held: SavedProgram = { ...UL, startDate: "04 Jun 2026", holds: [{ from: "2026-06-10", to: "2026-06-13", shift: 3, offsetShift: 0 }] };
-  const reheld = programRunViews(activateProgram([held], "UL", "15 Oct 2026").programs[0], history);
+  const reheld = programRunViews(activateProgram([held], "UL", "15 Oct 2026", history).programs[0], history);
   eq(reheld.map(v => v.ref.run), [0, "latest"], "a held run's days before its hold aren't read as an earlier run");
   eq([reheld[0].startYMD, reheld[0].sessions.length], ["2026-06-01", 14], "the run began on its first day, with all its sessions");
 
   // Never started: nothing to keep.
-  const fresh = activateProgram([{ ...UL, status: "created", completedDate: undefined }], "UL", "15 Oct 2026").programs[0];
+  const fresh = activateProgram([{ ...UL, status: "created", completedDate: undefined }], "UL", "15 Oct 2026", []).programs[0];
   eq(fresh.runs, undefined, "a program never run keeps no run");
+}
+{
+  // Shelved in its first week (user decision, 2026-11-06): paused like any
+  // other week once something's logged in it, its run kept when it's run
+  // again, and never offered to compare with, since it didn't finish. It went
+  // back to "created", kept no run, and its sessions read as an earlier run,
+  // which counts as finished. Dated from the real today, as getCurrentWeek is:
+  // begun yesterday, so it's in week 1 even before 3am.
+  const startYMD = addDaysYMD(toYMD(new Date()), -1);
+  const stored = (ymd: string) => formatStoredDate(fromYMD(ymd)!);
+  const wk1: SavedProgram = { ...UL, status: "active", startDate: stored(startYMD), completedDate: undefined, currentWeek: 1 };
+  const did = [session("UL", startYMD, "d0", [ex("Barbell Bench Press", [[90, 8]])])];
+
+  eq(deactivateProgram([wk1], "UL", did)[0].status, "paused", "shelved in week 1 with a session in it: paused, as any other week");
+  eq(deactivateProgram([wk1], "UL", [])[0].status, "created", "shelved in week 1 before a session: as if it never started");
+  eq(activateProgram([wk1, { ...PPL, status: "paused", currentWeek: 5 }], "PPL", stored(startYMD), did).programs[0].status, "paused",
+    "in week 1, made inactive by another made active: paused too");
+
+  const later = stored(addDaysYMD(startYMD, 4));
+  const again = activateProgram(deactivateProgram([wk1], "UL", did), "UL", later, did).programs[0];
+  eq(again.runs?.map(r => r.status), ["paused"], "run again: its week-1 run is kept, shelved");
+  eq(programRunViews(again, did).map(v => [v.ref.run, v.finished, v.sessions.length]), [[0, false, 1], ["latest", false, 0]],
+    "its session is that run's, not an earlier run's");
+  eq(compareCandidates([again], did, null).length, 0, "and it isn't offered to compare with");
+
+  // Shelved in week 1 before this (still "created", its session in it): run
+  // again, it's kept as the shelved run it was.
+  const before = activateProgram([{ ...wk1, status: "created" }], "UL", later, did).programs[0];
+  eq(before.runs?.map(r => r.status), ["paused"], "a week-1 shelve from before: kept as a shelved run when run again");
 }
 {
   // Run again before runs were kept: its older sessions are one earlier run.
@@ -446,7 +482,7 @@ near(liftChange(bench.green), (87.5 / 80 - 1) * 100, "green's bench, first to la
   eq(buildSessionTracks(withEarly, programs, TODAY).numberById[early.id], 3, "and its card says 3rd");
 
   // Run again: the new run counts from 1, as its cards do.
-  const { programs: next } = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, UL], "UL", "15 Oct 2026");
+  const { programs: next } = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, UL], "UL", "15 Oct 2026", history);
   const ul = next.find(p => p.id === "UL")!;
   const again = [...history, session("UL", "2026-10-16", "d1", [ex(SQUAT, [[100, 5]])])];
   const both = daySlots(ul, "d1", again, "2026-10-21", next);
@@ -464,11 +500,12 @@ near(liftChange(bench.green), (87.5 / 80 - 1) * 100, "green's bench, first to la
   const rerun: SavedProgram = { ...UL, status: "active", startDate: "05 Oct 2026", completedDate: "26 Jul 2026", currentWeek: 2 };
   eq(read(daySlots(rerun, "d1", history)), ["1", "2", "3", "4", "5", "6"], "from before runs were kept: counted, no schedule to miss on");
 
-  // A run shelved in its first week isn't kept (utils/programRuns.ts endingRun),
-  // so run again, its sessions have no run of their own: the chart says what
-  // their cards say, whatever that is.
-  const shelvedEarly = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, { ...UL, status: "created", startDate: "05 Oct 2026", completedDate: undefined, currentWeek: 1 }], "UL", "19 Oct 2026").programs;
+  // A run shelved in its first week back when that kept no run (still
+  // "created", a session in it): run again, it's kept as the shelved run it
+  // was (utils/programLifecycle.ts shelvedStatus), and the chart says what its
+  // cards say.
   const odd = [...history, session("UL", "2026-10-06", "d1", [ex(SQUAT, [[100, 5]])])];
+  const shelvedEarly = activateProgram([{ ...PPL, status: "paused", currentWeek: 5 }, { ...UL, status: "created", startDate: "05 Oct 2026", completedDate: undefined, currentWeek: 1 }], "UL", "19 Oct 2026", odd).programs;
   const oddUL = shelvedEarly.find(p => p.id === "UL")!;
   const oddTracks = buildSessionTracks(odd, shelvedEarly, "2026-10-21");
   eq(daySlots(oddUL, "d1", odd, "2026-10-21", shelvedEarly).every(s => !s.point || s.number === oddTracks.numberById[s.point.workoutId]), true,

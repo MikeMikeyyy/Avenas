@@ -2,12 +2,17 @@
 //
 // The cloud copy is only useful if it tracks local changes. Screens call
 // scheduleCloudPush() after any data-bearing local write; this debounces a burst
-// of writes into a single atomic push (lib/cloud.pushAllLocalDataToCloud →
-// replace_user_data RPC) ~DEBOUNCE_MS later, while the app is still foregrounded
-// and the network is available (the most reliable moment to push).
+// of writes into a single backup (lib/cloud.ts syncBackup → replace_user_data
+// RPC) ~DEBOUNCE_MS later, while the app is still foregrounded and the network
+// is available (the most reliable moment to push). A backup goes on top of the
+// one this phone last saw, so when the account's other phone has backed up
+// since, it merges that one in first (migration 0057, user decision
+// 2026-11-07); nothing changed since the last one, nothing is sent.
 //
 // flushCloudPush() pushes immediately and is used on app background/inactive as
 // a safety net for changes that happened in the last debounce window.
+// catchUpWithBackup() also asks whether the other phone backed up, and takes
+// its changes in: the app opening, coming back to the front, the signal back.
 //
 // Guards:
 //   - only pushes when a user is signed in
@@ -29,8 +34,9 @@
 // whenever the signal comes back.
 
 import { supabase } from "./supabase";
-import { BACKUP_OWED_KEY, getCacheOwner, pushAllLocalDataToCloud } from "./cloud";
+import { BACKUP_OWED_KEY, getCacheOwner, syncBackup, type SyncReason } from "./cloud";
 import { getJSON, removeKey, setJSON } from "../utils/storage";
+import { noteLocalChange } from "../utils/syncLocal";
 
 const DEBOUNCE_MS = 2500;
 
@@ -42,6 +48,8 @@ type LastBackup = { uid: string; at: number };
 let timer: ReturnType<typeof setTimeout> | null = null;
 let current: Promise<PushOutcome> | null = null;
 let rearm = false;
+/** A check asked for while a backup was on its way: run once that's done. */
+let rearmCheck = false;
 // Bumped by every scheduled push, so a push clears the owed flag only when
 // nothing changed while it ran (the push re-armed after it does that).
 let changes = 0;
@@ -58,22 +66,24 @@ let lastBackupLoaded = false;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach(l => l());
 
-async function doPush(): Promise<PushOutcome> {
+async function doPush(reason: SyncReason): Promise<PushOutcome> {
   const changesAtStart = changes;
+  const owed = await getJSON<boolean>(BACKUP_OWED_KEY, false);
   try {
     const { data, error } = await supabase.auth.getSession();
     // No signal and a token over an hour old: supabase-js can't renew it, and
     // answers with an error and no session. That's a backup that couldn't go,
     // not a phone nobody is signed in on. Taken for a skip, it was never
     // retried and let a sign-out past its backup check (lib/auth.ts).
-    if (error) return "failed";
+    if (error) return reason === "check" && !owed ? "skipped" : "failed";
     const uid = data.session?.user.id;
     if (!uid) return "skipped";
     const owner = await getCacheOwner();
     // owner === null means a pre-backend / not-yet-reconciled cache; reconcile
     // sets it on sign-in, so treat a mismatch (not absence) as "don't push".
     if (owner !== null && owner !== uid) return "skipped";
-    await pushAllLocalDataToCloud(uid);
+    const outcome = await syncBackup(uid, reason, { owed });
+    if (outcome === "skipped") return "skipped";
     if (changes === changesAtStart) await removeKey(BACKUP_OWED_KEY);
     lastBackup = { uid, at: Date.now() };
     lastBackupLoaded = true;
@@ -83,19 +93,22 @@ async function doPush(): Promise<PushOutcome> {
     return "pushed";
   } catch (e) {
     if (__DEV__) console.warn("[avenas] cloud auto-push", e);
-    return "failed";
+    // A look for the other phone's changes that couldn't be made, with nothing
+    // of this phone's waiting, leaves the backup as it was: no failure to show.
+    return reason === "check" && !owed ? "skipped" : "failed";
   }
 }
 
-function runPush(): Promise<PushOutcome> {
+function runPush(reason: SyncReason = "push"): Promise<PushOutcome> {
   if (current) {
     // A change arrived while a push was in flight — re-arm so it isn't lost.
     rearm = true;
+    if (reason === "check") rearmCheck = true;
     return current;
   }
   running = true;
   emit();
-  current = doPush().then((outcome) => {
+  current = doPush(reason).then((outcome) => {
     current = null;
     running = false;
     // A skip says nothing about whether the account's data is safe, so it
@@ -105,7 +118,10 @@ function runPush(): Promise<PushOutcome> {
     emit();
     if (rearm) {
       rearm = false;
-      scheduleCloudPush();
+      const check = rearmCheck;
+      rearmCheck = false;
+      if (check) void runPush("check");
+      else armPush();
     }
     return outcome;
   });
@@ -148,6 +164,14 @@ export function scheduleCloudPush(): void {
   // Owed from this moment, on the phone: if the push can't go, or the app
   // closes before it does, the next launch still sends it.
   void setJSON(BACKUP_OWED_KEY, true).then(emit);
+  // When, for a merge with the account's other phone: an item both changed
+  // takes the version changed last (utils/syncMerge.ts).
+  void noteLocalChange();
+  armPush();
+}
+
+/** The debounced push itself, for a change already counted. */
+function armPush(): void {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
@@ -189,11 +213,25 @@ export async function flushCloudPushNow(): Promise<boolean> {
 
 /** Back up right now for the Data & Sync screen's "Back Up Now". Unlike
  *  flushCloudPushNow, a skip is reported as such: the screen must not say
- *  "Backed up" when nothing was sent. */
+ *  "Backed up" when nothing was sent. Asks after the other phone too, so it
+ *  never says "Backed up" over a backup this phone hasn't taken in. */
 export async function backUpNow(): Promise<PushOutcome> {
   if (timer) {
     clearTimeout(timer);
     timer = null;
   }
-  return runPush();
+  return runPush("check");
+}
+
+/** Take in what the account's other phone backed up since this one last saw
+ *  the backup, and send this phone's changes with it: as the app opens, comes
+ *  back to the front, and gets its signal back (app/_layout.tsx). One small
+ *  read when there's nothing new; offline or signed out, nothing happens and
+ *  no failure shows unless a backup is owed. */
+export function catchUpWithBackup(): Promise<PushOutcome> {
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
+  return runPush("check");
 }

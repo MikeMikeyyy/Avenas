@@ -23,16 +23,17 @@ import UnfinishedWorkoutWatcher from "../components/UnfinishedWorkoutWatcher";
 import RestTimerBanner from "../components/RestTimerBanner";
 import ForceUpdateGate from "../components/ForceUpdateGate";
 import { PhotoFramerHost } from "../components/PhotoFramer";
-import { flushCloudPush, pushOwedBackup } from "../lib/syncManager";
+import { catchUpWithBackup, flushCloudPush, pushOwedBackup } from "../lib/syncManager";
 import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
 import { touchLastActive } from "../lib/connections";
 import { runWeightUnitMigrationIfNeeded } from "../utils/weightMigration";
 import { runDayIdMigrationIfNeeded } from "../utils/dayIdMigration";
 import { runHoldMigrationIfNeeded } from "../utils/holdMigration";
 import { runExerciseRenames } from "../utils/exerciseRenameMigration";
+import { refreshAssisted } from "../utils/assistedStore";
 import { linkAcceptedCopies } from "../utils/trainerStore";
 import { fileStaleDraft } from "../utils/unfinishedSessionStore";
-import { autoPauseIfIdle } from "../utils/programPause";
+import { settleActiveProgram } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 import { notificationSteps } from "../utils/notificationRoute";
 
@@ -94,12 +95,14 @@ function AppShell() {
   const { accountType, loaded: accountTypeLoaded } = useAccountType();
   const handledNotif = useRef<string | null>(null);
   useEffect(() => {
-    const url = notifResponse?.notification.request.content.data?.url;
+    const data = notifResponse?.notification.request.content.data;
+    const url = data?.url;
     if (typeof url !== "string" || !url.startsWith("/") || !accountTypeLoaded || !authLoaded) return;
     const id = notifResponse?.notification.request.identifier ?? url;
     if (handledNotif.current === id) return;
     handledNotif.current = id;
-    void notificationSteps(url, accountType, userId ?? "").then(steps => {
+    // The whole data, for a program notification's own program (0056).
+    void notificationSteps(url, accountType, userId ?? "", data).then(steps => {
       steps.forEach((step, i) => (i === 0 ? router.navigate(step) : router.push(step)));
     });
   }, [notifResponse, router, accountType, accountTypeLoaded, authLoaded, userId]);
@@ -126,15 +129,17 @@ function AppShell() {
     Alert.alert("You've been signed out", "Sign in again to keep backing up your training.");
   }, [endedElsewhere, router]);
 
-  // A backup owed from before the app closed (a workout logged with no
-  // signal) goes a moment after launch, once per launch. Offline it fails and
-  // stays owed for when the signal comes back (below).
+  // A moment after launch, once per launch: what the account's other phone
+  // backed up since comes in, and a backup owed from before the app closed (a
+  // workout logged with no signal) goes with it (lib/syncManager.ts
+  // catchUpWithBackup). Offline it stays owed for when the signal comes back
+  // (below).
   const owedChecked = useRef(false);
   useEffect(() => {
     if (!authLoaded || !userId || owedChecked.current) return;
     const id = setTimeout(() => {
       owedChecked.current = true;
-      void pushOwedBackup();
+      void catchUpWithBackup();
     }, OWED_BACKUP_DELAY_MS);
     return () => clearTimeout(id);
   }, [authLoaded, userId]);
@@ -150,17 +155,17 @@ function AppShell() {
   // before this build, so the server may still hold the sign-up choice.
   useEffect(() => { void reconcileUnit(); }, []);
 
-  // A full week with nothing logged puts the active program on hold by itself,
-  // so it isn't silently marching through weeks you didn't train. No-ops once
-  // paused; also runs on foreground below, since the app is often left open.
-  useEffect(() => { void autoPauseIfIdle(); }, []);
-
   // Two foreground/background jobs:
   //  - Cloud-backup safety net: on leaving the foreground, push any changes from
-  //    the last debounce window (flushCloudPush no-ops when signed out / wrong owner).
+  //    the last debounce window (flushCloudPush no-ops when signed out / wrong
+  //    owner, and sends nothing when nothing changed). On coming back, take in
+  //    what the account's other phone backed up meanwhile.
   //  - Presence heartbeat: refresh "last active" on mount, on every foreground,
   //    and on a light interval while foregrounded (touchLastActive no-ops when
   //    signed out), so connected accounts can show "active now".
+  const offline = useOffline();
+  const offlineRef = useRef(offline);
+  useEffect(() => { offlineRef.current = offline; }, [offline]);
   useEffect(() => {
     void touchLastActive();
     let beat: ReturnType<typeof setInterval> | null = setInterval(() => void touchLastActive(), HEARTBEAT_MS);
@@ -171,7 +176,14 @@ function AppShell() {
         if (beat) { clearInterval(beat); beat = null; }
       } else if (state === "active") {
         void touchLastActive();
-        void autoPauseIfIdle();
+        // The active program finished while away completes; a week with
+        // nothing logged puts it on hold (utils/programPause.ts). As at
+        // launch, since the app is often left open for days. Then the other
+        // phone's backup, which undoes a hold put on here while it trained
+        // (utils/syncMerge.ts undoStaleAutoPause).
+        void settleActiveProgram().then(() => {
+          if (!offlineRef.current) void catchUpWithBackup();
+        });
         // Also resync on the way IN, not just on the way out. iOS keeps this app
         // resident for days, so a return from the background is often the first
         // time a new day is seen — and the schedule left behind still assumes
@@ -186,12 +198,15 @@ function AppShell() {
   }, []);
 
   // Back online: a backup owed while the phone had no signal goes now, which
-  // is what the Workout page's offline banner promises a session logged then.
-  // Only on the change back; at launch it's the delayed check above.
-  const offline = useOffline();
+  // is what the Workout page's offline banner promises a session logged then,
+  // and what the other phone backed up meanwhile comes in. Only on the change
+  // back; at launch it's the delayed check above.
   const wasOffline = useRef(offline);
   useEffect(() => {
-    if (wasOffline.current && !offline) void pushOwedBackup();
+    if (wasOffline.current && !offline) {
+      void pushOwedBackup();
+      void catchUpWithBackup();
+    }
     wasOffline.current = offline;
   }, [offline]);
 
@@ -257,6 +272,12 @@ export default function RootLayout() {
   // workout left unfinished on a day that's over goes to the Journal with what
   // was entered in it, so Home and the Journal open with it and the Workout
   // tab and its clock start on the new day (utils/unfinishedSessionStore.ts).
+  // Then the active program: completed if its run finished while the app was
+  // closed (its last session done, or its last day gone by), else held after a
+  // full week with nothing logged, so it isn't silently marching through weeks
+  // you didn't train (utils/programPause.ts settleActiveProgram). After the filing, which can be
+  // its last session, and before Home draws, so it opens on where the program
+  // stands. All on the phone: no server call holds the splash.
   const [migrated, setMigrated] = useState(false);
   useEffect(() => {
     runWeightUnitMigrationIfNeeded()
@@ -265,7 +286,10 @@ export default function RootLayout() {
       .then(runExerciseRenames)
       .then(linkAcceptedCopies)
       .then(() => fileStaleDraft())
-      .finally(() => setMigrated(true));
+      .then(() => settleActiveProgram())
+      // Which custom exercises are assisted, before any count is drawn
+      // (utils/assisted.ts), whatever came of the steps before. Local reads.
+      .finally(() => refreshAssisted().finally(() => setMigrated(true)));
   }, []);
 
   // Splash stays up until fonts load here, then until the profile context

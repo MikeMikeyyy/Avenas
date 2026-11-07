@@ -6,17 +6,18 @@
 // They are separate stores on purpose (@avenas_journal_entries and
 // @avenas/workout_history, separate cloud tables, separate writers) and nothing
 // here changes that — the merge is a RENDER concern, and this is the one place
-// it happens. Two screens show this feed:
+// it happens. Two screens show this feed, as Recent Activity, over the same
+// RECENT_ACTIVITY_DAYS:
 //
-//   app/journal.tsx                        your own, 14 days
+//   app/journal.tsx                        your own
 //   components/journal/ClientJournalView   a client's, on the trainer's client
-//                                          page, 30 days
+//                                          page
 //
-// They had a copy each, and the windows had already drifted apart. The window
-// stays a parameter (the difference is real: your own journal is a working log,
-// a client's is something a trainer reviews), but everything else — which field
-// each side is timestamped by, what gets dropped, the ordering — is decided
-// here so the two feeds can't disagree about anything else.
+// They had a copy each, and the windows had already drifted apart. A client's
+// reached back 30 days, as something a trainer reviews, until the user asked
+// for it to show what their own does (2026-11-07). Which field each side is
+// timestamped by, what gets dropped and the ordering are decided here too, so
+// the two feeds can't disagree about anything.
 //
 // The two sides are timestamped by DIFFERENT fields, and that's the part worth
 // getting right in one place: an entry by `createdAt`, a workout by
@@ -37,6 +38,11 @@ export type JournalFeedItem =
   | { kind: "workout"; data: CompletedWorkout; ts: number };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How far back Recent Activity reaches, on your Journal and a client's
+ *  alike. Older workouts are a tap on their day of the calendar away, and the
+ *  session filter searches the whole history (sessionFeed). */
+export const RECENT_ACTIVITY_DAYS = 14;
 
 /**
  * Entries and workouts from the last `windowDays`, newest first.

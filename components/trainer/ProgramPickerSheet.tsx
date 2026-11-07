@@ -75,7 +75,7 @@ export default function ProgramPickerSheet({ visible, title, subtitle, programs:
                 style={[styles.row, i > 0 && { borderTopWidth: 1, borderTopColor: t.sheetLine }]}
               >
                 <View style={styles.rowText}>
-                  <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{p.name}</Text>
+                  <Text style={[styles.name, { color: t.tp }]}>{p.name}</Text>
                   <Text style={[styles.meta, { color: t.ts }]} numberOfLines={1}>{line}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={16} color={t.ts} />

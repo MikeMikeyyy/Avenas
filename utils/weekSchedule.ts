@@ -28,6 +28,7 @@
 
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { addDaysYMD } from "./dates";
+import { isAssisted } from "./assisted";
 import { resolveWorkoutForDate, type DayOverride } from "./workout";
 import { isDatePushed, isDateSkipped } from "./skippedDates";
 
@@ -152,13 +153,14 @@ export function buildWeekSchedule({
 
 /** The totals under Home's ring for a week's sessions (WeekSchedule.sessions):
  *  minutes trained, and the kilos moved in completed working sets (a timed
- *  hold moves none: its "reps" are seconds). */
+ *  hold moves none: its "reps" are seconds; nor does an assisted exercise,
+ *  whose weight is help: utils/assisted.ts). */
 export function weekTotals(sessions: CompletedWorkout[]): { totalMinutes: number; totalVolumeKg: number } {
   const totalMinutes = Math.round(
     sessions.reduce((sum, w) => sum + w.durationSeconds, 0) / 60
   );
   const totalVolumeKg = sessions.reduce((sum, w) =>
-    sum + w.exercises.reduce((es, ex) => ex.isIsometric ? es :
+    sum + w.exercises.reduce((es, ex) => ex.isIsometric || isAssisted(ex) ? es :
       es + ex.sets.reduce((ss, s) =>
         ss + (s.type === "working" && s.done ? (parseFloat(s.weight) || 0) * (parseFloat(s.reps) || 0) : 0), 0), 0), 0);
   return { totalMinutes, totalVolumeKg };
