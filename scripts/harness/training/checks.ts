@@ -1183,17 +1183,30 @@ function sameToken(a: string, b: string, isKg: boolean): boolean {
   return Number.isFinite(an) && Number.isFinite(bn) && near(an, bn, isKg ? 0.011 : 0.051);
 }
 
+/** Where ledger session `s` did the lift `name` of the card in `place`, as
+ *  itself: in that place, or anywhere but another place of the day's `plan`
+ *  holding the same lift (a heavy and a back-off bench keep their own). A lift
+ *  removed and added back, done at the end without its place, counts: it was
+ *  done (user report, 2026-11-12). */
+function ledgerDid(s: LedgerSession, name: string, place: string, plan: readonly PlannedExercise[] | undefined): LedgerExercise | undefined {
+  const lift = liftKey(name);
+  const siblings = new Set((plan ?? []).filter(p => p.id !== place && liftKey(p.name) === lift).map(p => p.id));
+  const done = s.exercises.filter(x => liftKey(x.name) === lift);
+  return done.find(x => x.place === place) ?? done.find(x => !x.place || !siblings.has(x.place));
+}
+
 /** The sets a card's "Previous" is read from, per the ledger: the last
- *  session of the day (`day`, newest first) that did this place as this
- *  exercise; else the exercise by name on this day, the first time it appears
- *  (a swap-in, one added, or a place new to the day). */
+ *  session of the day (`day`, newest first) that did the card's lift as
+ *  itself (ledgerDid); else the exercise by name on this day, the first time
+ *  it appears (a swap-in, one added, or a place new to the day). */
 function ledgerLast(
   day: readonly LedgerSession[],
   card: { name: string; programExerciseId?: string; swappedFrom?: string },
+  plan: readonly PlannedExercise[] | undefined,
 ): { sets: LedgerSet[]; unit: "kg" | "lb" } | undefined {
   if (card.programExerciseId && !card.swappedFrom) {
     for (const s of day) {
-      const e = s.exercises.find(x => x.place === card.programExerciseId && liftKey(x.name) === liftKey(card.name));
+      const e = ledgerDid(s, card.name, card.programExerciseId, plan);
       if (e) return { sets: e.sets, unit: s.unit };
     }
   }
@@ -1220,7 +1233,7 @@ export function checkHints(b: BeforeLog): Problem[] {
     const where = `${workout.name} (${workout.dayId}) › ${card.name}${card.swappedFrom ? ` (in for ${card.swappedFrom})` : ""}`;
     // Sets: lined up with the card's rows as it's finished with, each row its
     // own kind.
-    const last = ledgerLast(day, card);
+    const last = ledgerLast(day, card, b.plan);
     const want = hintRows(last?.sets ?? [], last?.unit ?? "kg", isKg, card.rows);
     const shown = prevHintsForRows(setsOf({ name: card.name, programExerciseId: card.programExerciseId, swappedFrom: card.swappedFrom }), card.rows)
       .map(t => formatPrevHint(t, isKg));
@@ -1233,13 +1246,14 @@ export function checkHints(b: BeforeLog): Problem[] {
         what: `${where}: Previous reads ${shown.join("  ")}; should read ${want.join("  ")} on rows ${card.rows.map(r => (r === "warmup" ? "W" : "#")).join("")}, last time was ${lifted} (${isKg ? "kg" : "lbs"} on screen)`,
       });
     }
-    // Notes: the last session this place was done in, as itself or by a swap
-    // in for it; an empty note blocks an older one.
+    // Notes: the last session that did the lift as itself (ledgerDid), or by
+    // a swap-in for it in its place; an empty note blocks an older one.
     if (card.programExerciseId && !card.swappedFrom) {
+      const place = card.programExerciseId;
       let note: string | undefined;
       for (const s of day) {
-        const e = s.exercises.find(x => x.place === card.programExerciseId
-          && (liftKey(x.name) === liftKey(card.name) || (x.swappedFrom && liftKey(x.swappedFrom) === liftKey(card.name))));
+        const e = ledgerDid(s, card.name, place, b.plan)
+          ?? s.exercises.find(x => x.place === place && !!x.swappedFrom && liftKey(x.swappedFrom) === liftKey(card.name));
         if (e) { note = e.note.trim() || undefined; break; }
       }
       const shownNote = noteOf({ name: card.name, programExerciseId: card.programExerciseId });
@@ -1561,7 +1575,7 @@ export function checkSave(a: AfterSave): Problem[] {
     const shown = finishedSessionPrevSets(saved, [saved, ...prior], program);
     ledger.exercises.forEach((e, i) => {
       const rows = [...e.sets.filter(x => x.type === "warmup"), ...e.sets.filter(x => x.type !== "warmup")].map(x => x.type);
-      const last = ledgerLast(day, { name: e.name, programExerciseId: e.place, swappedFrom: e.swappedFrom });
+      const last = ledgerLast(day, { name: e.name, programExerciseId: e.place, swappedFrom: e.swappedFrom }, ledger.plan);
       const want = hintRows(last?.sets ?? [], last?.unit ?? "kg", isKg, rows);
       const got = (shown[i] ?? []).map(t => formatPrevHint(t, isKg));
       if (!(want.length === got.length && want.every((t, j) => sameToken(t, got[j], isKg)))) {

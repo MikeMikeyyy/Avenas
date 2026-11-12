@@ -6,11 +6,11 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import { useTheme } from "../contexts/ThemeContext";
+import { useAuth } from "../contexts/AuthContext";
 import { useUserProfile } from "../contexts/UserProfileContext";
 import NeuCard from "../components/NeuCard";
 import PrimaryButton from "../components/PrimaryButton";
-import { setJSON } from "../utils/storage";
-import { TERMS_ACCEPTED_KEY, TERMS_VERSION } from "../constants/onboarding";
+import { acceptTerms } from "../utils/agreements";
 import { APP_DARK, APP_LIGHT, ACCT, FontFamily } from "../constants/theme";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -30,13 +30,17 @@ export default function AcceptTermsScreen() {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { completeOnboarding } = useUserProfile();
+  const { userId } = useAuth();
   const params = useLocalSearchParams<{ name?: string; email?: string }>();
 
   const [agreed, setAgreed] = useState(false);
 
   const onAgree = () => {
     if (!agreed) return;
-    setJSON(TERMS_ACCEPTED_KEY, TERMS_VERSION);
+    // Kept for this account on the phone and recorded on the server, so
+    // there's a showing it agreed (utils/agreements.ts). Never waited on: with
+    // no signal it goes at the next launch.
+    void acceptTerms(userId ?? "");
     const name = (params.name ?? "").trim();
     const email = (params.email ?? "").trim();
     completeOnboarding(name && email ? { name, email } : undefined);

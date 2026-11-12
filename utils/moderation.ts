@@ -27,9 +27,6 @@ import {
   BLOCKED_USERS_KEY, REPORTS_KEY, HIDDEN_MESSAGES_KEY,
   type BlockedUser, type Report, type ReportReason,
 } from "../constants/chat";
-import {
-  COMMUNITY_TERMS_KEY, COMMUNITY_TERMS_VERSION, type CommunityTermsAcceptance,
-} from "../constants/community";
 import { disconnectByOtherId } from "../lib/connections";
 import type { AccountType } from "../contexts/AccountTypeContext";
 
@@ -44,8 +41,10 @@ export async function loadBlocked(): Promise<BlockedUser[]> {
 }
 
 /** Wipe local block list / reports / hidden messages on account delete / switch.
- *  The community-terms acceptance gate is intentionally left intact (it's a legal
- *  gate, re-prompted only when COMMUNITY_TERMS_VERSION bumps). */
+ *  What each account agreed to stays (utils/agreements.ts): each account's is
+ *  its own entry, so the next account here has none and is asked. One agreement
+ *  for the whole phone, kept here on purpose, let a second account in without
+ *  ever seeing the guidelines. */
 export async function clearModerationData(): Promise<void> {
   await Promise.all([
     removeKey(BLOCKED_USERS_KEY),
@@ -366,23 +365,4 @@ export async function unaddContact(contactId: string, accountType: AccountType):
     if (__DEV__) console.warn("[avenas] unaddContact disconnect", contactId, e);
     return { severed: false };
   }
-}
-
-// ─── community guidelines acceptance ─────────────────────────────────────────
-
-export async function loadCommunityTerms(): Promise<CommunityTermsAcceptance | null> {
-  return getJSON<CommunityTermsAcceptance | null>(COMMUNITY_TERMS_KEY, null);
-}
-
-/** True only when the user accepted the CURRENT guidelines version. */
-export async function hasAcceptedCommunityTerms(): Promise<boolean> {
-  const t = await loadCommunityTerms();
-  return !!t && t.version === COMMUNITY_TERMS_VERSION;
-}
-
-export async function acceptCommunityTerms(): Promise<void> {
-  await setJSON<CommunityTermsAcceptance>(COMMUNITY_TERMS_KEY, {
-    version: COMMUNITY_TERMS_VERSION,
-    acceptedAtISO: new Date().toISOString(),
-  });
 }

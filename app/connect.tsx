@@ -40,6 +40,7 @@ import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { cardButton, darkGlow, pill, pillGlow, PILL_H_SM, PILL_H_XS } from "../constants/buttons";
 import { blockContact, reportPerson, loadBlockedIds, unblockUser } from "../utils/moderation";
 import { askConnectionRole, promptUndecidedConnectionRoles } from "../utils/connectionRolePrompt";
+import { noteConnections } from "../utils/connectionSummary";
 import type { ReportReason } from "../constants/chat";
 import {
   getMyCode,
@@ -94,6 +95,9 @@ export default function ConnectScreen() {
       // Hide blocked people entirely — their lingering connections and any new
       // requests they send never surface, so we can't be re-connected to them.
       setConnections(list.filter(c => !blocked.has(c.otherId)));
+      // Home's Connect card goes once there's someone, before Home is back
+      // (utils/connectionSummary.ts).
+      void noteConnections(list, blocked);
     } catch {
       /* leave the last good list in place */
     }

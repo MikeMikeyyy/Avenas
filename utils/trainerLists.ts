@@ -316,19 +316,23 @@ export type RecipientChoice = { all: boolean; groupIds: string[]; clientIds: str
  * The rows a send writes (appendSharedPrograms), one per person.
  *
  *   * every client: one each, as a send to people picked one by one;
- *   * clients picked one by one: one each, straight to them, so it's on their
- *     own Trainer tab and on no group's page, whatever groups are picked too
- *     (user report, 2026-10-29: someone picked one by one who was also in a
- *     group picked got the group's copy, which put it on the group's page);
  *   * a group: everyone else in it but me (invites still to be answered too),
  *     tagged with the group, as the group's own page sends it, so it shows on
  *     the group's Programs page and reaches a fellow trainer or anyone else in
  *     it who isn't my client (user report, 2026-10-29: a group picked here
  *     ticked only the people in it who were my clients and sent to them one by
- *     one).
+ *     one). All of them, whoever else is picked: someone picked one by one who
+ *     is in a group picked gets the group's copy (user report and decision,
+ *     2026-11-12: with everyone in a group picked one by one as well, the
+ *     group got no rows, so the send was on none of its pages; it was the
+ *     other way round from 2026-10-29);
+ *   * clients picked one by one and in no group picked: one each, straight to
+ *     them, on their own Trainer tab and no group's page. Someone picked on
+ *     their own, with no group picked, always gets it straight, whatever
+ *     groups they share with me (user report, 2026-10-29: it reached them
+ *     through a group, onto its page).
  *
- * Everyone gets it once: someone picked one by one gets it straight even when a
- * group picked has them, and someone in two of the groups gets the first's.
+ * Everyone gets it once: someone in two of the groups picked gets the first's.
  * Each group's rows, and the one-by-one rows, are a send of their own (their
  * own sent time, so their own batch key), so the Programs page lists each
  * where it went, as if sent from there.
@@ -358,11 +362,13 @@ export function shareEntriesFor(
     for (const id of people.clientIds) add(id, nowMs);
     return entries;
   }
-  // The ones picked one by one first: theirs is straight to them.
-  for (const id of choice.clientIds) add(id, nowMs);
+  // The groups picked first: everyone in one gets the group's copy, so the
+  // group's pages show the send to all of them.
   choice.groupIds.forEach((groupId, i) => {
     for (const id of people.groupMembers[groupId] ?? []) add(id, nowMs + i + 1, groupId);
   });
+  // Then the ones picked one by one that no group picked has: straight to them.
+  for (const id of choice.clientIds) add(id, nowMs);
   return entries;
 }
 

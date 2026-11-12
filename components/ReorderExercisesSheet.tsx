@@ -3,7 +3,8 @@
 // page and Log Workout; user request, 2026-10-29: four copies had drifted into
 // four looks), and its list, which the builder's Workout Summary also shows for
 // a day. Modelled on the builder's: each row is a drag handle, the exercise's
-// number (NumberBadge, as on its card), its name, Change (the page's Change
+// number (NumberBadge, as on its card; days reordered in Go to Day take a
+// Workout Summary's faded green one, `washNumbers`), its name, Change (the page's Change
 // Exercise) and the red delete circle, which asks first. Built on SimpleSheet,
 // so it drags down by its top, stops below the status bar and scrolls a long
 // list, with Done pinned under it. The first time it opens, a guide to moving
@@ -54,7 +55,7 @@ const SLIDE = { useNativeDriver: false, damping: 20, stiffness: 280 } as const;
 /** A place up (-1) or down (1) to make room for the held row, or none. */
 type Shift = -1 | 0 | 1;
 
-function ReorderRow({ index, count, name, meta, active, shift, divider, onHold, onOver, onLetGo, onChange, onRemove }: {
+function ReorderRow({ index, count, name, meta, active, shift, divider, washNumber, onHold, onOver, onLetGo, onChange, onRemove }: {
   index: number;
   count: number;
   name: string;
@@ -65,6 +66,8 @@ function ReorderRow({ index, count, name, meta, active, shift, divider, onHold, 
   shift: Shift;
   /** A hairline under it (every row but the last). */
   divider: boolean;
+  /** Its number in a faded green circle (NumberBadge `wash`), not raised. */
+  washNumber?: boolean;
   onHold: (index: number) => void;
   onOver: (index: number) => void;
   /** `commit` false when the touch was taken away rather than let go. */
@@ -136,7 +139,9 @@ function ReorderRow({ index, count, name, meta, active, shift, divider, onHold, 
         <View style={styles.handle}>
           <DragHandleIcon color={t.ts} />
         </View>
-        <NumberBadge n={index + 1} isDark={isDark} />
+        {/* An exercise's: its card's own raised badge, so the two read as one.
+            Days (Go to Day's Reorder): a Workout Summary's faded green one. */}
+        <NumberBadge n={index + 1} isDark={isDark} wash={washNumber} />
         {meta ? (
           <View style={styles.nameCol}>
             <Text style={[styles.metaName, { color: t.tp }]} numberOfLines={1}>{name}</Text>
@@ -193,11 +198,15 @@ export interface ReorderExerciseListProps<T> {
   onRemove?: (item: T, index: number) => void;
   /** True while a row is held, so whatever scrolls the list holds still. */
   onDragStateChange?: (dragging: boolean) => void;
+  /** The numbers in a Workout Summary's faded green circles (Go to Day's days;
+   *  user request, 2026-11-12) rather than an exercise card's raised badge,
+   *  which the exercises' rows keep so a row reads as its card. */
+  washNumbers?: boolean;
 }
 
 /** The rows on their own, for a sheet of its own (the builder's Workout
  *  Summary, its Go to Day). */
-export function ReorderExerciseList<T>({ items, keyOf, nameOf, metaOf, onReorder, onChange, onRemove, onDragStateChange }: ReorderExerciseListProps<T>) {
+export function ReorderExerciseList<T>({ items, keyOf, nameOf, metaOf, onReorder, onChange, onRemove, onDragStateChange, washNumbers }: ReorderExerciseListProps<T>) {
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
   // The same, for the touch handlers, which may run before a redraw has
   // caught up with the last place passed.
@@ -254,6 +263,7 @@ export function ReorderExerciseList<T>({ items, keyOf, nameOf, metaOf, onReorder
           active={drag?.from === i}
           shift={shiftOf(i)}
           divider={i < items.length - 1}
+          washNumber={washNumbers}
           onHold={hold}
           onOver={over}
           onLetGo={letGo}

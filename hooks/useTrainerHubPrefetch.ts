@@ -18,7 +18,8 @@ import { useEffect, useRef } from "react";
 import { useAccountType } from "../contexts/AccountTypeContext";
 import { useAuth } from "../contexts/AuthContext";
 import { useOffline } from "../contexts/ConnectivityContext";
-import { hasAcceptedCommunityTerms, syncBlocks } from "../utils/moderation";
+import { syncBlocks } from "../utils/moderation";
+import { hasAcceptedCommunityTerms } from "../utils/agreements";
 import { prefetchTrainerHub } from "../utils/trainerHub";
 import { flushPendingShareUnlinks } from "../utils/trainerStore";
 import { importLegacyTrainerClients } from "../lib/connectionRoles";
@@ -39,7 +40,7 @@ export function useTrainerHubPrefetch(): void {
     let cancelled = false;
     const timer = setTimeout(() => {
       void (async () => {
-        if (!(await hasAcceptedCommunityTerms()) || cancelled) return;
+        if (!(await hasAcceptedCommunityTerms(owner)) || cancelled) return;
         await Promise.all([
           prefetchTrainerHub(accountType, owner),
           warmUnreadMessages(accountType, owner),

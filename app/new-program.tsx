@@ -30,7 +30,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, BTN_SLATE, BTN_SLATE_DARK, NEU_BG, NEU_BG_DARK, PAUSED_ORANGE, WARMUP_ORANGE, accentTextColor, tipFill } from "../constants/theme";
-import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, haloGlow, pill, pillGlow, PILL_H_CHIP, PILL_H_SM, PILL_RADIUS, PILL_SHADOW, setInputSurface } from "../constants/buttons";
+import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, pill, pillGlow, PILL_H_CHIP, PILL_H_SM, PILL_RADIUS, PILL_SHADOW, setInputSurface } from "../constants/buttons";
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WARMUP_TIP_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY, NEW_PROGRAM_DRAFT_KEY, type CompletedWorkout, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets, programFinishDate } from "../constants/programs";
 import { activateProgram, carryOnProgram, minTotalWeeks, withTotalWeeks, type FinishedProgram } from "../utils/programLifecycle";
@@ -42,6 +42,7 @@ import { batchKeyOf, loadGroupReviewPrograms, loadSentPrograms, loadSharedProgra
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GlassButton, { GLASS, GlassSurface } from "../components/GlassButton";
+import { SummaryPill } from "../components/ProgramActionFabs";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
@@ -83,6 +84,9 @@ const NO_EXERCISES: Exercise[] = [];
 // size, and the room it takes after the name.
 const PIN_CHEVRON = 15;
 const PIN_CHEVRON_GAP = 6;
+
+// The gap between the floating + and Create Program under it (create mode).
+const PLUS_ABOVE_CREATE = 12;
 
 // Dev-only warning helper. Compiled out of release builds via `__DEV__`.
 function warnStorage(op: string, key: string, err: unknown) {
@@ -1136,9 +1140,9 @@ function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercis
             <View {...panResponders[i].panHandlers} style={styles.dragHandleArea}>
               <DragHandleIcon color={t.ts} />
             </View>
-            <View style={[styles.daySummaryNumChip, { backgroundColor: isTraining ? ACCT + "18" : (isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)") }]}>
-              <Text style={[styles.daySummaryNum, { color: isTraining ? ACCT : t.ts }]}>{i + 1}</Text>
-            </View>
+            {/* The pop-ups' faded green number, its words' green so it reads
+                (NumberBadge `wash`); a rest day's grey. */}
+            <NumberBadge n={i + 1} isDark={isDark} size={26} wash muted={!isTraining} />
             {isTraining ? (
               <TouchableOpacity
                 style={styles.sumDayBody}
@@ -1168,10 +1172,12 @@ function DraggableDayList({ cyclePattern, isTrainingDay, workouts, customExercis
   );
 }
 
-function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, workouts, customExercises, onReorderDays, onReorderExercises, onRemoveExercise, onEditExercise, onAddExercise, onJumpToDay, onClose }: {
+function ProgramSummarySheet({ visible, isDark, t, programName, cyclePattern, isTrainingDay, workouts, customExercises, onReorderDays, onReorderExercises, onRemoveExercise, onEditExercise, onAddExercise, onJumpToDay, onClose }: {
   visible: boolean;
   isDark: boolean;
   t: typeof APP_LIGHT | typeof APP_DARK;
+  /** The name as typed in Step 1: the sheet's title over the days. */
+  programName: string;
   cyclePattern: string[];
   isTrainingDay: boolean[];
   workouts: WorkoutMap;
@@ -1282,9 +1288,16 @@ function ProgramSummarySheet({ visible, isDark, t, cyclePattern, isTrainingDay, 
               </TouchableOpacity>
             ) : <View style={styles.sumBackBtn} />}
             <View style={{ flex: 1, alignItems: "center" }}>
-              <Text style={[styles.restTitle, { color: t.tp }]} numberOfLines={1}>
-                {detailIdx != null ? detailLabel : "Workout Summary"}
-              </Text>
+              {/* Over the days, the program's name as typed (user request,
+                  2026-11-12: it said "Workout Summary"), whole and wrapping,
+                  never cut short; over one day, that day's name. */}
+              {detailIdx != null ? (
+                <Text style={[styles.restTitle, { color: t.tp }]} numberOfLines={1}>{detailLabel}</Text>
+              ) : (
+                <Text style={[styles.restTitle, styles.sumProgramName, { color: t.tp }]}>
+                  {programName.trim() || "Workout Summary"}
+                </Text>
+              )}
               <Text style={[styles.restSubtitle, { color: t.ts }]} numberOfLines={1}>
                 {detailIdx != null
                   ? `${detailExs.length} exercise${detailExs.length === 1 ? "" : "s"} · ${detailSets} set${detailSets === 1 ? "" : "s"}`
@@ -1558,6 +1571,8 @@ export default function NewProgramScreen() {
   const isEditMode = !!editId;
   const isReviewMode = !!reviewId && !editId;
   const isSharedEditMode = !!sharedId && !editId && !reviewId;
+  // A new program: the one mode with the floating Create Program pill.
+  const isCreateMode = !isEditMode && !isReviewMode && !isSharedEditMode;
 
   // ── Units ──────────────────────────────────────────────────────────────────
   // Every weight typed here records the unit it was typed in, and reads in that
@@ -1680,16 +1695,19 @@ export default function NewProgramScreen() {
   // That is what froze the builder: the Reorder sheet opened the picker without
   // closing itself, and Add Exercise / tap-to-swap died until you left the page.
   // So: sheet openers close the others, and the picker render is gated below.
-  const [pickerState, setPickerState] = useState<{ day: string; replaceId?: string } | null>(null);
+  // `thenGo`: opened from the floating +, so once its exercises are added the
+  // page goes to the day they went into.
+  const [pickerState, setPickerState] = useState<{ day: string; replaceId?: string; thenGo?: boolean } | null>(null);
   // Workout Summary sheet (floating button on Step 2).
   const [summaryOpen, setSummaryOpen] = useState(false);
   // Per-day Reorder sheet (drag handle on an exercise row).
   const [reorderDay, setReorderDay] = useState<string | null>(null);
   // An exercise's ··· sheet (components/ProgramExerciseSheet.tsx).
   const [optionsFor, setOptionsFor] = useState<{ day: string; id: string } | null>(null);
-  // Go to Day (the pinned day name on Step 2), and the day it was opened on.
+  // Go to Day (the pinned day name on Step 2). The same sheet is the floating
+  // +'s first step ("add"): the day to add exercises to.
   const [goToDayOpen, setGoToDayOpen] = useState(false);
-  const [goToDayFrom, setGoToDayFrom] = useState<number | null>(null);
+  const [goToDayPurpose, setGoToDayPurpose] = useState<"go" | "add">("go");
   // First-run coach mark teaching the tap-to-toggle Training/Rest interaction.
   const [showCycleCoach, setShowCycleCoach] = useState(false);
   // First-run coach mark for Step 2: the green Add Exercise button and its
@@ -2783,9 +2801,6 @@ export default function NewProgramScreen() {
   const [pinShown, setPinShown] = useState(false);
   const pinShownRef = useRef(false);
   const lastScrollY = useRef(0);
-  // The day the pinned name shows (past halfway through its roll in): the one
-  // Go to Day ticks.
-  const dockedDay = useRef<string | null>(null);
   const placePin = useCallback((y: number) => {
     lastScrollY.current = y;
     const docks = daysOrder.map(d => dayOffsets.current[d]);
@@ -2799,9 +2814,6 @@ export default function NewProgramScreen() {
       setPinShown(shown);
     }
     if (!ready) return;
-    let docked = 0;
-    for (let i = 1; i < at.length && y >= at[i] - PIN_H / 2; i++) docked = i;
-    dockedDay.current = daysOrder[docked];
     // Day i's name rolls in over the PIN_H before it docks; the glass goes
     // from the name before's width to its own over the same stretch.
     const ws = widths as number[];
@@ -2849,15 +2861,39 @@ export default function NewProgramScreen() {
       contents: `${exs.length} exercise${exs.length === 1 ? "" : "s"} · ${sets} set${sets === 1 ? "" : "s"}`,
     }];
   }), [daysOrder, workouts, dayIds]);
-  // Ticked by slot, so after a swap it's the day now where the page is.
-  // From the pinned name, the day it's showing; from a day's own heading (user
-  // request, 2026-11-07: the same sheet from there), that day.
-  const openGoToDay = useCallback((day?: string) => {
+  // From the pinned name, and from a day's own heading (user request,
+  // 2026-11-07: the same sheet from there). No day is ticked (user request,
+  // 2026-11-12): each has a + instead.
+  const openGoToDay = useCallback(() => {
     Keyboard.dismiss();
-    const key = day ?? dockedDay.current;
-    setGoToDayFrom(key ? parseDayKey(key)?.idx ?? null : null);
+    setGoToDayPurpose("go");
     setGoToDayOpen(true);
   }, []);
+
+  // The floating + (user request, 2026-11-12: adding to a day meant scrolling
+  // to the Add Exercise at its end, in every mode, a trainer's review and
+  // shared edit included): pick the day (Go to Day's sheet, "add"), then the
+  // exercise picker opens on it, and once they're added the page goes to that
+  // day. One training day needs no picking. A day's + in Go to Day comes here
+  // too. Closes the other sheets first, as every opener here does (the
+  // single-modal note).
+  const addFromPlus = useCallback((day: string) => {
+    setSummaryOpen(false);
+    setReorderDay(null);
+    setOptionsFor(null);
+    setPickerState({ day, thenGo: true });
+  }, []);
+  const openAddToDay = useCallback(() => {
+    Keyboard.dismiss();
+    if (daysOrder.length === 0) return;
+    if (daysOrder.length === 1) { addFromPlus(daysOrder[0]); return; }
+    setSummaryOpen(false);
+    setReorderDay(null);
+    setOptionsFor(null);
+    setPickerState(null);
+    setGoToDayPurpose("add");
+    setGoToDayOpen(true);
+  }, [daysOrder, addFromPlus]);
 
   // Strip translateY(scrollY): day 0 rolls in from one row below over the last PIN_H
   // before it docks (so it enters/exits like every other transition, not a pop);
@@ -3048,7 +3084,9 @@ export default function NewProgramScreen() {
         // keeps its longer-standing 120 because its content runs much further.
         // Padding on the CONTENT, not a fixed height, so adding cycle days or
         // exercises keeps the same gap rather than eating into it.
-        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (step === 2 ? 120 : 90) + pinnedLift, barsReach) }}
+        // Step 2's end clears the floating buttons: in create mode the + stands
+        // above Create Program, a button's height and its gap higher.
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (step === 2 ? 120 + (isCreateMode ? PILL_H_SM + PLUS_ABOVE_CREATE : 0) : 90) + pinnedLift, barsReach) }}
       >
         <View style={styles.header}>
           <View style={{ width: 66 }} />
@@ -3200,22 +3238,31 @@ export default function NewProgramScreen() {
         </Reanimated.View>
       )}
 
+      {/* The floating + — bottom LEFT, Step 2, every mode (a trainer's review
+          and shared edit included): a day, then exercises for it, wherever the
+          page is (openAddToDay). Clear, as Summary is: the slate is the commit.
+          In create mode it stands above Create Program, which keeps the
+          corner. */}
+      {step === 2 && kbHeight === 0 && (
+        <Reanimated.View style={[{ position: "absolute", left: 20, bottom: insets.bottom + 24 + (isCreateMode ? PILL_H_SM + PLUS_ABOVE_CREATE : 0), zIndex: 8 }, pinnedStyle]}>
+          <GlassButton
+            size={PILL_H_SM}
+            onPress={openAddToDay}
+            solidStyle={PILL_SHADOW}
+            accessibilityLabel="Add exercises to a day"
+          >
+            <Ionicons name="add" size={24} color={t.tp} />
+          </GlassButton>
+        </Reanimated.View>
+      )}
+
       {/* Floating Workout Summary button — Step 2 only, where the full page gets
-          long. Hidden while the keyboard is up so it never overlaps the toolbar. */}
+          long. Hidden while the keyboard is up so it never overlaps the toolbar.
+          Clear, as on every program page (components/ProgramActionFabs.tsx
+          SummaryPill; user request, 2026-11-12: it was green). */}
       {step === 2 && kbHeight === 0 && (
         <Reanimated.View style={[{ position: "absolute", right: 20, bottom: insets.bottom + 24, zIndex: 8 }, pinnedStyle]}>
-          <GlassButton
-            pill
-            size={PILL_H_SM}
-            tint={ACCT}
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSummaryOpen(true); }}
-            contentStyle={styles.createFab}
-            solidStyle={[styles.summaryFabGlow, darkGlow(styles.summaryFabGlow, isDark)]}
-            accessibilityLabel="Workout summary"
-          >
-            <Ionicons name="list" size={16} color="#fff" />
-            <Text style={styles.summaryFabText}>Summary</Text>
-          </GlassButton>
+          <SummaryPill isDark={isDark} onPress={() => setSummaryOpen(true)} />
         </Reanimated.View>
       )}
 
@@ -3223,6 +3270,7 @@ export default function NewProgramScreen() {
         visible={summaryOpen}
         isDark={isDark}
         t={t}
+        programName={name}
         cyclePattern={cyclePattern}
         isTrainingDay={isTrainingDay}
         workouts={workouts}
@@ -3277,12 +3325,16 @@ export default function NewProgramScreen() {
 
       {/* Go to Day, from the pinned day name. Its day is gone to once the
           sheet has slid away, so the page scrolls with nothing over it. Its
-          Reorder moves the days on the page behind it as you go. */}
+          Reorder moves the days on the page behind it as you go. A day's +,
+          and any day picked when the floating + opened it ("add"), opens the
+          exercise picker on that day instead, once the sheet has gone (the
+          ··· sheet's Change, the same way). */}
       <GoToDaySheet
         visible={goToDayOpen}
         days={goToDays}
-        current={goToDayFrom}
+        purpose={goToDayPurpose}
         onPick={jumpToDayKey}
+        onAdd={addFromPlus}
         onReorder={arrangeCycleDays}
         onClose={() => setGoToDayOpen(false)}
       />
@@ -3304,6 +3356,8 @@ export default function NewProgramScreen() {
             } else {
               exNames.forEach((name, i) => addExercise(pickerState.day, name, setCount, customIds[i]));
             }
+            // From the +: the page goes to the day they went into.
+            if (pickerState.thenGo && exNames.length > 0) jumpToDayKey(pickerState.day);
             setPickerState(null);
           }}
           onCreateCustom={query => {
@@ -3469,9 +3523,7 @@ const styles = StyleSheet.create({
   daySummaryCardInner:  { paddingVertical: 4, paddingHorizontal: 0 },
   daySummaryEmpty:      { fontFamily: FontFamily.regular, fontSize: 13, fontStyle: "italic", paddingVertical: 14, paddingHorizontal: 16 },
   dragHandleArea:       { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },
-  daySummaryNumChip:    { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   daySummaryActions:    { flexDirection: "row", alignItems: "center", gap: 14 },
-  daySummaryNum:        { fontFamily: FontFamily.bold, fontSize: 13 },
   workoutDayCard:   { borderRadius: 16 },
   exerciseCard:     { borderRadius: 16, marginBottom: 14 },
   emptyCard:        { borderRadius: 16, marginBottom: 14 },
@@ -3550,17 +3602,16 @@ const styles = StyleSheet.create({
   summarySheet:     { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 30, maxHeight: "82%" },
   sumHeader:        { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1 },
   sumBackBtn:       { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  // A long name wraps onto a second line, centred as the one line is.
+  sumProgramName:   { textAlign: "center" },
   sumListWrap:      { paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8 },
   sumDayRow:        { flexDirection: "row", alignItems: "center", gap: 10, height: 62, paddingHorizontal: 8 },
   sumDayBody:       { flex: 1, justifyContent: "center", gap: 2 },
   sumDayName:       { fontFamily: FontFamily.semibold, fontSize: 15 },
   sumDayMeta:       { fontFamily: FontFamily.regular, fontSize: 12 },
-  summaryFabGlow:   haloGlow(ACCT, 0.6, 12),
-  summaryFabText:   { fontFamily: FontFamily.semibold, fontSize: 14, color: "#FFFFFF" },
-  // Same geometry as the Summary pill so the two read as a pair. Neutral drop
-  // shadow rather than Summary's ACCT glow — a coloured glow on a slate button
-  // would look like a mistake. Both are the solid pills' only: on iOS 26 they
-  // are glass (components/GlassButton.tsx), lit by the glass.
+  // Same geometry as the Summary pill so the two read as a pair. A neutral drop
+  // shadow, the solid pill's only: on iOS 26 it's glass (components/
+  // GlassButton.tsx), lit by the glass.
   createFabLift:    { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
   createFab:        { paddingHorizontal: 18, gap: 6 },
   createFabText:    { fontFamily: FontFamily.semibold, fontSize: 14 },

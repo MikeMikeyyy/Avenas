@@ -16,8 +16,9 @@ const TP = APP_LIGHT.tp;
 // Written to match the app as it ships: accounts with cloud backup, trainer and
 // group features, and the zero-tolerance community rules users also accept in
 // constants/community.ts (Apple Guideline 1.2), which section 6 must agree with.
-// Bump TERMS_VERSION (constants/onboarding.ts) to have everyone re-accept after
-// a material change. No em dashes in the copy.
+// Bump TERMS_VERSION (constants/onboarding.ts) after a material change: new
+// sign-ups accept and record the new version, but nothing asks existing
+// accounts again yet (see the note there). No em dashes in the copy.
 const SECTIONS: { heading: string; body: string }[] = [
   {
     heading: "1. Agreement",

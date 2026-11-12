@@ -40,6 +40,7 @@ import { getMyConnections, type Connection } from "../lib/connections";
 import { loadConnectionRoles, type ConnectionRole } from "../lib/connectionRoles";
 import { isCloudContactId } from "../lib/chat";
 import { loadBlockedIds } from "./moderation";
+import { noteConnections } from "./connectionSummary";
 import {
   addOtherTrainer,
   loadAssignedPT,
@@ -73,6 +74,9 @@ async function fetchLive(): Promise<{ live: LiveConnections; blocked: Set<string
   } catch {
     return { live: null, blocked }; // offline / signed out — keep what's on the device
   }
+  // Whether there's anyone at all, for Home's Connect card: this read is the
+  // startup prefetch's, so Home knows without asking (utils/connectionSummary.ts).
+  void noteConnections(conns, blocked);
   const accepted = conns.filter(c => c.status === "accepted" && !blocked.has(c.otherId));
   return { live: { accepted, ids: new Set(accepted.map(c => c.otherId)) }, blocked };
 }

@@ -8,17 +8,21 @@
 //
 // The acceptance is VERSIONED: bump COMMUNITY_TERMS_VERSION whenever the
 // guidelines materially change and every user is re-prompted on next entry.
+// It's per ACCOUNT on each phone and recorded on the server
+// (utils/agreements.ts, migration 0059), and every screen that shows other
+// people waits for it (components/CommunityGate.tsx).
 
+/** `Record<accountId, AgreementRecord>` (utils/agreements.ts): who has agreed
+ *  on this phone, and whether the server has it. */
+export const COMMUNITY_TERMS_BY_ACCOUNT_KEY = "@avenas/community_terms_by_account";
+
+/** The agreement from before it was per account: one for the whole phone. It
+ *  no longer counts (everyone agrees once more, so there's a record), and it's
+ *  removed when someone on the phone agrees. */
 export const COMMUNITY_TERMS_KEY = "@avenas/community_terms";
 
 /** Bump when the guidelines change → everyone must re-accept. */
 export const COMMUNITY_TERMS_VERSION = 1;
-
-/** Stored shape: the version the user accepted + when. */
-export type CommunityTermsAcceptance = {
-  version: number;
-  acceptedAtISO: string;
-};
 
 /** One-line promise shown on the agreement prompt. */
 export const COMMUNITY_PLEDGE =

@@ -1386,8 +1386,85 @@ async function main() {
   await as(null);
 
   await twoPhones(db, as);
+  await agreementRecords(db, as);
 
   return finish(db);
+}
+
+/**
+ * Who agreed to what (0059): an account records its own agreement to the
+ * Terms or the community guidelines through record_agreement, which keeps the
+ * first and the server's own time; a phone can't record one in the future, one
+ * for nothing, or one signed out; and through the API nobody writes, changes or
+ * takes back a record, or reads anyone else's. It goes with the account.
+ */
+async function agreementRecords(db: PGlite, as: (uid: string | null) => Promise<unknown>) {
+  const ME = "97979797-0000-4000-8000-000000000097";
+  const YOU = "96969696-0000-4000-8000-000000000096";
+  for (const id of [ME, YOU]) await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+
+  /** Through the API role, as the app is: the rows, how many changed, or the error. */
+  const api = async (uid: string | null, sql: string, params: unknown[] = []) => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      const r = await db.query<Record<string, unknown>>(sql, params);
+      return { rows: r.rows, changed: r.affectedRows ?? 0, error: null as string | null };
+    } catch (e) {
+      return { rows: [] as Record<string, unknown>[], changed: 0, error: (e as Error).message };
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  const record = (uid: string | null, document: string, version: number, agreedAt: string | null) =>
+    api(uid, `select public.record_agreement($1, $2, $3::timestamptz)`, [document, version, agreedAt]).then(r => r.error);
+  type Kept = { document: string; version: number; agreed_at: string; recorded_at: string };
+  const keptFor = async (uid: string) => (await db.query<Kept>(
+    `select document, version, agreed_at::text as agreed_at, recorded_at::text as recorded_at
+       from public.agreements where user_id = $1 order by document, version`, [uid])).rows;
+  const iso = (t: string | undefined) => (t ? new Date(t).toISOString() : null);
+
+  // In the past by any clock this runs on: a time ahead of the server's is
+  // clamped to it (checked below).
+  const tapped = "2026-01-12T09:30:00.000Z";
+  eq(await record(ME, "terms", 1, tapped), null, "agreements: an account records accepting the Terms, through the API");
+  const [terms] = await keptFor(ME);
+  eq([terms?.document, terms?.version, iso(terms?.agreed_at)], ["terms", 1, tapped],
+    "agreements: which document, which version, and when the phone says they agreed");
+  eq(typeof terms?.recorded_at === "string", true, "agreements: ...and when the server heard, by its own clock");
+  eq(await record(ME, "terms", 1, "2026-02-20T09:30:00.000Z"), null, "agreements: agreeing again (another phone) is fine...");
+  eq(iso((await keptFor(ME))[0]?.agreed_at), tapped, "agreements: ...and the first is kept");
+  eq(await record(ME, "community", 1, "2999-01-01T00:00:00.000Z"), null, "agreements: a phone with its clock far ahead records...");
+  const ahead = (await keptFor(ME)).find(r => r.document === "community");
+  eq(iso(ahead?.agreed_at), iso(ahead?.recorded_at), "agreements: ...no later than the server heard it");
+  eq(await record(ME, "community", 2, null), null, "agreements: a phone that sends no time...");
+  const untimed = (await keptFor(ME)).find(r => r.document === "community" && r.version === 2);
+  eq(iso(untimed?.agreed_at), iso(untimed?.recorded_at), "agreements: ...is recorded at the server's");
+  eq(/no such document/.test((await record(ME, "privacy", 1, tapped)) ?? ""), true, "agreements: only the Terms and the guidelines");
+  eq(/no such version/.test((await record(ME, "terms", 0, tapped)) ?? ""), true, "agreements: only a real version");
+  eq(/not authenticated/.test((await record(null, "terms", 1, tapped)) ?? ""), true, "agreements: never signed out");
+
+  eq(await record(YOU, "community", 1, tapped), null, "agreements: another account records its own");
+  eq((await keptFor(YOU)).map(r => r.document), ["community"], "agreements: ...as itself, whatever it sends (there's no one else to name)");
+  eq((await keptFor(ME)).length, 3, "agreements: ...and mine are as they were");
+
+  const mineRead = await api(ME, `select document from public.agreements where user_id = $1`, [ME]);
+  eq([mineRead.error, mineRead.rows.length], [null, 3], "agreements: an account reads its own records");
+  const yoursRead = await api(YOU, `select document from public.agreements where user_id = $1`, [ME]);
+  eq(yoursRead.rows.length, 0, "agreements: ...and nobody else's");
+  const write = await api(ME, `insert into public.agreements (user_id, document, version, agreed_at, recorded_at)
+    values ($1, 'terms', 9, now(), '2020-01-01')`, [ME]);
+  eq(/row-level security/.test(write.error ?? ""), true, "agreements: nobody writes one straight in (no backdating)");
+  const change = await api(ME, `update public.agreements set agreed_at = '2020-01-01' where user_id = $1`, [ME]);
+  eq([change.error, change.changed], [null, 0], "agreements: nor changes one");
+  const takeBack = await api(ME, `delete from public.agreements where user_id = $1`, [ME]);
+  eq([takeBack.error, takeBack.changed], [null, 0], "agreements: nor takes one back");
+  eq((await keptFor(ME)).length, 3, "agreements: ...all still there");
+
+  await as(null);
+  await db.query(`delete from auth.users where id = $1`, [ME]);
+  eq((await keptFor(ME)).length, 0, "agreements: they go with the account, as the Privacy Policy says");
+  eq((await keptFor(YOU)).length, 1, "agreements: ...and only that account's");
 }
 
 /**

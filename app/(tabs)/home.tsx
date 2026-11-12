@@ -45,6 +45,7 @@ import { EMPTY_ACHIEVEMENTS, type Achievement, type AchievementsState } from "..
 import { visibleAchievements } from "../../utils/achievements";
 import { loadAchievements } from "../../utils/achievementStore";
 import InsightsCard from "../../components/InsightsCard";
+import ConnectCard from "../../components/ConnectCard";
 import { tabScreen } from "../../components/TabScreen";
 
 const AVATAR_BG = "#ffffffff"; // change this to restyle the settings button independently
@@ -629,6 +630,10 @@ function HomeScreen() {
             </View>
           ))}
         </View>
+
+        {/* Connected with nobody yet, gym user or trainer: a way to connect
+            right here, rather than in the Trainer tab (components/ConnectCard.tsx). */}
+        <ConnectCard />
 
         <ActivityCalendar isDark={isDark} workoutDates={workoutDates} activeProgram={activeProgram} programs={programs} workoutHistory={workoutHistory} />
 

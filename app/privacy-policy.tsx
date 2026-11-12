@@ -29,7 +29,8 @@ const SECTIONS: { heading: string; body: string }[] = [
       "Profile: your profile photo if you add one, whether you use Avenas as a Gym User or a Trainer, and your preferred weight unit.\n\n" +
       "Training data: your programs, workout history, journal entries and custom exercises, including the weights, reps, dates and notes you record.\n\n" +
       "Messages and sharing: messages you send to your connections and groups, programs you share or send for review, and the groups you create or join.\n\n" +
-      "Reports: if you report a person or a message, the reason you give and a copy of the reported message.",
+      "Reports: if you report a person or a message, the reason you give and a copy of the reported message.\n\n" +
+      "Agreements: when you accept the Terms of Service or the Community Guidelines, we record which version you accepted and when, so we can show that you agreed to them.",
   },
   {
     heading: "3. Information Collected Automatically",
@@ -64,7 +65,7 @@ const SECTIONS: { heading: string; body: string }[] = [
   },
   {
     heading: "8. How Long We Keep It",
-    body: "We keep your information for as long as you have an account. When you delete your account, your profile, profile photo, training data, messages, connections, shared programs and the groups you own are permanently deleted, along with any reports you've made. A report someone else made about you, including any message it quotes, is kept so we can act on it.",
+    body: "We keep your information for as long as you have an account. When you delete your account, your profile, profile photo, training data, messages, connections, shared programs, the groups you own and the record of what you agreed to are permanently deleted, along with any reports you've made. A report someone else made about you, including any message it quotes, is kept so we can act on it.",
   },
   {
     heading: "9. Your Choices",
@@ -122,7 +123,7 @@ export default function PrivacyPolicyScreen() {
           <View style={{ width: 40 }} />
         </View>
 
-        <Text style={[styles.updated, { color: t.ts }]}>Last updated: September 2026</Text>
+        <Text style={[styles.updated, { color: t.ts }]}>Last updated: November 2026</Text>
 
         <NeuCard dark={isDark} style={styles.card}>
           {SECTIONS.map((s, i) => (

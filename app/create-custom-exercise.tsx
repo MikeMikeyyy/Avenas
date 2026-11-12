@@ -1,4 +1,16 @@
-import { useState, useEffect, useCallback } from "react";
+// Making (or editing) a custom exercise, laid out as option D of the Custom
+// Exercise Redesign canvas (user picks, 2026-11-12): the exercise as it shows
+// in your exercise list at the top, then The basics (its name and muscles, the
+// two it needs), Make it yours (a photo, a demo video, Assisted) and How to do
+// it (steps you can move and swipe away), with Save floating at the foot.
+//
+// Save floats over the page, standing on the workout bar while it shows, with
+// how many of your custom exercise slots are used above it while creating (an
+// edit takes no slot). Both sit on a blur that rises from the foot, the page
+// top's own (MaskedView + LinearGradient + BlurView), so the cards' words
+// passing under them blur away rather than run into the line.
+
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -13,8 +25,10 @@ import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Circle } from "react-native-svg";
 import { Image } from "expo-image";
+import Reanimated from "react-native-reanimated";
+import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFloatingBarsReach } from "../hooks/useFloatingBars";
+import { useFloatingBarsReach, usePinnedLift } from "../hooks/useFloatingBars";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { EXERCISE_PHOTO, pickFromLibrary, pickSquarePhoto } from "../lib/photoPicker";
@@ -22,8 +36,11 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, accentTextColor, addSlotInk } from "../constants/theme";
-import { darkGlow, glowOpacity, pill, pillGlow } from "../constants/buttons";
+import {
+  APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, ON_FILL,
+  accentTextColor, dangerTextColor, tipFill,
+} from "../constants/theme";
+import { cardButton, PILL_H, PILL_SHADOW } from "../constants/buttons";
 import {
   CUSTOM_KEY, MAX_CUSTOM, MAX_MEDIA_BYTES, MAX_VIDEO_SECONDS, MUSCLE_GROUPS,
   type SelectableMuscle, type CustomExercise,
@@ -33,6 +50,9 @@ import { renameCustomExercise } from "../utils/customExerciseStore";
 import { refreshAssisted } from "../utils/assistedStore";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
+import GlassButton from "../components/GlassButton";
+import ExerciseImage from "../components/ExerciseImage";
+import StepsEditor, { newStep, type Step } from "../components/StepsEditor";
 import { useTheme } from "../contexts/ThemeContext";
 import AppSwitch from "../components/AppSwitch";
 import { alertMessage } from "../utils/errors";
@@ -47,32 +67,84 @@ const SELECTABLE = MUSCLE_GROUPS.filter(g => g !== "All") as SelectableMuscle[];
  *  "handstand". Capitalise each word's first letter only, so "RDL" survives. */
 const titleCaseWords = (s: string) => s.trim().replace(/\S+/g, w => w[0].toUpperCase() + w.slice(1));
 
-const RING = 46;
-const RING_STROKE = 4;
+/** Save's gap above the home indicator. */
+const SAVE_GAP = 16;
+/** The slots line and its gap above Save. */
+const SLOT_LINE_H = 30;
+/** How far above the footer's top the blur fades in. */
+const FOOT_FADE = 28;
+
+const RING = 14;
+const RING_STROKE = 2;
 const RING_R = (RING - RING_STROKE) / 2;
 const RING_C = 2 * Math.PI * RING_R;
 
-/** How many custom exercise slots are taken, as a ring with "3/10" in it.
- *  Same ring as a week on the program history page. */
+/** How many custom exercise slots are taken, as a small ring beside the line. */
 function SlotRing({ used, isDark }: { used: number; isDark: boolean }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const pct = Math.min(1, used / MAX_CUSTOM);
   return (
-    <View style={styles.ring}>
-      <Svg width={RING} height={RING} style={styles.ringSvg}>
-        <Circle cx={RING / 2} cy={RING / 2} r={RING_R} stroke={t.ts} strokeWidth={RING_STROKE} fill="none" opacity={0.18} />
-        {pct > 0 && (
-          <Circle
-            cx={RING / 2} cy={RING / 2} r={RING_R}
-            stroke={ACCT} strokeWidth={RING_STROKE} fill="none"
-            strokeDasharray={RING_C}
-            strokeDashoffset={RING_C * (1 - pct)}
-            strokeLinecap="round"
-          />
-        )}
-      </Svg>
-      <Text style={[styles.ringText, { color: t.tp }]}>{used}/{MAX_CUSTOM}</Text>
+    <Svg width={RING} height={RING} style={styles.ringSvg}>
+      <Circle cx={RING / 2} cy={RING / 2} r={RING_R} stroke={t.ts} strokeWidth={RING_STROKE} fill="none" opacity={0.22} />
+      {pct > 0 && (
+        <Circle
+          cx={RING / 2} cy={RING / 2} r={RING_R}
+          stroke={ACCT} strokeWidth={RING_STROKE} fill="none"
+          strokeDasharray={RING_C}
+          strokeDashoffset={RING_C * (1 - pct)}
+          strokeLinecap="round"
+        />
+      )}
+    </Svg>
+  );
+}
+
+/** A section's heading, with "Required" or "Optional" across from it. */
+function SectionLabel({ title, note, required, isDark }: { title: string; note: string; required?: boolean; isDark: boolean }) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <View style={styles.labelRow}>
+      <Text style={[styles.sectionLabel, { color: t.ts }]}>{title}</Text>
+      <Text style={[required ? styles.labelRequired : styles.labelNote, { color: required ? accentTextColor(isDark) : t.ts }]}>{note}</Text>
     </View>
+  );
+}
+
+/** One of Make it yours' rows: an icon in a tile, what it is, and its control. */
+function OptionRow({ icon, title, sub, isDark, children }: {
+  icon: ReactNode;
+  title: string;
+  sub?: string;
+  isDark: boolean;
+  children: ReactNode;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <View style={styles.optRow}>
+      <View style={[styles.optIcon, { backgroundColor: t.field }]}>{icon}</View>
+      <View style={styles.optText}>
+        <Text style={[styles.optTitle, { color: t.tp }]}>{title}</Text>
+        {sub ? <Text style={[styles.optSub, { color: t.ts }]}>{sub}</Text> : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+/** A small button in a card (cardButton): Add, Change, Remove. */
+function CardPill({ label, onPress, isDark, accessibilityLabel }: {
+  label: string;
+  onPress: () => void;
+  isDark: boolean;
+  accessibilityLabel: string;
+}) {
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <BounceButton onPress={onPress} accessibilityLabel={accessibilityLabel} accessibilityRole="button">
+      <View style={[styles.cardPill, cardButton(t)]}>
+        <Text style={[styles.cardPillText, { color: t.tp }]}>{label}</Text>
+      </View>
+    </BounceButton>
   );
 }
 
@@ -83,7 +155,7 @@ export default function CreateCustomExerciseScreen() {
   const router = useRouter();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
-  const addSlot = addSlotInk(isDark);
+  const accent = accentTextColor(isDark);
   // `name` is what the user was searching for in the exercise picker when they
   // tapped Create Custom Exercise, so they don't have to type it twice.
   const { edit: editName, name: searchedName } = useLocalSearchParams<{ edit?: string; name?: string }>();
@@ -97,7 +169,9 @@ export default function CreateCustomExerciseScreen() {
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [assisted, setAssisted] = useState(false);
-  const [steps, setSteps] = useState<string[]>([]);
+  const [steps, setSteps] = useState<Step[]>([]);
+  // A step held to move it: the page holds still under it.
+  const [stepsDragging, setStepsDragging] = useState(false);
   const [saving, setSaving] = useState(false);
   const [slotCount, setSlotCount] = useState(0);
 
@@ -129,28 +203,20 @@ export default function CreateCustomExerciseScreen() {
       setAssisted(ex.assisted === true);
       // Prefer saved steps; otherwise seed the editor from a legacy description
       // (one step per line) so old exercises convert cleanly when re-saved.
-      setSteps(
-        ex.steps && ex.steps.length > 0
-          ? ex.steps
-          : ex.description
-            ? ex.description.split("\n").map(s => s.trim()).filter(Boolean)
-            : []
-      );
+      const words = ex.steps && ex.steps.length > 0
+        ? ex.steps
+        : ex.description
+          ? ex.description.split("\n").map(s => s.trim()).filter(Boolean)
+          : [];
+      setSteps(words.map(text => newStep(text)));
     }).catch(() => {});
   }, [editName]);
 
   const toggleMuscle = useCallback((muscle: SelectableMuscle) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSelectedMuscles(prev =>
       prev.includes(muscle) ? prev.filter(m => m !== muscle) : [...prev, muscle]
     );
-  }, []);
-
-  const addStep = useCallback(() => setSteps(prev => [...prev, ""]), []);
-  const updateStep = useCallback((i: number, text: string) => {
-    setSteps(prev => prev.map((s, idx) => (idx === i ? text : s)));
-  }, []);
-  const removeStep = useCallback((i: number) => {
-    setSteps(prev => prev.filter((_, idx) => idx !== i));
   }, []);
 
   // Both through lib/photoPicker, which every photo pick in the app shares (no
@@ -238,7 +304,8 @@ export default function CreateCustomExerciseScreen() {
       // An edit keeps the exercise's id (one made before ids stays without, as
       // its history is by name); a new exercise gets its own.
       const id = before ? before.id : newCustomId();
-      const cleanSteps = steps.map(s => s.trim()).filter(Boolean);
+      // In the order they stand, empty ones left out.
+      const cleanSteps = steps.map(s => s.text.trim()).filter(Boolean);
       const updated: CustomExercise = {
         ...(id ? { id } : {}),
         name,
@@ -271,8 +338,22 @@ export default function CreateCustomExerciseScreen() {
     }
   };
 
-  const canSave = exerciseName.trim().length > 0 && selectedMuscles.length > 0;
+  const name = exerciseName.trim();
+  const canSave = name.length > 0 && selectedMuscles.length > 0;
   const slotsLeft = Math.max(0, MAX_CUSTOM - slotCount);
+  // The slots line is the new exercise's: an edit takes no slot.
+  const showSlots = !isEditMode;
+  const full = showSlots && slotsLeft === 0;
+  const ready = canSave && !saving && !full;
+
+  // The footer: Save, the slots line above it while creating, and the blur
+  // under both, fading in FOOT_FADE above them. It stands on the workout bar
+  // while that shows, and the page's end clears it.
+  const saveBottom = insets.bottom + SAVE_GAP;
+  const { lift: pinnedLift, liftStyle } = usePinnedLift(saveBottom);
+  const footBody = (showSlots ? SLOT_LINE_H : 0) + PILL_H + saveBottom;
+  const slate = isDark ? BTN_SLATE_DARK : BTN_SLATE;
+  const slateInk = isDark ? APP_DARK.bg : ON_FILL;
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
@@ -299,218 +380,221 @@ export default function CreateCustomExerciseScreen() {
         bottomOffset={ABOVE_KEYBOARD_TOOLS}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        scrollEnabled={!stepsDragging}
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: insets.top + BACK_TOP,
-          paddingBottom: scrollEndPadding(insets.bottom + 32, barsReach),
+          paddingBottom: scrollEndPadding(footBody + 24 + pinnedLift, barsReach),
         }}
       >
         {/* Header */}
         <View style={styles.header}>
           <View style={{ width: 66 }} />
           <View style={{ flex: 1, alignItems: "center" }}>
-            <Text style={[styles.screenTitle, { color: t.tp }]}>{isEditMode ? "EDIT EXERCISE" : "CREATE EXERCISE"}</Text>
+            <Text style={[styles.screenTitle, { color: t.tp }]}>{isEditMode ? "EDIT EXERCISE" : "NEW EXERCISE"}</Text>
           </View>
           <View style={{ width: 66 }} />
         </View>
 
-        {/* Slots — only while creating, since editing doesn't take one. */}
-        {!isEditMode && (
-          <NeuCard dark={isDark} radius={16} style={styles.slotCard}>
-            <View
-              style={styles.slotRow}
-              accessible
-              accessibilityLabel={`${slotCount} of ${MAX_CUSTOM} custom exercise slots used, ${slotsLeft} left`}
-            >
-              <SlotRing used={slotCount} isDark={isDark} />
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={[styles.slotTitle, { color: t.tp }]}>Custom exercise slots</Text>
-                <Text style={[styles.slotSub, { color: t.ts }]}>
-                  {slotsLeft > 0
-                    ? `${slotCount} of ${MAX_CUSTOM} used, ${slotsLeft} left`
-                    : `All ${MAX_CUSTOM} used. Delete one to add more.`}
-                </Text>
-              </View>
+        {/* The exercise as your exercise list draws it: its photo (or the
+            list's dumbbell until it has one), its name and its muscles, as
+            they're filled in below. Only a preview: the photo is added in
+            Make it yours. */}
+        <Text style={[styles.sectionLabel, styles.labelAlone, { color: t.ts }]}>IN YOUR EXERCISE LIST</Text>
+        <NeuCard dark={isDark} style={styles.card}>
+          <View style={styles.previewRow}>
+            <ExerciseImage
+              exerciseId={`custom:${name}`}
+              overrideUri={imageUri ?? undefined}
+              variant="thumb"
+              size={64}
+              radius={14}
+              backgroundColor={t.div}
+              fallbackColor={t.ts}
+            />
+            <View style={styles.previewText}>
+              <Text style={[styles.previewName, { color: name ? t.tp : t.ts }]}>{name || "Your exercise"}</Text>
+              {selectedMuscles.length > 0 ? (
+                <View style={styles.tagRow}>
+                  {selectedMuscles.map(m => (
+                    <View key={m} style={[styles.tag, { backgroundColor: tipFill(isDark) }]}>
+                      <Text style={[styles.tagText, { color: accent }]}>{m}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={[styles.previewMeta, { color: t.ts }]}>Custom</Text>
+              )}
             </View>
-          </NeuCard>
-        )}
-
-        {/* Name */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>EXERCISE NAME</Text>
-        <NeuCard dark={isDark} style={styles.inputCard}>
-          <TextInput
-            style={[styles.textInput, { color: t.tp }]}
-            placeholder="e.g. Cable Curl"
-            placeholderTextColor={t.ts}
-            value={exerciseName}
-            onChangeText={setExerciseName}
-            returnKeyType="done"
-            autoCapitalize="words"
-          />
-        </NeuCard>
-
-        {/* Muscles */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>
-          TARGET MUSCLES <Text style={{ color: t.ts, fontFamily: FontFamily.regular }}>(select at least one)</Text>
-        </Text>
-        <View style={styles.muscleGrid}>
-          {SELECTABLE.map(muscle => {
-            const active = selectedMuscles.includes(muscle);
-            return (
-              <TouchableOpacity
-                key={muscle}
-                onPress={() => toggleMuscle(muscle)}
-                activeOpacity={0.7}
-                style={[
-                  styles.muscleChip,
-                  {
-                    backgroundColor: active ? ACCT : "transparent",
-                    borderColor: active ? "transparent" : t.div,
-                    ...(active && {
-                      shadowColor: ACCT,
-                      shadowOffset: { width: 0, height: 3 },
-                      shadowOpacity: glowOpacity(0.5, isDark),
-                      shadowRadius: 8,
-                    }),
-                  },
-                ]}
-              >
-                <Text style={[styles.muscleChipText, { color: active ? "#fff" : t.ts }]}>
-                  {muscle}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* Assisted: its weight is help, not load (user request, 2026-11-07),
-            so less is harder and less is its record (utils/assisted.ts). */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>WEIGHT</Text>
-        <NeuCard dark={isDark} style={styles.mediaCard}>
-          <View style={styles.assistedRow}>
-            <View style={styles.assistedText}>
-              <Text style={[styles.muteLabel, { color: t.tp }]}>Assisted</Text>
-              <Text style={[styles.slotSub, { color: t.ts }]}>
-                The weight helps you, like an assisted pull-up machine. Less is harder, so less weight is your record.
-              </Text>
-            </View>
-            <AppSwitch value={assisted} onValueChange={setAssisted} accessibilityLabel="Assisted" />
           </View>
         </NeuCard>
 
-        {/* Icon Photo */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>ICON PHOTO <Text style={{ fontFamily: FontFamily.regular }}>(optional)</Text></Text>
-        <NeuCard dark={isDark} style={styles.mediaCard}>
-          {imageUri ? (
-            <View style={styles.mediaPreviewRow}>
-              <Image source={{ uri: imageUri }} style={styles.photoThumb} contentFit="cover" />
-              <View style={{ flex: 1, gap: 4 }}>
-                <Text style={[styles.mediaSetText, { color: t.tp }]}>Photo added</Text>
-                <TouchableOpacity onPress={() => setImageUri(null)} activeOpacity={0.7}>
-                  <Text style={[styles.mediaRemoveText, { color: t.ts }]}>Remove</Text>
-                </TouchableOpacity>
-              </View>
+        {/* The basics: what an exercise needs to be saved. */}
+        <SectionLabel title="THE BASICS" note="Required" required isDark={isDark} />
+        <NeuCard dark={isDark} style={styles.card}>
+          <View style={styles.nameBlock}>
+            <Text style={[styles.fieldName, { color: t.ts }]}>Name</Text>
+            <TextInput
+              style={[styles.nameInput, { color: t.tp }]}
+              placeholder="e.g. Cable Curl"
+              placeholderTextColor={t.ts}
+              value={exerciseName}
+              onChangeText={setExerciseName}
+              returnKeyType="done"
+              autoCapitalize="words"
+              accessibilityLabel="Exercise name"
+            />
+          </View>
+          <View style={[styles.hairline, { backgroundColor: t.div }]} />
+          <View style={styles.musclesBlock}>
+            <View style={styles.fieldRow}>
+              <Text style={[styles.fieldName, { color: t.ts }]}>Target muscles</Text>
+              <Text style={[styles.fieldHint, { color: t.ts }]}>Pick at least one</Text>
             </View>
-          ) : (
-            <TouchableOpacity onPress={pickImage} activeOpacity={0.7} style={styles.mediaBtn}>
-              <Ionicons name="image-outline" size={20} color={ACCT} />
-              <Text style={[styles.mediaBtnText, { color: ACCT }]}>Add Photo</Text>
-            </TouchableOpacity>
-          )}
+            {/* Rounded pills, a picked one washed green with a tick (option
+                C's): a button in a card otherwise (cardButton). */}
+            <View style={styles.pillWrap}>
+              {SELECTABLE.map(muscle => {
+                const on = selectedMuscles.includes(muscle);
+                return (
+                  <TouchableOpacity
+                    key={muscle}
+                    onPress={() => toggleMuscle(muscle)}
+                    activeOpacity={0.7}
+                    style={[
+                      styles.musclePill,
+                      on ? [styles.musclePillOn, { backgroundColor: tipFill(isDark) }] : cardButton(t),
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: on }}
+                    accessibilityLabel={muscle}
+                  >
+                    {on ? <Ionicons name="checkmark" size={15} color={accent} /> : null}
+                    <Text style={[styles.musclePillText, on ? { color: accent, fontFamily: FontFamily.bold } : { color: t.tp }]}>
+                      {muscle}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
         </NeuCard>
 
-        {/* Video Demo */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>VIDEO DEMO <Text style={{ fontFamily: FontFamily.regular }}>(optional, up to {MAX_VIDEO_SECONDS}s)</Text></Text>
-        <NeuCard dark={isDark} style={styles.mediaCard}>
+        {/* Make it yours: a photo, a demo video and Assisted, none needed. */}
+        <SectionLabel title="MAKE IT YOURS" note="Optional" isDark={isDark} />
+        <NeuCard dark={isDark} style={styles.card}>
+          <OptionRow
+            isDark={isDark}
+            icon={imageUri
+              ? <Image source={{ uri: imageUri }} style={styles.optThumb} contentFit="cover" />
+              : <Ionicons name="image-outline" size={18} color={t.icon} />}
+            title="Photo"
+            sub={imageUri ? "Added" : "Shows on the exercise and in your list"}
+          >
+            {imageUri ? (
+              <View style={styles.pillPair}>
+                <CardPill label="Change" onPress={pickImage} isDark={isDark} accessibilityLabel="Change photo" />
+                <CardPill label="Remove" onPress={() => setImageUri(null)} isDark={isDark} accessibilityLabel="Remove photo" />
+              </View>
+            ) : (
+              <CardPill label="Add" onPress={pickImage} isDark={isDark} accessibilityLabel="Add photo" />
+            )}
+          </OptionRow>
+          <View style={[styles.hairline, styles.optDivider, { backgroundColor: t.div }]} />
+          <OptionRow
+            isDark={isDark}
+            icon={<Ionicons name={videoUri ? "play" : "videocam-outline"} size={18} color={videoUri ? accent : t.icon} />}
+            title="Demo video"
+            sub={videoUri ? "Added" : `A few reps, up to ${MAX_VIDEO_SECONDS} seconds`}
+          >
+            {videoUri ? (
+              <View style={styles.pillPair}>
+                <CardPill label="Change" onPress={pickVideo} isDark={isDark} accessibilityLabel="Change video" />
+                <CardPill label="Remove" onPress={() => setVideoUri(null)} isDark={isDark} accessibilityLabel="Remove video" />
+              </View>
+            ) : (
+              <CardPill label="Add" onPress={pickVideo} isDark={isDark} accessibilityLabel="Add video" />
+            )}
+          </OptionRow>
           {videoUri ? (
             <>
-              <View style={styles.mediaPreviewRow}>
-                <View style={[styles.videoIcon, { backgroundColor: ACCT + "22" }]}>
-                  <Ionicons name="play" size={20} color={ACCT} />
-                </View>
-                <View style={{ flex: 1, gap: 4 }}>
-                  <Text style={[styles.mediaSetText, { color: t.tp }]}>Video added</Text>
-                  <TouchableOpacity onPress={() => setVideoUri(null)} activeOpacity={0.7}>
-                    <Text style={[styles.mediaRemoveText, { color: t.ts }]}>Remove</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-              <View style={[styles.muteRow, { borderTopColor: t.div }]}>
-                <View style={styles.muteLabelRow}>
-                  <Ionicons
-                    name={muted ? "volume-mute-outline" : "volume-high-outline"}
-                    size={18}
-                    color={t.ts}
-                  />
-                  <Text style={[styles.muteLabel, { color: t.tp }]}>Mute audio</Text>
-                </View>
-                <AppSwitch
-                  value={muted}
-                  onValueChange={setMuted}
-                />
-              </View>
+              <View style={[styles.hairline, styles.optDivider, { backgroundColor: t.div }]} />
+              <OptionRow
+                isDark={isDark}
+                icon={<Ionicons name={muted ? "volume-mute-outline" : "volume-high-outline"} size={18} color={t.icon} />}
+                title="Mute audio"
+              >
+                <AppSwitch value={muted} onValueChange={setMuted} accessibilityLabel="Mute audio" />
+              </OptionRow>
             </>
-          ) : (
-            <TouchableOpacity onPress={pickVideo} activeOpacity={0.7} style={styles.mediaBtn}>
-              <Ionicons name="videocam-outline" size={20} color={ACCT} />
-              <Text style={[styles.mediaBtnText, { color: ACCT }]}>Add Video</Text>
-            </TouchableOpacity>
-          )}
+          ) : null}
+          <View style={[styles.hairline, styles.optDivider, { backgroundColor: t.div }]} />
+          {/* Assisted: its weight is help, not load (user request, 2026-11-07),
+              so less is harder and less is its record (utils/assisted.ts). */}
+          <OptionRow
+            isDark={isDark}
+            icon={<Ionicons name="arrow-up-circle-outline" size={19} color={t.icon} />}
+            title="Assisted"
+            sub="Less weight is harder, like an assisted pull-up"
+          >
+            <AppSwitch value={assisted} onValueChange={setAssisted} accessibilityLabel="Assisted" />
+          </OptionRow>
         </NeuCard>
 
-        {/* Steps — numbered how-to, added one at a time. Renders as green
-            numbered circles on the exercise summary, like bundled exercises. */}
-        <Text style={[styles.fieldLabel, { color: t.ts }]}>STEPS <Text style={{ fontFamily: FontFamily.regular }}>(optional)</Text></Text>
-        {steps.map((step, i) => (
-          <NeuCard key={i} dark={isDark} style={styles.stepCard}>
-            <View style={styles.stepEditorRow}>
-              <View style={[styles.stepNum, { backgroundColor: ACCT + "22" }]}>
-                <Text style={[styles.stepNumText, { color: ACCT }]}>{i + 1}</Text>
-              </View>
-              <TextInput
-                style={[styles.stepInput, { color: t.tp }]}
-                placeholder={`Step ${i + 1}`}
-                placeholderTextColor={t.ts}
-                value={step}
-                onChangeText={text => updateStep(i, text)}
-                multiline
-                textAlignVertical="top"
-              />
-              <TouchableOpacity
-                onPress={() => removeStep(i)}
-                hitSlop={8}
-                activeOpacity={0.7}
-                style={styles.stepRemoveBtn}
-                accessibilityLabel={`Remove step ${i + 1}`}
-                accessibilityRole="button"
-              >
-                <Ionicons name="close-circle" size={22} color={t.ts} />
-              </TouchableOpacity>
-            </View>
-          </NeuCard>
-        ))}
-        <TouchableOpacity
-          onPress={addStep}
-          activeOpacity={0.7}
-          style={[styles.addStepBtn, { backgroundColor: addSlot.fill, borderColor: addSlot.edge }]}
-          accessibilityLabel="Add step"
-          accessibilityRole="button"
-        >
-          <Ionicons name="add-circle-outline" size={20} color={accentTextColor(isDark)} />
-          <Text style={[styles.addStepText, { color: accentTextColor(isDark) }]}>Add Step</Text>
-        </TouchableOpacity>
-
-        {/* Save button — inline in scroll, never moves with keyboard */}
-        <BounceButton
-          onPress={canSave && !saving ? handleSave : undefined}
-          style={{ opacity: canSave && !saving ? 1 : 0.4, marginTop: 8 }}
-        >
-          <View style={[styles.saveBtn, darkGlow(styles.saveBtn, isDark)]}>
-            <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
-            <Text style={styles.saveBtnText}>{saving ? "Saving..." : "Save Exercise"}</Text>
-          </View>
-        </BounceButton>
+        {/* How to do it: numbered steps, typed in place, moved by their
+            handle and swiped away (components/StepsEditor.tsx). They show as
+            numbered circles on the exercise's page, like a bundled one's. */}
+        <SectionLabel title="HOW TO DO IT" note="Optional" isDark={isDark} />
+        <NeuCard dark={isDark} style={styles.card}>
+          <StepsEditor steps={steps} onChange={setSteps} onDragStateChange={setStepsDragging} />
+        </NeuCard>
       </KeyboardAwareScrollView>
+
+      <Reanimated.View pointerEvents="box-none" style={[styles.foot, liftStyle]}>
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <MaskedView style={StyleSheet.absoluteFill} maskElement={
+            <LinearGradient
+              colors={["transparent", "black"]}
+              locations={[0, FOOT_FADE / (FOOT_FADE + footBody)]}
+              style={StyleSheet.absoluteFill}
+            />
+          }>
+            <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
+          </MaskedView>
+        </View>
+        {showSlots ? (
+          <View
+            style={styles.slotLine}
+            accessible
+            accessibilityLabel={full
+              ? `All ${MAX_CUSTOM} custom exercise slots used. Delete one to add more.`
+              : `${slotCount} of your ${MAX_CUSTOM} custom exercises used`}
+          >
+            <SlotRing used={slotCount} isDark={isDark} />
+            <Text style={[styles.slotLineText, { color: full ? dangerTextColor(isDark) : t.ts }]}>
+              {full
+                ? `All ${MAX_CUSTOM} used. Delete one to add more.`
+                : `${slotCount} of your ${MAX_CUSTOM} custom exercises used`}
+            </Text>
+          </View>
+        ) : null}
+        <View style={styles.saveWrap}>
+          <GlassButton
+            pill
+            size={PILL_H}
+            tint={slate}
+            onPress={() => { void handleSave(); }}
+            disabled={!ready}
+            contentStyle={styles.saveContent}
+            solidStyle={styles.saveLift}
+            accessibilityLabel={isEditMode ? "Save changes" : "Save exercise"}
+          >
+            <Ionicons name="checkmark" size={18} color={slateInk} />
+            <Text style={[styles.saveText, { color: slateInk }]}>{saving ? "Saving..." : "Save Exercise"}</Text>
+          </GlassButton>
+        </View>
+        <View style={{ height: saveBottom }} />
+      </Reanimated.View>
 
       <KeyboardDismissButton />
     </View>
@@ -520,45 +604,63 @@ export default function CreateCustomExerciseScreen() {
 const styles = StyleSheet.create({
   root:            { flex: 1 },
   topGradient:     { position: "absolute", left: 0, right: 0, zIndex: 5 },
-  header:          { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 28 },
+  header:          { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
   screenTitle:     { fontFamily: FontFamily.bold, fontSize: 17, letterSpacing: 1.5 },
-  slotCard:        { marginBottom: 24 },
-  slotRow:         { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
-  slotTitle:       { fontFamily: FontFamily.semibold, fontSize: 15 },
-  slotSub:         { fontFamily: FontFamily.regular, fontSize: 13 },
-  ring:            { width: RING, height: RING, alignItems: "center", justifyContent: "center" },
+
+  // A section's heading, its note across from it.
+  labelRow:        { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", marginHorizontal: 4, marginBottom: 10 },
+  sectionLabel:    { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase" },
+  labelAlone:      { marginHorizontal: 4, marginBottom: 10 },
+  labelRequired:   { fontFamily: FontFamily.bold, fontSize: 12 },
+  labelNote:       { fontFamily: FontFamily.regular, fontSize: 12 },
+  card:            { marginBottom: 24 },
+  hairline:        { height: StyleSheet.hairlineWidth, marginHorizontal: 16 },
+
+  // The preview: the list's thumbnail, the name and the muscles' tags.
+  previewRow:      { flexDirection: "row", alignItems: "center", gap: 14, padding: 14 },
+  previewText:     { flex: 1, gap: 7 },
+  previewName:     { fontFamily: FontFamily.bold, fontSize: 17 },
+  previewMeta:     { fontFamily: FontFamily.regular, fontSize: 13 },
+  tagRow:          { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  tag:             { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 3 },
+  tagText:         { fontFamily: FontFamily.bold, fontSize: 12 },
+
+  // The basics.
+  nameBlock:       { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, gap: 4 },
+  fieldName:       { fontFamily: FontFamily.semibold, fontSize: 12 },
+  fieldHint:       { fontFamily: FontFamily.regular, fontSize: 12 },
+  nameInput:       { fontFamily: FontFamily.semibold, fontSize: 17, paddingVertical: 2 },
+  musclesBlock:    { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16 },
+  fieldRow:        { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 },
+  pillWrap:        { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  musclePill:      { flexDirection: "row", alignItems: "center", gap: 5, height: 36, paddingHorizontal: 14, borderRadius: 18 },
+  // A picked muscle: the accent's edge, and less room before its tick.
+  musclePillOn:    { borderWidth: 1.5, borderColor: ACCT, paddingLeft: 10 },
+  musclePillText:  { fontFamily: FontFamily.semibold, fontSize: 14 },
+
+  // Make it yours.
+  optRow:          { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
+  optIcon:         { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  optThumb:        { width: 36, height: 36 },
+  optText:         { flex: 1, gap: 1 },
+  optTitle:        { fontFamily: FontFamily.semibold, fontSize: 15 },
+  optSub:          { fontFamily: FontFamily.regular, fontSize: 12 },
+  // Under the words, not the icons, as a list's lines run.
+  optDivider:      { marginLeft: 64, marginRight: 0 },
+  pillPair:        { flexDirection: "row", gap: 6 },
+  cardPill:        { height: 32, paddingHorizontal: 13, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  cardPillText:    { fontFamily: FontFamily.bold, fontSize: 13 },
+
+  // The footer, its blur filling it from FOOT_FADE down.
+  foot:            { position: "absolute", left: 0, right: 0, bottom: 0, paddingTop: FOOT_FADE },
+  slotLine:        { height: SLOT_LINE_H - 12, marginBottom: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 20 },
   // Starts the arc at 12 o'clock.
-  ringSvg:         { position: "absolute", transform: [{ rotate: "-90deg" }] },
-  ringText:        { fontFamily: FontFamily.bold, fontSize: 12 },
-  fieldLabel:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 10, marginTop: 4 },
-  inputCard:       { marginBottom: 20, borderRadius: 16 },
-  textInput:       { fontFamily: FontFamily.regular, fontSize: 16, paddingHorizontal: 18, paddingVertical: 16 },
-  muscleGrid:      { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 20 },
-  muscleChip:      { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
-  muscleChipText:  { fontFamily: FontFamily.semibold, fontSize: 13 },
-  mediaCard:       { marginBottom: 20, borderRadius: 16 },
-  mediaBtn:        { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, paddingVertical: 16 },
-  mediaBtnText:    { fontFamily: FontFamily.semibold, fontSize: 15 },
-  mediaPreviewRow: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
-  photoThumb:      { width: 64, height: 64, borderRadius: 10 },
-  videoIcon:       { width: 64, height: 64, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  mediaSetText:    { fontFamily: FontFamily.semibold, fontSize: 14 },
-  mediaRemoveText: { fontFamily: FontFamily.regular, fontSize: 13 },
-  muteRow:         { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
-  muteLabelRow:    { flexDirection: "row", alignItems: "center", gap: 8 },
-  muteLabel:       { fontFamily: FontFamily.semibold, fontSize: 14 },
-  // The Assisted switch's row: its words, then the switch.
-  assistedRow:     { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
-  assistedText:    { flex: 1, gap: 3 },
-  stepCard:        { marginBottom: 10, borderRadius: 16 },
-  stepEditorRow:   { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
-  stepNum:         { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", marginTop: 6 },
-  stepNumText:     { fontFamily: FontFamily.bold, fontSize: 13 },
-  stepInput:       { flex: 1, fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21, paddingTop: 6, paddingBottom: 6, minHeight: 38 },
-  stepRemoveBtn:   { marginTop: 6 },
-  // A dashed "add one here" slot, coloured by addSlotInk (constants/theme.ts).
-  addStepBtn:      { ...pill(), gap: 8, borderWidth: 1.5, borderStyle: "dashed", marginBottom: 20 },
-  addStepText:     { fontFamily: FontFamily.semibold, fontSize: 15 },
-  saveBtn:         { ...pill(), gap: 8, backgroundColor: ACCT, ...pillGlow(ACCT, 0.4) },
-  saveBtnText:     { fontFamily: FontFamily.bold, fontSize: 16, color: "#fff", letterSpacing: 0.3 },
+  ringSvg:         { transform: [{ rotate: "-90deg" }] },
+  slotLineText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
+  saveWrap:        { paddingHorizontal: 20 },
+  saveContent:     { gap: 8 },
+  saveText:        { fontFamily: FontFamily.bold, fontSize: 16, letterSpacing: 0.3 },
+  // The solid slate pill's shadow, as deep as the builder's Create pill's;
+  // glass is lit by the glass.
+  saveLift:        { ...PILL_SHADOW, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
 });

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions, type AccessibilityActionEvent, type ScrollViewInstance } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, TouchableOpacity, TouchableWithoutFeedback, Modal, Animated, PanResponder, Easing, Alert, useWindowDimensions, type AccessibilityActionEvent, type LayoutChangeEvent, type ScrollViewInstance } from "react-native";
 import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
@@ -9,8 +9,9 @@ import { useFloatingBarsReach } from "../hooks/useFloatingBars";
 import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 // Aliased: `Animated` in this file is React Native's, used by the sheets' pan
-// responders. Reanimated drives the collapse transition.
-import Reanimated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
+// responders. Reanimated drives the collapse transition and the actions
+// sheet's height between its steps.
+import Reanimated, { Easing as ReEasing, FadeIn, FadeOut, LinearTransition, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PROGRAMS_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_DRAFT_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout, type SavedProgram, getCurrentWeek, programFinishDate } from "../constants/programs";
@@ -19,7 +20,7 @@ import { noteDeleted } from "../utils/syncLocal";
 import { useSyncedDataReload } from "../hooks/useSyncedDataReload";
 import { awardProgramAchievement } from "../utils/achievementStore";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ACCT_DEEP, PAUSED_ORANGE, DANGER_BRIGHT } from "../constants/theme";
-import { cardButton, darkGlow, glowOpacity, pill, pillGlow, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
+import { cardButton, darkGlow, glowOpacity, pill, pillGlow, PILL_H_SM, PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { PROGRESS_ICON } from "../constants/tabIcons";
 import DrawnIcon from "../components/DrawnIcon";
 import { programIdsWithSessions } from "../utils/progressStats";
@@ -48,6 +49,7 @@ import { loadAssignedPT, removeSharedProgramByLocalId } from "../utils/trainerSt
 import { requestReview, reviewSentWords, type ReviewTo } from "../utils/reviewRequest";
 import { reviewTargets, type ReviewTargets } from "../utils/trainerLists";
 import { fetchGymHub, fetchPTHub, hubKindFor, hydrateTrainerHub, peekGymHub, peekPTHub } from "../utils/trainerHub";
+import { hasAcceptedCommunityTerms } from "../utils/agreements";
 import { useAuth } from "../contexts/AuthContext";
 import { alertOffline, useOffline } from "../contexts/ConnectivityContext";
 import PersonRow, { PERSON_AVATAR } from "../components/trainer/PersonRow";
@@ -60,6 +62,8 @@ import { askArchiveOrDelete } from "../utils/archiveChoice";
 import { programStatus } from "../utils/programStatus";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 import ArchiveButton from "../components/ArchiveButton";
+import { ProgramSummaryDays, programSummaryLine } from "../components/ProgramSummarySheet";
+import { OpenInBuilderPill } from "../components/ProgramActionFabs";
 
 // Warmup-set accent (matches the orange used for warmup sets across the app).
 const WARMUP_ORANGE = "#ffbf0f";
@@ -486,9 +490,9 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
 
 // ─── Program Actions Sheet ──────────────────────────────────────────────────────
 // Bottom-sheet popup opened by tapping a program card. Shows the status-appropriate
-// actions (Set Workout / Edit / Mark Complete / Duplicate / Make Inactive for the
-// active program; Make Active / Edit / Duplicate / Delete otherwise). Replaces the
-// old inline dropdown so tapping a card no longer expands it.
+// actions (Set Workout / Summary / Edit / Mark Complete / Duplicate / Make Inactive
+// for the active program; Make Active / Summary / Edit / Duplicate / Delete
+// otherwise). Replaces the old inline dropdown so tapping a card no longer expands it.
 
 interface ProgramAction {
   key: string;
@@ -500,8 +504,51 @@ interface ProgramAction {
   destructive?: boolean;  // red icon + text
   tint?: string;          // custom icon/text colour
   /** Opens a next step of this sheet instead of closing it (Send for Review's
-   *  who to send it to): a sheet's interactions are steps of one sheet. */
-  step?: "send";
+   *  who to send it to, Program Summary's days): a sheet's interactions are
+   *  steps of one sheet. */
+  step?: ActionStep;
+}
+
+type ActionStep = "send" | "summary";
+
+/** How long the sheet takes to grow or shrink to the next step's height. */
+const STEP_HEIGHT_MS = 320;
+/** The fade a step comes in with, once the sheet has moved on from its first. */
+const STEP_FADE = FadeIn.duration(220);
+/** Program Summary's foot: Open in Builder and the room above it. */
+const SUMMARY_FOOT_GAP = 12;
+
+/** The sheet's steps, under its title, at the height of the step on show,
+ *  moving to the next step's height on the UI thread rather than snapping to
+ *  it (user report, 2026-11-12: Program Summary jumped straight to its height).
+ *
+ *  As ExpandReveal does: the step is absolute inside, so its own height is
+ *  measured, and the box tweens to it. The first height of an open is taken
+ *  as it is, so the sheet slides up already its size. Mounted with the sheet's
+ *  program, so every open starts unmeasured. Not clipped: while it grows,
+ *  the step shows down to the sheet's foot, which the sheet's own clip ends,
+ *  as a sheet growing reads. A step too tall for the screen caps its own
+ *  scroll (the sheet's `bodyMax`), since an absolute step can't shrink. */
+function StepBody({ children }: { children: React.ReactNode }) {
+  const height = useSharedValue(0);
+  const measured = useRef(false);
+  const boxStyle = useAnimatedStyle(() => ({ height: height.value }));
+  // `.set()`, not `.value =`: the React Compiler's lint takes a write to a
+  // hook's value for a mutation.
+  const onLayout = (e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (!measured.current) {
+      measured.current = true;
+      height.set(h);
+      return;
+    }
+    height.set(withTiming(h, { duration: STEP_HEIGHT_MS, easing: ReEasing.out(ReEasing.cubic) }));
+  };
+  return (
+    <Reanimated.View style={boxStyle}>
+      <View style={styles.stepContent} onLayout={onLayout}>{children}</View>
+    </Reanimated.View>
+  );
 }
 
 function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendTargets, onSend }: {
@@ -520,9 +567,21 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
   const offline = useOffline();
   const slideY = useRef(new Animated.Value(600)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
-  // The actions, or Send for Review's second step: who it goes to. Back to
-  // the actions as the sheet goes, so it opens on them next time.
-  const [step, setStep] = useState<"actions" | "send">("actions");
+  // The actions, or a second step: Send for Review's who it goes to, or
+  // Program Summary's days. Back to the actions as the sheet goes, so it
+  // opens on them next time.
+  const [step, setStep] = useState<"actions" | ActionStep>("actions");
+  // Moved off the step it opened on: steps fade in from then on, and the
+  // first one shows at once, as the sheet slides up.
+  const [moved, setMoved] = useState(false);
+  const goTo = (next: "actions" | ActionStep) => { setMoved(true); setStep(next); };
+  // The tallest a step can be: the screen, less the gap the sheet keeps under
+  // the status bar, its title and its foot. The title is measured; until then
+  // a one-line title's height.
+  const { height: screenH } = useWindowDimensions();
+  const [headH, setHeadH] = useState(SHEET_TOP_ROW_H + 50);
+  const footPad = sheetFootGap(insets.bottom) + 16;
+  const bodyMax = screenH - (insets.top + SHEET_TOP_GAP) - headH - footPad;
 
   const panResponder = useRef(
     PanResponder.create({
@@ -539,7 +598,7 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
           Animated.parallel([
             Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
             Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setStep("actions"); onClose(); });
+          ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setStep("actions"); setMoved(false); onClose(); });
         } else {
           Animated.parallel([
             Animated.spring(slideY, { toValue: 0, useNativeDriver: true, bounciness: 4 }),
@@ -556,7 +615,7 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
     Animated.parallel([
       Animated.timing(slideY, { toValue: 800, duration: 220, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setStep("actions"); onClose(); after?.(); });
+    ]).start(() => { slideY.setValue(600); backdropOpacity.setValue(0); setStep("actions"); setMoved(false); onClose(); after?.(); });
   };
 
   useEffect(() => {
@@ -578,30 +637,67 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
     close(() => onSend(program, to));
   };
   const sending = step === "send";
+  const summing = step === "summary";
+  // Program Summary's Open in Builder is the sheet's own Edit Program, so it
+  // shows where Edit does (not on a finished program) and does what it does.
+  const editAction = actions.find(a => a.key === "edit");
+  const fadeIn = moved ? STEP_FADE : undefined;
 
   return (
-    <Modal visible={visible} animationType="none" transparent onRequestClose={() => (sending ? setStep("actions") : close())}>
-      {/* Never past the status bar: a long list of trainers and groups shrinks
-          the sheet and scrolls inside it, as a SimpleSheet's does. */}
+    <Modal visible={visible} animationType="none" transparent onRequestClose={() => (step !== "actions" ? goTo("actions") : close())}>
+      {/* Never past the status bar: a long list of trainers and groups, or of
+          a program's days, stops at `bodyMax` and scrolls inside the sheet, as
+          a SimpleSheet's does. */}
       <View style={[styles.swBackdrop, { paddingTop: insets.top + SHEET_TOP_GAP }]}>
         <TouchableWithoutFeedback onPress={() => close()}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.swOverlay, { opacity: backdropOpacity }]} />
         </TouchableWithoutFeedback>
-        <Animated.View style={[styles.paSheet, sheetSurface(t.bg), { paddingBottom: sheetFootGap(insets.bottom) + 16, transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[styles.paSheet, sheetSurface(t.bg), { paddingBottom: footPad, transform: [{ translateY: slideY }] }]}>
           <SheetGlass />
-          <View {...panResponder.panHandlers}>
+          <View
+            {...panResponder.panHandlers}
+            onLayout={e => { const h = e.nativeEvent.layout.height; if (h !== headH) setHeadH(h); }}
+          >
             <View style={styles.swHandleArea}>
               <View style={styles.swHandle} />
             </View>
             {/* Its plain × that sat on this row is the glass X above now
-                (SheetCloseButton, as every pop-up's). */}
+                (SheetCloseButton, as every pop-up's). Program Summary keeps
+                the program's name, so the title stays put as the sheet grows. */}
             <View style={[styles.paHeader, { borderBottomColor: t.div }]}>
               <Text style={[styles.paTitle, { color: t.tp }]}>{sending ? "Send for Review" : program.name}</Text>
             </View>
           </View>
-          {sending ? (
+          <StepBody>
+          {summing ? (
+            <>
+              {/* Every day and its exercises' names, the Workout Summary the
+                  archive and a sent program open (components/ProgramSummarySheet.tsx),
+                  as tall as the days until the sheet reaches the top, then
+                  scrolling above the foot. */}
+              <Reanimated.View key="summary" entering={fadeIn}>
+                <ScrollView
+                  style={[styles.paScroll, { maxHeight: bodyMax - (editAction ? SUMMARY_FOOT_GAP + PILL_H_SM : 0) }]}
+                  alwaysBounceVertical={false}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <Text style={[styles.summaryLine, { color: t.ts }]}>{programSummaryLine(program)}</Text>
+                  <ProgramSummaryDays snapshot={program} isDark={isDark} style={styles.summaryDays} />
+                </ScrollView>
+              </Reanimated.View>
+              {/* Bottom right, as on a program someone sent (components/
+                  ProgramActionFabs.tsx). Out of the fade: glass can't be
+                  faded. It comes into view as the sheet reaches its height. */}
+              {editAction ? (
+                <View style={styles.summaryFoot}>
+                  <OpenInBuilderPill isDark={isDark} onPress={() => close(editAction.onPress)} />
+                </View>
+              ) : null}
+            </>
+          ) : sending ? (
+            <Reanimated.View key="send" entering={fadeIn}>
             <ScrollView
-              style={styles.paScroll}
+              style={[styles.paScroll, { maxHeight: bodyMax }]}
               // Room under the last card for its shadow, which the scroll's
               // edge cut off in a line (CARD_SHADOW_ROOM).
               contentContainerStyle={styles.paScrollBody}
@@ -657,8 +753,9 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
                 </>
               ) : null}
             </ScrollView>
+            </Reanimated.View>
           ) : (
-            <View style={styles.paList}>
+            <Reanimated.View key="actions" entering={fadeIn} style={styles.paList}>
               {actions.map((a) => (
                 <SheetPill
                   key={a.key}
@@ -666,13 +763,14 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
                   variant={a.primary ? "primary" : a.destructive ? "danger" : "default"}
                   tint={a.tint}
                   icon={c => typeof a.icon === "function" ? a.icon(c) : <Ionicons name={a.icon} size={16} color={c} />}
-                  onPress={() => (a.step ? setStep(a.step) : close(a.onPress))}
+                  onPress={() => (a.step ? goTo(a.step) : close(a.onPress))}
                 />
               ))}
-            </View>
+            </Reanimated.View>
           )}
+          </StepBody>
           {/* The step after the actions faces its way back to them. */}
-          {sending ? <SheetBackButton onPress={() => setStep("actions")} /> : null}
+          {step !== "actions" ? <SheetBackButton onPress={() => goTo("actions")} /> : null}
           <SheetCloseButton onPress={() => close()} />
         </Animated.View>
       </View>
@@ -1004,13 +1102,20 @@ export default function ProgramsScreen() {
   // Who Send for Review offers: the Trainer tab's saved copy of my trainers and
   // groups (kept current by the tab and the prefetch after launch), so it's
   // there at once; the tab's own load only when this phone has never saved
-  // one. With no trainer listed, the one picked for the tab stands in.
+  // one. With no trainer listed, the one picked for the tab stands in. Nobody
+  // until this account has agreed to the community guidelines on this phone:
+  // sending is the community's, and this is a way to it from outside the
+  // screens that ask (components/CommunityGate.tsx).
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     const owner = userId ?? "";
     if (owner) {
       const kind = hubKindFor(accountType);
       void (async () => {
+        if (!(await hasAcceptedCommunityTerms(owner))) {
+          if (!cancelled) setSendTargets({ trainers: [], groups: [] });
+          return;
+        }
         await hydrateTrainerHub(kind, owner);
         const saved = kind === "pt" ? peekPTHub(owner) : peekGymHub(owner);
         const hub = saved ?? (kind === "pt" ? await fetchPTHub(owner) : await fetchGymHub(owner));
@@ -1067,6 +1172,9 @@ export default function ProgramsScreen() {
   // sheet. Each onPress runs after the sheet closes (see ProgramActionsSheet.close).
   const buildActions = (program: SavedProgram): ProgramAction[] => {
     const editAction: ProgramAction = { key: "edit", label: "Edit Program", icon: c => <SquarePenIcon size={16} color={c} />, onPress: () => router.navigate({ pathname: "/new-program", params: { id: program.id } }) };
+    // Every program, over Edit (user request, 2026-11-12): what's in it at a
+    // glance, the sheet's next step rather than a page.
+    const summaryAction: ProgramAction = { key: "summary", label: "Program Summary", icon: "list-outline", step: "summary", onPress: () => {} };
     const duplicateAction: ProgramAction = { key: "duplicate", label: "Duplicate Program", icon: "copy-outline", onPress: () => handleDuplicateProgram(program) };
     const deleteAction: ProgramAction = { key: "remove", label: "Remove", icon: "trash-outline", destructive: true, onPress: () => handleRemoveProgram(program) };
     // Near the top, under Edit (user pick, 2026-11-06): it opens the sheet's
@@ -1093,6 +1201,7 @@ export default function ProgramsScreen() {
             setSetWorkoutOpen(true);
           }
         } } as ProgramAction]),
+        summaryAction,
         editAction,
         // Pause / Resume sits right under Edit: on a paused program, Resume is
         // the thing you came for, so it leads rather than sitting below Mark
@@ -1109,10 +1218,11 @@ export default function ProgramsScreen() {
         duplicateAction,
       ];
     } else if (program.status === "completed") {
-      list = [duplicateAction, deleteAction];
+      list = [summaryAction, duplicateAction, deleteAction];
     } else {
       list = [
         { key: "makeactive", label: "Make Active Program", icon: "checkmark-circle-outline", primary: true, onPress: () => handleMakeActive(program) },
+        summaryAction,
         editAction,
         duplicateAction,
         deleteAction,
@@ -1343,9 +1453,16 @@ const styles = StyleSheet.create({
   paSheet:            { borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden", flexShrink: 1 },
   paHeader:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   paTitle:            { flex: 1, fontFamily: FontFamily.bold, fontSize: 18 },
+  // A step, under the title: absolute in StepBody, so it measures at its own height.
+  stepContent:        { position: "absolute", top: 0, left: 0, right: 0 },
+  // Program Summary: what the days add up to, then the days, their number
+  // circles in line with the title above; Open in Builder at the foot, right.
+  summaryLine:        { fontFamily: FontFamily.regular, fontSize: 13, paddingHorizontal: 20, paddingTop: 14 },
+  summaryDays:        { paddingHorizontal: 20 },
+  summaryFoot:        { alignItems: "flex-end", paddingHorizontal: 20, paddingTop: SUMMARY_FOOT_GAP },
   paList:             { paddingHorizontal: 20, paddingTop: 16, gap: 10 },
-  // Send for Review's step: as tall as its people until the sheet reaches the
-  // top, then it scrolls (the sheet shrinks, paSheet's flexShrink).
+  // Send for Review's and Program Summary's steps: as tall as what's in them
+  // until the sheet reaches the top (StepBody's `bodyMax`), then they scroll.
   paScroll:           { flexGrow: 0 },
   paScrollBody:       { paddingBottom: CARD_SHADOW_ROOM },
   sendHint:           { fontFamily: FontFamily.regular, fontSize: 13, lineHeight: 18, paddingHorizontal: 24, paddingTop: 14 },

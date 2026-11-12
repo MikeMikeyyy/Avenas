@@ -618,9 +618,24 @@ export class Lifter {
       const extra = this.pick(EXTRA_LIFTS.filter(n => !cards.some(c => c.name === n)));
       if (extra) cards.push({ name: extra, kind: LIFTS[extra].kind, template: null });
     }
+    // A card removed and added back from the picker (Remove, then Add
+    // Exercise): the same lift, done at the end without its place in the
+    // program, with an added card's rows. It's still the lift's last time
+    // (user report, 2026-11-12: next week's Previous read the week before's
+    // numbers from its place).
+    // What the day's note says it did to the session, besides swaps.
+    const reordered: string[] = [];
+    const plain = cards.filter(c => c.programExerciseId && !c.swappedFrom);
+    if (plain.length > 1 && this.chance(0.04)) {
+      const back = this.pick(plain);
+      if (back) {
+        cards.splice(cards.indexOf(back), 1);
+        cards.push({ name: back.name, kind: back.kind, template: null });
+        reordered.push(`removed ${back.name} and added it back`);
+      }
+    }
     // A machine taken: one exercise done first (Move exercise). Or one left
     // out (Remove). What the Journal's "Planned 2nd" and "Skipped" are about.
-    const reordered: string[] = [];
     if (cards.length > 2 && this.chance(0.05)) {
       const [moved] = cards.splice(this.between(1, cards.length - 1), 1);
       cards.unshift(moved);

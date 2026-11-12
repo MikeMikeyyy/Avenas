@@ -30,7 +30,9 @@ import { Image } from "expo-image";
 import Svg, { Circle } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
-import { useFloatingBarsReach } from "../hooks/useFloatingBars";
+import { useFloatingBarsReach, usePinnedLift } from "../hooks/useFloatingBars";
+import ProgramActionFabs from "../components/ProgramActionFabs";
+import ProgramSummarySheet from "../components/ProgramSummarySheet";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -563,6 +565,14 @@ export default function ProgramHistoryDetailScreen() {
   }, []);
   const clearWeeks = useCallback(() => setWeekKeys(new Set()), []);
 
+  // Summary, bottom right (user request, 2026-11-12): the program's days and
+  // their exercises' names (components/ProgramSummarySheet.tsx), for your own
+  // program from the Journal and a client's from their page alike. No Open in
+  // Builder: this page reads how a program went, it doesn't edit one. It
+  // stands on the workout bar while it shows, with the page's end padding.
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const { lift: pinnedLift, liftStyle: pinnedStyle } = usePinnedLift(insets.bottom + 24);
+
   const openWorkout = useCallback((id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.navigate({ pathname: "/workout-detail", params: { id, ...(clientId ? { clientId } : {}) } });
@@ -597,7 +607,8 @@ export default function ProgramHistoryDetailScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + 40, barsReach) }]}
+        // Room under the last week for the Summary pill (program-view's).
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + BACK_TOP, paddingBottom: scrollEndPadding(insets.bottom + (program ? 100 : 40) + pinnedLift, barsReach) }]}
       >
         {/* Page header: the program's whole name, a long one on a second
             line rather than cut short (user request, 2026-11-06). */}
@@ -647,14 +658,29 @@ export default function ProgramHistoryDetailScreen() {
         ))}
       </ScrollView>
 
-      <WeekFilterSheet
-        visible={filterOpen}
-        weeks={model?.weeks ?? []}
-        selected={pickedKeys}
-        onToggle={toggleWeek}
-        onClear={clearWeeks}
-        onClose={() => setFilterOpen(false)}
-      />
+      {program ? (
+        <ProgramActionFabs
+          bottom={insets.bottom + 24}
+          liftStyle={pinnedStyle}
+          isDark={isDark}
+          onOpenSummary={() => setSummaryOpen(true)}
+        />
+      ) : null}
+
+      {/* One RN Modal on screen at a time: the summary and the week filter
+          each open from the page itself, so they're never both wanted. */}
+      {summaryOpen && program ? (
+        <ProgramSummarySheet visible snapshot={program} isDark={isDark} onClose={() => setSummaryOpen(false)} />
+      ) : (
+        <WeekFilterSheet
+          visible={filterOpen}
+          weeks={model?.weeks ?? []}
+          selected={pickedKeys}
+          onToggle={toggleWeek}
+          onClear={clearWeeks}
+          onClose={() => setFilterOpen(false)}
+        />
+      )}
     </FadeScreen>
   );
 }

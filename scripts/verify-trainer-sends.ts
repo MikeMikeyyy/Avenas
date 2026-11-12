@@ -12,11 +12,13 @@
 //      with it, Cole (a trainer, not her client) included. It's on the group's
 //      page, Cara's Programs page and Cole's TO ACCEPT, and one send on Tara's
 //      SENT.
-//   4. The group, and Cara picked one by one as well: Cara gets it once,
-//      straight to her (her own Programs page, not the group's), and the rest
-//      of the group through it. And as reported: Cole, who's in Tara's group,
-//      picks only Tara, and then Tara and the group: hers comes straight to her
-//      both times, never through the group.
+//   4. The group, and Cara picked one by one as well: everyone in the group
+//      gets it through it, Cara once, so the send is on the group's page with
+//      all of them. As reported (2026-10-29): Cole, who's in Tara's group,
+//      picks only Tara: it comes straight to her, never through the group.
+//      Cole picks Tara and the group: hers is the group's, as everyone's in
+//      it. As reported (2026-11-12): Tara picks everyone in the group one by
+//      one, and the group: it's on the group's page, sent to all three.
 //   5. Cole passes Tara's program on to the group, from ADDED (he coaches it).
 //   6. Every client: a row each in the database, nothing left on Tara's phone.
 //
@@ -28,6 +30,7 @@
 import { on, warnings } from "./harness/app";
 import { CARA, CODY, COLE, GROUP, TARA, closeWorld, db, resetWorld, setupWorld, type Person } from "./harness/world";
 import { batchKeyOf, programsSummary, sendBatches, shareEntriesFor, trainerReceivedLists, type RecipientChoice } from "../utils/trainerLists";
+import { groupProgramLists } from "../utils/groupPrograms";
 import { getJSON } from "../utils/storage";
 import { PROGRAMS_KEY, type SavedProgram } from "../constants/programs";
 import { SHARED_PROGRAMS_KEY, type SharedProgram } from "../utils/trainerStore";
@@ -62,11 +65,23 @@ async function rows(): Promise<string[]> {
   return res.rows.map(r => `${r.sender}→${r.recipient}${r.group_id ? " (group)" : ""}: ${r.program_name}`);
 }
 
-/** Send as the Programs page does: the rows for the choice, from the sender's phone. */
-async function send(from: Person, p: SavedProgram, choice: RecipientChoice, clientIds: string[], groupMembers: Record<string, string[]> = {}) {
-  await on(from, () => from.app.appendSharedPrograms(
+/** Send as the Programs page does: the rows for the choice, from the sender's
+ *  phone. What the send saved, which the page adds to its SENT. */
+async function send(from: Person, p: SavedProgram, choice: RecipientChoice, clientIds: string[], groupMembers: Record<string, string[]> = {}): Promise<SharedProgram[]> {
+  return on(from, () => from.app.appendSharedPrograms(
     shareEntriesFor(p, choice, { clientIds, groupMembers, myUid: from.uid }, Date.now()),
   ));
+}
+
+/** View Program on each send a page made from `added` alone, as it does
+ *  straight after sending: whether the program page, which finds the share by
+ *  its id among the sender's, finds it (user report, 2026-11-12: it said "no
+ *  longer available" until the page reloaded, holding ids made on the phone). */
+async function viewOpens(p: Person, added: SharedProgram[]) {
+  return on(p, async () => {
+    const shares = await p.app.loadSharedPrograms();
+    return sendBatches(added).map(b => shares.some(s => s.id === b.entries[0].id && s.programName === b.programName));
+  });
 }
 
 /** A trainer's Programs page: TO ACCEPT and ADDED, and the card's "new". */
@@ -107,6 +122,14 @@ async function groupPageOf(p: Person) {
   return on(p, async () => (await p.app.loadGroupSharedPrograms(GROUP)).map(s => s.programName));
 }
 
+/** A coach's Group Programs on the group's Programs page: each send, and how
+ *  many in the group it went to. */
+async function groupProgramsOf(p: Person) {
+  return on(p, async () => groupProgramLists({
+    groupShares: await p.app.loadGroupSharedPrograms(GROUP), groupReviews: [], iCoachGroup: true, myUid: p.uid,
+  }).sent.map(b => [b.programName, b.entries.length]));
+}
+
 /** The first program in this trainer's TO ACCEPT or ADDED. */
 async function firstReceived(p: Person, list: "waiting" | "added"): Promise<SharedProgram> {
   return on(p, async () => trainerReceivedLists(await p.app.loadSharedPrograms())[list][0]);
@@ -125,8 +148,9 @@ async function main() {
 
   // ── 1. Tara → Cole, straight ──
   await resetWorld();
-  await send(TARA, BLOCK, { all: false, groupIds: [], clientIds: [COLE.uid] }, taraClients);
+  const toCole = await send(TARA, BLOCK, { all: false, groupIds: [], clientIds: [COLE.uid] }, taraClients);
   eq(await rows(), ["Tara→Cole: Block"], "1: Tara's program to Cole is in the database");
+  eq(await viewOpens(TARA, toCole), [true], "1: straight after sending, View Program opens it");
   eq(await inbox(COLE), { toAccept: ["Block"], added: [], newOnCard: 1 }, "1: it's in Cole's TO ACCEPT, new on his Programs card");
   eq(await sent(TARA), [{ program: "Block", group: false, total: 1, accepted: 0 }], "1: one send on Tara's SENT");
   await on(COLE, async () => COLE.app.acceptSharedProgramBatch(batchKeyOf(await firstReceived(COLE, "waiting"))));
@@ -155,10 +179,12 @@ async function main() {
 
   // ── 4. The group, and Cara one by one too ──
   await resetWorld();
-  await send(TARA, BLOCK, { all: false, groupIds: [GROUP], clientIds: [CARA.uid] }, taraClients, groupBut(TARA));
-  eq(await rows(), ["Tara→Cara: Block", "Tara→Cody (group): Block", "Tara→Cole (group): Block"],
-    "4: Cara, picked one by one, gets it once and straight to her; the rest of the group through it");
-  eq(await gymViews(CARA), { programsPage: ["Block"], groupPage: [] }, "4: on Cara's own Programs page, not the group's");
+  const justSent = await send(TARA, BLOCK, { all: false, groupIds: [GROUP], clientIds: [CARA.uid] }, taraClients, groupBut(TARA));
+  eq(await rows(), ["Tara→Cara (group): Block", "Tara→Cody (group): Block", "Tara→Cole (group): Block"],
+    "4: Cara, picked one by one and in the group picked, gets it once, through the group, as the rest of it does");
+  eq(await gymViews(CARA), { programsPage: ["Block"], groupPage: ["Block"] }, "4: on Cara's own Programs page and the group's");
+  eq(await groupProgramsOf(TARA), [["Block", 3]], "4: on the group's Group Programs for Tara, sent to all three");
+  eq(await viewOpens(TARA, justSent), [true], "4: straight after sending, View Program opens the group's send");
 
   // ── 4b. As reported: Cole, in Tara's group, picks only Tara ──
   await resetWorld();
@@ -170,9 +196,18 @@ async function main() {
   // ── 4c. Cole picks Tara and the group they share ──
   await resetWorld();
   await send(COLE, COLES, { all: false, groupIds: [GROUP], clientIds: [TARA.uid] }, [TARA.uid], groupBut(COLE));
-  eq(await rows(), ["Cole→Cara (group): Cole's Block", "Cole→Cody (group): Cole's Block", "Cole→Tara: Cole's Block"],
-    "4c: Tara, picked one by one, gets it straight; the rest of the group through it");
-  eq(await receivedThrough(TARA), [["Cole's Block", null]], "4c: Tara's is from Cole, not from the group");
+  eq(await rows(), ["Cole→Cara (group): Cole's Block", "Cole→Cody (group): Cole's Block", "Cole→Tara (group): Cole's Block"],
+    "4c: Tara, picked one by one and in the group picked, gets the group's copy, as the rest of it does");
+  eq(await receivedThrough(TARA), [["Cole's Block", GROUP]], "4c: Tara's comes through the group");
+
+  // ── 4d. As reported (2026-11-12): everyone in the group one by one, and the group ──
+  await resetWorld();
+  await send(TARA, BLOCK, { all: false, groupIds: [GROUP], clientIds: [COLE.uid, CARA.uid, CODY.uid] }, taraClients, groupBut(TARA));
+  eq(await rows(), ["Tara→Cara (group): Block", "Tara→Cody (group): Block", "Tara→Cole (group): Block"],
+    "4d: everyone in the group gets it through it, once each");
+  eq(await groupProgramsOf(TARA), [["Block", 3]], "4d: it's on the group's Group Programs for Tara, sent to all three");
+  eq(await gymViews(CODY), { programsPage: ["Block"], groupPage: ["Block"] }, "4d: and on the group's page for Cody");
+  eq(await sent(TARA), [{ program: "Block", group: true, total: 3, accepted: 0 }], "4d: one send to the group on Tara's SENT");
 
   // ── 5. Cole passes Tara's program on to the group ──
   await resetWorld();

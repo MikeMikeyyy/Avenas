@@ -567,6 +567,81 @@ eq(buildPrevByName(tzHist, "2026-05-11")["bench"]?.working, ["100×5"], "prev be
   eq(finishedSessionPrevSets(today, [today, pull]), [["—", "—", "—"]], "finished: another day's figures aren't this day's Previous");
 }
 
+// ── Previous is LAST time the lift was done on the day ───────────────────────
+// User report, 2026-11-12: Smith Machine Incline Press read the numbers from
+// two weeks before (one warm-up of 30, then 40×8 and 50×8), though the Journal
+// had last week's (warm-ups of 20 and 30, then 50×8 and 55×6). Last week's had
+// been done without its place in the program: added back during the session
+// (or afterwards in the Journal), so it carried no programExerciseId while the
+// rest of the session did. The walk only took a session where the PLACE held
+// the lift, so it went past last week to the place's older numbers.
+{
+  type Kind = "warmup" | "working";
+  const sets = (...rows: [string, string, Kind?][]) =>
+    rows.map(([weight, reps, type = "working"]) => ({ type, weight, reps, done: true }));
+  const SMITH = "Smith Machine Incline Press";
+  const program = makeProgram({
+    id: "prog-w", cyclePattern: ["Wednesday", "Rest"], dayIds: ["d-wed", "d-rest"],
+    workouts: { "0:Wednesday": [
+      { id: "pex_smith", name: SMITH, sets: [] },
+      { id: "pex_fly", name: "Cable Fly", sets: [] },
+      { id: "pex_heavy", name: "Bench Press", sets: [] },
+      { id: "pex_back", name: "Bench Press", sets: [] },
+    ] },
+  });
+  const scope = prevDayScopeFor({ name: "Wednesday", programId: "prog-w", dayId: "d-wed" }, program);
+  eq(Object.keys(scope.places ?? {}), ["pex_smith", "pex_fly", "pex_heavy", "pex_back"],
+    "previous: the day's scope knows every place on the day");
+  const wed = (id: string, date: string, exercises: CompletedWorkout["exercises"]): CompletedWorkout => ({
+    id, date, completedAt: `${date}T18:00:00.000Z`, durationSeconds: 3600,
+    workoutName: "Wednesday", programId: "prog-w", dayId: "d-wed", exercises,
+  });
+  const fly = { name: "Cable Fly", notes: "", sets: sets(["20", "12"]), programExerciseId: "pex_fly" };
+  const twoWeeksAgo = wed("w-1", "2026-10-28", [
+    { name: SMITH, notes: "old note", sets: sets(["30", "8", "warmup"], ["40", "8"], ["50", "8"]), programExerciseId: "pex_smith" },
+    fly,
+  ]);
+  const lastWeekSmith = { name: SMITH, notes: "two plates a side", sets: sets(["20", "8", "warmup"], ["30", "8", "warmup"], ["50", "8"], ["55", "6"]) };
+  const card = { name: SMITH, programExerciseId: "pex_smith" };
+  const rows: Kind[] = ["warmup", "warmup", "working", "working"];
+  const lastWeek = (smith: CompletedWorkout["exercises"][number]) => wed("w-2", "2026-11-04", [fly, smith]);
+
+  // Added back during the session, or afterwards in the Journal: no place.
+  const history = [lastWeek(lastWeekSmith), twoWeeksAgo];
+  eq(prevHintsForRows(buildPrevSetsLookup(history, undefined, scope)(card), rows), ["20×8", "30×8", "50×8", "55×6"],
+    "previous: last week's lift done without its place is still last time (as reported)");
+  eq(buildPrevNoteLookup(history, undefined, scope)(card), "two plates a side",
+    "previous: and so is its note");
+  eq(prevHintsForRows(buildPrevSetsLookup(history)(card), rows), ["20×8", "30×8", "50×8", "55×6"],
+    "previous: and without the program to say which places are which");
+  // Saved under an id the program has since given up.
+  eq(prevHintsForRows(buildPrevSetsLookup([lastWeek({ ...lastWeekSmith, programExerciseId: "pex_gone" }), twoWeeksAgo], undefined, scope)(card), rows),
+    ["20×8", "30×8", "50×8", "55×6"], "previous: one saved under a place the program no longer has is still last time");
+  // Swapped in for another exercise: still this lift, at its numbers.
+  eq(prevHintsForRows(buildPrevSetsLookup([lastWeek({ ...lastWeekSmith, programExerciseId: "pex_fly", swappedFrom: "Cable Fly" }), twoWeeksAgo], undefined, scope)(card), rows),
+    ["20×8", "30×8", "50×8", "55×6"], "previous: the lift swapped in for another card last week is still its last time");
+  // Finishing it: the locked cards read the same.
+  const today = wed("w-3", "2026-11-11", [{ ...lastWeekSmith, programExerciseId: "pex_smith" }]);
+  eq(finishedSessionPrevSets(today, [today, ...history], program), [["20×8", "30×8", "50×8", "55×6"]],
+    "previous: a finished session's cards read the same last time");
+
+  // What it mustn't change: a week the lift wasn't done at all is passed over,
+  eq(prevHintsForRows(buildPrevSetsLookup([wed("w-2", "2026-11-04", [fly]), twoWeeksAgo], undefined, scope)(card), rows),
+    ["30×8", "—", "40×8", "50×8"], "previous: a week without the lift is passed over");
+  // a week it was swapped out is too (its swap-in's numbers are another lift's),
+  const swappedOut = { name: "Dumbbell Press", notes: "", sets: sets(["30", "10"]), programExerciseId: "pex_smith", swappedFrom: SMITH };
+  eq(prevHintsForRows(buildPrevSetsLookup([wed("w-2", "2026-11-04", [swappedOut, fly]), twoWeeksAgo], undefined, scope)(card), rows),
+    ["30×8", "—", "40×8", "50×8"], "previous: a week it was swapped out is passed over");
+  // and two of one lift on the day keep their own: last week only the
+  // back-off was done, so the heavy card reads its own week before.
+  const heavy = { name: "Bench Press", notes: "", sets: sets(["100", "5"]), programExerciseId: "pex_heavy" };
+  const backOff = (weight: string) => ({ name: "Bench Press", notes: "", sets: sets([weight, "8"]), programExerciseId: "pex_back" });
+  const benches = [wed("w-2", "2026-11-04", [backOff("82.5")]), wed("w-1", "2026-10-28", [heavy, backOff("80")])];
+  const benchOf = buildPrevSetsLookup(benches, undefined, scope);
+  eq([benchOf({ name: "Bench Press", programExerciseId: "pex_heavy" })?.working, benchOf({ name: "Bench Press", programExerciseId: "pex_back" })?.working],
+    [["100×5"], ["82.5×8"]], "previous: the heavy card never reads the back-off's numbers, nor the back-off the heavy's");
+}
+
 // ── Notes follow the DAY, not the date ─────────────────────────────────────────
 // Push (d0) is done on Thu 1 Jan with an exercise note and a session note. The
 // week after, it's done on a different date, and both notes must still be
@@ -787,8 +862,8 @@ eq(buildPrevByName(crossProgram, undefined, upperB)["incline press"]?.working, [
   };
   eq(
     prevDayScopeFor({ name: "Upper", programId: "P", dayId: "d0" }, twoUpperProgram),
-    { name: "Upper", dayId: "d0", programId: "P", absorbsUnidentified: true },
-    "prevDayScopeFor: first same-named day absorbs unidentified sessions",
+    { name: "Upper", dayId: "d0", programId: "P", absorbsUnidentified: true, places: {} },
+    "prevDayScopeFor: first same-named day absorbs unidentified sessions (and its places, none here)",
   );
   eq(
     prevDayScopeFor({ name: "Upper", programId: "P", dayId: "d3" }, twoUpperProgram).absorbsUnidentified,

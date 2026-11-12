@@ -167,8 +167,12 @@ eq(programsSummary([], [], [inOld, inNew, inTaken, inDeletedCopy, myOwnSend]), {
   eq(rowsOf({ all: false, groupIds: ["gA"], clientIds: [] }), [["c1", "gA", at(1)], ["t9", "gA", at(1)], ["x7", "gA", at(1)]],
     "send: a group reaches everyone in it, clients or not, each row tagged with it");
   eq(rowsOf({ all: false, groupIds: ["gA", "gB"], clientIds: ["c1", "c3"] }),
-    [["c1", null, at(0)], ["c3", null, at(0)], ["t9", "gA", at(1)], ["x7", "gA", at(1)], ["c2", "gB", at(2)]],
-    "send: everyone once: picked one by one, straight to them even in a group picked; in two groups, the first's");
+    [["c1", "gA", at(1)], ["t9", "gA", at(1)], ["x7", "gA", at(1)], ["c2", "gB", at(2)], ["c3", null, at(0)]],
+    "send: everyone once: in a group picked, its copy, picked one by one too or not; in two groups, the first's; the rest picked one by one, straight");
+  // As reported (2026-11-12): everyone in a group picked one by one as well.
+  // The group got no rows, so the send was on none of its pages.
+  eq(rowsOf({ all: false, groupIds: ["gB"], clientIds: ["t9", "c2"] }), [["t9", "gB", at(1)], ["c2", "gB", at(1)]],
+    "send: a group picked gets the send, all of it, when everyone in it is picked one by one as well");
   eq(rowsOf({ all: false, groupIds: [], clientIds: ["c1"] }), [["c1", null, at(0)]],
     "send: one person picked is a send to them alone, whatever groups they're in");
   eq(rowsOf({ all: false, groupIds: ["gA"], clientIds: [] }, { ...people, groupMembers: { gA: ["me", "c1"], gB: [] } }).map(r => r[0]), ["c1"],

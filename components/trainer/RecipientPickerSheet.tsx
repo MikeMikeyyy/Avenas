@@ -23,11 +23,14 @@
 // of the group got nothing. The caller offers only groups I may send to (mine,
 // and those I'm a trainer in).
 //
-// A person ticked one by one gets it straight to them, on their own Trainer
-// tab, never through a group, whatever groups are ticked too (user report,
-// 2026-10-29). Groups and people are ticked apart: nothing ticks itself. (A
-// client in a group ticked used to show ticked by it and take the group's
-// copy, which put the program on the group's page as well.)
+// Groups and people are ticked apart: nothing ticks itself (a client in a
+// group ticked used to show ticked by it). A person ticked one by one gets it
+// straight to them, on their own Trainer tab, unless a group ticked has them:
+// then they get the group's copy, so the group's Programs page shows the send
+// to everyone in it (user report and decision, 2026-11-12: with everyone in
+// the group ticked one by one too, the group got nothing, and its page
+// nothing to show). Ticked with no group, it's always straight, never
+// through a group they share with me (user report, 2026-10-29).
 //
 // Nothing moves once the sheet is open, so a tap lands where it was aimed: the
 // note about weights in the other unit, which arrives a moment after it opens,
@@ -194,7 +197,7 @@ export default function RecipientPickerSheet({ visible, programName, clients, gr
       : {
           all: false,
           // In the order they're listed, so the first group someone's in is
-          // the one their copy comes through (if they weren't ticked themselves).
+          // the one their copy comes through (ticked themselves too or not).
           groupIds: groups.filter(g => pickedGroups.has(g.id)).map(g => g.id),
           clientIds: [...selected],
         });

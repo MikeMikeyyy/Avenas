@@ -582,15 +582,19 @@ export default function TrainerProgramsScreen() {
       Alert.alert("No recipients", "Add a client before sending a program.");
       return;
     }
+    let sent: SharedProgram[];
     try {
-      await appendSharedPrograms(entries);
+      sent = await appendSharedPrograms(entries);
     } catch (e) {
       // Real-account sends go through the server and genuinely fail offline:
       // don't pretend it worked.
       Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
-    setHub(h => h && { ...h, sharedOut: [...entries, ...h.sharedOut] });
+    // As saved, with the server's ids: the ones made here are placeholders,
+    // and View Program on the new send opened nothing until the page reloaded
+    // (user report, 2026-11-12).
+    setHub(h => h && { ...h, sharedOut: [...sent, ...h.sharedOut] });
     const groupNames = choice.groupIds
       .filter(id => entries.some(e => e.groupId === id))
       .map(id => groups.find(g => g.id === id)?.name ?? "a group");

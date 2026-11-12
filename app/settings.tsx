@@ -14,7 +14,7 @@ import { removeKey } from "../utils/storage";
 import { isApplePrivateEmail, signOut } from "../lib/auth";
 import { deleteAccount } from "../lib/cloud";
 import { appStoreReviewUrl, appStoreReviewWebUrl } from "../lib/appConfig";
-import { TERMS_ACCEPTED_KEY } from "../constants/onboarding";
+import { TERMS_BY_ACCOUNT_KEY } from "../constants/onboarding";
 import { WORKOUT_VIEW_MODE_KEY, WORKOUT_AUTOFILL_KEY, LIVE_ACTIVITY_KEY } from "../constants/programs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -187,7 +187,7 @@ export default function SettingsScreen() {
   const handleResetOnboarding = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     resetOnboarding();
-    removeKey(TERMS_ACCEPTED_KEY);
+    removeKey(TERMS_BY_ACCOUNT_KEY);
     router.replace("/onboarding");
   };
 

@@ -596,11 +596,11 @@ export default function ProgramViewScreen() {
           pointerEvents="box-none"
           style={[styles.floatingBtnWrap, { bottom: insets.bottom + 16 }, pinnedStyle]}
         >
-          {/* Slate, not green: where it sits directly under the green Summary
-              pill, two green buttons stacked read as one cluster with no clear
-              primary. Slate is the app's other primary colour, the same as
-              the builder's Create pill and "Open in Builder", so it stays
-              slate on See Changes too, where it stands alone. */}
+          {/* Slate, the app's other primary colour, the same as the builder's
+              Create pill and "Open in Builder": the one coloured button here,
+              under the clear Summary pill (it was slate beside a green Summary
+              so the two didn't read as one cluster), and on See Changes, where
+              it stands alone. */}
           <GlassButton
             pill
             size={PILL_H_SM}

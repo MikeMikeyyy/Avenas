@@ -7,6 +7,10 @@
 // Cancel, a drag down or a tap outside. Below iOS 26, and on Android, a sheet
 // is the solid one it always was and the X a solid round button.
 //
+// Whatever the page has under a pop-up, its glass shows the page's plain colour
+// under the dim (SheetGlass's backing; user request, 2026-11-12), as it does
+// over an empty stretch of page: no photo or chart blurred through it.
+//
 // A sheet spreads `sheetSurface(fill)` into its own style in place of its fill,
 // draws <SheetGlass /> as its first child, starts with a SHEET_TOP_ROW (the
 // grabber, and room for the X beside it, so nothing it shows can run under
@@ -14,7 +18,7 @@
 // SHEET_DIM. components/trainer/SimpleSheet.tsx does all of that for the
 // sheets built on it.
 
-import { StyleSheet, type StyleProp, type ViewStyle } from "react-native";
+import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import GlassButton, { GLASS, GlassSurface } from "./GlassButton";
 import { APP_DARK, APP_LIGHT } from "../constants/theme";
@@ -66,10 +70,28 @@ export function sheetFootGap(insetBottom: number): number {
 }
 
 /** The glass behind everything on a sheet (or a pop-up card, `radius`): its
- *  first child. Nothing below iOS 26, where the sheet has its fill. */
+ *  first child. Nothing below iOS 26, where the sheet has its fill.
+ *
+ *  The glass stands on a backing in the sheet's exact shape: the page's own
+ *  colour under the pop-up's dim (SHEET_DIM, which every pop-up dims with), so
+ *  it only ever sees that and reads as it does over an empty stretch of page,
+ *  whatever the page has under it (user request, 2026-11-12: an exercise's
+ *  black photo showed through as a dark blurred square, and Progress's charts
+ *  as a green one). The backing is behind the glass, never on it: nothing is
+ *  painted over the glass, which stays iOS's own. */
 export function SheetGlass({ radius = GLASS_SHEET_RADIUS }: { radius?: number }) {
+  const { isDark } = useTheme();
   if (!GLASS) return null;
-  return <GlassSurface style={[StyleSheet.absoluteFill, { borderRadius: radius }]}>{null}</GlassSurface>;
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  const shape = [StyleSheet.absoluteFill, { borderRadius: radius }];
+  return (
+    <>
+      <View pointerEvents="none" style={[shape, { backgroundColor: t.bg }]}>
+        <View style={[shape, { backgroundColor: SHEET_DIM }]} />
+      </View>
+      <GlassSurface style={shape}>{null}</GlassSurface>
+    </>
+  );
 }
 
 /** The back chevron in a sheet's top left corner, facing the X, on a sheet

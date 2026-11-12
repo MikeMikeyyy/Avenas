@@ -88,10 +88,16 @@ export type NewShareRow = {
 
 /** Insert one row per recipient. Throws when offline / signed out / not
  *  connected to a recipient — callers surface that instead of pretending the
- *  send worked (the whole point of the cloud path). */
-export async function insertShareRows(uid: string, entries: NewShareRow[]): Promise<void> {
-  if (entries.length === 0) return;
-  const { error } = await supabase.from("shared_programs").insert(
+ *  send worked (the whole point of the cloud path).
+ *
+ *  Returns each row's id, in the order of `entries`: the server makes them,
+ *  so a screen that shows a send it has just made needs these to open it
+ *  (user report, 2026-11-12: View Program straight after a send said "no
+ *  longer available", holding an id the server never had). Matched back by
+ *  recipient, group and send rather than trusted to come back in order. */
+export async function insertShareRows(uid: string, entries: NewShareRow[]): Promise<string[]> {
+  if (entries.length === 0) return [];
+  const { data, error } = await supabase.from("shared_programs").insert(
     entries.map(e => ({
       sender_id: uid,
       recipient_id: e.recipientId,
@@ -102,8 +108,15 @@ export async function insertShareRows(uid: string, entries: NewShareRow[]): Prom
       sent_key: e.sentKey,
       group_id: e.groupId ?? null,
     })),
-  );
+  ).select("id, recipient_id, group_id, sent_key");
   if (error) throw new Error(`send program: ${error.message}`);
+  const left = [...((data ?? []) as Pick<SharedProgramRow, "id" | "recipient_id" | "group_id" | "sent_key">[])];
+  return entries.map(e => {
+    const i = left.findIndex(r =>
+      r.recipient_id === e.recipientId && (r.group_id ?? null) === (e.groupId ?? null) && r.sent_key === e.sentKey);
+    if (i < 0) throw new Error("send program: the server didn't say what it saved.");
+    return left.splice(i, 1)[0].id;
+  });
 }
 
 /** Column-level patch. trainerStore maps SharedProgram/SentProgram field names

@@ -22,6 +22,7 @@ import WorkoutActiveBar from "../components/WorkoutActiveBar";
 import UnfinishedWorkoutWatcher from "../components/UnfinishedWorkoutWatcher";
 import RestTimerBanner from "../components/RestTimerBanner";
 import ForceUpdateGate from "../components/ForceUpdateGate";
+import CommunityGate from "../components/CommunityGate";
 import { PhotoFramerHost } from "../components/PhotoFramer";
 import { catchUpWithBackup, flushCloudPush, pushOwedBackup } from "../lib/syncManager";
 import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
@@ -36,6 +37,7 @@ import { fileStaleDraft } from "../utils/unfinishedSessionStore";
 import { settleActiveProgram } from "../utils/programPause";
 import { initNotifications, resyncScheduledNotifications } from "../utils/notificationScheduler";
 import { notificationSteps } from "../utils/notificationRoute";
+import { syncAgreements } from "../utils/agreements";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -53,6 +55,14 @@ const OWED_BACKUP_DELAY_MS = 2000;
 // native-stack runtime option but isn't in Expo Router's option types yet; a
 // named (non-fresh) const sidesteps the excess-property check without `any`.
 const INSIGHTS_MODAL_OPTIONS = { presentation: "modal" as const, detachPreviousScreen: false };
+
+// Every screen is laid out through the community gate, so one with other people
+// in it waits for the guidelines however it was opened: a link in the app, a QR
+// code's link, a notification (components/CommunityGate.tsx). Here, not on each
+// screen, so a new screen can't be left out.
+const communityScreenLayout = ({ route, children }: { route: { name: string; params?: object }; children: React.ReactElement }) => (
+  <CommunityGate route={route}>{children}</CommunityGate>
+);
 
 // The navigators' own theme, in the app's colours. The native stack paints its
 // NATIVE container (the view behind every pushed screen) with `colors.background`,
@@ -140,6 +150,9 @@ function AppShell() {
     const id = setTimeout(() => {
       owedChecked.current = true;
       void catchUpWithBackup();
+      // An agreement made with no signal (the Terms at sign-up, the community
+      // guidelines) reaches the server's record (utils/agreements.ts).
+      void syncAgreements(userId);
     }, OWED_BACKUP_DELAY_MS);
     return () => clearTimeout(id);
   }, [authLoaded, userId]);
@@ -206,9 +219,10 @@ function AppShell() {
     if (wasOffline.current && !offline) {
       void pushOwedBackup();
       void catchUpWithBackup();
+      if (userId) void syncAgreements(userId);
     }
     wasOffline.current = offline;
-  }, [offline]);
+  }, [offline, userId]);
 
   // Theme the navigator's screen background. React Navigation's default screen
   // background is white, which flashes through during the Insights modal's dismiss
@@ -227,7 +241,7 @@ function AppShell() {
             <ForceUpdateGate>
               <NavThemeProvider value={isDark ? NAV_DARK : NAV_LIGHT}>
                 <View style={{ flex: 1, backgroundColor: navBg }}>
-                  <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }}>
+                  <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }} screenLayout={communityScreenLayout}>
                     <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
                   </Stack>
                   {/* Over every screen: the workout bar, which grows to hold a

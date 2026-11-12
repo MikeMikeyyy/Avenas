@@ -401,6 +401,11 @@ export type PrevDayScope = {
    *  session that recorded no `dayId` attaches to that day and not to this one.
    *  See `ProgramDayRef.absorbsUnidentified`. */
   absorbsUnidentified?: boolean;
+  /** The day's program exercises, each place (its id, a session exercise's
+   *  programExerciseId) to the lift it holds (exerciseIdentity): which other
+   *  places on the day hold a card's lift (a heavy and a back-off Bench Press),
+   *  whose numbers are theirs, never that card's. Filled by prevDayScopeFor. */
+  places?: Record<string, string>;
 };
 
 /** Was completed session `w` performed on `day`? Mirrors `workoutMatchesDay`. */
@@ -439,7 +444,14 @@ export function prevDayScopeFor(
   if (!program || !workout.dayId) return scope;
   // programDays() comes back already marked, in cycle order.
   const ref = programDays(program).find(d => d.dayId === workout.dayId);
-  if (ref) scope.absorbsUnidentified = ref.absorbsUnidentified;
+  if (ref) {
+    scope.absorbsUnidentified = ref.absorbsUnidentified;
+    // The day's exercises under its key as saved (trainingDayKeys trims the
+    // label), or as the Workout tab reads it.
+    const exercises = program.workouts[workoutKey(ref.index, ref.label.trim() || "Workout")]
+      ?? program.workouts[workoutKey(ref.index, ref.label)] ?? [];
+    scope.places = Object.fromEntries(exercises.filter(e => !!e.id && !!e.name).map(e => [e.id, exerciseIdentity(e)]));
+  }
   return scope;
 }
 
@@ -522,6 +534,48 @@ export function buildPrevNotesByName(
  *  exercise, with which custom one of that name it was. */
 function originOf(ex: { swappedFrom?: string; swappedFromId?: string }): ExerciseRef | null {
   return ex.swappedFrom ? { name: ex.swappedFrom, customId: ex.swappedFromId } : null;
+}
+
+/** The other places on `day` holding the lift on card `ex`: a heavy and a
+ *  back-off Bench Press are each the other's. What's done in them is theirs.
+ *  From the day's program (`day.places`); without it, from `sessions`: a
+ *  place where the lift was done in the same session as in the card's own. */
+function siblingPlaces(ex: PrevExerciseKey, day: PrevDayScope | undefined, sessions: readonly CompletedWorkout[]): ReadonlySet<string> {
+  const out = new Set<string>();
+  const own = ex.programExerciseId;
+  if (!own) return out;
+  const lift = exerciseIdentity(ex);
+  if (day?.places) {
+    for (const [place, held] of Object.entries(day.places)) {
+      if (place !== own && held === lift) out.add(place);
+    }
+    return out;
+  }
+  for (const w of sessions) {
+    const places = w.exercises.filter(x => x.programExerciseId && sameExercise(x, ex)).map(x => x.programExerciseId!);
+    if (!places.includes(own)) continue;
+    for (const place of places) if (place !== own) out.add(place);
+  }
+  return out;
+}
+
+/**
+ * Where session `w` did the lift on card `ex`, as itself: in the card's own
+ * place, or else anywhere but another card's place for the same lift
+ * (`siblings`). Null when it didn't do the lift, or did it only as a sibling.
+ *
+ * Anywhere, because the lift is the lift wherever it was done: added back
+ * during the session or afterwards in the Journal (no place), saved under an
+ * id the program has since given up, or swapped in for another exercise. The
+ * walk used to take only a session whose PLACE held the lift, and went past
+ * one like that to the place's older numbers (user report, 2026-11-12: two
+ * weeks ago's numbers under Previous, last week's in the Journal).
+ */
+function liftIn(w: CompletedWorkout, ex: PrevExerciseKey, siblings: ReadonlySet<string>): CompletedWorkout["exercises"][number] | null {
+  const done = w.exercises.filter(x => sameExercise(x, ex));
+  return done.find(x => x.programExerciseId === ex.programExerciseId)
+    ?? done.find(x => !x.programExerciseId || !siblings.has(x.programExerciseId))
+    ?? null;
 }
 
 /** What an exercise card asks the note lookup with. */
@@ -620,16 +674,18 @@ function hintNumbers(hint: string): [number, number] {
 /**
  * The "Previous:" note for each exercise card, under the same rules as
  * `buildPrevNotesByName` (last session only, an empty note blocks, day-scoped),
- * but with a program exercise matched by its PLACE in the program rather than
- * its name.
+ * with a program exercise's PLACE in the program deciding which of a session's
+ * exercises answers for it.
  *
  * Why: a day can list the same exercise twice (a heavy and a back-off Bench
  * Press). By name both would show whichever note came first last week; by
  * place each shows its own, and moving exercises around in the session changes
- * nothing. A place counts while it still holds that exercise, done as itself or
- * swapped out for another that session (whose note it then takes, which is the
- * swappedFrom rule). A place the program has since given a different exercise
- * doesn't pass on notes written about the old one.
+ * nothing. The last session that did the lift answers, the lift done in its
+ * place or anywhere but a same-lift sibling's place (`liftIn`: added back, or
+ * under an id the program has since dropped). One that didn't do it answers
+ * through a swap-in that stood in for it in its place (the swappedFrom rule);
+ * a place the program has since given a different exercise doesn't pass on
+ * notes written about the old one.
  *
  * A session saved before places were recorded (no programExerciseId anywhere in
  * it) is read by name exactly as before, so existing history keeps working;
@@ -647,12 +703,15 @@ export function buildPrevNoteLookup(
   const byName = buildPrevNotesByName(history, beforeDate, day);
   return ex => {
     if (!ex.programExerciseId || ex.swappedFrom) return byName[exerciseIdentity(ex)];
+    const siblings = siblingPlaces(ex, day, sessions);
     for (const w of sessions) {
       const placed = w.exercises.some(x => x.programExerciseId);
-      const hit = placed
-        ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId
-            && (sameExercise(x, ex) || sameExercise(originOf(x), ex)))
-        : w.exercises.find(x => sameExercise(x, ex)) ?? w.exercises.find(x => sameExercise(originOf(x), ex));
+      // The lift itself first: within a session, the exercise done under its
+      // own name wins over a swap-in standing for it.
+      const hit = liftIn(w, ex, siblings)
+        ?? (placed
+          ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId && sameExercise(originOf(x), ex))
+          : w.exercises.find(x => sameExercise(originOf(x), ex)));
       if (hit) return (hit.notes ?? "").trim() || undefined;
     }
     return undefined;
@@ -729,19 +788,22 @@ export function buildPrevByName(
 }
 
 /**
- * The previous sets ("Previous: 100×5") for each exercise card, under the same
- * day scoping as `buildPrevByName`, but with a program exercise matched by its
- * PLACE in the program (programExerciseId), as `buildPrevNoteLookup` does for
- * notes: a day that lists Bench Press twice shows the heavy numbers on the
- * heavy one and the back-off numbers on the back-off one, whatever order the
- * session was done in.
+ * The previous sets ("Previous: 100×5") for each exercise card: the LAST
+ * session of the day (`day`, as `buildPrevByName` scopes it) that did the
+ * card's lift, with a program exercise's PLACE in the program
+ * (programExerciseId) deciding which of that session's exercises it was, as
+ * `buildPrevNoteLookup` does for notes: a day that lists Bench Press twice
+ * shows the heavy numbers on the heavy one and the back-off numbers on the
+ * back-off one, whatever order the session was done in.
  *
- * One deliberate difference from notes: a place only answers with numbers
- * lifted by THIS exercise there. When it was swapped out last time, the
- * swap-in's weights were for another lift, so the walk goes on to the last time
- * this exercise itself was done in that place. And a place with no numbers of
- * its own (new to the program, or only ever swapped out) shows the exercise's
- * last numbers from anywhere on this day, by name, which is the same lift.
+ * Last time is the last time the lift itself was done (`liftIn`): in the
+ * card's place, or anywhere but a same-lift sibling's place, so a lift added
+ * back during the session or afterwards in the Journal, or saved under an id
+ * the program has since dropped, is still last time (user report, 2026-11-12:
+ * it was passed over for the place's numbers from the week before). A week it
+ * was swapped out is passed over: the swap-in's weights were for another
+ * lift. A card no session did its lift for, as itself, falls back to the
+ * lift's last numbers from anywhere on this day, by name.
  *
  * Sessions saved before places were recorded are read by name, as before. A
  * swap-in, or an exercise added during the session, is looked up by name.
@@ -760,11 +822,9 @@ export function buildPrevSetsLookup(
   return ex => {
     const ownName = byName[exerciseIdentity(ex)];
     if (!ex.programExerciseId || ex.swappedFrom) return ownName;
+    const siblings = siblingPlaces(ex, day, sessions);
     for (const w of sessions) {
-      const placed = w.exercises.some(x => x.programExerciseId);
-      const hit = placed
-        ? w.exercises.find(x => x.programExerciseId === ex.programExerciseId && sameExercise(x, ex))
-        : w.exercises.find(x => sameExercise(x, ex));
+      const hit = liftIn(w, ex, siblings);
       if (hit) return formatPrevSets(hit);
     }
     return ownName;

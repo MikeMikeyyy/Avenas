@@ -20,6 +20,7 @@ import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import FadeScreen from "../components/FadeScreen";
 import ExerciseImage from "../components/ExerciseImage";
+import NumberBadge from "../components/NumberBadge";
 import VideoDemo from "../components/VideoDemo";
 import FavouriteExerciseButton from "../components/FavouriteExerciseButton";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT } from "../constants/theme";
@@ -266,8 +267,10 @@ export default function ExerciseSummaryScreen() {
               <View style={styles.instructions}>
                 {instructions.map((step, i) => (
                   <View key={i} style={[styles.stepRow, i > 0 && { marginTop: 14 }]}>
-                    <View style={[styles.stepNum, { backgroundColor: ACCT + "22" }]}>
-                      <Text style={[styles.stepNumText, { color: ACCT }]}>{i + 1}</Text>
+                    {/* The faded green number, its words' green so it reads
+                        (NumberBadge `wash`, as the custom exercise's steps). */}
+                    <View style={styles.stepNum}>
+                      <NumberBadge n={i + 1} isDark={isDark} size={26} wash />
                     </View>
                     <Text style={[styles.stepText, { color: t.tp }]}>{step}</Text>
                   </View>
@@ -341,11 +344,8 @@ const styles = StyleSheet.create({
 
   instructions: { paddingHorizontal: 16, paddingVertical: 16 },
   stepRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
-  stepNum: {
-    width: 26, height: 26, borderRadius: 13,
-    alignItems: "center", justifyContent: "center", marginTop: 1,
-  },
-  stepNumText: { fontFamily: FontFamily.bold, fontSize: 13 },
+  // The number in line with its step's first line.
+  stepNum: { marginTop: 1 },
   stepText: { flex: 1, fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 21 },
 
   aboutText: { fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 21, padding: 16 },

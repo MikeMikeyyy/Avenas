@@ -976,13 +976,20 @@ function outgoing(snapshot: SavedProgram): SavedProgram {
 /** Send program shares. Entries addressed to REAL accounts (uuid clientId) go
  *  through the cloud table — and THROW when that fails (offline / not
  *  connected), so callers can tell the user instead of faking success. Mock
- *  roster entries keep the local path. */
-export async function appendSharedPrograms(entries: SharedProgram[]): Promise<void> {
+ *  roster entries keep the local path.
+ *
+ *  Returns the entries as they were saved, in the order given: a real
+ *  account's with the id the server gave its row (the caller's is only a
+ *  placeholder), so a screen that adds the send to its list can open it at
+ *  once. A screen keeping the placeholder found nothing to open, or to remove. */
+export async function appendSharedPrograms(entries: SharedProgram[]): Promise<SharedProgram[]> {
   const unit = await senderUnit();
   const cloudEntries = entries.filter(e => e.clientId !== "all" && isCloudContactId(e.clientId));
   const localEntries = entries
     .filter(e => !cloudEntries.includes(e))
     .map(e => (e.programSnapshot ? { ...e, programSnapshot: withSenderUnits(outgoing(e.programSnapshot), unit) } : e));
+  const saved = new Map<SharedProgram, SharedProgram>();
+  entries.filter(e => !cloudEntries.includes(e)).forEach((e, i) => saved.set(e, localEntries[i]));
   if (cloudEntries.length > 0) {
     const uid = await getMyUid();
     if (!uid) throw new Error("Sign in to send programs to connected accounts.");
@@ -1005,12 +1012,16 @@ export async function appendSharedPrograms(entries: SharedProgram[]): Promise<vo
         groupId: e.groupId,
       });
     }
-    await insertShareRows(uid, rows);
+    const ids = await insertShareRows(uid, rows);
+    // As a reload maps the row (rowToShared): its id, me as the sender, and
+    // the snapshot as it went.
+    cloudEntries.forEach((e, i) => saved.set(e, { ...e, id: ids[i], senderId: uid, programSnapshot: rows[i].snapshot }));
   }
   if (localEntries.length > 0) {
     const existing = await loadLocalSharedPrograms();
     await setJSON(SHARED_PROGRAMS_KEY, [...localEntries, ...existing]);
   }
+  return entries.map(e => saved.get(e) ?? e);
 }
 
 // One send, one review I sent, and the hide on a review sent back to me, as

@@ -43,7 +43,6 @@ import { unitLabel, unitOf } from "../../../utils/units";
 import type { ReportReason } from "../../../constants/chat";
 import {
   appendSharedPrograms,
-  batchKeyOf,
   loadClientData,
   loadClients,
   loadSharedPrograms,
@@ -304,20 +303,19 @@ export default function ClientDetailScreen() {
       sentAtISO: new Date().toISOString(),
       programSnapshot: program,
     };
+    let saved: SharedProgram[];
     try {
-      await appendSharedPrograms([entry]);
+      saved = await appendSharedPrograms([entry]);
     } catch (e) {
       Alert.alert("Couldn't send program", alertMessage(e, "Check your connection and try again."));
       return;
     }
-    // Re-read rather than prepend `entry`: its `share_…` id is a local
-    // placeholder, and the cloud row has a uuid. A card holding the placeholder
-    // couldn't be removed — removeSharedProgram took it for a local entry and
-    // left the real program in the cloud, where it reappeared on the next load.
-    // The prepend survives only as a fallback if the reload fails.
-    const fresh = await loadSharedPrograms();
-    const landed = fresh.some(s => batchKeyOf(s) === batchKeyOf(entry));
-    setShared(landed ? fresh : [entry, ...fresh]);
+    // As saved, never `entry`: its `share_…` id is a local placeholder, and
+    // the cloud row has a uuid (appendSharedPrograms hands it back). A card
+    // holding the placeholder couldn't be removed — removeSharedProgram took
+    // it for a local entry and left the real program in the cloud, where it
+    // reappeared on the next load. It was re-read from the server for this.
+    setShared(prev => [...saved, ...prev]);
     Alert.alert("Program Sent", `"${program.name}" was sent to ${client?.name ?? "this client"}.`);
   }, [id, client]);
 

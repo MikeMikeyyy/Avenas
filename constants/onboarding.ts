@@ -15,9 +15,14 @@ export const WELCOME = {
   subtitle: "Your workouts, programs and progress, all in one beautifully simple place.",
 } as const;
 
-// Terms of Service acceptance, recorded on the accept-terms step. Bump
-// TERMS_VERSION to require re-acceptance after a material terms change.
-export const TERMS_ACCEPTED_KEY = "@avenas/terms_accepted";
+// Terms of Service acceptance, recorded on the accept-terms step for the
+// account signing up, on the phone and on the server (utils/agreements.ts,
+// migration 0059). Bump TERMS_VERSION after a material change: sign-ups from
+// then on accept and record the new one. Nothing asks an account that already
+// exists again: that needs a check at launch, which isn't built.
+/** `Record<accountId, AgreementRecord>`. It was one number for the whole phone
+ *  (`@avenas/terms_accepted`), which nothing read; that's no longer written. */
+export const TERMS_BY_ACCOUNT_KEY = "@avenas/terms_by_account";
 export const TERMS_VERSION = 1;
 
 export const FEATURE_SLIDES: FeatureSlideCopy[] = [
