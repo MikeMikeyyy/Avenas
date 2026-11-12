@@ -876,7 +876,15 @@ function ProgressBody({
         {title !== "" ? (
           <View style={[styles.titleRow, styles.titleRowSplit]}>
             <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
-            {!comparing ? <CompareButton onPress={startComparing} /> : null}
+            {/* The circle laid out, its touch area's spare taken off every
+                side, so it sits where the Trainer tab's buttons sit beside its
+                title: 20 in, the row no taller than the circle (user request,
+                2026-11-12: going between the two tabs, the header jumped). */}
+            {!comparing ? (
+              <View style={styles.compareInTitle}>
+                <CompareButton onPress={startComparing} />
+              </View>
+            ) : null}
           </View>
         ) : !comparing ? (
           // A trainer's client page has no title: Compare has the title row's
@@ -1144,7 +1152,11 @@ const styles = StyleSheet.create({
   // The tab title as every tab has it, Home's greeting: 28pt bold, 20pt in,
   // level with the cards (user decision, 2026-10-21; it was 32pt at 24pt).
   titleRow: { paddingHorizontal: 20, marginBottom: 8 },
-  titleRowSplit: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: 16 },
+  titleRowSplit: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  // Compare beside the title as a 40pt circle in the layout (components/
+  // trainer/HubTitle.tsx's buttons): its 44pt touch area's 2pt spare taken
+  // off each side.
+  compareInTitle: { margin: -(COMPARE_HIT - COMPARE_SIZE) / 2 },
   filterRow: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20 },
   // A client's page's Compare, alone at the right: its touch area pulled out
   // by its spare so the circle ends 20 in, over the time range's end (as the
