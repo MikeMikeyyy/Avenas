@@ -20,6 +20,7 @@ import { isFavourite as isFav, sortByMuscleThenName, toggleFavourite } from "../
 import { exerciseSearchDoc, parseQuery, rankMatch, searchDoc } from "../utils/exerciseSearch";
 import { sharedExercises } from "../utils/customExerciseDetails";
 import { customIdForName, liveCustoms } from "../utils/customExercises";
+import { exerciseKey } from "../utils/exerciseNames";
 import { loadCarriedExercises } from "../lib/exerciseMedia";
 import ExerciseImage from "./ExerciseImage";
 import FavouriteStar from "./FavouriteStar";
@@ -62,10 +63,11 @@ export interface ExercisePickerProps {
   withSetCount?: boolean;
   /**
    * The name of the exercise being CHANGED, for a swap: the sheet is titled
-   * "Change Exercise", says what it replaces, picks exactly one (a second tap
-   * moves the tick) and confirms with "Swap Exercise". Without it, every change
-   * flow showed "Add Exercise" with numbered multi-picks and quietly kept only
-   * the first.
+   * "Change Exercise" and says what it replaces, and a tap on an exercise asks
+   * "Replace X with Y?", Swap doing it there and then (the one way to swap; the
+   * foot stays Create Custom Exercise). The exercise being replaced is marked
+   * Current and can't be picked. Without it, every change flow showed "Add
+   * Exercise" with numbered multi-picks and quietly kept only the first.
    */
   changing?: string;
   onDeleteCustom: (name: string) => void;
@@ -340,13 +342,50 @@ export default function ExercisePicker({
   const canAddCustom = customExercises.length < MAX_CUSTOM;
 
   const togglePick = (name: string) => {
-    setPickedOrder(prev =>
-      prev.includes(name) ? prev.filter(n => n !== name)
-      // A change takes one exercise: picking another moves the tick to it.
-      : isChange ? [name]
-      : [...prev, name]
+    setPickedOrder(prev => (prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]));
+  };
+
+  // ── A change is a tap on the exercise (user report, 2026-11-19): it was a
+  // tick on the row and then "Swap Exercise" at the sheet's foot, in the
+  // place of Create Custom Exercise, and a friend ticked the one he wanted,
+  // never saw the button change, closed the sheet and nothing had changed.
+  // Now the tap asks, and Swap swaps; there's nothing to confirm at the foot,
+  // so a sheet closed is never a swap lost. The question stays (the user's
+  // pick): a stray tap while scrolling 800 rows mid-workout mustn't swap.
+  const changingKey = changing ? exerciseKey(changing) : null;
+  /** The exercise being replaced: marked Current, never swapped for itself. */
+  const isCurrent = (name: string) => changingKey !== null && exerciseKey(name) === changingKey;
+  // One question at a time: a quick second tap mustn't stack another.
+  const asking = useRef(false);
+  const askSwap = (name: string) => {
+    if (asking.current || isCurrent(name)) return;
+    asking.current = true;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const settled = () => { asking.current = false; };
+    Alert.alert(
+      "Swap Exercise",
+      changing ? `Replace ${changing} with ${name}?` : `Swap in ${name}?`,
+      [
+        { text: "Cancel", style: "cancel", onPress: settled },
+        {
+          text: "Swap",
+          isPreferred: true,
+          onPress: () => {
+            settled();
+            onSelectMultiple([name], setCount, [customIdForName(name, customExercises, shared)]);
+            setSearch("");
+          },
+        },
+      ],
+      { cancelable: true, onDismiss: settled },
     );
   };
+  /** A row's tap: a change asks to swap, an add ticks it. */
+  const rowPress = (name: string) => ({
+    onPress: () => (isChange ? askSwap(name) : togglePick(name)),
+    activeOpacity: isChange && isCurrent(name) ? 1 : 0.6,
+    accessibilityHint: isChange && !isCurrent(name) && changing ? `Asks to replace ${changing} with it` : undefined,
+  });
 
   const confirmPicks = () => {
     if (pickedOrder.length === 0) return;
@@ -359,6 +398,16 @@ export default function ExercisePicker({
 
   // ─── Row renderers ──────────────────────────────────────────────────────────
   const renderPickBadge = (name: string) => {
+    // A change: the swap mark (the tap asks), or Current on the one replaced.
+    if (isChange) {
+      return isCurrent(name) ? (
+        <Text style={[styles.currentTag, { color: t.ts }]}>Current</Text>
+      ) : (
+        <View style={[styles.pickerAddBtn, { backgroundColor: ACCT + "22", borderColor: ACCT }]}>
+          <Ionicons name="swap-horizontal" size={18} color={ACCT} />
+        </View>
+      );
+    }
     const pickIndex = pickedOrder.indexOf(name);
     const isPicked = pickIndex !== -1;
     return (
@@ -367,10 +416,8 @@ export default function ExercisePicker({
         : { backgroundColor: ACCT + "22", borderColor: ACCT }
       ]}>
         {isPicked
-          ? isChange
-            ? <Ionicons name="checkmark" size={18} color="#fff" />
-            : <Text style={styles.pickerAddNum}>{pickIndex + 1}</Text>
-          : <Ionicons name={isChange ? "swap-horizontal" : "add"} size={18} color={ACCT} />}
+          ? <Text style={styles.pickerAddNum}>{pickIndex + 1}</Text>
+          : <Ionicons name="add" size={18} color={ACCT} />}
       </View>
     );
   };
@@ -423,8 +470,7 @@ export default function ExercisePicker({
       const e = item.exercise;
       return (
         <TouchableOpacity
-          onPress={() => togglePick(e.name)}
-          activeOpacity={0.6}
+          {...rowPress(e.name)}
           style={[styles.pickerRow, { borderBottomColor: t.sheetLine }]}
         >
           {renderThumb(e.name, (
@@ -479,8 +525,7 @@ export default function ExercisePicker({
       const e = item.exercise;
       return (
         <TouchableOpacity
-          onPress={() => togglePick(e.name)}
-          activeOpacity={0.6}
+          {...rowPress(e.name)}
           style={[styles.pickerRow, { borderBottomColor: t.sheetLine }]}
         >
           {renderThumb(e.name, (
@@ -502,8 +547,7 @@ export default function ExercisePicker({
     const e = item.exercise;
     return (
       <TouchableOpacity
-        onPress={() => togglePick(e.name)}
-        activeOpacity={0.6}
+        {...rowPress(e.name)}
         style={[styles.pickerRow, { borderBottomColor: t.sheetLine }]}
       >
         {renderThumb(e.name, (
@@ -670,7 +714,9 @@ export default function ExercisePicker({
             removeClippedSubviews
           />
 
-          {/* Bottom bar — confirm picks OR create custom */}
+          {/* Bottom bar: confirm picks OR create custom. A change never has
+              picks (a tap asks to swap), so it's always Create Custom
+              Exercise. */}
           <View
             onLayout={e => setBottomBarH(e.nativeEvent.layout.height)}
             style={[styles.customSection, { borderTopColor: t.div, paddingBottom: sheetFootGap(insets.bottom) + 16 }]}
@@ -708,18 +754,14 @@ export default function ExercisePicker({
                 <BounceButton
                   style={{ flex: 1 }}
                   onPress={confirmPicks}
-                  accessibilityLabel={isChange
-                    ? `Swap for ${pickedOrder[0]}`
-                    : `Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`}
+                  accessibilityLabel={`Add ${pickedOrder.length} exercise${pickedOrder.length > 1 ? "s" : ""}`}
                   accessibilityRole="button"
                 >
                   <View style={[styles.createCustomBtnWrap, darkGlow(styles.createCustomBtnWrap, isDark)]}>
                     <View style={styles.createCustomBtn}>
-                      <Ionicons name={isChange ? "swap-horizontal" : "checkmark"} size={18} color="#fff" />
+                      <Ionicons name="checkmark" size={18} color="#fff" />
                       <Text style={styles.createCustomBtnText}>
-                        {isChange
-                          ? "Swap Exercise"
-                          : `Add ${pickedOrder.length} Exercise${pickedOrder.length > 1 ? "s" : ""}`}
+                        {`Add ${pickedOrder.length} Exercise${pickedOrder.length > 1 ? "s" : ""}`}
                       </Text>
                     </View>
                   </View>
@@ -786,6 +828,8 @@ const styles = StyleSheet.create({
   circleBtn:           { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   pickerAddBtn:        { width: 32, height: 32, borderRadius: 16, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   pickerAddNum:        { fontFamily: FontFamily.bold, fontSize: 13, color: "#fff" },
+  // In the swap mark's place on the exercise being replaced.
+  currentTag:          { fontFamily: FontFamily.semibold, fontSize: 12 },
   pickerEmpty:         { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 40 },
   customSection:       { paddingHorizontal: 16, paddingTop: 14, borderTopWidth: 1, gap: 10 },
   customSlots:         { fontFamily: FontFamily.regular, fontSize: 12 },
