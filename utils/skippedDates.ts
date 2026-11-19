@@ -44,7 +44,8 @@
 //
 // For an absence longer than a day or two, pausing is still the right tool — it
 // shifts `startDate` wholesale (utils/programPause.ts). And "Set Workout Date"
-// is a clean reset that drops every move (`clearShifts`).
+// is a reset from today (`clearShifts`): the moves before stay, settled
+// (utils/cycleDrift.ts realignedFrom).
 //
 // RN-free and pure so it can be unit-tested under plain node/tsx
 // (see scripts/verify-skipped-dates.ts).
@@ -53,6 +54,7 @@ import { programFinishDate, type SavedProgram } from "../constants/programs";
 import { toYMD } from "./dates";
 import { cycleIndexForDate, getWorkoutForDate, normalizeDriftDates, type DayOverride } from "./workout";
 import { heldOn } from "./programHolds";
+import { realignedFrom } from "./cycleDrift";
 
 type SkipFields = Pick<SavedProgram, "skippedDates" | "pushedDates" | "pulledDates">;
 
@@ -64,6 +66,13 @@ export function isDateSkipped(program: SkipFields, ymd: string): boolean {
 /** Is `ymd` a workout that was moved to the next day, rather than dropped? */
 export function isDatePushed(program: SkipFields, ymd: string): boolean {
   return !!program.pushedDates?.includes(ymd);
+}
+
+/** Is `ymd` a move settled by a Set Workout Date since (utils/cycleDrift.ts
+ *  realignedFrom)? It stays as it was: putting it back would shift the days
+ *  between it and the re-alignment, which the user has already set. */
+export function isSettledMove(program: SkipFields & Partial<Pick<SavedProgram, "holds">>, ymd: string): boolean {
+  return isDatePushed(program, ymd) && ymd < realignedFrom(program);
 }
 
 /** Is `ymd` the rest day a move was absorbed into? Bookkeeping, not something
@@ -138,6 +147,8 @@ export function pullDate(program: SavedProgram, ymd: string): SavedProgram {
  * identity to skip a write.
  */
 export function unskipDate(program: SavedProgram, ymd: string): SavedProgram {
+  // A move from before a Set Workout Date is settled (isSettledMove).
+  if (isSettledMove(program, ymd)) return program;
   const wasPushed = isDatePushed(program, ymd);
   if (!isDateSkipped(program, ymd) && !wasPushed) return program;
 
@@ -168,13 +179,20 @@ export function unskipDate(program: SavedProgram, ymd: string): SavedProgram {
  * moved the finish back and forth.
  */
 function reabsorbFrom(program: SavedProgram, fromYMD: string): SavedProgram {
-  const pushes = [...(program.pushedDates ?? [])].sort();
-  const kept = (program.pulledDates ?? []).filter(d => d < fromYMD).sort();
-  const settledBefore = new Set((program.pulledDates ?? []).filter(d => d >= fromYMD && isDateSkipped(program, d)));
+  // Moves before the last Set Workout Date are settled, rest days and all
+  // (utils/cycleDrift.ts realignedFrom): they're no one's to pair. Paired
+  // again, a move whose rest day the re-alignment had dropped took another,
+  // and the finish moved a day early.
+  const since = realignedFrom(program);
+  const settled = (program.pulledDates ?? []).filter(d => d < since);
+  const pushes = [...(program.pushedDates ?? [])].filter(d => d >= since).sort();
+  const kept = (program.pulledDates ?? []).filter(d => d < fromYMD && d >= since).sort();
+  const settledBefore = new Set((program.pulledDates ?? []).filter(d => d >= fromYMD && d >= since && isDateSkipped(program, d)));
   const before = pushes.filter(d => d < fromYMD);
   const owed = [...before.slice(Math.min(before.length, kept.length)), ...pushes.filter(d => d >= fromYMD)];
 
-  let current: SavedProgram = { ...program, pulledDates: kept.length > 0 ? kept : undefined };
+  const pulled = [...settled, ...kept];
+  let current: SavedProgram = { ...program, pulledDates: pulled.length > 0 ? pulled : undefined };
   owed.forEach((push, i) => {
     const after = addDays(push, 1);
     if (!after) return;
@@ -267,27 +285,29 @@ export function toggleSkippedDate(program: SavedProgram, ymd: string): SavedProg
 }
 
 /**
- * `program` with every MOVE dropped, for "Set Workout Date".
+ * `program` with every MOVE from `todayYMD` on dropped, for "Set Workout Date":
+ * a move dated today or later (its push and its mark: a reset must not leave a
+ * planned day empty) and every rest day spent from today. Plain skips are
+ * untouched: they never shifted anything.
  *
- * Setting "today is Push" is the user saying "this is where I am" — so the
- * moves that got them here have to go, or they keep counting. Left in place, the
- * schedule looked perfectly back on plan while the finish date stayed however
- * many days late, with nothing on screen to explain the difference.
- *
- * What survives: a move dated BEFORE today becomes a plain skip, because you
- * genuinely didn't train that day and the calendar should still say rest rather
- * than "missed". A move dated today or later is removed outright — a reset must
- * not leave a future planned day empty. Plain skips are untouched: they never
- * shifted anything.
+ * The moves before today stay as they were (user priority, 2026-11-16: nothing
+ * done should change the history): they still shift the days before today, and
+ * the re-alignment setWorkoutDay records stops them counting from today on
+ * (utils/cycleDrift.ts realignedFrom), so the program is back on plan there.
+ * Dropped, every day between a move and today was re-labelled; left counting
+ * past today, the schedule looked back on plan while the finish date stayed
+ * however many days late.
  */
 export function clearShifts(program: SavedProgram, todayYMD: string): SavedProgram {
   const futureMoves = new Set((program.pushedDates ?? []).filter(d => d >= todayYMD));
   const skipped = (program.skippedDates ?? []).filter(d => !futureMoves.has(d));
+  const pushed = (program.pushedDates ?? []).filter(d => d < todayYMD);
+  const pulled = (program.pulledDates ?? []).filter(d => d < todayYMD);
   return {
     ...program,
     skippedDates: skipped.length > 0 ? skipped : undefined,
-    pushedDates: undefined,
-    pulledDates: undefined,
+    pushedDates: pushed.length > 0 ? pushed : undefined,
+    pulledDates: pulled.length > 0 ? pulled : undefined,
   };
 }
 

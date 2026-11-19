@@ -27,6 +27,7 @@ import { daysBetweenYMD, fromYMD, MONTH_NAMES } from "./dates";
 import { FORGOTTEN_AFTER_MS, stillGoing } from "./heldSession";
 import { stampSession, timeValFromDate } from "./sessionTime";
 import { parseWeightToKg } from "./units";
+import { supersetIdsOf } from "./supersets";
 
 /** A set as the Workout tab logs it: the numbers as typed, in the unit the
  *  session is in. `doneAt` is when it was ticked (epoch ms). */
@@ -79,8 +80,11 @@ export function completedExercises(
   isKg: boolean,
   isometricExIds: ReadonlySet<string>,
 ): CompletedExercise[] {
-  return exercises.map(ex => {
+  // A superset only where it's real: two or more side by side (utils/supersets.ts).
+  const supersets = supersetIdsOf(exercises);
+  return exercises.map((ex, i) => {
     const exLog = log[ex.id];
+    const supersetId = supersets[i];
     return {
       name: ex.name,
       // Which custom exercise it was, so its history stays its own
@@ -97,6 +101,8 @@ export function completedExercises(
       // The card's Hold switch: its reps are seconds, kept out of reps and
       // volume totals (CompletedExercise.isIsometric).
       ...(isometricExIds.has(ex.id) ? { isIsometric: true as const } : {}),
+      // Done in rounds with the ones beside it (CompletedExercise.supersetId).
+      ...(supersetId ? { supersetId } : {}),
     };
   });
 }

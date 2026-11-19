@@ -34,6 +34,7 @@ import TrashIcon from "../components/TrashIcon";
 import JournalCalendar from "../components/JournalCalendar";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../components/journal/JournalWorkoutCard";
 import JournalProgramsBlock from "../components/journal/JournalProgramsBlock";
+import JournalTrainingCard from "../components/journal/JournalTrainingCard";
 import SessionFilter, { RecentActivityHeading, SessionGroupHeading, useSessionFilter } from "../components/journal/SessionFilter";
 import SheetPill from "../components/SheetPill";
 import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
@@ -41,11 +42,12 @@ import SquarePenIcon from "../components/SquarePenIcon";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, ORB_GRADS } from "../constants/theme";
 import { glowOpacity } from "../constants/buttons";
 import {
-  PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY,
+  PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, WORKOUT_DAY_OVERRIDE_KEY,
   type SavedProgram, type CompletedWorkout, type ProgramDayRef,
 } from "../constants/programs";
 import { programDays } from "../utils/programDays";
-import { getEffectiveToday, getWorkoutForDate } from "../utils/workout";
+import { getEffectiveToday, getWorkoutForDate, type DayOverride } from "../utils/workout";
+import { plannedThisWeek } from "../utils/trainingTotals";
 import { fmtDayDate } from "../utils/dates";
 import { applyRestDay, clearRestDay, isDatePushed, isDateSkipped } from "../utils/restDay";
 import { JOURNAL_KEY, type JournalEntry } from "../constants/journal";
@@ -474,6 +476,9 @@ export default function JournalScreen() {
   const [workoutPickerVisible, setWorkoutPickerVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState("");
   const [restAction, setRestAction] = useState<RestAction>(null);
+  // Today's change-day pick, read as Home reads it, so this week's bar on the
+  // Your Training card holds the same plan as Home's ring.
+  const [todayOverride, setTodayOverride] = useState<DayOverride | null>(null);
 
   const loadPrograms = useCallback(() =>
     AsyncStorage.getItem(PROGRAMS_KEY)
@@ -496,6 +501,9 @@ export default function JournalScreen() {
     AsyncStorage.getItem(WORKOUT_DATES_KEY)
       .then(raw => { if (raw) setWorkoutDates(JSON.parse(raw)); })
       .catch((e) => warnStorage("getItem", WORKOUT_DATES_KEY, e));
+    AsyncStorage.getItem(WORKOUT_DAY_OVERRIDE_KEY)
+      .then(raw => { setTodayOverride(raw ? JSON.parse(raw) : null); })
+      .catch((e) => warnStorage("getItem", WORKOUT_DAY_OVERRIDE_KEY, e));
     loadPrograms();
   }, [loadPrograms]);
   useFocusEffect(loadAll);
@@ -588,6 +596,14 @@ export default function JournalScreen() {
     [workoutInfoOf],
   );
   const sessions = useSessionFilter(workoutHistory, sessionOf);
+
+  // The Your Training card's week: the training day the app is on (before 3am
+  // is still yesterday), and the workouts this week holds, as Home's ring has.
+  const effectiveToday = getEffectiveToday(activeProgram, workoutHistory);
+  const weekPlan = useMemo(
+    () => plannedThisWeek({ program: activeProgram, history: workoutHistory, programs, today: effectiveToday, override: todayOverride }),
+    [activeProgram, workoutHistory, programs, effectiveToday, todayOverride],
+  );
 
   const renderItem = (item: JournalFeedItem) => {
     if (item.kind === "workout") {
@@ -691,6 +707,17 @@ export default function JournalScreen() {
           isDark={isDark}
           onOpenProgram={programId => router.navigate({ pathname: "/program-history-detail", params: { programId } })}
           onOpenAllPrograms={() => router.navigate("/program-history")}
+        />
+
+        {/* Your whole history at a glance (shared with a trainer's view of
+            this page); nothing until the first workout */}
+        <JournalTrainingCard
+          history={workoutHistory}
+          programs={programs}
+          today={effectiveToday}
+          plannedThisWeek={weekPlan}
+          isDark={isDark}
+          onOpenWorkout={id => router.navigate({ pathname: "/workout-detail", params: { id } })}
         />
 
         {/* Recent activity heading, and the session filter's button and chips

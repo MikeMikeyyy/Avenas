@@ -6,7 +6,9 @@
 // A session that set several PRs stays ONE card: tapping it expands the card to
 // name each PR and its numbers, with a link to the workout. It used to headline
 // one exercise and say "plus N more", which meant opening the workout and
-// working out for yourself which lifts those were.
+// working out for yourself which lifts those were. A session's rep PRs
+// (utils/repPrs.ts) are a card the same way, with the records medal where the
+// trophy is, on the same gold.
 //
 // The records sit on a gold rail down the blank column beside the list: a
 // glowing dot at each record, joined by a line that starts at the first dot
@@ -28,13 +30,14 @@ import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
 import DumbbellIcon from "./DumbbellIcon";
 import FlameIcon from "./FlameIcon";
+import MedalIcon from "./icons/MedalIcon";
 import ExpandReveal, { useReveal, useRevealChevron } from "./ExpandReveal";
 import { APP_DARK, APP_LIGHT, ACCT, AURORA, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
 import { pill, pillGlow, PILL_H_XS } from "../constants/buttons";
 import { getTier } from "../constants/streakTiers";
-import { TROPHY_ICON } from "../constants/icons";
+import { PROGRAM_DONE_ICON, TROPHY_ICON } from "../constants/icons";
 import type { Achievement } from "../constants/achievements";
-import { describeAchievement, formatPRLine } from "../utils/achievements";
+import { describeAchievement, formatPRLine, formatRepPRLine } from "../utils/achievements";
 import { daysBetweenYMD, todayYMD, toYMD } from "../utils/dates";
 
 /** The flame's size budget in the 34pt badge circle. FlameIcon renders 0.86 of
@@ -46,6 +49,13 @@ const FLAME_SIZE = 26;
  *  still tints the wash behind it). It fills its square edge to edge, so 20
  *  weighs about the same as the 17–18pt glyphs on the other cards. */
 const TROPHY_SIZE = 20;
+/** The rep PR medal at the trophy's height, cropped to its artwork (it's
+ *  narrower, so it weighs about the same). */
+const MEDAL_SIZE = 20;
+/** A finished program's clipboard (PROGRAM_DONE_ICON), full-colour artwork
+ *  like the trophy, at the trophy's size. Its tick is the aqua the badge's
+ *  wash still takes. */
+const PROGRAM_SIZE = 20;
 
 /** The summary row's geometry, which the PR rail lines up with. */
 const ROW_PAD_X = 14;
@@ -71,10 +81,12 @@ function badgeFor(a: Achievement, isDark: boolean, streakColor?: string): { colo
   switch (a.category) {
     case "pr":
       return { color: isDark ? GOLD_DARK : GOLD, icon: () => <Image source={TROPHY_ICON} style={styles.trophy} contentFit="contain" /> };
+    case "reps":
+      return { color: isDark ? GOLD_DARK : GOLD, icon: () => <MedalIcon size={MEDAL_SIZE} tight /> };
     case "workouts":
       return { color: ACCT, icon: c => <DumbbellIcon size={18} color={c} /> };
     case "program":
-      return { color: AURORA.aqua, icon: c => <Ionicons name="ribbon" size={17} color={c} /> };
+      return { color: AURORA.aqua, icon: () => <Image source={PROGRAM_DONE_ICON} style={styles.programIcon} contentFit="contain" /> };
     case "streak": {
       // The streak's own flame: the animated Lottie (components/FlameIcon.tsx),
       // the same artwork Home's streak badge and the streak page draw. It was a
@@ -106,10 +118,15 @@ function AchievementCard({ achievement, isDark, isKg, streakColor, onOpenWorkout
   const copy = describeAchievement(achievement, isKg);
   const when = earnedWhen(achievement.earnedAt);
   const badge = badgeFor(achievement, isDark, streakColor);
-  // Only a multi-PR session has more to say than its own subtitle, so only it
-  // expands; every other card goes straight where it happened.
-  const prs = achievement.category === "pr" ? achievement.prs : [];
-  const expandable = prs.length > 1;
+  // Only a session of several PRs (or rep PRs) has more to say than its own
+  // subtitle, so only it expands; every other card goes straight where it
+  // happened.
+  const records = achievement.category === "pr"
+    ? achievement.prs.map(pr => ({ name: pr.exerciseName, line: formatPRLine(pr, isKg) }))
+    : achievement.category === "reps"
+      ? achievement.repPrs.map(r => ({ name: r.exerciseName, line: formatRepPRLine(r, isKg) }))
+      : [];
+  const expandable = records.length > 1;
 
   const [open, setOpen] = useState(false);
   const reveal = useReveal();
@@ -175,26 +192,26 @@ function AchievementCard({ achievement, isDark, isKg, streakColor, onOpenWorkout
             {row}
           </TouchableOpacity>
           <ExpandReveal progress={reveal.progress} fade={reveal.fade} open={open} contentStyle={styles.prList}>
-            {prs.map((pr, i) => {
+            {records.map((record, i) => {
               // The line runs from the first dot to the last: up from every
               // dot but the first, down from every dot but the last.
               const before = i > 0;
-              const more = i < prs.length - 1;
+              const more = i < records.length - 1;
               return (
-                <View key={pr.exerciseName}>
+                <View key={`${record.name}-${i}`}>
                   <View style={styles.prHead}>
                     <View style={styles.railCell}>
                       <View style={[styles.railLine, before && rail]} />
                       <View style={[styles.node, node]} />
                       <View style={[styles.railLine, more && rail]} />
                     </View>
-                    <Text style={[styles.prName, { color: t.tp }]} numberOfLines={1}>{pr.exerciseName}</Text>
+                    <Text style={[styles.prName, { color: t.tp }]} numberOfLines={1}>{record.name}</Text>
                   </View>
                   <View style={styles.prFoot}>
                     <View style={styles.railCell}>
                       {more && <View style={[styles.railLine, rail]} />}
                     </View>
-                    <Text style={[styles.prValue, { color: t.ts }]} numberOfLines={1}>{formatPRLine(pr, isKg)}</Text>
+                    <Text style={[styles.prValue, { color: t.ts }]} numberOfLines={1}>{record.line}</Text>
                   </View>
                 </View>
               );
@@ -227,6 +244,7 @@ const styles = StyleSheet.create({
   row:       { flexDirection: "row", alignItems: "center", gap: ROW_GAP, paddingHorizontal: ROW_PAD_X, paddingVertical: 11 },
   badge:     { width: BADGE, height: BADGE, borderRadius: BADGE / 2, alignItems: "center", justifyContent: "center" },
   trophy:    { width: TROPHY_SIZE, height: TROPHY_SIZE },
+  programIcon: { width: PROGRAM_SIZE, height: PROGRAM_SIZE },
   text:      { flex: 1 },
   title:     { fontFamily: FontFamily.semibold, fontSize: 14 },
   detail:    { fontFamily: FontFamily.regular, fontSize: 12, marginTop: 1 },

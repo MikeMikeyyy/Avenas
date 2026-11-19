@@ -48,6 +48,19 @@ public class AvenasLiveActivityModule: Module {
       return false
     }
 
+    // The app's Rest timer alerts setting (master and category), for the
+    // "Rest complete" a lock-screen rest gets (RestAlert): the app sends it at
+    // launch and on every change of its notification settings.
+    Function("setRestAlerts") { (on: Bool) in
+      UserDefaults(suiteName: avenasAppGroupId)?.set(on, forKey: AvenasSharedKeys.restAlerts)
+    }
+
+    // The lock screen's "Rest complete", cancelled: the app is scheduling its
+    // own, or its rest was dismissed (utils/notificationScheduler.ts).
+    Function("cancelRestAlert") {
+      RestAlert.cancelOwn()
+    }
+
     AsyncFunction("startOrUpdate") { (payload: ActivityPayloadRecord) async in
       guard #available(iOS 17.0, *) else { return }
 
@@ -112,6 +125,7 @@ public class AvenasLiveActivityModule: Module {
           ActivityContent(state: activity.content.state, staleDate: nil),
           dismissalPolicy: .immediate)
       }
+      RestAlert.cancelOwn()
       let defaults = WorkoutActivityController.defaults
       defaults?.removeObject(forKey: AvenasSharedKeys.queue)
       defaults?.removeObject(forKey: AvenasSharedKeys.actions)
@@ -122,6 +136,9 @@ public class AvenasLiveActivityModule: Module {
     // intents ran plus the current rest-end mirror so JS can re-sync its timer.
     AsyncFunction("consumeActions") { () -> [String: Any] in
       guard #available(iOS 16.2, *) else { return ["actions": [], "restEndMs": 0.0] }
+      // The app takes the card's rest back from here, and gives it its own
+      // "Rest complete" (RestTimerContext), so the lock screen's goes.
+      RestAlert.cancelOwn()
       let actions = WorkoutActivityController.loadActions()
       if !actions.isEmpty {
         WorkoutActivityController.saveActions([])

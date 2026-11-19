@@ -25,22 +25,30 @@ import { PROGRESS_ICON } from "../constants/tabIcons";
 import DrawnIcon from "../components/DrawnIcon";
 import { programIdsWithSessions } from "../utils/progressStats";
 import { programProgressParams } from "../utils/progressSession";
+import { useHoldProgressReturn } from "../hooks/useProgressReturn";
 import { CARD_SHADOW_ROOM } from "../constants/cards";
 import NeuCard from "../components/NeuCard";
 import BounceButton from "../components/BounceButton";
 import GlassButton from "../components/GlassButton";
+import AiEntryCard from "../components/AiEntryCard";
+import BuilderMark from "../components/icons/BuilderMark";
 import SheetPill from "../components/SheetPill";
 import { SHEET_DIM, SHEET_TOP_GAP, SHEET_TOP_ROW, SHEET_TOP_ROW_H, SheetBackButton, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
 import SquarePenIcon from "../components/SquarePenIcon";
 import ChevronToggle from "../components/ChevronToggle";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ActiveBadge from "../components/ActiveBadge";
-import { formatStoredDate } from "../utils/dates";
+import { Image } from "expo-image";
+import { PROGRAM_DONE_ICON } from "../constants/icons";
+import { formatStoredDate, todayYMD } from "../utils/dates";
+import { replaceMessage, startsLabel, startsLater, storedStart, withStartDate } from "../utils/programStart";
+import ProgramStartStep from "../components/ProgramStartStep";
 import { getJSON } from "../utils/storage";
 import { dayIdAt } from "../utils/programDays";
-import { getEffectiveToday } from "../utils/workout";
+import { getEffectiveToday, normalizeDriftDates } from "../utils/workout";
 import { pauseProgram, resumeWithPrompt } from "../utils/programPause";
-import { runStartDate } from "../utils/programHolds";
+import { completeIfFinished } from "../utils/programFinish";
+import { runStartDate, runStartYMD } from "../utils/programHolds";
 import { activateProgram, completeProgram, deactivateProgram, setWorkoutDay } from "../utils/programLifecycle";
 import { useTheme } from "../contexts/ThemeContext";
 import { useWorkoutTimer } from "../contexts/WorkoutTimerContext";
@@ -309,6 +317,9 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
   // pausedAt or it reads as running: green bars and an "Active" badge.
   const paused = !!program.pausedAt;
   const accent = paused ? PAUSED_ORANGE : ACCT;
+  // Set to start later (utils/programStart.ts): week 0, so no bar filled, and
+  // when it starts in place of its week.
+  const startsOn = startsLater(program);
   const week = getCurrentWeek(program);
   const finish = programFinishDate(program);
   const finishLabel = finish ? formatStoredDate(finish) : null;
@@ -347,11 +358,11 @@ const ActiveProgramCard = React.memo(function ActiveProgramCard({ program, isDar
             ))}
           </View>
           <Text style={[styles.weekLabel, { color: t.ts }]}>
-            {paused ? `Paused on week ${week} of ${program.totalWeeks}` : `Week ${week} of ${program.totalWeeks}`}
+            {startsOn ? startsLabel(startsOn) : paused ? `Paused on week ${week} of ${program.totalWeeks}` : `Week ${week} of ${program.totalWeeks}`}
           </Text>
 
           <View style={styles.dateChipRow}>
-            <DateChip icon="calendar" label={`Started ${runStartDate(program)}`} isDark={isDark} />
+            <DateChip icon="calendar" label={`${startsOn ? "Starts" : "Started"} ${runStartDate(program)}`} isDark={isDark} />
             {/* The other end of the timeline. Moves out when a day is pushed and
                 back when a rest day is spent, which is the only place that trade
                 is visible. Not shown while held — a hold has no finish date until
@@ -413,12 +424,16 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
   const filledWeeks = program.status === "completed" ? program.currentWeek : computedWeek;
   // Shared with the archive's cards (utils/programStatus.ts), so a program
   // reads the same on both sides of an archive.
-  const { color: statusColor, label: statusLabel } = programStatus(program, t.ts);
+  const { color: statusColor, label: statusLabel, done: statusDone } = programStatus(program, t.ts);
   const weekText =
     program.status === "completed" ? `Completed ${program.currentWeek} of ${program.totalWeeks} weeks` :
     program.status === "created"   ? `${program.totalWeeks} weeks planned` :
     `Week ${computedWeek} of ${program.totalWeeks}`;
   const dateLabel = program.status === "created" ? "Created" : "Started";
+  // One set to start later and let go before it began keeps that day as its
+  // start (utils/programLifecycle.ts unbegun): no "Created" date to come.
+  const startYMDShown = runStartYMD(program);
+  const dateShown = !(program.status === "created" && startYMDShown && startYMDShown > todayYMD());
 
   return (
     <NeuCard dark={isDark} style={styles.programCard}>
@@ -434,6 +449,8 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
             <Text style={[styles.programName, { color: t.tp }]}>{program.name}</Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View style={[styles.statusBadge, { backgroundColor: isDark ? `${statusColor}22` : `${statusColor}18` }]}>
+                {/* In the header row, so a collapsed card still shows it. */}
+                {statusDone && <Image source={PROGRAM_DONE_ICON} style={styles.statusDoneIcon} contentFit="contain" />}
                 <Text style={[styles.statusBadgeText, { color: statusColor }]}>{statusLabel}</Text>
               </View>
               <Ionicons name="ellipsis-horizontal" size={18} color={t.ts} />
@@ -453,7 +470,7 @@ const ProgramCard = React.memo(function ProgramCard({ program, isDark, collapsed
           </View>
           <Text style={[styles.weekLabel, { color: t.ts }]}>{weekText}</Text>
           <View style={styles.dateChipRow}>
-            <DateChip icon="calendar" label={`${dateLabel} ${runStartDate(program)}`} isDark={isDark} />
+            {dateShown ? <DateChip icon="calendar" label={`${dateLabel} ${runStartDate(program)}`} isDark={isDark} /> : null}
             {program.status === "completed" && program.completedDate && (
               <DateChip icon="flag" label={`Completed ${program.completedDate}`} isDark={isDark} accent />
             )}
@@ -509,7 +526,9 @@ interface ProgramAction {
   step?: ActionStep;
 }
 
-type ActionStep = "send" | "summary";
+/** `start`: when it starts, Make Active Program's next step and Change Start
+ *  Date's (components/ProgramStartStep.tsx). */
+type ActionStep = "send" | "summary" | "start";
 
 /** How long the sheet takes to grow or shrink to the next step's height. */
 const STEP_HEIGHT_MS = 320;
@@ -551,7 +570,7 @@ function StepBody({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendTargets, onSend }: {
+function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendTargets, onSend, history, onStart }: {
   visible: boolean;
   program: SavedProgram | null;
   actions: ProgramAction[];
@@ -561,6 +580,11 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
   sendTargets: ReviewTargets;
   /** Send for Review's pick, run once the sheet has gone. */
   onSend: (program: SavedProgram, to: ReviewTo) => void;
+  /** What's logged: a workout today keeps a program from starting today. */
+  history: readonly CompletedWorkout[];
+  /** The start picked (Make Active Program, Change Start Date), run once the
+   *  sheet has gone. */
+  onStart: (program: SavedProgram, ymd: string) => void;
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
@@ -638,6 +662,7 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
   };
   const sending = step === "send";
   const summing = step === "summary";
+  const starting = step === "start";
   // Program Summary's Open in Builder is the sheet's own Edit Program, so it
   // shows where Edit does (not on a finished program) and does what it does.
   const editAction = actions.find(a => a.key === "edit");
@@ -669,7 +694,26 @@ function ProgramActionsSheet({ visible, program, actions, isDark, onClose, sendT
             </View>
           </View>
           <StepBody>
-          {summing ? (
+          {starting ? (
+            // Scrolling past `bodyMax`, as the other steps do: the calendar
+            // makes it tall on a small phone.
+            <ScrollView
+              key="start"
+              style={[styles.paScroll, { maxHeight: bodyMax }]}
+              contentContainerStyle={styles.startStep}
+              alwaysBounceVertical={false}
+              showsVerticalScrollIndicator={false}
+            >
+              <ProgramStartStep
+                programName={program.name}
+                today={todayYMD()}
+                history={history}
+                current={startsLater(program)}
+                onPick={ymd => close(() => onStart(program, ymd))}
+                onCancel={() => goTo("actions")}
+              />
+            </ScrollView>
+          ) : summing ? (
             <>
               {/* Every day and its exercises' names, the Workout Summary the
                   archive and a sent program open (components/ProgramSummarySheet.tsx),
@@ -785,6 +829,7 @@ export default function ProgramsScreen() {
   // How far up the workout bar reaches, so the page scrolls clear of it.
   const barsReach = useFloatingBarsReach();
   const router = useRouter();
+  const holdProgressReturn = useHoldProgressReturn();
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isRunning, isPaused, discardWorkout } = useWorkoutTimer();
@@ -819,33 +864,31 @@ export default function ProgramsScreen() {
   // Making a program active ends the current one's run: it's shelved where it
   // stands, and making it active again later starts it over from week 1. So
   // with another program active this asks first, in the builder's words for
-  // its own Set as Active (user request, 2026-10-14).
-  const handleMakeActive = (program: SavedProgram) => {
+  // its own Set as Active (user request, 2026-10-14). The start is picked
+  // before it (the sheet's step, utils/programStart.ts), so it can say when.
+  const handleMakeActive = (program: SavedProgram, startYMD: string) => {
     const current = programs.find(p => p.status === "active" && p.id !== program.id);
     if (!current) {
-      void makeActive(program);
+      void makeActive(program, startYMD);
       return;
     }
-    const week = getCurrentWeek(current);
     Alert.alert(
       "Replace your active program?",
-      week >= current.totalWeeks
-        ? `"${current.name}" has reached its last week, so it will be marked complete and "${program.name}" will start today.`
-        : `"${current.name}" is your active program, in week ${week} of ${current.totalWeeks}. "${program.name}" will start today in its place, and making "${current.name}" active again later starts it over from week 1. Your logged workouts stay in your Journal.`,
+      replaceMessage(current, program.name, startYMD),
       [
-        { text: "Replace", style: "destructive", onPress: () => void makeActive(program) },
+        { text: "Replace", style: "destructive", onPress: () => void makeActive(program, startYMD) },
         { text: "Cancel", style: "cancel" },
       ],
     );
   };
 
-  const makeActive = async (program: SavedProgram) => {
-    // A fresh run from today, the outgoing program demoted by the week it
-    // reached (utils/programLifecycle.ts, shared with the builder's "set it as
-    // your active program"). The history says whether a run in its first week
-    // has anything in it to keep.
+  const makeActive = async (program: SavedProgram, startYMD: string) => {
+    // A fresh run from the day picked, the outgoing program demoted by the
+    // week it reached today (utils/programLifecycle.ts, shared with the
+    // builder's "set it as your active program"). The history says whether a
+    // run in its first week has anything in it to keep.
     const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
-    const { programs: updated, finished } = activateProgram(programs, program.id, todayFormatted(), Array.isArray(history) ? history : []);
+    const { programs: updated, finished } = activateProgram(programs, program.id, todayFormatted(), Array.isArray(history) ? history : [], storedStart(startYMD));
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     // A same-day change-day override belongs to the PREVIOUS active program —
@@ -856,6 +899,22 @@ export default function ProgramsScreen() {
     // Starting a new program after running the old one to its end finishes the
     // old one just as Mark Complete would, so it earns the same achievement.
     if (finished) void awardProgramAchievement(finished.program, finished.week);
+  };
+
+  // Change Start Date: the active program, before the day it was set to start,
+  // moved to another (utils/programStart.ts withStartDate).
+  const changeStart = async (program: SavedProgram, startYMD: string) => {
+    const updated = programs.map(p => (p.id === program.id ? normalizeDriftDates(withStartDate(p, startYMD)) : p));
+    setPrograms(updated);
+    await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
+    scheduleCloudPush();
+  };
+
+  // The start step's pick: the active program's is Change Start Date, any
+  // other's Make Active Program.
+  const handleStart = (program: SavedProgram, startYMD: string) => {
+    if (program.status === "active") void changeStart(program, startYMD);
+    else handleMakeActive(program, startYMD);
   };
 
   // Deactivate the active program without completing it: shelved ("paused";
@@ -886,7 +945,9 @@ export default function ProgramsScreen() {
     // calendar day, last night's unfinished workout stayed up after pausing,
     // and a Move to Tomorrow then put it inside the hold, where it vanished.
     const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
-    const updated = pauseProgram(programs, program.id, getEffectiveToday(program, Array.isArray(history) ? history : []));
+    const logged = Array.isArray(history) ? history : [];
+    // From the day after, once today's workout is logged (holdStartsOn).
+    const updated = pauseProgram(programs, program.id, getEffectiveToday(program, logged), logged);
     setPrograms(updated);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     // A change-day override belongs to a running program; it would resurface a
@@ -1003,10 +1064,9 @@ export default function ProgramsScreen() {
     // they picked.
     const sessions = Array.isArray(history) ? history : [];
     const today = getEffectiveToday(activeProgram, sessions);
-    // A clean reset of every move, then today solved onto the day picked
-    // (utils/programLifecycle.ts setWorkoutDay, which keeps the app on that day
-    // when it's set between midnight and 3am).
-    const realigned = setWorkoutDay(activeProgram, targetDayIndex, today, sessions);
+    // A reset from today of every move, then today solved onto the day picked,
+    // every day before it read as it was (utils/programLifecycle.ts setWorkoutDay).
+    const realigned = setWorkoutDay(activeProgram, targetDayIndex, today);
     if (!realigned) return false;
 
     // A workout already under way on the Workout tab (the timer started, or
@@ -1088,14 +1148,22 @@ export default function ProgramsScreen() {
   // latest: read on focus, and again when the account's other phone's changes
   // merge in while it's open (or the next save writes them away).
   const loadPrograms = useCallback(() => {
-    AsyncStorage.getItem(PROGRAMS_KEY).then(raw => {
-      if (!raw) { setPrograms([]); return; }
+    void (async () => {
+      // A run that ended by itself since the app last came to the front (its
+      // last day went by with the app still open past midnight) ends before its
+      // actions are offered: Set Workout Date on it left the Workout tab empty
+      // (utils/programFinish.ts; found by the solo flows, 2026-11-16).
+      await completeIfFinished();
       try {
-        const parsed: unknown = JSON.parse(raw);
-        if (Array.isArray(parsed)) setPrograms(parsed as SavedProgram[]);
-      } catch { setPrograms([]); }
-    }).catch(() => {});
-    getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []).then(h => setHistory(Array.isArray(h) ? h : []));
+        const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
+        const parsed: unknown = raw ? JSON.parse(raw) : [];
+        setPrograms(Array.isArray(parsed) ? (parsed as SavedProgram[]) : []);
+      } catch {
+        setPrograms([]);
+      }
+      const h = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+      setHistory(Array.isArray(h) ? h : []);
+    })();
   }, []);
   useSyncedDataReload(loadPrograms);
 
@@ -1159,9 +1227,12 @@ export default function ProgramsScreen() {
   // View Progress (user request, 2026-11-07): the Progress tab on this
   // program (utils/progressSession.ts). This page sits over the tabs, so
   // dismissTo goes back to them rather than push a second copy, as Exercise
-  // History's See All Progress does.
+  // History's See All Progress does. The way back is held first, so the tab
+  // has a back button to here (utils/progressReturn.ts).
   const viewProgress = (program: SavedProgram) => {
-    router.dismissTo({ pathname: "/(tabs)/progress", params: programProgressParams(program.id) });
+    const params = programProgressParams(program.id);
+    holdProgressReturn(params.programProgressAt);
+    router.dismissTo({ pathname: "/(tabs)/progress", params });
   };
   const totalCount = programs.length;
   const weeksTrained = programs.reduce((sum, p) =>
@@ -1190,7 +1261,18 @@ export default function ProgramsScreen() {
     };
 
     let list: ProgramAction[];
-    if (program.status === "active") {
+    if (startsLater(program)) {
+      // Set to start later (utils/programStart.ts): when it starts leads, as
+      // Set Workout Date does on a running one. Nothing to pause, set a day of
+      // or complete before it's begun; Make Inactive lets it go.
+      list = [
+        { key: "start", label: "Change Start Date", icon: "calendar-outline", primary: true, step: "start", onPress: () => {} },
+        summaryAction,
+        editAction,
+        { key: "inactive", label: "Make Inactive", icon: "remove-circle-outline", tint: WARMUP_ORANGE, onPress: () => handleMakeInactive(program) },
+        duplicateAction,
+      ];
+    } else if (program.status === "active") {
       list = [
         // Set Workout Date shifts cycleOffset, which resuming also does — offering
         // both while paused would just mean the resume overwrites your choice.
@@ -1221,7 +1303,8 @@ export default function ProgramsScreen() {
       list = [summaryAction, duplicateAction, deleteAction];
     } else {
       list = [
-        { key: "makeactive", label: "Make Active Program", icon: "checkmark-circle-outline", primary: true, onPress: () => handleMakeActive(program) },
+        // Its next step asks when it starts (utils/programStart.ts).
+        { key: "makeactive", label: "Make Active Program", icon: "checkmark-circle-outline", primary: true, step: "start", onPress: () => {} },
         summaryAction,
         editAction,
         duplicateAction,
@@ -1264,6 +1347,17 @@ export default function ProgramsScreen() {
           <Text style={[styles.screenTitle, { color: t.tp }]}>MY PROGRAMS</Text>
           <View style={{ width: 66 }} />
         </View>
+
+        {/* The AI Program Builder (user pick, 2026-11-13: a card at the top). */}
+        <AiEntryCard
+          isDark={isDark}
+          Mark={BuilderMark}
+          title="Build with AI"
+          subtitle="Answer a few questions, get a program made for you"
+          route="/program-builder"
+          accessibilityLabel="Build a program with AI"
+          style={styles.aiCard}
+        />
 
         {/* Stats */}
         <NeuCard dark={isDark} style={styles.statsCard}>
@@ -1367,6 +1461,8 @@ export default function ProgramsScreen() {
         onClose={() => setActionsProgram(null)}
         sendTargets={sendTargets}
         onSend={(program, to) => void handleSendForReview(program, to)}
+        history={history}
+        onStart={handleStart}
       />
 
       {activeProgram && setWorkoutOpen && (
@@ -1393,6 +1489,7 @@ const styles = StyleSheet.create({
   header:             { flexDirection: "row", alignItems: "center", height: BACK_SIZE, marginBottom: 24 },
   screenTitle:        { fontFamily: FontFamily.bold, fontSize: 20, letterSpacing: 1.5, textTransform: "uppercase", textAlign: "center", flex: 1 },
 
+  aiCard:             { marginBottom: 16 },
   statsCard:          { marginBottom: 24, borderRadius: 20 },
   statsRow:           { flexDirection: "row" },
   statCell:           { flex: 1, flexDirection: "row" },
@@ -1416,8 +1513,11 @@ const styles = StyleSheet.create({
   programCard:        { marginBottom: 12, borderRadius: 20 },
   programCardInner:   { padding: 16, gap: 10 },
   programName:        { fontFamily: FontFamily.semibold, fontSize: 15, flex: 1, marginRight: 8 },
-  statusBadge:        { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
+  statusBadge:        { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   statusBadgeText:    { fontFamily: FontFamily.semibold, fontSize: 12 },
+  // The finished program's clipboard in a Completed badge: full-colour
+  // artwork fills its square, so a touch over the 12pt word.
+  statusDoneIcon:     { width: 14, height: 14 },
 
   rowBetween:         { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
 
@@ -1461,6 +1561,8 @@ const styles = StyleSheet.create({
   summaryDays:        { paddingHorizontal: 20 },
   summaryFoot:        { alignItems: "flex-end", paddingHorizontal: 20, paddingTop: SUMMARY_FOOT_GAP },
   paList:             { paddingHorizontal: 20, paddingTop: 16, gap: 10 },
+  // When it starts (components/ProgramStartStep.tsx, which has its own sides).
+  startStep:          { paddingTop: 12 },
   // Send for Review's and Program Summary's steps: as tall as what's in them
   // until the sheet reaches the top (StepBody's `bodyMax`), then they scroll.
   paScroll:           { flexGrow: 0 },

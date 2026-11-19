@@ -52,3 +52,6 @@ scripts/exercise-source/*
 # editor's Java/Gradle tooling makes them on opening one)
 .gradle/
 modules/*/android/build/
+
+# Supabase CLI working files (linked project, version cache)
+supabase/.temp/

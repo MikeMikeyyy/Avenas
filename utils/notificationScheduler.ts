@@ -37,6 +37,7 @@ import {
   type SavedProgram,
 } from "../constants/programs";
 import { loadNotificationPrefs, isCategoryEnabled } from "./notifications";
+import { cancelLockScreenRestAlert } from "../modules/avenas-live-activity";
 import type { NotificationCategory } from "../constants/notifications";
 
 /** How many days of one-shot reminders to keep queued. Refilled on every app
@@ -283,6 +284,9 @@ let restAlertGen = 0;
 export function scheduleRestTimerAlert(endsAtMs: number): void {
   if (!isNative) return;
   const gen = ++restAlertGen;
+  // One rest alert at a time: a rest the lock screen started had its own
+  // (RestAlert, WorkoutActivitySupport.swift), and this one replaces it.
+  cancelLockScreenRestAlert();
   restAlertChain = restAlertChain.then(async () => {
     await cancelRestTimerAlertAsync();
     if (gen !== restAlertGen) return;
@@ -312,6 +316,8 @@ async function cancelRestTimerAlertAsync(): Promise<void> {
 /** Cancel the pending rest alert (timer dismissed or finished in-app). */
 export function cancelRestTimerAlert(): void {
   if (!isNative) return;
+  // The rest is gone, wherever it was started (the lock screen's alert too).
+  cancelLockScreenRestAlert();
   restAlertGen++;
   restAlertChain = restAlertChain.then(cancelRestTimerAlertAsync).catch((e) => warn("restTimerCancel", e));
 }

@@ -72,17 +72,27 @@ export function rowTypesOf(sets: { warmup: readonly unknown[]; working: readonly
   return [...sets.warmup.map(() => "warmup" as const), ...sets.working.map(() => "working" as const)];
 }
 
-/** What ticking a still-empty set fills in: last time's numbers at its row
- *  ("80×8" is 80 and 8, "×8" a bodyweight set's 8 reps, "80×" a weight with no
- *  reps: utils/workout.ts formatPrevSets always writes both sides).
- *  Null when the set already has something typed, or there's nothing to copy.
- *  One rule for every way a set gets ticked: the card's checkbox and the lock
- *  screen's button (and the card's preview of what that button will tick). A
- *  lock-screen tick used to leave the set empty for the user to fill in after
- *  unlocking, until they asked for it to fill in like the app's (2026-10-05). */
+/** What a set holds once it's ticked: each box left empty takes last time's
+ *  number at its row ("80×8" is 80 and 8, "×8" a bodyweight set's 8 reps,
+ *  "80×" a weight with no reps: utils/workout.ts formatPrevSets always writes
+ *  both sides), and a box typed in keeps what was typed, never overwritten.
+ *  So a weight typed up from last time, its reps left empty, is ticked with
+ *  last time's reps; reps typed with the weight empty, with last time's weight
+ *  (user request, 2026-11-14: it used to fill only a set with nothing typed).
+ *  Null when there's nothing to fill: both boxes typed, or no number last time
+ *  for an empty one. One rule for every way a set gets ticked: the card's
+ *  checkbox, the timer's tick and the lock screen's button (and the card's
+ *  preview of what that button will tick). A lock-screen tick used to leave the
+ *  set empty for the user to fill in after unlocking, until they asked for it
+ *  to fill in like the app's (2026-10-05). */
 export function prevFillFor(set: { weight: string; reps: string }, prevHint: string | undefined): { weight: string; reps: string } | null {
-  if (set.weight.trim() || set.reps.trim()) return null;
   if (!prevHint || prevHint === "—") return null;
-  const [weight = "", reps = ""] = prevHint.split("×");
+  const [prevWeight = "", prevReps = ""] = prevHint.split("×");
+  const typedWeight = set.weight.trim() !== "";
+  const typedReps = set.reps.trim() !== "";
+  const weight = typedWeight ? set.weight : prevWeight;
+  const reps = typedReps ? set.reps : prevReps;
+  // Nothing an empty box can take: leave the set as it is.
+  if (weight === set.weight && reps === set.reps) return null;
   return { weight, reps };
 }

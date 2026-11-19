@@ -22,11 +22,12 @@ import {
   skipDate,
   toggleSkippedDate,
   unskipDate,
+  isSettledMove,
 } from "../utils/skippedDates";
 import { cycleDrift } from "../utils/cycleDrift";
-import { formatStoredDate, parseStoredDate, toYMD } from "../utils/dates";
+import { addDaysYMD, formatStoredDate, parseStoredDate, toYMD } from "../utils/dates";
 import { heldOn, idleDays, programAsOf, runStartYMD } from "../utils/programHolds";
-import { programsAfterPastLog, setWorkoutDay } from "../utils/programLifecycle";
+import { activateProgram, completeProgram, deactivateProgram, minTotalWeeks, programsAfterPastLog, setWorkoutDay } from "../utils/programLifecycle";
 import { getEffectiveToday, getWorkoutForDate, resolveDayIndex, resolveWorkoutForDate, cycleIndexForDate, normalizeDriftDates } from "../utils/workout";
 import { sessionCountForDay, workoutMatchesDay } from "../utils/progressStats";
 import { markDayRefLabels, programDays } from "../utils/programDays";
@@ -676,24 +677,55 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
   eq([trip.pushedDates, trip.pulledDates], [last.program.pushedDates, last.program.pulledDates],
     "end: a move put straight back leaves the last day's move as it was");
   eq(programFinishDate(trip)!.getTime(), programFinishDate(last.program)!.getTime(), "end: ...and the finish");
+
+  // Set Workout Date on the day the move brought into the run, past the plan's
+  // last day: the run runs to it. Counted from the plan's last day, the move
+  // before counted below that day and not from it, so no end date held, the
+  // run ended the day before and the workout just set was gone from the
+  // Workout tab (found by the solo flows, 2026-11-17).
+  const MON2 = plus(MON, 7);
+  eq(toYMD(programFinishDate(last.program)!), MON2, "past the plan setup: the last day's move ends it on the Monday");
+  const set = setWorkoutDay(last.program, 1, MON2)!;
+  eq(toYMD(programFinishDate(set)!), MON2, "past the plan: set on the day the move brought in, it runs to that day");
+  eq(getWorkoutForDate(set, MON2)?.dayId, "w1", "past the plan: ...which is the day set");
+  eq([0, 1, 2, 3, 4, 5, 6].map(k => getWorkoutForDate(set, plus(MON, k))?.dayId ?? null),
+    [0, 1, 2, 3, 4, 5, 6].map(k => getWorkoutForDate(last.program, plus(MON, k))?.dayId ?? null),
+    "past the plan: the days before read as they did");
+  const movedOn = planDoItTomorrow(set, MON2);
+  eq([movedOn.kind, toYMD(programFinishDate(movedOn.program)!)], ["extended", plus(MON, 8)], "past the plan: a move after it still ends it a day later");
+  // Set where the plan still has days to go, it finishes on the plan's last day.
+  const early = setWorkoutDay(last.program, 0, FRI)!;
+  eq(toYMD(programFinishDate(early)!), SUN, "on plan: set before the plan's last day, it finishes on it");
 }
 
 // ─── Set Workout Date between midnight and 3am ───────────────────────────────
-// Re-aligning re-labels yesterday too. Wednesday was a rest day, so at 1am on
-// Thursday the app is on Thursday; "today is Lower" makes Wednesday an Upper
-// not logged, which holds the app on Wednesday (getEffectiveToday), and it
-// showed Upper. Wednesday is marked off instead, so the app stays on Thursday.
+// Wednesday was a rest day, so at 1am on Thursday the app is on Thursday.
+// "Today is Lower" re-aligns from Thursday on and leaves Wednesday the rest it
+// was: re-labelled, it turned into an Upper not logged, which held the app on
+// Wednesday (getEffectiveToday), and marking it off was the patch.
 {
   const oneAm = new Date(2026, 8, 10, 1, 0);
   eq(getEffectiveToday(base, [], oneAm), THU, "1am setup: the app is on Thursday (Wednesday rested)");
-  const set = setWorkoutDay(base, 1, THU, [], oneAm)!;
+  const set = setWorkoutDay(base, 1, THU)!;
   eq(getEffectiveToday(set, [], oneAm), THU, "1am: the app stays on the day that was set");
   eq(getWorkoutForDate(set, THU)?.name, "Lower", "1am: ...which is Lower");
-  eq(isDateSkipped(set, WED), true, "1am: Wednesday reads as the rest it was, not an Upper missed");
-  const tenAm = setWorkoutDay(base, 1, THU, [], new Date(2026, 8, 10, 10, 0))!;
-  eq(isDateSkipped(tenAm, WED), false, "10am: nothing to hold, so yesterday is left alone");
-  const logged = setWorkoutDay(base, 1, THU, [{ date: WED }], oneAm)!;
-  eq(isDateSkipped(logged, WED), false, "1am, yesterday logged: it doesn't hold the app, so it's left alone");
+  eq([getWorkoutForDate(set, WED), isDateSkipped(set, WED)], [null, false], "1am: Wednesday reads as the rest it was, nothing marked off");
+}
+
+// ─── Set Workout Date leaves the past as it was ─────────────────────────────
+// User priority, 2026-11-16: nothing done should change the history. Every day
+// before today reads as it did, the re-alignment kept as a hold of no days on
+// today (programAsOf undoes it for an earlier day); from today, the day set.
+{
+  const before = schedule(base, MON, 10);
+  for (const [day, i] of [[THU, 0], [THU, 1], [FRI, 0], [FRI, 1]] as const) {
+    const set = setWorkoutDay(base, i, day)!;
+    const days = schedule(set, MON, 10);
+    const cut = days.findIndex((_, k) => addDaysYMD(MON, k) === day);
+    eq(days.slice(0, cut), before.slice(0, cut), `past kept (${day} set to day ${i + 1}): the days before read as they did`);
+    eq(getWorkoutForDate(set, day)?.dayId, base.dayIds![i], `past kept (${day} set to day ${i + 1}): that day is the day set`);
+    eq(runStartYMD(set), runStartYMD(base), `past kept (${day} set to day ${i + 1}): the run still began when it did`);
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -775,24 +807,21 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
     eq(programFinishDate(skippedPull)!.getTime(), planned, "skip the absorbing day: still finishes on time");
   }
 
-  // ─── Set Workout Date is a clean reset ───
+  // ─── Set Workout Date is a reset from today ───
   // Move Saturday, then on Monday say "today is Push". The old behaviour: the
   // week looked back on plan but the finish date stayed a day late, because the
-  // move still counted. Now the moves go first.
+  // move still counted. What the moves before today still owe is cancelled from
+  // today, and they stay as they were, so the days before read as they did.
   {
     const MON2 = "2026-09-21";
     const moved = pushDate(mine, SAT); // a bare push, the worst case for leftover drift
-    const reset = clearShifts(moved, MON2);
-    const natural = cycleIndexForDate({ ...reset, cycleOffset: 0 }, MON2)!;
-    const offset = ((0 - natural) % 7 + 7) % 7;
-    const after = normalizeDriftDates({ ...reset, cycleOffset: offset });
+    const after = setWorkoutDay(moved, 0, MON2)!;
 
     eq(getWorkoutForDate(after, MON2)?.name, "Push", "set date: today is the day that was chosen");
-    eq(after.pushedDates, undefined, "set date: no moves left counting");
-    eq(after.pulledDates, undefined, "set date: no used rest days left counting");
-    eq(programFinishDate(after)!.getTime(), planned, "set date: the finish date is honest — no hidden extra day");
-    eq(isDateSkipped(after, SAT), true, "set date: a PAST move stays as a skip, so the calendar still says rest");
-    eq(cycleDrift(after, "2026-10-31"), 0, "set date: zero drift from here on");
+    eq(programFinishDate(after)!.getTime(), planned, "set date: the finish date is honest, no hidden extra day");
+    eq(isDateSkipped(after, SAT), true, "set date: a PAST move still reads rest");
+    eq(schedule(after, "2026-09-14", 7), schedule(moved, "2026-09-14", 7), "set date: the week before today reads as it did");
+    eq(schedule(after, MON2, 28), schedule({ ...mine, startDate: "21 Sep 2026" }, MON2, 28), "set date: from today, the plan from day 1, nothing late");
   }
   {
     // A move dated in the FUTURE is removed outright: a reset mustn't leave a
@@ -801,7 +830,15 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
     const reset = clearShifts(pushDate(mine, FUTURE_SAT), "2026-09-21");
     eq(isDateSkipped(reset, FUTURE_SAT), false, "set date: a future move is cleared, not turned into a skip");
     const plainSkip = clearShifts(skipDate(mine, FUTURE_SAT), "2026-09-21");
-    eq(isDateSkipped(plainSkip, FUTURE_SAT), true, "set date: a plain skip is left alone — it never shifted anything");
+    eq(isDateSkipped(plainSkip, FUTURE_SAT), true, "set date: a plain skip is left alone, it never shifted anything");
+    // A move whose rest day was still to come: it stays, settled (the next
+    // move's re-sweep leaves it be), and the days before today read with it.
+    const moved = planDoItTomorrow(mine, SAT).program;
+    const set = setWorkoutDay(moved, 0, "2026-09-21")!;
+    eq([set.pushedDates, set.pulledDates, isDateSkipped(set, SAT)], [[SAT], undefined, true], "set date: the move before today stays (settled), its rest day still to come goes");
+    eq([isSettledMove(set, SAT), unskipDate(set, SAT) === set], [true, true], "set date: a move before it is settled, so it can't be put back");
+    eq([isDatePushed(set, SAT), isDatePushed(set, "2026-09-22")], [true, false], "set date: ...and read as the move it was, before today");
+    eq(schedule(set, "2026-09-14", 7), schedule(moved, "2026-09-14", 7), "set date: the week before today reads as it did, the move's shift included");
   }
 }
 
@@ -931,6 +968,70 @@ const asDate = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); 
   const earlier = programsAfterPastLog([carryOn], { owningProgramId: "P", programId: "P", date: plus(MON, -1), workoutName: "Upper" }).programs[0];
   eq([earlier.startDate, runStartYMD(earlier), earlier.holds], ["10 Sep 2026", plus(MON, -1), carryOn.holds],
     "hold: one from before the run moves its start back a day, and keeps the hold");
+
+  // Let go while on hold (finished, made inactive, replaced): the days it was
+  // held stay held, never the workouts they'd have been, missed (found by a
+  // history probe of the solo flows, 2026-11-16).
+  {
+    const heldSince = plus(MON, 10);
+    const onHoldNow: SavedProgram = { ...base, pausedAt: heldSince, currentWeek: 2 };
+    const LET_GO = formatStoredDate(new Date(`${plus(MON, 13)}T12:00:00`));
+    const read = (p: SavedProgram) => [10, 11, 12, 13].map(k => (getWorkoutForDate(p, plus(MON, k)) ? "workout" : heldOn(p, plus(MON, k)) ? "held" : "rest"));
+    const asWas = read(onHoldNow);
+    const done = completeProgram([onHoldNow], "P", LET_GO).programs[0];
+    eq([done.status, done.pausedAt, read(done)], ["completed", undefined, ["held", "held", "held", "held"]], "let go on hold: finished, its held days still held");
+    const off = deactivateProgram([onHoldNow], "P", [], LET_GO)[0];
+    eq([off.pausedAt, read(off)], [undefined, ["held", "held", "held", "held"]], "let go on hold: made inactive, the same");
+    const other: SavedProgram = { ...base, id: "Q", status: "created", currentWeek: 0 };
+    const replaced = activateProgram([onHoldNow, other], "Q", LET_GO, []).programs[0];
+    eq(read(replaced), ["held", "held", "held", "held"], "let go on hold: replaced, the same");
+    eq(asWas.every(s => s !== "workout"), true, "let go on hold: (setup) held, nothing scheduled");
+    const notYet = completeProgram([{ ...base, pausedAt: plus(MON, 14) }], "P", LET_GO).programs[0];
+    eq([notYet.pausedAt, notYet.holds], [undefined, undefined], "let go before a hold from tomorrow began: nothing held");
+  }
+
+  // On hold now, it reads the week it had reached on the day it was held: a
+  // session from before the run, moving its start back, moves that week on
+  // too. Left as it was, it read the week before, and the builder could make
+  // it shorter than a week it has a session in (found by the solo flows,
+  // 2026-11-15).
+  const onHold: SavedProgram = { ...base, startDate: "05 Oct 2026", pausedAt: "2026-10-09", currentWeek: 1 };
+  const backdated = programsAfterPastLog([onHold], { owningProgramId: "P", programId: "P", date: "2026-09-28", workoutName: "Upper" }).programs[0];
+  eq([backdated.startDate, backdated.pausedAt, getCurrentWeek(backdated), minTotalWeeks(backdated)], ["28 Sep 2026", "2026-10-09", 2, 2],
+    "hold: a session from before the run moves the start back, and the week reached by the hold with it");
+  const sameWeek = programsAfterPastLog([onHold], { owningProgramId: "P", programId: "P", date: "2026-10-03", workoutName: "Upper" }).programs[0];
+  eq([sameWeek.startDate, getCurrentWeek(sameWeek)], ["03 Oct 2026", 1], "hold: ...still week 1 when the hold day's in its first week");
+  const running = programsAfterPastLog([{ ...onHold, pausedAt: undefined }], { owningProgramId: "P", programId: "P", date: "2026-09-28", workoutName: "Upper" }).programs[0];
+  eq(running.currentWeek, 1, "hold: a run that isn't held keeps its stored week (getCurrentWeek counts from the start)");
+}
+
+// ─── a past session moves only the start of the run under way ───────────────
+// Found by the solo flows, 2026-11-17: a program set to start next Monday had
+// day 1 logged ten days ago, which moved its start back over its own earlier
+// runs: the two shared days, it finished at once, and carrying it on numbered
+// a session in both.
+{
+  const TODAY = "2026-10-06";
+  const log = { owningProgramId: "P", programId: "P", date: "2026-09-26", workoutName: "Upper" };
+  const after = (p: SavedProgram, date: string) => programsAfterPastLog([p], { ...log, date }, TODAY);
+  const later: SavedProgram = { ...base, startDate: "12 Oct 2026" };
+  eq(after(later, "2026-09-26").changed, false, "past log: a program set to start later keeps the start it was given");
+  const done: SavedProgram = { ...base, status: "completed", completedDate: "01 Nov 2026" };
+  eq(after(done, "2026-09-01").changed, false, "past log: a finished run isn't re-dated");
+  const shelved: SavedProgram = { ...base, status: "paused", currentWeek: 2 };
+  eq(after(shelved, "2026-09-01").changed, false, "past log: nor a shelved one");
+  const earlierRun = {
+    startDate: "07 Sep 2026", totalWeeks: 8, cycleDays: 6, cyclePattern: base.cyclePattern, dayIds: base.dayIds,
+    currentWeek: 3, status: "completed" as const, endDate: "2026-09-27",
+  };
+  const rerun: SavedProgram = { ...base, startDate: "05 Oct 2026", runs: [earlierRun] };
+  eq(after(rerun, "2026-09-20").changed, false, "past log: a day of an earlier run is that run's, the run under way keeps its start");
+  eq(after(rerun, "2026-09-27").changed, false, "past log: ...its last day too");
+  eq(after(rerun, "2026-09-30").programs[0].startDate, "30 Sep 2026", "past log: a day after it ended moves the run under way's start back to it");
+  eq(after(base, "2026-09-01").programs[0].startDate, "01 Sep 2026", "past log: with no earlier run, back to the day logged");
+  const unrun: SavedProgram = { ...base, status: "created", currentWeek: 0 };
+  eq(after(unrun, "2026-09-01").programs[0].startDate, "01 Sep 2026", "past log: a program never run moves too (a run of its own once made active)");
+  eq(after({ ...unrun, runs: [earlierRun] }, "2026-09-20").changed, false, "past log: ...but never into a day of an earlier run");
 }
 
 // ─── a rest day for a move, past held days and other moves ──────────────────

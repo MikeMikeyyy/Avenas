@@ -5,9 +5,11 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect, useEffectEvent, type ReactElement } from "react";
 import {
-  View, Text, StyleSheet, Animated, type NativeScrollEvent, type NativeSyntheticEvent, type RefreshControlProps,
+  View, Text, StyleSheet, Animated, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent, type RefreshControlProps,
   type ViewInstance,
 } from "react-native";
+import { useAnimatedRef, useScrollOffset } from "react-native-reanimated";
+import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import MaskedView from "../MaskedView";
@@ -15,8 +17,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import FadeScreen from "../FadeScreen";
 import NeuCard from "../NeuCard";
-import ProgramScopePicker from "../ProgramScopePicker";
-import DropdownPicker from "../DropdownPicker";
+import ProgramScopePicker, { PROGRAM_SCOPE_FACE, ProgramScopeFace, programScopeA11y, scopeLabel } from "../ProgramScopePicker";
+import DropdownPicker, { DROPDOWN_BAR_FACE, DropdownBarFace } from "../DropdownPicker";
+import { glassContentStyle } from "../GlassButton";
 import VolumeBarChart from "../VolumeBarChart";
 import StrengthRadarChart from "../StrengthRadarChart";
 import DayExerciseList from "../DayExerciseList";
@@ -24,8 +27,10 @@ import ExerciseProgressionChart from "../ExerciseProgressionChart";
 import DumbbellIcon from "../DumbbellIcon";
 import KeyboardDismissButton from "../KeyboardDismissButton";
 import AllExercisesList from "./AllExercisesList";
-import CompareButton, { COMPARE_HIT, COMPARE_SIZE } from "./CompareButton";
-import CompareHeader from "./CompareHeader";
+import CompareButton, { COMPARE_HIT, COMPARE_SIZE, CompareMark } from "./CompareButton";
+import CompareHeader, { COMPARE_ROW_FACE, CompareRowFace, compareRowA11y } from "./CompareHeader";
+import FilterDock, { type DockItem } from "./FilterDock";
+import BackButton from "../BackButton";
 import CompareSheet, { type CompareSheetSide } from "./CompareSheet";
 import CompareGlanceCard from "./CompareGlanceCard";
 import CompareWeeksChart from "./CompareWeeksChart";
@@ -33,7 +38,9 @@ import CompareLiftList from "./CompareLiftList";
 import CompareExerciseCard from "./CompareExerciseCard";
 import { RevealOnScrollContext, type RevealWatcher } from "./revealOnScroll";
 
-import { APP_DARK, APP_LIGHT, FontFamily, accentTextColor } from "../../constants/theme";
+import { ACCT, APP_DARK, APP_LIGHT, FontFamily, accentTextColor, compareBlue } from "../../constants/theme";
+import { PILL_H_XS } from "../../constants/buttons";
+import { DOCK_ITEM, DOCK_TOP_GAP, mergeSpan, settleTarget, type Box } from "../../utils/filterDock";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useUnit } from "../../contexts/UnitContext";
 import { useFloatingBarsReach } from "../../hooks/useFloatingBars";
@@ -58,12 +65,14 @@ import {
   computeWorkoutDurationMinutes,
   computeWorkoutReps,
   computeWorkoutTonnage,
+  currentScopeProgram,
   filterByDateWindow,
   filterByProgramScope,
   getRangeOption,
   isCustomSession,
+  isUnderWay,
   previousComparableWindow,
-  autoWeekRange,
+  autoRangeFor,
   rangeHoldingLast,
   rangeWindow,
   yearBarCount,
@@ -85,6 +94,8 @@ import {
 /** A view waiting to be scrolled into sight, and where it sits in the page's
  *  content once measured. */
 type Watched = { view: ViewInstance; onReveal: () => void; y?: number; h?: number };
+/** The buttons the filter dock draws, by where the page holds them. */
+type DockKey = "back" | "compare" | "scope" | "range" | "stop" | "green" | "blue";
 /** How far into the screen a view comes before it counts as seen. */
 const REVEAL_INSET = 24;
 
@@ -161,6 +172,10 @@ export interface ProgressViewProps {
    *  Handed over only once the sessions and programs were read after the tap,
    *  so a program just made active scopes as Current program. */
   showProgram?: ProgramProgressRequest | null;
+  /** Back to where View Progress or See All Progress was tapped, for that
+   *  visit (utils/progressReturn.ts): a back button before the title, held at
+   *  the dock's left as the page scrolls. */
+  onBack?: () => void;
 }
 
 const NO_CUSTOM: CustomExercise[] = [];
@@ -194,6 +209,7 @@ function ProgressBody({
   clientId,
   show,
   showProgram,
+  onBack,
   sessionKey,
 }: ProgressViewProps & { sessionKey: string }) {
   const { isDark } = useTheme();
@@ -227,7 +243,12 @@ function ProgressBody({
   const [programProgressAt, setProgramProgressAt] = useProgressSelection(sessionKey, "programProgressAt");
   const [scopeFallbackNote, setScopeFallbackNote] = useState<string | null>(null);
 
-  const scrollRef = useRef<any>(null);
+  // An animated ref on the page's own (RN Animated) scroll view, so the filter
+  // dock reads its scroll on the UI thread (useScrollOffset) and moves exactly
+  // with the page. Not a Reanimated.ScrollView: that one doesn't reflow its
+  // content as heights animate (a day opening), see docs/ARCHITECTURE.md.
+  const scrollRef = useAnimatedRef<any>();
+  const dockScroll = useScrollOffset(scrollRef);
   const scrollY = useRef(new Animated.Value(0)).current;
   const exerciseSectionRef = useRef<ViewInstance>(null);
   const exerciseSectionY = useRef(0);
@@ -280,7 +301,18 @@ function ProgressBody({
   }, [scopeFallbackNote]);
 
   const activeProgram = useMemo(() => programs.find(p => p.status === "active") ?? null, [programs]);
-  const hasActiveProgram = activeProgram !== null;
+  // What "Current program" shows: the active program once a workout's logged
+  // in it, else the one finished last (utils/progressStats.ts
+  // currentScopeProgram).
+  const currentProgram = useMemo(() => currentScopeProgram(programs, history), [programs, history]);
+  const hasCurrentProgram = currentProgram !== null;
+  // Current program is one not under way: the one finished last, while the
+  // new one has nothing logged (or there's none). Its charts open on its last
+  // workouts (autoRange).
+  const currentResting = useMemo(
+    () => scope.kind === "current" && currentProgram !== null && !isUnderWay(currentProgram, history),
+    [scope.kind, currentProgram, history],
+  );
 
   const scopedWorkouts = useMemo(
     () => filterByProgramScope(history, scope, programs),
@@ -301,7 +333,12 @@ function ProgressBody({
   // week until then (user request, 2026-11-06: a new week opened on empty
   // charts). From the sessions the charts read, so it moves to this week as
   // soon as a workout's done, the page reloading them on every focus.
-  const autoRange = useMemo(() => autoWeekRange(scopedWorkouts, new Date()), [scopedWorkouts]);
+  // Current program showing a finished one, they open on its last workouts
+  // instead (autoRangeFor).
+  const autoRange = useMemo(
+    () => autoRangeFor(scopedWorkouts, new Date(), currentResting),
+    [scopedWorkouts, currentResting],
+  );
   const range: RangeKey = rangePick ?? autoRange;
   // Picking what automatic shows keeps it automatic, so a tap on the week it's
   // already on doesn't pin it there for when the next week comes.
@@ -373,12 +410,14 @@ function ProgressBody({
     setProgramProgressAt(showProgram.at);
     const target = programs.find(p => p.id === showProgram.programId);
     if (target) {
-      const running = target.status === "active";
-      setScope(running ? { kind: "current" } : { kind: "program", programId: target.id });
+      // As Current program when it's the one that shows, else as itself: a
+      // new program made active with nothing logged opens on its own page,
+      // not on Current's, which is still the one finished last.
+      setScope(currentProgram?.id === target.id ? { kind: "current" } : { kind: "program", programId: target.id });
       setScopeFallbackNote(null);
       setCompare(null);
       setCompareLift(null);
-      if (!running) {
+      if (!isUnderWay(target, history)) {
         setRangePick(rangeHoldingLast(history.filter(w => workoutBelongsToProgram(w, target)), rangePick, new Date()));
       }
       setTopScrollRequest(n => n + 1);
@@ -425,8 +464,8 @@ function ProgressBody({
   // sessions logged against them. Under All programs the list is every
   // exercise instead (allRows), so there are no days.
   const daysInScope = useMemo(
-    () => (scope.kind === "all" ? NO_DAYS : scopedProgramDays(scope, programs, scopedWorkouts)),
-    [scope, programs, scopedWorkouts],
+    () => (scope.kind === "all" ? NO_DAYS : scopedProgramDays(scope, programs, scopedWorkouts, history)),
+    [scope, programs, scopedWorkouts, history],
   );
 
   // The live ref behind the selection. Derived rather than stored, so a scope
@@ -534,12 +573,57 @@ function ProgressBody({
   // 2026-10-26): the round button on the Exercise Progress heading opens it
   // (hooks/useSectionSearch.ts, which keeps it clear of the keyboard). It
   // closes when the list goes: another scope picked, a comparison started. ─
+  // ── The filter dock (components/progress/FilterDock.tsx; user request and
+  // picks, 2026-11-15) ── The top buttons are drawn over the page, which
+  // holds an unseen ghost of each in its place, measured here: where each
+  // rests in the scroll content. They merge into a row of small buttons at
+  // the top as the page scrolls (utils/filterDock.ts).
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const backRef = useRef<ViewInstance>(null);
+  const compareRef = useRef<ViewInstance>(null);
+  const scopeRef = useRef<ViewInstance>(null);
+  const rangeRef = useRef<ViewInstance>(null);
+  const stopRef = useRef<ViewInstance>(null);
+  const greenRef = useRef<ViewInstance>(null);
+  const blueRef = useRef<ViewInstance>(null);
+  const [dockRests, setDockRests] = useState<Partial<Record<DockKey, Box>>>({});
+  const measureDock = useCallback(() => {
+    const content = scrollRef.current?.getInnerViewRef?.();
+    if (!content) return;
+    // Compare's and ✕'s boxes are their touch areas: the circle is 2 in.
+    const spare = (COMPARE_HIT - COMPARE_SIZE) / 2;
+    const targets: [DockKey, { current: ViewInstance | null }, number][] = [
+      ["back", backRef, 0], ["compare", compareRef, spare], ["scope", scopeRef, 0], ["range", rangeRef, 0],
+      ["stop", stopRef, spare], ["green", greenRef, 0], ["blue", blueRef, 0],
+    ];
+    for (const [key, ref, inset] of targets) {
+      const view = ref.current;
+      if (!view || typeof view.measureLayout !== "function") continue;
+      view.measureLayout(content, (x, y, w, h) => {
+        const box = { x: x + inset, y: y + inset, w: w - 2 * inset, h: h - 2 * inset };
+        setDockRests(prev => {
+          const was = prev[key];
+          return was && was.x === box.x && was.y === box.y && was.w === box.w && was.h === box.h ? prev : { ...prev, [key]: box };
+        });
+      }, () => {});
+    }
+  }, [scrollRef]);
+  // The row: under the status bar on the Progress tab; on a client's page,
+  // where Compare (✕) already rests, at the top under the page's switch.
+  const { width: pageW } = useWindowDimensions();
+  const dockPin = comparing ? dockRests.stop : dockRests.compare;
+  const dockTop = withTopInset ? insets.top + DOCK_TOP_GAP : (dockPin?.y ?? 0);
+  const dockRight = dockPin ? dockPin.x + dockPin.w : pageW - 20;
+  // What scrolls the page to a spot lands below the row.
+  const dockBottom = dockTop + DOCK_ITEM;
+
   const allList = scope.kind === "all" && !comparing;
   const exerciseHeadingRef = useRef<ViewInstance>(null);
   const {
     open: searchOpen, query, setQuery, toggle: toggleSearch, close: closeSearch, onKeyboardDown, picked: pickedFromSearch,
     inputRef: searchInputRef, extraPadding: searchPadding,
-  } = useSectionSearch({ scrollRef, headingRef: exerciseHeadingRef, topInset: withTopInset ? insets.top : 0, shown: allList });
+  } = useSectionSearch({ scrollRef, headingRef: exerciseHeadingRef, topInset: dockBottom, shown: allList });
   // View Progress from My Programs: back to the top, the search put away as
   // another scope picked puts it away. Not animated: the page is coming into
   // view on the tab switch.
@@ -751,6 +835,24 @@ function ProgressBody({
     scrollTop.current = e.nativeEvent.contentOffset.y;
     if (watched.current.size > 0) checkReveals();
   }, [checkReveals]);
+  // Let go part way through the filter dock's merge, the page glides on to
+  // the nearer end, so the buttons are never left half merged (the mockup's
+  // "finish the merge when you let go"). The last to merge decides.
+  const dockLastSpan = useRef<{ from: number; to: number } | null>(null);
+  const settleDock = useCallback((y: number) => {
+    const span = dockLastSpan.current;
+    const target = span ? settleTarget(y, span.from, span.to) : null;
+    if (target !== null) scrollRef.current?.scrollTo?.({ y: target, animated: true });
+  }, [scrollRef]);
+  const onDragEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onScrollStop(e);
+    // A fling goes on: its end decides.
+    if (Math.abs(e.nativeEvent.velocity?.y ?? 0) < 0.05) settleDock(e.nativeEvent.contentOffset.y);
+  }, [onScrollStop, settleDock]);
+  const onFlingEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onScrollStop(e);
+    settleDock(e.nativeEvent.contentOffset.y);
+  }, [onScrollStop, settleDock]);
 
   /** Where the chart's section sits in the page's content, read from the
    *  layout as it stands NOW. Its last onLayout isn't enough: a section that
@@ -780,11 +882,11 @@ function ProgressBody({
       // disappears under the header gradient: on screens too short for both,
       // the top wins (the bars are translucent, so a grazed CTA stays legible).
       const needed = y + h - (viewH - coveredBottom);
-      const cap = y - (insets.top + 24);
+      const cap = y - (dockBottom + 16);
       node?.scrollTo?.({ y: Math.max(0, Math.min(needed, cap)), animated: true });
     } else {
-      // No size to go by: pin the section's top near the top of the screen.
-      node?.scrollTo?.({ y: Math.max(0, y - 40), animated: true });
+      // No size to go by: the section's top just under the filter dock.
+      node?.scrollTo?.({ y: Math.max(0, y - (dockBottom + 16)), animated: true });
     }
   });
 
@@ -824,12 +926,91 @@ function ProgressBody({
     setChartScrollRequest(n => n + 1);
   }, []);
 
-  const showNoActiveProgramHint = scope.kind === "current" && !hasActiveProgram;
+  const showNoActiveProgramHint = scope.kind === "current" && !hasCurrentProgram;
   // A client's page starts right under its Progress / Journal / Programs
   // switch, its Compare row the first thing (see below).
   const topPad = withTopInset ? insets.top + 50 : title === "" ? 0 : 16;
   // Clear of the workout bar too while it shows (constants/floatingBars.ts).
   const botPad = scrollEndPadding(bottomPadding ?? (insets.bottom + 140), barsReach);
+
+  // The dock's buttons: the filters and Compare, or comparing, the two
+  // programs and ✕. Each big one wears its page button's own face.
+  const rangeOption = RANGE_OPTIONS.find(o => o.key === range) ?? RANGE_OPTIONS[0];
+  const sizeOf = (b?: Box) => (b ? { width: b.w, height: b.h } : null);
+  const round = { w: DOCK_ITEM, h: DOCK_ITEM };
+  const pageDockItems: DockItem[] = comparing && greenView && blueView ? (() => {
+    const greenRun = { name: cmpNames.green, status: greenView.finished ? runDates(greenView, todayYMD) : runStatus(greenView, todayYMD) };
+    const blueRun = { name: cmpNames.blue, status: runDates(blueView, todayYMD) };
+    return [
+      {
+        key: "green", kind: "merge", rest: dockRests.green ?? null, glassOnLeave: true,
+        bigFace: <View style={[COMPARE_ROW_FACE, sizeOf(dockRests.green)]}><CompareRowFace side="green" program={greenRun} /></View>,
+        smallFace: <><View style={[styles.dockDot, { backgroundColor: ACCT }]} /><Text style={[styles.dockName, { color: t.tp }]}>{greenRun.name}</Text></>,
+        onPress: () => openSheet("green"), accessibilityLabel: compareRowA11y("green", greenRun),
+      },
+      {
+        key: "blue", kind: "merge", rest: dockRests.blue ?? null, glassOnLeave: true,
+        bigFace: <View style={[COMPARE_ROW_FACE, sizeOf(dockRests.blue)]}><CompareRowFace side="blue" program={blueRun} /></View>,
+        smallFace: <><View style={[styles.dockRing, { borderColor: compareBlue(isDark) }]} /><Text style={[styles.dockName, { color: t.tp }]}>{blueRun.name}</Text></>,
+        onPress: () => openSheet("blue"), accessibilityLabel: compareRowA11y("blue", blueRun),
+      },
+      {
+        key: "stop", kind: "pin", rest: dockRests.stop ?? null, small: round,
+        smallFace: <Ionicons name="close" size={20} color={t.tp} />,
+        onPress: stopComparing, accessibilityLabel: "Stop comparing",
+      },
+    ];
+  })() : [
+    {
+      key: "scope", kind: "merge", rest: dockRests.scope ?? null, small: round,
+      bigFace: (
+        <View style={[glassContentStyle(true, true, PILL_H_XS), PROGRAM_SCOPE_FACE, sizeOf(dockRests.scope)]}>
+          <ProgramScopeFace scope={scope} programs={programs} />
+        </View>
+      ),
+      // The program's layers, its dot as the big button's (green for a program).
+      smallFace: (
+        <View>
+          <Ionicons name="layers-outline" size={20} color={t.ts} />
+          <View style={[styles.dockScopeDot, { backgroundColor: scope.kind === "all" || scope.kind === "custom" ? t.ts : ACCT }]} />
+        </View>
+      ),
+      onPress: () => setScopeOpen(true), accessibilityLabel: programScopeA11y(scopeLabel(scope, programs)),
+    },
+    {
+      key: "range", kind: "merge", rest: dockRests.range ?? null, small: round,
+      bigFace: (
+        <View style={[glassContentStyle(true, false, PILL_H_XS), DROPDOWN_BAR_FACE, sizeOf(dockRests.range)]}>
+          <DropdownBarFace label={rangeOption.shortLabel ?? rangeOption.label} leadingIcon="calendar-outline" />
+        </View>
+      ),
+      smallFace: <Ionicons name="calendar-outline" size={19} color={t.ts} />,
+      onPress: () => setRangeOpen(true), accessibilityLabel: `Time range: ${rangeOption.label}. Tap to change.`,
+    },
+    ...(!comparing ? [{
+      key: "compare", kind: "pin" as const, rest: dockRests.compare ?? null, small: round,
+      smallFace: <CompareMark />,
+      onPress: startComparing, accessibilityLabel: "Compare programs",
+    }] : []),
+  ];
+  // The way back, before the title, joins them: held at the row's left as
+  // Compare (✕) is at its right, so it's in reach wherever you are.
+  const showBack = !!onBack && title !== "";
+  const dockItems: DockItem[] = onBack && showBack ? [{
+    key: "back", kind: "lead", rest: dockRests.back ?? null, small: round,
+    smallFace: <Ionicons name="chevron-back" size={22} color={t.tp} />,
+    onPress: onBack, accessibilityLabel: "Go back",
+  }, ...pageDockItems] : pageDockItems;
+  // The dock draws them once every one's place is measured; the page shows
+  // its own till then, so a button is never missing.
+  const dockLive = dockItems.length > 0 && dockItems.every(it => it.rest);
+  // The merge the page glides to the end of when let go part way: the last's.
+  const lastSpan = dockItems.reduce<{ from: number; to: number } | null>((last, it) => {
+    if (it.kind !== "merge" || !it.rest) return last;
+    const span = mergeSpan(it.rest.y, dockTop);
+    return !last || span.to > last.to ? span : last;
+  }, null);
+  useEffect(() => { dockLastSpan.current = lastSpan; }, [lastSpan?.from, lastSpan?.to]);
 
   const Wrapper: any = asScreen ? FadeScreen : View;
   const wrapperProps = asScreen ? { style: { backgroundColor: t.bg } } : { style: { flex: 1, backgroundColor: t.bg } };
@@ -853,6 +1034,10 @@ function ProgressBody({
         </Animated.View>
       )}
 
+      {/* The top buttons, drawn over the page once it has measured where each
+          rests; until then (or if it can't) the page shows its own. */}
+      {dockLive ? <FilterDock items={dockItems} scroll={dockScroll} top={dockTop} right={dockRight} /> : null}
+
       <RevealOnScrollContext.Provider value={revealWatcher}>
       <Animated.ScrollView
         ref={scrollRef as any}
@@ -868,21 +1053,30 @@ function ProgressBody({
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.scroll, { paddingTop: topPad, paddingBottom: botPad + searchPadding }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
-        onScrollEndDrag={onScrollStop}
-        onMomentumScrollEnd={onScrollStop}
+        onScrollEndDrag={onDragEnd}
+        onMomentumScrollEnd={onFlingEnd}
         scrollEventThrottle={16}
         refreshControl={refreshControl}
       >
         {title !== "" ? (
           <View style={[styles.titleRow, styles.titleRowSplit]}>
-            <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
+            <View style={styles.titleLead}>
+              {/* Back to where View Progress was tapped, this visit only
+                  (utils/progressReturn.ts). */}
+              {showBack ? (
+                <View ref={backRef} onLayout={measureDock}>
+                  <BackButton inline ghost={dockLive} onPress={onBack} />
+                </View>
+              ) : null}
+              <Text style={[styles.title, { color: t.tp }]}>{title}</Text>
+            </View>
             {/* The circle laid out, its touch area's spare taken off every
                 side, so it sits where the Trainer tab's buttons sit beside its
                 title: 20 in, the row no taller than the circle (user request,
                 2026-11-12: going between the two tabs, the header jumped). */}
             {!comparing ? (
-              <View style={styles.compareInTitle}>
-                <CompareButton onPress={startComparing} />
+              <View ref={compareRef} onLayout={measureDock} style={styles.compareInTitle}>
+                <CompareButton ghost={dockLive} onPress={startComparing} />
               </View>
             ) : null}
           </View>
@@ -894,7 +1088,9 @@ function ProgressBody({
           // then as wide as its name). Comparing, the header's ✕ takes the
           // same place.
           <View style={styles.compareRow}>
-            <CompareButton onPress={startComparing} />
+            <View ref={compareRef} onLayout={measureDock}>
+              <CompareButton ghost={dockLive} onPress={startComparing} />
+            </View>
           </View>
         ) : null}
 
@@ -903,7 +1099,7 @@ function ProgressBody({
             well below the title (user report, 2026-10-28). On a client's page
             it starts where the Compare row was, its ✕ where Compare was, and
             the filters sit close under that row. */}
-        <View style={{ marginTop: title !== "" ? (comparing ? -4 : 18) : (comparing ? 0 : 10) }}>
+        <View style={{ marginTop: title !== "" ? (comparing ? -4 : 18) : (comparing ? 0 : 10) }} onLayout={measureDock}>
           {comparing && greenView && blueView ? (
             // Comparing: the two programs in place of the filters. Each
             // program is read whole, so there's no time range. A finished
@@ -915,26 +1111,42 @@ function ProgressBody({
               onChangeGreen={() => openSheet("green")}
               onChangeBlue={() => openSheet("blue")}
               onStop={stopComparing}
+              ghost={dockLive}
+              stopRef={stopRef}
+              greenRef={greenRef}
+              blueRef={blueRef}
+              onLayout={measureDock}
             />
           ) : (
             // The page's two filters: which program, and over what dates. Both
             // apply to the Volume and Strength cards alike.
-            <View style={styles.filterRow}>
-              <ProgramScopePicker
-                scope={scope}
-                programs={programs}
-                onChange={s => { setScope(s); setScopeFallbackNote(null); closeSearch(); }}
-                hasCustom={hasCustom}
-                style={{ flex: 1 }}
-              />
-              <DropdownPicker<RangeKey>
-                value={range}
-                options={RANGE_OPTIONS}
-                onChange={pickRange}
-                sheetTitle="Time range"
-                size="bar"
-                leadingIcon="calendar-outline"
-              />
+            <View style={styles.filterRow} onLayout={measureDock}>
+              {/* Ghosts: the dock draws the buttons, and opens these sheets. */}
+              <View ref={scopeRef} onLayout={measureDock} style={styles.scopeSlot}>
+                <ProgramScopePicker
+                  ghost={dockLive}
+                  open={scopeOpen}
+                  onOpenChange={setScopeOpen}
+                  scope={scope}
+                  programs={programs}
+                  history={history}
+                  onChange={s => { setScope(s); setScopeFallbackNote(null); closeSearch(); }}
+                  hasCustom={hasCustom}
+                />
+              </View>
+              <View ref={rangeRef} onLayout={measureDock}>
+                <DropdownPicker<RangeKey>
+                  ghost={dockLive}
+                  open={rangeOpen}
+                  onOpenChange={setRangeOpen}
+                  value={range}
+                  options={RANGE_OPTIONS}
+                  onChange={pickRange}
+                  sheetTitle="Time range"
+                  size="bar"
+                  leadingIcon="calendar-outline"
+                />
+              </View>
             </View>
           )}
           {scopeFallbackNote && !comparing ? (
@@ -1153,11 +1365,21 @@ const styles = StyleSheet.create({
   // level with the cards (user decision, 2026-10-21; it was 32pt at 24pt).
   titleRow: { paddingHorizontal: 20, marginBottom: 8 },
   titleRowSplit: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  // The back button (when there's a way back) and the title, at the left.
+  titleLead: { flexDirection: "row", alignItems: "center", gap: 12, flexShrink: 1 },
   // Compare beside the title as a 40pt circle in the layout (components/
   // trainer/HubTitle.tsx's buttons): its 44pt touch area's 2pt spare taken
   // off each side.
   compareInTitle: { margin: -(COMPARE_HIT - COMPARE_SIZE) / 2 },
   filterRow: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20 },
+  // The program filter's place: the row's spare width, as its pill took.
+  scopeSlot: { flex: 1 },
+  // The dock's small faces (components/progress/FilterDock.tsx).
+  dockScopeDot: { position: "absolute", top: -1, right: -3, width: 8, height: 8, borderRadius: 4 },
+  dockDot: { width: 10, height: 10, borderRadius: 5 },
+  dockRing: { width: 10, height: 10, borderRadius: 5, borderWidth: 2.5 },
+  // A program's name whole, wrapping in its pill (never cut short).
+  dockName: { flexShrink: 1, fontFamily: FontFamily.bold, fontSize: 15 },
   // A client's page's Compare, alone at the right: its touch area pulled out
   // by its spare so the circle ends 20 in, over the time range's end (as the
   // Comparing header's ✕ does).

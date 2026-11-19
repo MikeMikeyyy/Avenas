@@ -1,7 +1,7 @@
 // What a workout earned, at the top of its detail screen (app/workout-detail.tsx):
-// every PR it set, with the new weight, what it beat and by how much, and the
-// workout milestone if it was one. Nothing renders for a session that earned
-// nothing.
+// every PR it set, with the new weight, what it beat and by how much (or, for a
+// session with no weight PR, its rep PRs: utils/repPrs.ts), and the workout
+// milestone if it was one. Nothing renders for a session that earned nothing.
 //
 // The achievements come from utils/achievements.ts achievementsForWorkout, the
 // same answer the program page's rows and Home's cards give, so a session
@@ -18,12 +18,14 @@ import { Ionicons } from "@expo/vector-icons";
 
 import NeuCard from "./NeuCard";
 import DumbbellIcon from "./DumbbellIcon";
+import MedalIcon from "./icons/MedalIcon";
 import { ACCT, ACCT_DEEP, APP_DARK, APP_LIGHT, FontFamily, GOLD, GOLD_DARK } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
 import { TROPHY_ICON } from "../constants/icons";
 import type { Achievement } from "../constants/achievements";
-import { formatWeight } from "../utils/achievements";
+import { formatRepGain, formatRepPRLine, formatRepSet, formatWeight } from "../utils/achievements";
 import { ordinal } from "../utils/workoutSummary";
+import { trimNumber } from "../utils/units";
 
 function WorkoutAchievements({ achievements, isDark, isKg }: {
   achievements: Achievement[];
@@ -32,18 +34,24 @@ function WorkoutAchievements({ achievements, isDark, isKg }: {
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const prs = achievements.flatMap(a => (a.category === "pr" ? a.prs : []));
+  // Only a session with no weight PR has these (detectWorkoutAchievements).
+  const repPrs = achievements.flatMap(a => (a.category === "reps" ? a.repPrs : []));
   const milestone = achievements.find(a => a.category === "workouts");
-  if (prs.length === 0 && !milestone) return null;
+  const records = prs.length + repPrs.length;
+  if (records === 0 && !milestone) return null;
 
   const gold = isDark ? GOLD_DARK : GOLD;
   // Accent green washes out as small text on the light card (see theme.ts).
   const ink = isDark ? ACCT : ACCT_DEEP;
   // The card's colour is its headline's: gold when it set a record, green when
   // the milestone is all there is.
-  const tone = prs.length > 0 ? gold : ACCT;
-  const title = prs.length === 0
-    ? "Workout milestone"
-    : prs.length === 1 ? "New personal record" : `${prs.length} new personal records`;
+  const tone = records > 0 ? gold : ACCT;
+  const repKind = repPrs.length > 0 && repPrs.every(r => r.hold) ? "hold" : "rep";
+  const title = prs.length > 0
+    ? prs.length === 1 ? "New personal record" : `${prs.length} new personal records`
+    : repPrs.length > 0
+      ? repPrs.length === 1 ? `New ${repKind} PR` : `${repPrs.length} new ${repKind} PRs`
+      : "Workout milestone";
   const count = milestone && milestone.category === "workouts" ? milestone.count : null;
 
   return (
@@ -53,6 +61,7 @@ function WorkoutAchievements({ achievements, isDark, isKg }: {
         accessibilityLabel={[
           title,
           ...prs.map(pr => `${pr.exerciseName}, ${formatWeight(pr.valueKg, isKg)}, up from ${formatWeight(pr.prevKg, isKg)}`),
+          ...repPrs.map(r => `${r.exerciseName}, ${formatRepPRLine(r, isKg)}`),
           ...(count ? [`${ordinal(count)} workout logged`] : []),
         ].join(". ")}
       >
@@ -63,7 +72,9 @@ function WorkoutAchievements({ achievements, isDark, isKg }: {
           <View style={[styles.badge, { backgroundColor: `${tone}33`, borderColor: `${tone}8c` }]}>
             {prs.length > 0
               ? <Image source={TROPHY_ICON} style={styles.trophy} contentFit="contain" />
-              : <DumbbellIcon size={20} color={ink} />}
+              : repPrs.length > 0
+                ? <MedalIcon size={22} tight />
+                : <DumbbellIcon size={20} color={ink} />}
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.kicker, { color: t.ts }]}>ACHIEVEMENTS</Text>
@@ -89,11 +100,29 @@ function WorkoutAchievements({ achievements, isDark, isKg }: {
           </View>
         ))}
 
+        {repPrs.map((r, i) => (
+          <View key={`${r.exerciseName}-${i}`} style={[styles.row, { borderTopColor: t.div }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowName, { color: t.tp }]} numberOfLines={1}>{r.exerciseName}</Text>
+              <Text style={[styles.rowSub, { color: t.ts }]} numberOfLines={1}>
+                Up from {r.hold ? `${trimNumber(r.prevReps, 1)} s` : `${trimNumber(r.prevReps, 1)} ${r.prevReps === 1 ? "rep" : "reps"}`}
+              </Text>
+            </View>
+            <View style={styles.rowRight}>
+              <Text style={[styles.rowValue, { color: t.tp }]}>{formatRepSet(r, isKg)}</Text>
+              <View style={[styles.delta, { backgroundColor: `${ACCT}24` }]}>
+                <Ionicons name="arrow-up" size={10} color={ink} />
+                <Text style={[styles.deltaText, { color: ink }]}>{formatRepGain(r)}</Text>
+              </View>
+            </View>
+          </View>
+        ))}
+
         {/* The milestone under the records when there are any; on its own it's
             already the headline, so it only adds the number. */}
         {count !== null && (
           <View style={[styles.row, { borderTopColor: t.div }]}>
-            {prs.length > 0 && (
+            {records > 0 && (
               <View style={[styles.miniBadge, { backgroundColor: `${ACCT}26` }]}>
                 <DumbbellIcon size={15} color={ink} />
               </View>

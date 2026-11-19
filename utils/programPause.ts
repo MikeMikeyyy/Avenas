@@ -24,9 +24,9 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert } from "react-native";
-import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, getCurrentWeek, type SavedProgram } from "../constants/programs";
+import { PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, getCurrentWeek, type CompletedWorkout, type SavedProgram } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
-import { todayYMD } from "./dates";
+import { addDaysYMD, todayYMD } from "./dates";
 import { AUTO_PAUSE_AFTER_DAYS, idleDays } from "./programHolds";
 import { noteAutoPause } from "./syncLocal";
 import { completeIfFinished } from "./programFinish";
@@ -55,21 +55,39 @@ function ymdToDate(ymd: string): Date | null {
   return d;
 }
 
-/** Put `programId` on hold as of `whenYMD`. Returns the updated list. */
+/**
+ * The first day a hold asked for on `whenYMD` covers: that day, or the next
+ * once a workout is logged on it. A day already trained isn't held: held from
+ * it, its workout dropped out of the day's count (its number changed) and a
+ * resume "where I left off" came back to the day already done (found by a
+ * history probe of the solo flows, 2026-11-16). As a program made active
+ * never starts on a day already trained (utils/programStart.ts).
+ */
+export function holdStartsOn(whenYMD: string, history: readonly Pick<CompletedWorkout, "date">[]): string {
+  return history.some(w => w.date === whenYMD) ? addDaysYMD(whenYMD, 1) : whenYMD;
+}
+
+/** Put `programId` on hold as of `whenYMD` (from the day after, once a
+ *  workout's logged that day: holdStartsOn). Returns the updated list. */
 export function pauseProgram(
   programs: SavedProgram[],
   programId: string,
-  whenYMD: string = todayYMD(),
+  whenYMD: string,
+  history: readonly Pick<CompletedWorkout, "date">[],
 ): SavedProgram[] {
+  const from = holdStartsOn(whenYMD, history);
   return programs.map(p => {
     if (p.id !== programId) return p;
     // Snapshot the COMPUTED week, not the stored one. Nothing writes
     // currentWeek while a program runs — it's set to 1 at activation and only
     // updated when the program is demoted — so p.currentWeek is stale and
     // freezing on it would drop a week-8 program back to week 1. Called before
-    // pausedAt is set, so getCurrentWeek still measures from startDate.
+    // pausedAt is set, so getCurrentWeek still measures from startDate, as of
+    // now, the week the program shows: held from the day after a workout,
+    // that day can begin the next week, and frozen on it "Paused on week 3"
+    // read a week on from the one it was paused in (it resumes there).
     const week = getCurrentWeek(p);
-    return { ...p, pausedAt: whenYMD, currentWeek: week };
+    return { ...p, pausedAt: from, currentWeek: week };
   });
 }
 
@@ -233,7 +251,8 @@ export async function autoPauseIfIdle(): Promise<SavedProgram | null> {
     // yesterday), as a pause from My Programs is: from the calendar day, a 1am
     // open left last night's workout up on a held program, and a move put it
     // inside the hold.
-    const updated = pauseProgram(programs, active.id, getEffectiveToday(active, dates.map(date => ({ date }))));
+    const logged = dates.map(date => ({ date }));
+    const updated = pauseProgram(programs, active.id, getEffectiveToday(active, logged), logged);
     await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
     const held = updated.find(p => p.id === active.id) ?? null;
     // Marked as the app's own: on a phone that was behind (the account's other

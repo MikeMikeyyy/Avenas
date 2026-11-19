@@ -17,7 +17,7 @@ import { on, type Phone } from "../app";
 import { getJSON, removeKey, setJSON } from "../../../utils/storage";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY,
-  getCurrentWeek, programFinishDate, type CompletedWorkout, type SavedProgram,
+  getCurrentWeek, programFinishDate, type CompletedExercise, type CompletedWorkout, type SavedProgram,
 } from "../../../constants/programs";
 import { addDaysYMD, formatStoredDate, parseStoredDate, toYMD } from "../../../utils/dates";
 import { getEffectiveToday, getWorkoutForDate, normalizeDriftDates, resolveWorkoutForDate, type DayOverride } from "../../../utils/workout";
@@ -37,6 +37,15 @@ import { dayIdAt, programDays } from "../../../utils/programDays";
 import { planImport, readWorkoutCsv, type ExerciseChoice } from "../../../utils/workoutImport";
 import { matchExerciseName } from "../../../utils/exerciseMatch";
 import { loadImports, saveImport, undoImport, type ImportRecord } from "../../../utils/importStore";
+import { joinSuperset, supersetRuns } from "../../../utils/supersets";
+import { nextSetOf } from "../../../utils/nextSet";
+import { completedExercises, type DraftSet } from "../../../utils/unfinishedSession";
+import { logExercisesFor, loggedExercises } from "../../../utils/logWorkout";
+import { earliestStart, startOptions, startsLater, storedStart, withStartDate } from "../../../utils/programStart";
+import { calendarWeeks, homeMonthCells, pastPlanFrom, type CalendarDayState, type HomeCellState } from "../../../utils/journalCalendar";
+import { runStartYMD } from "../../../utils/programHolds";
+import { programAsRun } from "../../../utils/programRuns";
+import { isStreakRiskDay } from "../../../utils/streak";
 
 const SAM: Phone = { uid: "sam", name: "Sam", store: new Map(), offline: false };
 const A = "prog_strength";
@@ -51,7 +60,10 @@ function startingPrograms(): SavedProgram[] {
       id: A, name: NAMES[A], totalWeeks: 3, currentWeek: 1, status: "active",
       startDate: formatStoredDate(new Date(2026, 8, 27)),
       trainingDays: 2, cycleDays: 3, cyclePattern: ["Upper", "Lower", "Rest"], dayIds: ["a0", "a1", "a2"],
-      workouts: { "0:Upper": [exercise("a_bench", "Bench Press")], "1:Lower": [exercise("a_squat", "Squat")] },
+      workouts: {
+        "0:Upper": [exercise("a_bench", "Bench Press"), exercise("a_ohp", "Shoulder Press")],
+        "1:Lower": [exercise("a_squat", "Squat")],
+      },
     },
     {
       id: B, name: NAMES[B], totalWeeks: 2, currentWeek: 0, status: "created",
@@ -163,6 +175,63 @@ function homeStrip(s: Snap) {
   });
 }
 
+/** Home's calendar (components/ActivityCalendar.tsx) and the Journal's for a
+ *  day, as each draws it: the calendar day as today, every program's runs for
+ *  the days gone by, the active program for the rest. Each month worked out
+ *  once. */
+function calendars(s: Snap): (ymd: string) => { home: HomeCellState; journal: CalendarDayState | null } {
+  const active = activeOf(s);
+  const plan = pastPlanFrom(s.programs, s.history);
+  const dates = new Set(s.dates);
+  const months = new Map<string, { home: HomeCellState[]; pad: number; journal: Map<string, CalendarDayState> }>();
+  return ymd => {
+    const [y, m, d] = ymd.split("-").map(Number);
+    const key = ymd.slice(0, 7);
+    let month = months.get(key);
+    if (!month) {
+      const journal = new Map<string, CalendarDayState>();
+      for (const w of calendarWeeks(y, m - 1, s.calendarDay, dates, active, plan)) for (const day of w.days) if (day) journal.set(day.date, day.state);
+      month = { home: homeMonthCells(y, m - 1, s.calendarDay, dates, active, plan), pad: (new Date(y, m - 1, 1).getDay() + 6) % 7, journal };
+      months.set(key, month);
+    }
+    return { home: month.home[month.pad + d - 1], journal: month.journal.get(ymd) ?? null };
+  };
+}
+
+/**
+ * A program made active, or its start moved, to start on `start`
+ * (utils/programStart.ts; user request, 2026-11-16): day 1 on the day picked,
+ * never today once a workout was logged today, its run fresh, week 0 and
+ * nothing scheduled before it, the days between rest on Home's calendar and
+ * the Journal's with no streak to lose on them, and the history as it was.
+ */
+function startsAsPicked(before: Snap, after: Snap, pid: string, start: string): string[] {
+  const p = programOf(after, pid)!;
+  const issues: string[] = [];
+  const today = after.calendarDay;
+  if (p.status !== "active") return [`${p.name} isn't active`];
+  if (runStartYMD(p) !== start) issues.push(`${p.name} starts ${runStartYMD(p)}, not ${start} as picked`);
+  if (start === today && before.history.some(w => w.date === today)) issues.push(`${p.name} starts today, a day already trained`);
+  if (p.cycleOffset || p.pausedAt || p.skippedDates || p.pushedDates || p.pulledDates) issues.push(`${p.name}'s fresh run kept marks from before: ${JSON.stringify({ cycleOffset: p.cycleOffset, pausedAt: p.pausedAt, skipped: p.skippedDates, pushed: p.pushedDates, pulled: p.pulledDates })}`);
+  const first = dayOf(getWorkoutForDate(p, start));
+  const expected = p.cyclePattern[0] === "Rest" ? null : { name: p.cyclePattern[0], dayId: dayIdAt(p, 0), programId: p.id };
+  if (!sameDay(first, expected)) issues.push(`its day 1 (${say(expected)}) isn't on ${start}, the day picked: it has ${say(first)}`);
+  if (start > today && getCurrentWeek(p) !== 0) issues.push(`before its start it reads week ${getCurrentWeek(p)}`);
+  const cal = calendars(after);
+  for (let d = today; d < start; d = addDaysYMD(d, 1)) {
+    const planned = getWorkoutForDate(p, d);
+    if (planned) issues.push(`${d}, before ${p.name} starts on ${start}, schedules ${planned.name}`);
+    if (isStreakRiskDay(p, d)) issues.push(`the streak can be lost on ${d}, before ${p.name} starts`);
+    if (d > today && d.slice(0, 7) === today.slice(0, 7)) {
+      const { home, journal } = cal(d);
+      if (home !== "rest") issues.push(`Home's calendar shows ${d}, before ${p.name} starts, as ${home}, not rest`);
+      if (journal !== "rest") issues.push(`the Journal's calendar shows ${d}, before ${p.name} starts, as ${journal}, not rest`);
+    }
+  }
+  if (JSON.stringify(before.history) !== JSON.stringify(after.history)) issues.push("making it active changed the history");
+  return issues;
+}
+
 /** What the strip shows for `date` (weekSchedule.ts's rule for one row, which
  *  also covers dates outside this week): today and later honour a pick. */
 function planOn(s: Snap, date: string): Day {
@@ -189,7 +258,11 @@ function firstDifference(a: string[], b: string[]): string | null {
 // ─── The screens' own writes ─────────────────────────────────────────────────
 
 /** The Workout tab's Finish (buildCompletedWorkout + persistCompletedWorkout). */
-async function finishWorkout(s: Snap, day: { name: string; programId?: string; dayId?: string }): Promise<CompletedWorkout> {
+async function finishWorkout(
+  s: Snap,
+  day: { name: string; programId?: string; dayId?: string },
+  exercises: CompletedExercise[] = [],
+): Promise<CompletedWorkout> {
   const completed: CompletedWorkout = {
     id: `workout_${Date.now()}_${nextId++}`,
     date: s.today,
@@ -198,7 +271,7 @@ async function finishWorkout(s: Snap, day: { name: string; programId?: string; d
     programId: day.programId ?? "",
     dayId: day.dayId,
     durationSeconds: 1800,
-    exercises: [],
+    exercises,
   };
   const dates = await getJSON<string[]>(WORKOUT_DATES_KEY, []);
   if (!dates.includes(completed.date)) await setJSON(WORKOUT_DATES_KEY, [...dates, completed.date]);
@@ -235,8 +308,13 @@ const byDate = (a: CompletedWorkout, b: CompletedWorkout) => a.date.localeCompar
 const newestOf = (s: Snap) => [...s.history].sort(byDate).at(-1) ?? null;
 const oldestOf = (s: Snap) => [...s.history].sort(byDate)[0] ?? null;
 
-/** log-workout.tsx's save of a session on a past date, from the Journal. */
-async function logFromJournal(date: string, day: { name: string; programId: string; dayId?: string }): Promise<CompletedWorkout> {
+/** log-workout.tsx's save of a session on a past date, from the Journal:
+ *  `exercises` as its Save writes them (utils/logWorkout.ts loggedExercises). */
+async function logFromJournal(
+  date: string,
+  day: { name: string; programId: string; dayId?: string },
+  exercises: CompletedExercise[] = [],
+): Promise<CompletedWorkout> {
   const completed: CompletedWorkout = {
     id: `workout_${Date.now()}_${nextId++}`,
     date,
@@ -245,7 +323,7 @@ async function logFromJournal(date: string, day: { name: string; programId: stri
     programId: day.programId,
     dayId: day.dayId,
     durationSeconds: 1800,
-    exercises: [],
+    exercises,
   };
   const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
   await setJSON(WORKOUT_HISTORY_KEY, [completed, ...history]);
@@ -373,7 +451,9 @@ const cards = (s: Snap) => buildSessionTracks(s.history, s.programs, s.today);
 
 /** A delete takes its session and nothing else: no program moves, today's
  *  pick stays, and every other session the schedule placed keeps its dot
- *  (user request, 2026-10-16: delete, do it again, delete again). */
+ *  (user request, 2026-10-16: delete, do it again, delete again). But for a
+ *  pick left with no program running and nothing done today, which goes with
+ *  the run that ended (reopenIfUnfinished). */
 function afterDeleting(before: Snap, after: Snap, target: CompletedWorkout): string[] {
   const issues: string[] = [];
   if (after.history.some(w => w.id === target.id)) issues.push(`${target.workoutName} on ${target.date} is still there after deleting it`);
@@ -381,7 +461,10 @@ function afterDeleting(before: Snap, after: Snap, target: CompletedWorkout): str
   if (JSON.stringify(programsAfterDeletedSession(before.programs, target, after.history)) !== JSON.stringify(after.programs)) {
     issues.push("deleting a workout changed a program");
   }
-  if (JSON.stringify(before.override) !== JSON.stringify(after.override)) issues.push("deleting a workout changed today's pick");
+  const pickGoes = !activeOf(after) && before.override?.date === after.today && !after.history.some(w => w.date === after.today);
+  if (JSON.stringify(pickGoes ? null : before.override) !== JSON.stringify(after.override)) {
+    issues.push(pickGoes ? "a pick for a run that's ended stayed after its day's workout was deleted" : "deleting a workout changed today's pick");
+  }
   const was = cards(before);
   const now = cards(after);
   for (const w of after.history) {
@@ -416,6 +499,9 @@ function backAsItWas(before: Snap, after: Snap): string[] {
   return issues;
 }
 
+/** The exercises today's workout opens with, as the Workout tab draws them. */
+const todaysExercises = (s: Snap) => resolveWorkoutForDate(activeOf(s), s.override, s.today, s.programs)?.exercises ?? [];
+
 const workoutSteps: Step[] = [
   {
     label: "Workout tab: log today's workout",
@@ -423,6 +509,48 @@ const workoutSteps: Step[] = [
     changes: { history: true },
     run: async s => logToday(s, workoutTab(s).shows!),
     check: (_b, after, w) => [...sessionLandsOnToday(after, w as CompletedWorkout), ...endedWhenFinished(after)],
+  },
+  {
+    // A superset made on the Workout tab (utils/supersets.ts; user request,
+    // 2026-11-15): today's first two, Superset With from the first one's
+    // sheet, done the way the session walks them, set by set; saved as one,
+    // and the program left as it was (it's the session's alone, like a swap).
+    label: "Workout tab: superset today's first two exercises, and log it",
+    enabled: s => { const w = workoutTab(s); return !w.completed && !!w.shows && todaysExercises(s).length >= 2; },
+    changes: { history: true },
+    run: async s => {
+      const exercises = joinSuperset(todaysExercises(s), 0, 1);
+      const log = Object.fromEntries(exercises.map(e => [e.id, {
+        warmup: [] as DraftSet[],
+        working: [0, 1].map((): DraftSet => ({ weight: "60", reps: "8", done: false })),
+        notes: "",
+      }]));
+      // Each tick on the set the session's up to (the glow, the lock screen).
+      const walked: string[] = [];
+      for (let at = 1; at < 20; at++) {
+        const next = nextSetOf(exercises.map(e => e.id), log, exercises.map(e => e.supersetId));
+        if (!next) break;
+        log[next.exId].working[next.setIdx] = { ...log[next.exId].working[next.setIdx], done: true, doneAt: at };
+        walked.push(`${next.exIndex}:${next.setIdx}`);
+      }
+      const w = await finishWorkout(s, workoutTab(s).shows!, completedExercises(exercises, log, true, new Set()));
+      await completeIfFinished();
+      return { w, walked, programId: activeOf(s)?.id };
+    },
+    check: (_b, after, result) => {
+      const { w, walked, programId } = result as { w: CompletedWorkout; walked: string[]; programId?: string };
+      const issues = [...sessionLandsOnToday(after, w), ...endedWhenFinished(after)];
+      if (walked.join(" ") !== "0:0 1:0 0:1 1:1") issues.push(`the superset's sets came up ${walked.join(" ")}, not a round at a time`);
+      const saved = after.history.find(x => x.id === w.id);
+      if (JSON.stringify(supersetRuns(saved?.exercises ?? [])) !== "[[0,1]]") {
+        issues.push(`the session saved its superset as ${JSON.stringify(saved?.exercises.map(e => e.supersetId ?? null))}`);
+      }
+      const program = after.programs.find(p => p.id === programId);
+      if (program && Object.values(program.workouts).some(list => list.some(e => e.supersetId))) {
+        issues.push("a superset made on the Workout tab got into the program");
+      }
+      return issues;
+    },
   },
   {
     label: "Workout tab: log a custom workout",
@@ -654,7 +782,12 @@ function lengthChanged(before: Snap, after: Snap): string[] {
   if (!now || now.id !== was.id) return [`changing ${was.name}'s length took it out of the active slot`];
   const issues: string[] = [];
   if (now.totalWeeks < minTotalWeeks(was)) issues.push(`${now.name} went to ${now.totalWeeks} weeks, shorter than week ${minTotalWeeks(was)} it's in`);
-  if (getCurrentWeek(now) !== getCurrentWeek(was)) issues.push(`changing its length moved the week from ${getCurrentWeek(was)} to ${getCurrentWeek(now)}`);
+  // The week the run has reached, which changing its length never moves. Read
+  // past the cap: past its plan's last day (a move with no rest day to take
+  // it, a Set Workout Date there, or 1am the day after) it shows its last
+  // week, and made longer, the week it has really reached.
+  const reached = (p: SavedProgram) => getCurrentWeek({ ...p, totalWeeks: Number.MAX_SAFE_INTEGER });
+  if (reached(now) !== reached(was)) issues.push(`changing its length moved the week from ${reached(was)} to ${reached(now)}`);
   const [shownBefore, shownAfter] = [workoutTab(before).shows, workoutTab(after).shows];
   if (!workoutTab(after).completed && !sameDay(shownBefore, shownAfter)) issues.push(`changing its length changed today from ${say(shownBefore)} to ${say(shownAfter)}`);
   const [was_, now_] = [cards(before), cards(after)];
@@ -691,35 +824,85 @@ function carriedOn(before: Snap, after: Snap, id: string): string[] {
     .flatMap(w => w.days)
     .filter(d => d.ymd > ended && d.ymd < after.today && d.state === "missed");
   if (missed.length > 0) issues.push(`carried on, ${missed.map(d => d.ymd).join(", ")} read as missed: the days after it ended`);
+  // Finished while held, it carries on where the hold began, in the week it
+  // was in on that day: the days held aren't its own.
+  const doneOn = done ? toYMD(done) : null;
+  const heldThrough = doneOn && ended === doneOn ? was.holds?.find(h => h.from < h.to && h.from <= doneOn && doneOn < h.to) : undefined;
+  if (heldThrough) {
+    const ran: SavedProgram = { ...was, status: "active", completedDate: undefined, holds: was.holds?.filter(h => h.to <= heldThrough.from) };
+    const heldIn = getCurrentWeek(ran, new Date(`${heldThrough.from}T12:00:00`));
+    if (getCurrentWeek(now) !== heldIn) issues.push(`finished while held from ${heldThrough.from}, in week ${heldIn}, it carried on in week ${getCurrentWeek(now)}`);
+  }
   return issues;
 }
 
+/** My Programs' Make Active Program with `start` picked (makeActive): the one
+ *  running replaced today, today's pick gone with it. */
+async function makeActiveFrom(pid: string, start: string): Promise<string> {
+  const { programs } = activateProgram(await readPrograms(), pid, todayStored(), await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []), storedStart(start));
+  await writePrograms(programs);
+  await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
+  return start;
+}
+
+/** The active program, as My Programs offers it: none once its run has run
+ *  out (its last day gone by, or its last session done), since opening the
+ *  page ends it (completeIfFinished) before any of its actions are there. */
+const offered = (s: Snap): SavedProgram | null => {
+  const active = activeOf(s);
+  return active && !runFinishedOn(active, s.history, s.today) ? active : null;
+};
+
+/** The start step's coming Monday: tomorrow on a Sunday. */
+const comingMonday = (s: Snap) =>
+  startOptions(s.calendarDay, s.history).find(o => o.key === "monday")?.ymd ?? addDaysYMD(s.calendarDay, 1);
+
 const programSteps: Step[] = [
+  // Make Active Program, starting on the first day its start step offers
+  // (utils/programStart.ts): today, or tomorrow once a workout's logged today.
   ...[A, B].map((pid): Step => ({
     label: `My Programs: make ${NAMES[pid]} active`,
     enabled: s => { const p = programOf(s, pid); return !!p && p.status !== "active" && !p.archivedAt; },
     changes: { otherPrograms: true },
-    run: async () => {
-      const { programs } = activateProgram(await readPrograms(), pid, todayStored(), await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []));
-      await writePrograms(programs);
-      await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
-    },
-    check: (_b, after) => {
+    run: async s => makeActiveFrom(pid, earliestStart(s.calendarDay, s.history)),
+    check: (before, after, start) => {
+      const issues = startsAsPicked(before, after, pid, start as string);
       const p = programOf(after, pid)!;
-      const issues: string[] = [];
-      if (p.status !== "active") issues.push(`${p.name} isn't active`);
-      if (p.cycleOffset || p.pausedAt || p.skippedDates || p.pushedDates || p.pulledDates) issues.push(`${p.name}'s fresh run kept marks from before: ${JSON.stringify({ cycleOffset: p.cycleOffset, pausedAt: p.pausedAt, skipped: p.skippedDates, pushed: p.pushedDates, pulled: p.pulledDates })}`);
       const first = dayOf(getWorkoutForDate(p, after.calendarDay));
       const expected = p.cyclePattern[0] === "Rest" ? null : { name: p.cyclePattern[0], dayId: dayIdAt(p, 0), programId: p.id };
-      if (after.today === after.calendarDay && !workoutTab(after).completed && !sameDay(first, expected)) {
+      if (start === after.calendarDay && after.today === after.calendarDay && !workoutTab(after).completed && !sameDay(first, expected)) {
         issues.push(`a fresh run starts on day 1 (${say(expected)}); today shows ${say(first)}`);
       }
       return issues;
     },
   })),
+  // Its start put off to the coming Monday (user request, 2026-11-16: "the
+  // coming monday or week after monday etc."), the days until then rest.
+  ...[A, B].map((pid): Step => ({
+    label: `My Programs: make ${NAMES[pid]} active from the coming Monday`,
+    enabled: s => { const p = programOf(s, pid); return !!p && p.status !== "active" && !p.archivedAt; },
+    changes: { otherPrograms: true },
+    run: async s => makeActiveFrom(pid, comingMonday(s)),
+    check: (before, after, start) => startsAsPicked(before, after, pid, start as string),
+  })),
+  {
+    // Change Start Date, before it's begun: the Monday after.
+    label: "My Programs: change the active program's start to the Monday after",
+    enabled: s => !!startsLater(activeOf(s), s.calendarDay),
+    run: async s => {
+      const active = activeOf(s)!;
+      const to = startOptions(s.calendarDay, s.history).find(o => o.key === "mondayAfter")!.ymd;
+      await writePrograms((await readPrograms()).map(p => (p.id === active.id ? normalizeDriftDates(withStartDate(p, to)) : p)));
+      return { id: active.id, to };
+    },
+    check: (before, after, result) => {
+      const { id, to } = result as { id: string; to: string };
+      return startsAsPicked(before, after, id, to);
+    },
+  },
   {
     label: "My Programs: make the active program inactive",
-    enabled: s => !!activeOf(s),
+    enabled: s => !!offered(s),
     run: async s => {
       await writePrograms(deactivateProgram(await readPrograms(), activeOf(s)!.id, await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, [])));
       await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
@@ -727,7 +910,8 @@ const programSteps: Step[] = [
   },
   {
     label: "My Programs: mark the active program complete",
-    enabled: s => !!activeOf(s),
+    // Not offered before the day it's set to start (utils/programStart.ts).
+    enabled: s => !!offered(s) && !startsLater(activeOf(s), s.calendarDay),
     run: async s => {
       await writePrograms(completeProgram(await readPrograms(), activeOf(s)!.id, todayStored()).programs);
       await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
@@ -735,11 +919,11 @@ const programSteps: Step[] = [
   },
   {
     label: "My Programs: pause the active program",
-    enabled: s => !!activeOf(s) && !activeOf(s)!.pausedAt,
+    enabled: s => !!offered(s) && !activeOf(s)!.pausedAt && !startsLater(activeOf(s), s.calendarDay),
     run: async s => {
       // handlePauseProgram: held from the day the Workout tab is on.
       const active = activeOf(s)!;
-      await writePrograms(pauseProgram(await readPrograms(), active.id, getEffectiveToday(active, s.history)));
+      await writePrograms(pauseProgram(await readPrograms(), active.id, getEffectiveToday(active, s.history), s.history));
       await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
     },
     check: (before, after) => {
@@ -776,7 +960,10 @@ const programSteps: Step[] = [
       // The weeks didn't count during the hold, so it picks up in the week the
       // hold began in, on the program's timeline as it is now (a session logged
       // from the Journal meanwhile can have moved its start back).
-      const [y, m, d] = was.pausedAt!.split("-").map(Number);
+      // A hold from tomorrow (after today's workout, holdStartsOn) resumed
+      // today never began: it carries on from today.
+      const heldFrom = was.pausedAt! > before.today ? before.today : was.pausedAt!;
+      const [y, m, d] = heldFrom.split("-").map(Number);
       const heldIn = getCurrentWeek({ ...was, pausedAt: undefined }, new Date(y, m - 1, d));
       if (getCurrentWeek(now) !== heldIn) issues.push(`resuming put it in week ${getCurrentWeek(now)}; the hold began in week ${heldIn}`);
       return issues;
@@ -786,26 +973,41 @@ const programSteps: Step[] = [
   ...[0, 1, 2].map((index): Step => ({
     label: `My Programs: Set Workout Date, today is day ${index + 1}`,
     enabled: s => {
-      const active = activeOf(s);
-      return !!active && !active.pausedAt && !!active.cyclePattern[index] && active.cyclePattern[index] !== "Rest";
+      const active = offered(s);
+      return !!active && !active.pausedAt && !startsLater(active, s.calendarDay) && !!active.cyclePattern[index] && active.cyclePattern[index] !== "Rest";
     },
     run: async s => {
       const active = activeOf(s)!;
       const today = getEffectiveToday(active, s.history);
-      const realigned = setWorkoutDay(active, index, today, s.history);
+      const realigned = setWorkoutDay(active, index, today);
       if (!realigned) return null;
       await writePrograms((await readPrograms()).map(p => (p.id === active.id ? realigned : p)));
       await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
       return realigned;
     },
-    check: (_b, after, realigned) => {
+    check: (before, after, realigned) => {
       if (!realigned) return [];
+      const was = activeOf(before)!;
       const active = activeOf(after)!;
       const issues: string[] = [];
       const want = { name: active.cyclePattern[index], dayId: dayIdAt(active, index), programId: active.id };
       const shown = workoutTab(after).shows;
       if (!workoutTab(after).completed && !sameDay(shown, want)) issues.push(`set today to ${say(want)}; the Workout tab shows ${say(shown)}`);
-      if (active.pushedDates || active.pulledDates) issues.push(`moves survived the reset: pushed ${JSON.stringify(active.pushedDates)}, pulled ${JSON.stringify(active.pulledDates)}`);
+      // A reset from today: no move from today on survives; the ones before
+      // stay, and every day before today reads as it did (user priority,
+      // 2026-11-16: nothing done should change the history).
+      const today = getEffectiveToday(was, before.history);
+      const later = [...(active.pushedDates ?? []), ...(active.pulledDates ?? [])].filter(d => d >= today);
+      if (later.length) issues.push(`moves from today on survived the reset: ${JSON.stringify(later)}`);
+      // Back on plan: it finishes on the plan's last day, or today when the
+      // moves before had carried the run past that (programFinishDate).
+      const start = parseStoredDate(active.startDate);
+      const planned = start ? addDaysYMD(toYMD(start), active.totalWeeks * 7 - 1) : null;
+      const onPlan = planned && planned < today ? today : planned;
+      if (finishOf(active) !== onPlan) issues.push(`setting today's day finishes it on ${finishOf(active)}, not back on plan on ${onPlan}`);
+      const from = addDaysYMD(today, -21);
+      const diff = firstDifference(planWindow(was, from, 21), planWindow(active, from, 21));
+      if (diff) issues.push(`setting today's day re-labelled a day before it: ${diff}`);
       return issues;
     },
   })),
@@ -814,7 +1016,8 @@ const programSteps: Step[] = [
     // the mid-run edit that re-dates the cycle under any moves, here its last
     // day turned into a workout, or back into a rest day.
     label: "Program builder: edit the active program, its last day a workout (or a rest day again)",
-    enabled: s => !!activeOf(s),
+    // From My Programs, which ends a run that has run out as it opens.
+    enabled: s => !!offered(s),
     run: async s => {
       const active = activeOf(s)!;
       const last = active.cyclePattern.length - 1;
@@ -831,7 +1034,7 @@ const programSteps: Step[] = [
   // saves it, never shorter than the week it's in (withTotalWeeks).
   ...[1, -1].map((delta): Step => ({
     label: `Program builder: the active program a week ${delta > 0 ? "longer" : "shorter"}`,
-    enabled: s => !!activeOf(s),
+    enabled: s => !!offered(s),
     run: async s => {
       const active = activeOf(s)!;
       await writePrograms((await readPrograms()).map(p => (p.id === active.id
@@ -892,6 +1095,42 @@ const journalSteps: Step[] = [
     check: (_b, a) => endedWhenFinished(a),
   },
   {
+    // Log Workout's Superset With (utils/logWorkout.ts; user request,
+    // 2026-11-15): yesterday's planned day opened as the page opens it, its
+    // first two exercises paired on the first one's card, the sets typed in,
+    // and saved. The session keeps the superset; the program's days don't get
+    // it (it's the log's alone, like a swap).
+    label: "Journal: log yesterday's planned workout, its first two exercises supersetted",
+    enabled: s => {
+      const active = activeOf(s);
+      const y = addDaysYMD(s.today, -1);
+      const planned = active ? getWorkoutForDate(active, y) : null;
+      return !!planned && planned.exercises.length >= 2 && !s.history.some(w => w.date === y);
+    },
+    changes: { history: true },
+    run: async s => {
+      const active = activeOf(s)!;
+      const y = addDaysYMD(s.today, -1);
+      const planned = getWorkoutForDate(active, y)!;
+      const days = JSON.stringify(active.workouts);
+      const opened = joinSuperset(logExercisesFor(planned.exercises), 0, 1);
+      const typed = opened.map(e => ({ ...e, sets: e.sets.map(x => ({ ...x, weight: "60", reps: "8", done: true })) }));
+      const w = await logFromJournal(y, { name: planned.name, programId: active.id, dayId: planned.dayId }, loggedExercises(typed, true));
+      return { w, programId: active.id, days };
+    },
+    check: (_b, after, result) => {
+      const { w, programId, days } = result as { w: CompletedWorkout; programId: string; days: string };
+      const issues = endedWhenFinished(after);
+      const saved = after.history.find(x => x.id === w.id);
+      if (JSON.stringify(supersetRuns(saved?.exercises ?? [])) !== "[[0,1]]") {
+        issues.push(`the Journal's log saved its superset as ${JSON.stringify(saved?.exercises.map(e => e.supersetId ?? null))}`);
+      }
+      const program = after.programs.find(p => p.id === programId);
+      if (program && JSON.stringify(program.workouts) !== days) issues.push("a superset made in Log Workout changed the program's days");
+      return issues;
+    },
+  },
+  {
     label: "Journal: log day 1 on a date ten days ago",
     enabled: s => {
       const active = activeOf(s);
@@ -903,7 +1142,16 @@ const journalSteps: Step[] = [
       const day = programDays(active)[0];
       await logFromJournal(addDaysYMD(s.today, -10), { name: day.label, programId: active.id, dayId: day.dayId });
     },
-    check: (_b, a) => endedWhenFinished(a),
+    check: (b, a) => {
+      const issues = endedWhenFinished(a);
+      // Set to start later, it keeps the start it was given
+      // (programsAfterPastLog): moved back, it had run its length by today.
+      const was = activeOf(b)!;
+      const now = programOf(a, was.id);
+      const starts = startsLater(was, b.calendarDay);
+      if (starts && now && runStartYMD(now) !== starts) issues.push(`${was.name}, set to start ${starts}, now starts ${runStartYMD(now)}`);
+      return issues;
+    },
   },
   {
     label: "Journal: log yesterday's planned workout, then delete it",
@@ -1040,6 +1288,26 @@ export const STEPS: Step[] = [...clockSteps, ...workoutSteps, ...stripSteps, ...
 /** Sequences always played out, step by step: the everyday ones worth pinning
  *  whatever the explorer happens to reach. */
 export const STORIES: string[][] = [
+  // When a program starts (utils/programStart.ts; user request, 2026-11-16).
+  // Trained today, then made active: it starts tomorrow, today's workout left
+  // as the one it was.
+  ["Workout tab: log today's workout", "My Programs: make Push Pull active", "the next day comes (app opened at 10am)",
+    "Workout tab: log today's workout"],
+  // Set to start the coming Monday: rest till then, day 1 on the day.
+  ["My Programs: make Push Pull active from the coming Monday", "the next day comes (app opened at 10am)",
+    "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)",
+    "Workout tab: log today's workout"],
+  // Put off a week more, and a week away from the app before it: it doesn't
+  // hold itself for a week with nothing logged before it began.
+  ["My Programs: make Push Pull active from the coming Monday", "My Programs: change the active program's start to the Monday after",
+    "a week goes by without opening the app", "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)",
+    "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)", "Workout tab: log today's workout"],
+  // On hold, a session logged from before the run moves its start back: it's
+  // then in the week it had reached by the hold, and can't be made shorter than
+  // that (found by the walks, 2026-11-15: it read the week before, and a week
+  // shorter put a session it had outside it).
+  ["My Programs: pause the active program", "Journal: log day 1 on a date ten days ago",
+    "Program builder: the active program a week shorter", "Program builder: the active program a week shorter"],
   // Not up to it two days running: moved, and moved again.
   ["Workout tab: change today to Rest, Move to Tomorrow", "the next day comes (app opened at 10am)",
     "Workout tab: change today to Rest, Move to Tomorrow", "the next day comes (app opened at 10am)",
@@ -1123,6 +1391,58 @@ export const STORIES: string[][] = [
   ["Program builder: the active program a week shorter", "Program builder: the active program a week shorter",
     "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)",
     "Workout tab: change today to Rest, Move to Tomorrow", "the next day comes (app opened at 10am)", "Workout tab: log today's workout"],
+
+  // Nothing done changes what's logged or how the days gone by read (user
+  // priority, 2026-11-16). Each of these found by the walks and fixed.
+  // Set Workout Date on the day the last workout was moved to, past the
+  // plan's last day: it runs to that day (it ended the day before, the day
+  // just set gone from the Workout tab).
+  ["Program builder: the active program a week shorter", "Program builder: the active program a week shorter",
+    "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)",
+    "Workout tab: change today to Rest, Move to Tomorrow", "the next day comes (app opened at 10am)",
+    "My Programs: Set Workout Date, today is day 2", "Workout tab: log today's workout"],
+  // Set Workout Date after a move, and at 1am: the days before read as they
+  // did (it re-labelled them, a rest day a missed workout).
+  ["Workout tab: change today to Rest, Move to Tomorrow", "the next day comes (app opened at 10am)",
+    "the next day comes (app opened at 10am)", "My Programs: Set Workout Date, today is day 1", "Workout tab: log today's workout"],
+  ["past midnight: 1am, still up", "My Programs: Set Workout Date, today is day 2", "Workout tab: log today's workout"],
+  // Held after training today: the hold starts tomorrow, today's workout
+  // stays today's (it was held from today, the session on a held day).
+  ["Workout tab: log today's workout", "My Programs: pause the active program", "the next day comes (app opened at 10am)",
+    "the next day comes (app opened at 10am)", "My Programs: resume, picking up today", "Workout tab: log today's workout"],
+  ["Workout tab: log today's workout", "My Programs: pause the active program", "My Programs: resume, carrying on where I left off",
+    "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)", "Workout tab: log today's workout"],
+  // Finished while held, then carried on the same day: the held days stay
+  // held (they read as workouts missed), and today isn't held.
+  ["My Programs: pause the active program", "the next day comes (app opened at 10am)",
+    "My Programs: mark the active program complete", "Program builder: a finished program two weeks longer, carried on",
+    "Workout tab: log today's workout"],
+  // Held nine days, then finished, then carried on: back in the week it was
+  // held in (it came back a week on, the days held counted as its own).
+  ["My Programs: pause the active program", "a week goes by without opening the app", "the next day comes (app opened at 10am)",
+    "the next day comes (app opened at 10am)", "My Programs: mark the active program complete",
+    "Program builder: a finished program two weeks longer, carried on", "Workout tab: log today's workout"],
+  // A workout done ahead of its day on the last day: its number stays when
+  // the program is carried on (it fell back a number past the run's end).
+  ["Program builder: the active program a week shorter", "Program builder: the active program a week shorter",
+    "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)",
+    "Workout tab: change today to Strength's day 2", "Workout tab: log today's workout",
+    "Program builder: a finished program two weeks longer, carried on"],
+  // Set to start the coming Monday, a session logged ten days ago keeps that
+  // start (it moved it back, and the program had run its length by Monday).
+  ["My Programs: make Push Pull active from the coming Monday", "Journal: log day 1 on a date ten days ago",
+    "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)",
+    "the next day comes (app opened at 10am)", "the next day comes (app opened at 10am)", "Workout tab: log today's workout"],
+  // Started again, then a session of its earlier run logged: that run's, the
+  // run under way keeps its start (moved back over it, the two shared days).
+  ["Workout tab: log today's workout", "My Programs: make the active program inactive", "My Programs: make Strength active",
+    "the next day comes (app opened at 10am)", "Workout tab: log today's workout", "Journal: log day 1 on a date ten days ago"],
+  // Finished and started again the same day: today is the new run's alone.
+  ["My Programs: mark the active program complete", "My Programs: make Strength active", "Workout tab: log today's workout"],
+  // Set to start the coming Monday, let go, then started today: the run
+  // before ends before today (it ran on to Sunday, into the new one).
+  ["My Programs: make the active program inactive", "My Programs: make Strength active from the coming Monday",
+    "My Programs: make the active program inactive", "My Programs: make Strength active", "Workout tab: log today's workout"],
 ];
 
 // ─── Always true ─────────────────────────────────────────────────────────────
@@ -1146,6 +1466,13 @@ export function alwaysTrue(s: Snap): string[] {
       if (list && new Set(list).size !== list.length) issues.push(`${p.name}: a ${name} date is listed twice: ${JSON.stringify(list)}`);
     }
     if (p.dayIds && p.dayIds.length !== p.cyclePattern.length) issues.push(`${p.name} has ${p.dayIds.length} day ids for ${p.cyclePattern.length} days`);
+    // A program's runs follow one another, never sharing a day: a session on
+    // one was counted in both, its number in each (utils/programRuns.ts).
+    const runStarts = [...(p.runs ?? []).map(r => runStartYMD(programAsRun(p, r))), p.status === "created" ? null : runStartYMD(p)];
+    (p.runs ?? []).forEach((r, i) => {
+      const next = runStarts[i + 1];
+      if (next && r.endDate >= next) issues.push(`${p.name}'s run ${i + 1} ends ${r.endDate}, on or after its next run began on ${next}`);
+    });
     // A shelved or finished run never reads past its length ("Week 6 of 4",
     // "Completed 8 of 6 weeks"): it can't be made shorter than it got to.
     if ((p.status === "paused" || p.status === "completed") && p.currentWeek > p.totalWeeks) {
@@ -1175,6 +1502,30 @@ export function alwaysTrue(s: Snap): string[] {
       issues.push(`today's row on Home's strip says ${row.workoutName}${row.completed ? " (done)" : ""}; the Workout tab ${tab.completed ? `has ${tab.completed.workoutName} done` : `shows ${wantName}`}`);
     }
   }
+
+  // Set to start later (utils/programStart.ts; user request, 2026-11-16): in
+  // no week, and every day still to come before its start a rest day on both
+  // calendars (this month's, as Home shows them). And once those days have
+  // gone by, still rest, never missed: a day gone by before the active run
+  // began, nothing logged on it and no other run's workout planned there.
+  const active = activeOf(s);
+  if (active && !active.pausedAt) {
+    const cal = calendars(s);
+    const plan = pastPlanFrom(s.programs, s.history);
+    const starts = startsLater(active, s.calendarDay);
+    if (starts && getCurrentWeek(active) !== 0) issues.push(`${active.name} starts ${starts} and reads week ${getCurrentWeek(active)}`);
+    const runStart = runStartYMD(active);
+    const monthStart = `${s.calendarDay.slice(0, 7)}-01`;
+    for (let d = addDaysYMD(s.calendarDay, -14); d < addDaysYMD(s.calendarDay, 14); d = addDaysYMD(d, 1)) {
+      if (d < monthStart || d.slice(0, 7) !== s.calendarDay.slice(0, 7) || d === s.calendarDay) continue;
+      if (!runStart || d >= runStart || s.dates.includes(d)) continue;
+      if (d < s.calendarDay && plan(d) === "workout") continue;
+      const { home, journal } = cal(d);
+      if (home !== "rest" || journal !== "rest") {
+        issues.push(`${d}, before ${active.name} began on ${runStart} and with nothing logged, shows as ${home} on Home's calendar and ${journal} on the Journal's, not rest`);
+      }
+    }
+  }
   return issues;
 }
 
@@ -1183,6 +1534,13 @@ export function untouched(step: Step, before: Snap, after: Snap): string[] {
   const issues: string[] = [];
   if (!step.changes?.history && JSON.stringify(before.history) !== JSON.stringify(after.history)) {
     issues.push("it changed the workout history");
+  }
+  // What's logged is a snapshot (CLAUDE.md): a step adds a session or takes
+  // one away, and never rewrites one it leaves.
+  const was = new Map(before.history.map(w => [w.id, JSON.stringify(w)]));
+  for (const w of after.history) {
+    const prior = was.get(w.id);
+    if (prior !== undefined && prior !== JSON.stringify(w)) issues.push(`it rewrote ${w.workoutName} on ${w.date} (${w.id})`);
   }
   if (!step.changes?.otherPrograms) {
     const activeId = activeOf(before)?.id;

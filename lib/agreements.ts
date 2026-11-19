@@ -4,8 +4,9 @@
 
 import { supabase } from "./supabase";
 
-/** What can be agreed to: the Terms of Service, the community guidelines. */
-export type AgreementDocument = "terms" | "community";
+/** What can be agreed to: the Terms of Service, the community guidelines,
+ *  sharing training with the AI (0060). */
+export type AgreementDocument = "terms" | "community" | "ai";
 
 /** Record that the signed-in account agreed to `version` of `document` at
  *  `agreedAtISO` (the phone's clock; the server keeps its own time beside it).

@@ -6,6 +6,7 @@ import {
   type ReminderTime,
 } from "../constants/notifications";
 import { loadNotificationPrefs, saveNotificationPrefs } from "../utils/notifications";
+import { setLockScreenRestAlerts } from "../modules/avenas-live-activity";
 import { resyncScheduledNotifications } from "../utils/notificationScheduler";
 import { syncPushCategories } from "../lib/push";
 
@@ -72,6 +73,13 @@ export function NotificationPrefsProvider({ children }: { children: React.ReactN
       return next;
     });
   }, []);
+
+  // The lock-screen card schedules "Rest complete" natively for a rest started
+  // there (the app asleep), so it's told the setting: at launch, and on every
+  // change (modules/avenas-live-activity setLockScreenRestAlerts).
+  useEffect(() => {
+    if (loaded) setLockScreenRestAlerts(prefs.master && prefs.categories.restTimerAlerts);
+  }, [loaded, prefs]);
 
   const isEnabled = useCallback(
     (category: NotificationCategory) => prefs.master && prefs.categories[category],

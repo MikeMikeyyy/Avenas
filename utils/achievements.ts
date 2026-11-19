@@ -9,6 +9,11 @@
 //             before. First-time logs, ties, and estimated-1RM or set-volume
 //             improvements don't count. One card per session, headlined by
 //             the heaviest new record.
+//   Rep PR    more reps than ever at a weight done before (utils/repPrs.ts,
+//             user request 2026-11-14). Its own card, earned only by a
+//             session with no weight PR, and never a notification: rep PRs
+//             come most weeks, and a notification after almost every
+//             session is what the PR rule above was written to end.
 //   Workouts  the 10th, 25th, 50th, 100th, 250th and 500th workout, once each.
 //   Program   finishing a program that ran its full length. Marking one
 //             complete early isn't an achievement.
@@ -26,8 +31,9 @@ import {
   type Achievement,
   type AchievementCategory,
   type AchievementsState,
+  type RepPRDetail,
 } from "../constants/achievements";
-import { computeSessionRecords } from "./workoutSummary";
+import { computeSessionRecords, isRepRecord } from "./workoutSummary";
 import { exerciseIdentity } from "./exerciseNames";
 import { isAssistedIdentity, liftBeats } from "./assisted";
 import { toDisplayWeight, trimNumber } from "./units";
@@ -58,20 +64,23 @@ function betterOf(a: number, b: number, assisted: boolean): number {
  */
 export function bestLiftsBefore(history: readonly CompletedWorkout[]): Map<string, number> {
   const best = new Map<string, number>();
-  for (const w of history) {
-    for (const ex of w.exercises) {
-      const key = ex.name ? exerciseIdentity(ex) : "";
-      if (!key) continue;
-      const assisted = isAssistedIdentity(key);
-      for (const s of ex.sets) {
-        if (s.type !== "working" || !s.done || positive(s.reps) === 0) continue;
-        const kg = positive(s.weight);
-        const next = betterOf(kg, best.get(key) ?? 0, assisted);
-        if (next > 0) best.set(key, next);
-      }
+  for (const w of history) addBestLifts(best, w);
+  return best;
+}
+
+/** `w`'s sets added to `best`: bestLiftsBefore one session at a time. */
+function addBestLifts(best: Map<string, number>, w: CompletedWorkout): void {
+  for (const ex of w.exercises) {
+    const key = ex.name ? exerciseIdentity(ex) : "";
+    if (!key) continue;
+    const assisted = isAssistedIdentity(key);
+    for (const s of ex.sets) {
+      if (s.type !== "working" || !s.done || positive(s.reps) === 0) continue;
+      const kg = positive(s.weight);
+      const next = betterOf(kg, best.get(key) ?? 0, assisted);
+      if (next > 0) best.set(key, next);
     }
   }
-  return best;
 }
 
 /** A set as the PR trophy reads it: its kind, whether it's ticked, its reps
@@ -136,13 +145,44 @@ export function prSetsOfWorkout(workout: CompletedWorkout, history: readonly Com
   const best = bestLiftsBefore(
     Number.isFinite(at) ? history.filter(w => w.id !== workout.id && Date.parse(w.completedAt) < at) : [],
   );
-  return prTrophySets(
-    workout.exercises.map(ex => ({
-      identity: ex.name ? exerciseIdentity(ex) : "",
-      sets: ex.sets.map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) })),
-    })),
-    identity => best.get(identity),
-  );
+  return prTrophySets(trophyInputs(workout), identity => best.get(identity));
+}
+
+/** A saved workout's exercises as the trophy reads them, in saved order. */
+function trophyInputs(workout: CompletedWorkout): { identity: string; sets: PrSetInput[] }[] {
+  return workout.exercises.map(ex => ({
+    identity: ex.name ? exerciseIdentity(ex) : "",
+    sets: ex.sets.map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) })),
+  }));
+}
+
+/**
+ * How many trophies a whole history wears: every session's prSetsOfWorkout,
+ * worked out in one pass, for the Journal's Your Training card
+ * (utils/trainingTotals.ts), whose PR count must be the marks the sessions
+ * show. As there, sessions finished at the same moment don't count each other,
+ * and one with an unreadable completedAt wears none and counts towards no
+ * other's.
+ */
+export function countTrophies(history: readonly CompletedWorkout[]): number {
+  const timed = history
+    .map(w => ({ w, at: Date.parse(w.completedAt) }))
+    .filter(x => Number.isFinite(x.at))
+    .sort((a, b) => a.at - b.at);
+  const best = new Map<string, number>();
+  let count = 0;
+  for (let i = 0; i < timed.length;) {
+    let j = i;
+    while (j < timed.length && timed[j].at === timed[i].at) j++;
+    for (let k = i; k < j; k++) {
+      for (const row of prTrophySets(trophyInputs(timed[k].w), identity => best.get(identity))) {
+        for (const worn of row) if (worn) count++;
+      }
+    }
+    for (let k = i; k < j; k++) addBestLifts(best, timed[k].w);
+    i = j;
+  }
+  return count;
 }
 
 /**
@@ -184,7 +224,8 @@ export function bestBeforeEach(history: readonly CompletedWorkout[], identity: s
 }
 
 /**
- * PR and workout-milestone achievements earned by saving `completed`.
+ * PR (or else rep PR) and workout-milestone achievements earned by saving
+ * `completed`.
  * `priorHistory` MUST NOT contain `completed` (same contract as
  * computeSessionRecords).
  */
@@ -200,7 +241,8 @@ export function detectWorkoutAchievements(
   // computeSessionRecords already requires STRICTLY beating the prior best and
   // marks a first-ever log with prevKg null; this keeps just the heaviest-weight
   // records against a real previous best.
-  const prs = computeSessionRecords(completed, priorHistory)
+  const records = computeSessionRecords(completed, priorHistory);
+  const prs = records
     .filter(r => r.kind === "heaviest" && r.prevKg !== null)
     .sort((a, b) => b.valueKg - a.valueKg);
   if (prs.length > 0) {
@@ -211,6 +253,23 @@ export function detectWorkoutAchievements(
       workoutId: completed.id,
       prs: prs.map(r => ({ exerciseName: r.exerciseName, valueKg: r.valueKg, prevKg: r.prevKg as number })),
     });
+  } else {
+    // Rep PRs (utils/repPrs.ts) are a session's card only when it set no
+    // weight PR, and a card of their own, so they never take a weight PR's
+    // away (user decision, 2026-11-14: rep PRs keep Home quiet).
+    const repPrs = records.filter(isRepRecord);
+    if (repPrs.length > 0) {
+      out.push({
+        id: `reps:${completed.id}`,
+        category: "reps",
+        earnedAt,
+        workoutId: completed.id,
+        repPrs: repPrs.map(r => ({
+          exerciseName: r.exerciseName, weightKg: r.valueKg, reps: r.reps, prevReps: r.prevReps,
+          ...(r.hold ? { hold: true as const } : {}), ...(r.assisted ? { assisted: true as const } : {}),
+        })),
+      });
+    }
   }
 
   const count = priorHistory.length + 1;
@@ -333,7 +392,8 @@ export function visibleAchievements(
     .sort((a, b) => Date.parse(b.earnedAt) - Date.parse(a.earnedAt));
 }
 
-/** When several are earned at once, the one the notification is about. */
+/** When several are earned at once, the one the notification is about. Rep
+ *  PRs aren't here: they never notify (see the rules at the top). */
 const NOTIFY_PRIORITY: AchievementCategory[] = ["program", "workouts", "pr", "streak"];
 
 export function pickHeadline(earned: Achievement[]): Achievement | null {
@@ -371,6 +431,37 @@ export function formatPRLine(pr: { valueKg: number; prevKg: number }, isKg: bool
     : `${formatWeight(pr.valueKg, isKg)}, up from ${formatWeight(pr.prevKg, isKg)}`;
 }
 
+/** A count of reps or seconds as typed: "9", "8.5". */
+const count = (n: number) => trimNumber(n, 1);
+
+/** One rep PR's line, for its card: "9 reps at 80 kg, up from 8"; at
+ *  bodyweight "12 reps, up from 10"; assisted "9 reps with 20 kg assistance,
+ *  up from 8"; a hold "60 s at 20 kg, up from 45 s" ("60 s, up from 45 s"). */
+export function formatRepPRLine(
+  r: Pick<RepPRDetail, "weightKg" | "reps" | "prevReps" | "hold" | "assisted">,
+  isKg: boolean,
+): string {
+  const done = r.hold ? `${count(r.reps)} s` : `${count(r.reps)} ${r.reps === 1 ? "rep" : "reps"}`;
+  const at = r.weightKg <= 0 ? ""
+    : r.assisted ? ` with ${formatWeight(r.weightKg, isKg)} assistance` : ` at ${formatWeight(r.weightKg, isKg)}`;
+  return `${done}${at}, up from ${r.hold ? `${count(r.prevReps)} s` : count(r.prevReps)}`;
+}
+
+/** A rep PR's set, short, where its record is shown beside it (the
+ *  post-workout summary, the workout page): "80 kg × 9", "12 reps" at
+ *  bodyweight; a hold "20 kg, 60 s" or "60 s". An assisted one's weight is
+ *  its help, as it was logged. */
+export function formatRepSet(r: Pick<RepPRDetail, "weightKg" | "reps" | "hold">, isKg: boolean): string {
+  if (r.hold) return r.weightKg > 0 ? `${formatWeight(r.weightKg, isKg)}, ${count(r.reps)} s` : `${count(r.reps)} s`;
+  return r.weightKg > 0 ? `${formatWeight(r.weightKg, isKg)} × ${count(r.reps)}` : `${count(r.reps)} ${r.reps === 1 ? "rep" : "reps"}`;
+}
+
+/** How much a rep PR beat the most before by: "1 rep", "2 reps", "15 s". */
+export function formatRepGain(r: Pick<RepPRDetail, "reps" | "prevReps" | "hold">): string {
+  const more = r.reps - r.prevReps;
+  return r.hold ? `${count(more)} s` : `${count(more)} ${more === 1 ? "rep" : "reps"}`;
+}
+
 export function describeAchievement(a: Achievement, isKg: boolean): AchievementCopy {
   switch (a.category) {
     case "pr": {
@@ -393,6 +484,28 @@ export function describeAchievement(a: Achievement, isKg: boolean): AchievementC
         title: `${a.prs.length} new PRs`,
         detail: a.prs.map(pr => pr.exerciseName).join(", "),
         notifyTitle: `${a.prs.length} new personal records!`,
+        notifyBody: rest > 0 ? `${named} and ${rest} more.` : `${named}.`,
+      };
+    }
+    case "reps": {
+      // Never sent (NOTIFY_PRIORITY), but said the way the card says it.
+      if (a.repPrs.length === 1) {
+        const r = a.repPrs[0];
+        const kind = r.hold ? "hold" : "rep";
+        return {
+          title: `New ${kind} PR on ${r.exerciseName}`,
+          detail: formatRepPRLine(r, isKg),
+          notifyTitle: `New ${kind} PR!`,
+          notifyBody: `${r.exerciseName}: ${formatRepPRLine(r, isKg)}.`,
+        };
+      }
+      const kind = a.repPrs.every(r => r.hold) ? "hold" : "rep";
+      const named = a.repPrs.slice(0, NOTIFY_NAME_LIMIT).map(r => r.exerciseName).join(", ");
+      const rest = a.repPrs.length - NOTIFY_NAME_LIMIT;
+      return {
+        title: `${a.repPrs.length} new ${kind} PRs`,
+        detail: a.repPrs.map(r => r.exerciseName).join(", "),
+        notifyTitle: `${a.repPrs.length} new ${kind} PRs!`,
         notifyBody: rest > 0 ? `${named} and ${rest} more.` : `${named}.`,
       };
     }

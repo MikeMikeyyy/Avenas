@@ -12,8 +12,10 @@
 
 export const ACHIEVEMENTS_KEY = "@avenas/achievements";
 
-/** Each category holds at most ONE card; a newer achievement replaces it. */
-export type AchievementCategory = "pr" | "workouts" | "program" | "streak";
+/** Each category holds at most ONE card; a newer achievement replaces it.
+ *  Rep PRs have their own ("reps"), so a session of them never takes a
+ *  weight PR's card away. */
+export type AchievementCategory = "pr" | "reps" | "workouts" | "program" | "streak";
 
 /** Total workouts logged that earn a milestone. */
 export const WORKOUT_MILESTONES: readonly number[] = [10, 25, 50, 100, 250, 500];
@@ -54,6 +56,20 @@ export type PRDetail = {
   prevKg: number;
 };
 
+/** One exercise's rep PR, as set in a single session (utils/repPrs.ts). */
+export type RepPRDetail = {
+  exerciseName: string;
+  /** The weight its reps were done at, kg; 0 for bodyweight. An assisted
+   *  exercise's is its help. */
+  weightKg: number;
+  /** Reps done, a hold's seconds. */
+  reps: number;
+  /** The most done before at that weight or better, which it beat. */
+  prevReps: number;
+  hold?: true;
+  assisted?: true;
+};
+
 /** Values are stored raw (weights in canonical kg) and formatted at display
  *  time, so a kg/lbs switch re-expresses cards instead of freezing old text. */
 export type Achievement =
@@ -64,6 +80,14 @@ export type Achievement =
        *  still one card: it lists them when tapped, rather than saying "plus 4
        *  more" and sending the user to the workout to guess which. */
       prs: PRDetail[];
+    })
+  | (Base & {
+      category: "reps";
+      workoutId: string;
+      /** EVERY rep PR the session set, in its order. Earned only by a session
+       *  that set no weight PR: that one's card is the weight PRs' alone (user
+       *  decision, 2026-11-14: rep PRs keep Home quiet). */
+      repPrs: RepPRDetail[];
     })
   | (Base & { category: "workouts"; workoutId: string; count: number })
   | (Base & { category: "program"; programId: string; programName: string; totalWeeks: number })

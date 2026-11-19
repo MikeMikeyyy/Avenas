@@ -167,8 +167,14 @@ eq(withoutSet([], [s("a"), s("b")], "zz"), null, "a key that isn't there removes
   eq(prevFillFor(empty, "80×"), { weight: "80", reps: "" }, "fill: a weight with no reps last time stays a weight");
   eq(prevFillFor(empty, "—"), null, "fill: nothing last time, nothing filled");
   eq(prevFillFor(empty, undefined), null, "fill: no hint at all, nothing filled");
-  eq(prevFillFor({ weight: "85", reps: "" }, "80×8"), null, "fill: a typed weight is the user's, never overwritten");
-  eq(prevFillFor({ weight: " ", reps: "6" }, "80×8"), null, "fill: typed reps keep the set as typed");
+  // Each empty box takes last time's number; a typed one is never overwritten
+  // (user request, 2026-11-14: it used to fill only a set with nothing typed).
+  eq(prevFillFor({ weight: "85", reps: "" }, "80×8"), { weight: "85", reps: "8" }, "fill: a weight typed up from last time stays, and the empty reps take last time's");
+  eq(prevFillFor({ weight: "", reps: "10" }, "80×8"), { weight: "80", reps: "10" }, "fill: typed reps stay, and the empty weight takes last time's");
+  eq(prevFillFor({ weight: "85", reps: "6" }, "80×8"), null, "fill: both typed, nothing filled");
+  eq(prevFillFor({ weight: "85", reps: "" }, "80×"), null, "fill: no reps last time, a typed weight is ticked as it is");
+  eq(prevFillFor({ weight: "", reps: "10" }, "×8"), null, "fill: a bodyweight set's typed reps, no weight to take");
+  eq(prevFillFor({ weight: " ", reps: "6" }, "80×8"), { weight: "80", reps: "6" }, "fill: a box of only spaces counts as empty");
   eq(flatIndexOf(2, "warmup", 1), 1, "rows: a warmup is its own row");
   eq(flatIndexOf(2, "working", 0), 2, "rows: working sets come after the warmups");
 
@@ -188,8 +194,8 @@ eq(withoutSet([], [s("a"), s("b")], "zz"), null, "a key that isn't there removes
   ], exId => hints[exId]);
   eq(after.bench.working[0], { id: "a", weight: "80", reps: "8", done: true, doneAt: 1000 },
     "lock screen: an empty set is ticked with last time's numbers at its row (past the warmup)");
-  eq(after.bench.working[1], { id: "b", weight: "85", reps: "", done: true, doneAt: 2000 },
-    "lock screen: a set typed in before locking keeps what was typed");
+  eq(after.bench.working[1], { id: "b", weight: "85", reps: "8", done: true, doneAt: 2000 },
+    "lock screen: a set typed in before locking keeps what was typed, its empty reps taking last time's");
   eq(after.bench.working[2], { id: "c", weight: "", reps: "", done: true, doneAt: 3000 },
     "lock screen: nothing last time, so it's ticked as it was");
   eq(after.squat.working[0], { id: "s0", weight: "120", reps: "5", done: true, doneAt: 4000 },
@@ -208,7 +214,7 @@ eq(withoutSet([], [s("a"), s("b")], "zz"), null, "a key that isn't there removes
   // What the card showed on each set is exactly what the tick fills in.
   const { queue } = buildLiveActivityQueue(
     [{ id: "bench", name: "Bench" }, { id: "squat", name: "Squat" }], log, exId => hints[exId]);
-  eq(queue.map(q => `${q.exId}:${q.weight}×${q.reps}`), ["bench:80×8", "bench:85×", "bench:×", "squat:120×5"],
+  eq(queue.map(q => `${q.exId}:${q.weight}×${q.reps}`), ["bench:80×8", "bench:85×8", "bench:×", "squat:120×5"],
     "lock screen: the card previews what a tick will fill in, or what was typed");
 }
 

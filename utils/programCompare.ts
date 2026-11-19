@@ -35,10 +35,11 @@ import { currentExerciseName, exerciseIdentity, type ExerciseRef } from "./exerc
 import { chartValue, drawsOn, percentChange } from "./exerciseChartLayout";
 import { dayIdAt, workoutKey } from "./programDays";
 import { programAsOf } from "./programHolds";
+import { startsLabel, startsLater } from "./programStart";
 import { buildProgramHistory, sessionStats } from "./programHistory";
 import {
   collectExerciseHistory, computeMuscleGroupStats, computeWorkoutDurationMinutes, computeWorkoutReps,
-  computeWorkoutTonnage, workoutBelongsToProgram,
+  computeWorkoutTonnage, currentScopeProgram, workoutBelongsToProgram,
 } from "./progressStats";
 import { programRunViews, sameRun, type ProgramRunView, type RunRef } from "./programRuns";
 import { placeSessions, placingOccurrences } from "./sessionTrack";
@@ -48,9 +49,12 @@ import { ordinal } from "./workoutSummary";
 
 /** The run the page reads as green when a comparison starts: the latest run of
  *  the program picked at the top; with none picked ("Current program", "All
- *  programs"), the active program's; with none active either, the run that
- *  finished last, so two finished programs can be compared with nothing on the
- *  go (user request, 2026-10-14). Green's row changes it from there. */
+ *  programs"), Current program's (currentScopeProgram: the active program
+ *  once a workout's logged in it, else the one finished last, so it starts
+ *  from what the page shows, never a new program with nothing in it; user
+ *  request, 2026-11-19); with neither, the run that finished last, so two
+ *  finished programs can be compared with nothing on the go (user request,
+ *  2026-10-14). Green's row changes it from there. */
 export function greenRunFor(
   scope: ProgramScope,
   programs: readonly SavedProgram[],
@@ -60,8 +64,8 @@ export function greenRunFor(
     const p = programs.find(q => q.id === scope.programId);
     return p ? programRunViews(p, history).find(v => v.ref.run === "latest") ?? null : null;
   }
-  const active = programs.find(q => q.status === "active");
-  if (active) return programRunViews(active, history).find(v => v.ref.run === "latest") ?? null;
+  const current = currentScopeProgram(programs, history);
+  if (current) return programRunViews(current, history).find(v => v.ref.run === "latest") ?? null;
   return compareCandidates(programs, history, null)[0] ?? null;
 }
 
@@ -165,6 +169,9 @@ export function runStatus(view: ProgramRunView, todayYMD: string): string {
   if (view.finished) return view.endYMD ? `Finished ${shortDate(view.endYMD, todayYMD)}` : "Finished";
   if (view.ref.run === "latest" && p.status === "active") {
     if (p.pausedAt) return "On hold";
+    // Set to start later (utils/programStart.ts): when, not "Week 0".
+    const startsOn = startsLater(p, todayYMD);
+    if (startsOn) return startsLabel(startsOn);
     return `Week ${getCurrentWeek(p, new Date(`${todayYMD}T12:00:00`))} of ${p.totalWeeks}`;
   }
   return `Stopped in week ${Math.max(1, p.currentWeek)}`;

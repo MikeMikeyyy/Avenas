@@ -2,7 +2,7 @@
   "expo": {
     "name": "avenas",
     "slug": "avenas",
-    "version": "2.13.5",
+    "version": "2.13.6",
     "orientation": "portrait",
     "icon": "./assets/images/icon-transparent.png",
     "scheme": "avenas",
@@ -26,7 +26,7 @@
       },
       "bundleIdentifier": "com.avenas.app",
       "appleTeamId": "8X55YH783A",
-      "buildNumber": "59",
+      "buildNumber": "60",
       "usesAppleSignIn": true
     },
     "android": {
@@ -78,7 +78,14 @@
       "@react-native-community/datetimepicker",
       "expo-sharing",
       "expo-image",
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Avenas uses the microphone so you can speak a message and see it typed out for you.",
+          "speechRecognitionPermission": "Avenas turns what you say into text for your message. Your iPhone does this itself where it can, and the recording is never sent to Avenas."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

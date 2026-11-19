@@ -183,7 +183,7 @@ const program1: SavedProgram = { ...program, workouts: withoutCustomExercise(pro
 eq(program1.workouts["0:Upper"].map(e => e.name), ["Barbell Bench Press"], "story: deleted, it's out of the program");
 eq(liveCustoms(customs1).length, 0, "story: ...out of the picker, and its slot is free");
 const dayOf = (p: SavedProgram, hist: CompletedWorkout[]) =>
-  scopedProgramDays({ kind: "program", programId: p.id }, [p], hist).find(d => d.dayId === "d0")!;
+  scopedProgramDays({ kind: "program", programId: p.id }, [p], hist, hist).find(d => d.dayId === "d0")!;
 const day1 = dayOf(program1, logged);
 eq(collectExerciseHistory(logged, asA, day1).map(pt => pt.topWeight), [20, 22.5, 25], "story: what was logged stays on its chart");
 eq(computePRs(collectExerciseHistory(logged, asA, day1), logged, asA, day1).heaviest?.value, 25, "story: ...and its records");

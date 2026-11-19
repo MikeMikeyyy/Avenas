@@ -153,6 +153,13 @@ export function placingOccurrences(
  * done the Monday after, counts as the new week's done early, and last week's
  * stays missed.
  *
+ * Done ahead of its day, it's the next occurrence whether or not `occurrences`
+ * reaches it: past the run's end, or after the hold it's on. It fell back to
+ * the one before when the next wasn't listed, so a workout's number changed
+ * with the run's end: a week shorter, carried on, held or finished, a session
+ * done ahead read one number, then another (found by the solo flows,
+ * 2026-11-16). Its index can then be past `occurrences`, filling none of them.
+ *
  * Left out: anything dated before the run began, and anything after its day in
  * a cycle the day hadn't come round in yet (a first week that started past it).
  */
@@ -177,7 +184,7 @@ export function placeSessions(
     // Its date's slot up to the day's own (equal on a date the day was moved
     // off): the day was still to come in this cycle.
     const at = w.date >= startYMD ? cycleIndexForDate(program, w.date) : null;
-    if (at !== null && at <= slot && before + 1 < occurrences.length) placed[w.id] = before + 1;
+    if (at !== null && at <= slot) placed[w.id] = before + 1;
     else if (before >= 0) placed[w.id] = before;
   }
   return placed;

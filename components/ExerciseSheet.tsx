@@ -27,11 +27,12 @@ import SimpleSheet from "./trainer/SimpleSheet";
 import NeuCard from "./NeuCard";
 import CollapsibleCard from "./CollapsibleCard";
 import SheetPill, { SheetToggle } from "./SheetPill";
+import SupersetPickStep, { namesList, type SupersetChoice } from "./SupersetPickStep";
 import SegmentedControl, { type SegmentOption } from "./SegmentedControl";
 import DeleteCircleButton from "./DeleteCircleButton";
 import TrashIcon from "./TrashIcon";
 import HistoryIcon from "./HistoryIcon";
-import { APP_DARK, APP_LIGHT, ACCT, DANGER_BRIGHT, FontFamily, WARMUP_ORANGE } from "../constants/theme";
+import { accentTextColor, APP_DARK, APP_LIGHT, ACCT, DANGER_BRIGHT, FontFamily, WARMUP_ORANGE } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 import { useUnit } from "../contexts/UnitContext";
 import { unitLabel, unitOf } from "../utils/units";
@@ -77,6 +78,14 @@ interface Props {
   /** The set by its row key (utils/setRows.ts setRowKey), once its row has closed. */
   onRemoveSet: (rowKey: string) => void;
   onToggleHold: () => void;
+  /** What it can be put in a superset with (utils/supersets.ts): the others
+   *  here, in order, but its own superset's members. */
+  supersetChoices: readonly SupersetChoice[];
+  /** Its superset's other members, by name; none when it's in none. */
+  supersetWith: readonly string[];
+  /** Joins the one picked to its superset; the sheet closes. */
+  onSuperset: (key: string) => void;
+  onLeaveSuperset: () => void;
   /** These four run once the sheet has slid away and closed, so a sheet one
    *  of them opens never goes up over this one (one RN Modal at a time). */
   onMove: () => void;
@@ -85,9 +94,13 @@ interface Props {
   onRemove: () => void;
 }
 
+// Superset With, after Change (components/SupersetPickStep.tsx, a step of
+// this sheet; user request, 2026-11-15): for today's session alone, like a
+// swap (utils/supersets.ts).
 function ExerciseSheet({
   visible, onClose, name, position, warmup, working, isHold,
   onToggleSetType, onAddSet, onRemoveSet, onToggleHold, onMove, onChange, onHistory, onRemove,
+  supersetChoices, supersetWith, onSuperset, onLeaveSuperset,
 }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -95,7 +108,8 @@ function ExerciseSheet({
   const unit = unitLabel(unitOf(isKg));
 
   // Remove asks first, as the sheet's next step rather than an alert over it.
-  const [step, setStep] = useState<"sets" | "remove">("sets");
+  // Superset With picks what to pair it with, as another step.
+  const [step, setStep] = useState<"sets" | "remove" | "superset">("sets");
 
   // What runs once the sheet has slid away (`leave` below): after its close,
   // in the same update.
@@ -134,6 +148,17 @@ function ExerciseSheet({
       {close => {
         const leave = (then: () => void) => { after.current = then; close(); };
 
+        if (step === "superset") {
+          return (
+            <SupersetPickStep
+              name={name}
+              choices={supersetChoices}
+              onPick={key => { onSuperset(key); close(); }}
+              onCancel={() => setStep("sets")}
+            />
+          );
+        }
+
         if (step === "remove") {
           return (
             <Reanimated.View entering={FadeIn.duration(160)} style={styles.body}>
@@ -152,6 +177,11 @@ function ExerciseSheet({
             <View style={styles.head}>
               {position ? <Text style={[styles.position, { color: t.ts }]}>{position}</Text> : null}
               <Text style={[styles.title, { color: t.tp }]} numberOfLines={2}>{name}</Text>
+              {supersetWith.length > 0 ? (
+                <Text style={[styles.supersetLine, { color: accentTextColor(isDark) }]} numberOfLines={2}>
+                  {`Superset with ${namesList(supersetWith)}`}
+                </Text>
+              ) : null}
             </View>
 
             <Text style={[styles.section, { color: t.ts }]}>SETS</Text>
@@ -233,6 +263,26 @@ function ExerciseSheet({
               icon={c => <Ionicons name="swap-horizontal-outline" size={18} color={c} />}
               onPress={() => leave(onChange)}
             />
+            {supersetWith.length === 0 ? (
+              <SheetPill
+                label="Superset With"
+                icon={c => <Ionicons name="link-outline" size={18} color={c} />}
+                onPress={() => setStep("superset")}
+              />
+            ) : (
+              <>
+                <SheetPill
+                  label="Add to Superset"
+                  icon={c => <Ionicons name="link-outline" size={18} color={c} />}
+                  onPress={() => setStep("superset")}
+                />
+                <SheetPill
+                  label="Remove from Superset"
+                  icon={c => <Ionicons name="unlink-outline" size={18} color={c} />}
+                  onPress={() => { onLeaveSuperset(); close(); }}
+                />
+              </>
+            )}
             <SheetToggle
               label="Timed Hold"
               icon={c => <Ionicons name="timer-outline" size={18} color={c} />}
@@ -265,6 +315,7 @@ const styles = StyleSheet.create({
   head:         { alignItems: "center", gap: 2, paddingHorizontal: 4, paddingBottom: 4 },
   position:     { fontFamily: FontFamily.semibold, fontSize: 13 },
   title:        { fontFamily: FontFamily.bold, fontSize: 20, textAlign: "center" },
+  supersetLine: { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: "center" },
   message:      { fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21, textAlign: "center", paddingHorizontal: 8, paddingBottom: 4 },
   section:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1, paddingHorizontal: 4, marginBottom: -4 },
   sectionAfter: { marginTop: 8 },

@@ -25,6 +25,9 @@ import { planOf } from "../../../utils/exerciseChanges";
 import { LB_PER_KG, UNIT_KEY, parseWeightToKg, trimNumber } from "../../../utils/units";
 import { addDaysYMD, formatStoredDate, parseStoredDate, toYMD } from "../../../utils/dates";
 import { getEffectiveToday, getWorkoutForDate, resolveWorkoutForDate, swapOrigin, type DayOverride } from "../../../utils/workout";
+import { joinSuperset, supersetIdsOf } from "../../../utils/supersets";
+import { logExercisesFor } from "../../../utils/logWorkout";
+import { earliestStart, startOptions, startsLater, storedStart } from "../../../utils/programStart";
 import { applyRestDay } from "../../../utils/restDay";
 import { pauseProgram, resumeWithPrompt, settleActiveProgram } from "../../../utils/programPause";
 import { activateProgram, completeProgram, deactivateProgram, programsAfterPastLog } from "../../../utils/programLifecycle";
@@ -52,6 +55,9 @@ export type LedgerExercise = {
   kind: LiftKind;
   sets: LedgerSet[];
   note: string;
+  /** The superset it was done in (utils/supersets.ts): the program's, or one
+   *  made in the session, kept only where two or more were side by side. */
+  superset?: string;
 };
 
 export type LedgerSession = {
@@ -250,18 +256,23 @@ export class Lifter {
     ]);
     takePrompts();
     answerPrompts(() => null);
-    await this.activateNext(startYMD);
+    await this.activateNext(startYMD, undefined, true);
   }
 
   /** Make the next program in the rotation active. `ended` says how the run
    *  going until now ended, when the lifter decided: marked complete, or
    *  shelved; otherwise it's finished if the activation finished it. */
-  private async activateNext(today: string, ended?: "completed" | "shelved") {
+  private async activateNext(today: string, ended?: "completed" | "shelved", first = false) {
     const id = this.rotation[this.next % this.rotation.length];
     this.next += 1;
     const programs = await this.readPrograms();
     const history = await this.readHistory();
-    const { programs: updated, finished } = activateProgram(programs, id, formatStoredDate(new Date()), history);
+    // When it starts (utils/programStart.ts; user request, 2026-11-16): as soon
+    // as it can (today, or tomorrow once today's trained), or now and then the
+    // coming Monday or the one after, the days until then rest.
+    const mondays = startOptions(today, history).filter(o => o.key === "monday" || o.key === "mondayAfter");
+    const start = !first && this.chance(0.35) ? this.pick(mondays)?.ymd ?? earliestStart(today, history) : earliestStart(today, history);
+    const { programs: updated, finished } = activateProgram(programs, id, formatStoredDate(new Date()), history, storedStart(start));
     await this.run(async () => {
       await setJSON(PROGRAMS_KEY, updated);
       await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
@@ -273,8 +284,8 @@ export class Lifter {
       r.endYMD = today;
       r.finished = ended ? ended === "completed" : finished?.program.id === r.programId;
     }
-    this.runs.push({ programId: id, startYMD: today });
-    this.note(today, `made ${updated.find(p => p.id === id)!.name} active${finished ? ` (${finished.program.name} finished)` : ""}`);
+    this.runs.push({ programId: id, startYMD: start });
+    this.note(today, `made ${updated.find(p => p.id === id)!.name} active${start !== today ? `, starting ${start}` : ""}${finished ? ` (${finished.program.name} finished)` : ""}`);
   }
 
   // ─── A day ─────────────────────────────────────────────────────────────────
@@ -304,11 +315,13 @@ export class Lifter {
         const { active, today } = await this.workoutTab();
         if (active && !active.pausedAt) {
           const programs = await this.readPrograms();
+          // From the day after, once today's workout is logged (holdStartsOn).
+          const paused = pauseProgram(programs, active.id, today, await this.readHistory());
           await this.run(async () => {
-            await setJSON(PROGRAMS_KEY, pauseProgram(programs, active.id, today));
+            await setJSON(PROGRAMS_KEY, paused);
             await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
           });
-          this.holds.push({ programId: active.id, from: today });
+          this.holds.push({ programId: active.id, from: paused.find(p => p.id === active.id)?.pausedAt ?? today });
         }
       }
     }
@@ -427,6 +440,8 @@ export class Lifter {
     const active = programs.find(p => p.status === "active") ?? null;
     if (!active) { await this.activateNext(date); return; }
     if (active.pausedAt) return;
+    // Waiting for the day it's set to start: nothing to finish or shelve yet.
+    if (startsLater(active, date)) return;
     // In its last week, now and then it's ended early to move on: Mark
     // Complete (which is what it's for now), or the next one made active.
     if (getCurrentWeek(active) >= active.totalWeeks && this.chance(0.1)) {
@@ -603,8 +618,9 @@ export class Lifter {
   /** The Workout tab: today's workout, done and completed now (the clock). */
   private async trainToday(date: string, day: Day) {
     // withProgramIds, then swaps (the Change chip) and an add or two.
-    const cards: (Omit<SessionCard, "rows"> & { template: Exercise | null })[] = day.exercises.map(e => ({
+    const cards: (Omit<SessionCard, "rows"> & { template: Exercise | null; supersetId?: string })[] = day.exercises.map(e => ({
       name: e.name, programExerciseId: e.id, kind: LIFTS[e.name]?.kind ?? "weighted", template: e,
+      ...(e.supersetId ? { supersetId: e.supersetId } : {}),
     }));
     for (const c of cards) {
       const swapFor = LIFTS[c.name]?.swapFor;
@@ -645,6 +661,21 @@ export class Lifter {
       const [left] = cards.splice(this.between(1, cards.length - 1), 1);
       reordered.push(`skipped ${left.name}`);
     }
+    // Superset With on the Workout tab (utils/supersets.ts; user request,
+    // 2026-11-15): now and then two done in rounds that the plan has apart,
+    // for the session alone. One a place further down comes up beside the
+    // first ("Planned 4th" on the Journal); one in a superset already
+    // makes it a giant set. The moves and the skip above go as the reorder
+    // sheet's would (a superset member moved away leaves it), which the save
+    // keeps only where two or more are still side by side.
+    if (cards.length > 2 && this.chance(0.06)) {
+      const at = this.between(0, cards.length - 2);
+      const pick = Math.min(cards.length - 1, at + this.between(1, 2));
+      const names = [cards[at].name, cards[pick].name];
+      cards.splice(0, cards.length, ...joinSuperset(cards, at, pick, () => `ss_live_${this.seq}`));
+      reordered.push(`supersetted ${names[0]} with ${names[1]}`);
+    }
+    const supersets = supersetIdsOf(cards);
     // A set short on a card now and then (shortOf).
     const shorts = cards.map(c => this.shortOf(c.template));
     // The plan as the Workout tab set the session up: the day's exercises, in
@@ -673,6 +704,7 @@ export class Lifter {
       kind: c.kind,
       sets: oneShort(this.setsFor(c.name, c.template), shorts[i]),
       note: this.exerciseNote(),
+      ...(supersets[i] ? { superset: supersets[i] } : {}),
     }));
     const finish = new Date();
     const minutes = this.between(45, 95);
@@ -744,10 +776,29 @@ export class Lifter {
     const end = late
       ? new Date(y, m - 1, d + 1, this.between(0, 2), this.between(0, 59))
       : new Date(y, m - 1, d, this.between(7, 19), this.between(0, 59));
-    const exercises: LedgerExercise[] = day.exercises.map(e => ({
-      name: e.name, place: e.id || undefined, kind: LIFTS[e.name]?.kind ?? "weighted",
-      sets: this.setsFor(e.name, e), note: this.exerciseNote(),
-    }));
+    // The day as the page opens it, its supersets with it (utils/logWorkout.ts),
+    // and now and then Superset With on a card, for the log alone (user
+    // request, 2026-11-15): one a place or two further down brought up beside
+    // it, as on the Workout tab.
+    let k = 0;
+    let cards = logExercisesFor(day.exercises, () => `lex_${k++}`);
+    const fromDay = new Map(cards.map((c, i) => [c.id, day.exercises[i]]));
+    let supersetted = "";
+    if (cards.length > 2 && this.chance(0.06)) {
+      const at = this.between(0, cards.length - 2);
+      const pick = Math.min(cards.length - 1, at + this.between(1, 2));
+      supersetted = `, ${cards[at].name} supersetted with ${cards[pick].name}`;
+      cards = joinSuperset(cards, at, pick, () => `ss_log_${this.seq}`);
+    }
+    const supersets = supersetIdsOf(cards);
+    const exercises: LedgerExercise[] = cards.map((c, i) => {
+      const e = fromDay.get(c.id)!;
+      return {
+        name: e.name, place: e.id || undefined, kind: LIFTS[e.name]?.kind ?? "weighted",
+        sets: this.setsFor(e.name, e), note: this.exerciseNote(),
+        ...(supersets[i] ? { superset: supersets[i] } : {}),
+      };
+    });
     await this.save({
       via: "journal",
       date,
@@ -764,7 +815,7 @@ export class Lifter {
     // doSave: a program's last session, logged after the fact, ends it.
     if (day.programId) await this.thenEnds(toYMD(new Date()), () => completeIfFinished());
     for (const e of day.exercises) this.progress(e.name);
-    this.note(toYMD(new Date()), `logs ${day.name} for ${date} from the Journal${withTime ? `, done ${hm(end)}${late ? " that night" : ""}` : " (no time)"}`);
+    this.note(toYMD(new Date()), `logs ${day.name} for ${date} from the Journal${withTime ? `, done ${hm(end)}${late ? " that night" : ""}` : " (no time)"}${supersetted}`);
   }
 
   /** Writes a finished session the way its screen does, and the ledger. */
@@ -791,6 +842,8 @@ export class Lifter {
       // The Hold switch, on for a hold the program marks (both screens start
       // it from the program exercise's isIsometric).
       ...(e.kind === "hold" ? { isIsometric: true as const } : {}),
+      // As completedExercises saves it: only a real superset.
+      ...(e.superset ? { supersetId: e.superset } : {}),
     }));
     let completedAt: string;
     let durationSeconds: number;

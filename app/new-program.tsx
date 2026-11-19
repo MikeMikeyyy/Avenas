@@ -34,6 +34,9 @@ import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, pill, pillGlow, 
 import { CUSTOM_KEY, type CarriedExercise, type CustomExercise } from "../constants/exercises";
 import { PROGRAMS_KEY, CYCLE_COACHMARK_KEY, WORKOUTS_COACHMARK_KEY, WARMUP_TIP_KEY, WORKOUT_DAY_OVERRIDE_KEY, WORKOUT_HISTORY_KEY, NEW_PROGRAM_DRAFT_KEY, type CompletedWorkout, type SavedProgram, type Exercise, type ProgramSet, type WorkoutMap, getCurrentWeek, normaliseSets, programFinishDate } from "../constants/programs";
 import { activateProgram, carryOnProgram, minTotalWeeks, withTotalWeeks, type FinishedProgram } from "../utils/programLifecycle";
+import { replaceMessage, storedStart } from "../utils/programStart";
+import ProgramStartSheet from "../components/ProgramStartSheet";
+import { ALERT_SETTLE_MS } from "../lib/photoPicker";
 import { getJSON } from "../utils/storage";
 import { marksAfterEdit } from "../utils/skippedDates";
 import { scheduleCloudPush } from "../lib/syncManager";
@@ -46,6 +49,7 @@ import { SummaryPill } from "../components/ProgramActionFabs";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import ExercisePicker from "../components/ExercisePicker";
 import CollapsibleCard from "../components/CollapsibleCard";
+import SupersetLink from "../components/SupersetLink";
 import ExpandReveal, { REVEAL_HEIGHT_MS, useReveal } from "../components/ExpandReveal";
 import NumberBadge from "../components/NumberBadge";
 import ReorderExercisesSheet, { DragHandleIcon, ReorderExerciseList } from "../components/ReorderExercisesSheet";
@@ -66,6 +70,7 @@ import { musclesForExercise } from "../utils/muscleGroups";
 import { carriedIn, customIdentity, exerciseSummaryParams, knownCustomExercises, stampCustomDetails } from "../utils/customExerciseDetails";
 import { loadCarriedExercises } from "../lib/exerciseMedia";
 import { arrangeTrainingDays, canonicalizeWorkouts, dayLabel, forkChangedDayIds, normalizeDayIds, parseDayKey, reorderCycleSlots, trainingDayKeys, type CycleSlots } from "../utils/programDays";
+import { cleanSupersets, joinSuperset, leaveSuperset, moveKeepingSupersets, runOf, supersetChoicesFor, supersetLines, supersetPlaces } from "../utils/supersets";
 import { alertMessage } from "../utils/errors";
 import { exerciseIdentity, sameExercise } from "../utils/exerciseNames";
 import { liveIndexOf, withCurrentCustomNames, withoutCustomExercise } from "../utils/customExercises";
@@ -79,6 +84,7 @@ const DRAFT_KEY = NEW_PROGRAM_DRAFT_KEY;
 // Stable empty list, so a closed sheet doesn't hand its list a fresh array
 // identity on every render (which would rebuild its drag PanResponders).
 const NO_EXERCISES: Exercise[] = [];
+const NO_HISTORY: CompletedWorkout[] = [];
 
 // The pinned day name's chevron (Go to Day), at DropdownPicker's page-pill
 // size, and the room it takes after the name.
@@ -292,6 +298,9 @@ interface ExerciseRowProps {
   warmupTip: WarmupTipPhase | null;
   /** Ends the warm-up tip for good: its Got it, or any set switched. */
   onWarmupTipDone: () => void;
+  /** A superset member that isn't its last: there's no rest after it in a
+   *  round, so its label leaves the rest to the last (utils/supersets.ts). */
+  restInRound?: boolean;
 }
 
 /**
@@ -350,7 +359,7 @@ function WeightSetInput({
 // exercise's row, not every row in the day. All function props are stable, and
 // updateExerciseSets preserves the identity of untouched Exercise objects, so
 // the shallow compare bails for every row except the one being edited.
-const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExercises, isDark, onUpdateExercise, onUpdateExerciseSets, onOpenOptions, onEditExercise, onInputFocus, customImageById, warmupTip, onWarmupTipDone }: ExerciseRowProps) {
+const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExercises, isDark, onUpdateExercise, onUpdateExerciseSets, onOpenOptions, onEditExercise, onInputFocus, customImageById, warmupTip, onWarmupTipDone, restInRound = false }: ExerciseRowProps) {
   const router = useRouter();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
@@ -483,7 +492,7 @@ const ExerciseRow = memo(function ExerciseRow({ day, exercise, exIndex, totalExe
           {/* Its rest, quietly, now its button is in the sheet (user pick,
               2026-11-07); nothing when it has none. */}
           <Text style={[styles.exNumLabel, { color: t.ts }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-            EXERCISE {exIndex + 1} OF {totalExercises}{restSecs > 0 ? ` · REST ${formatRest(restSecs)}` : ""}
+            EXERCISE {exIndex + 1} OF {totalExercises}{restSecs > 0 && !restInRound ? ` · REST ${formatRest(restSecs)}` : ""}
           </Text>
           {/* Two lines before an ellipsis (user request, 2026-11-05: long names
               ended in "…"), tight enough that two barely outgrow the photo;
@@ -1246,6 +1255,8 @@ function ProgramSummarySheet({ visible, isDark, t, programName, cyclePattern, is
   const detailKey = detailIdx != null ? `${detailIdx}:${detailLabel}` : null;
   const detailExs = detailKey ? (workouts[detailKey] ?? []) : [];
   const detailSets = detailExs.reduce((n, e) => n + normaliseSets(e).length, 0);
+  // Each superset member's line in its rows.
+  const detailLines = supersetLines(detailExs, e => e.id);
 
   const trainingCount = isTrainingDay.filter(Boolean).length;
   let totalEx = 0;
@@ -1332,6 +1343,8 @@ function ProgramSummarySheet({ visible, isDark, t, programName, cyclePattern, is
                 items={detailExs}
                 keyOf={ex => ex.id}
                 nameOf={ex => ex.name}
+                metaOf={ex => detailLines.get(ex.id) ?? ""}
+                move={moveKeepingSupersets}
                 onReorder={exs => onReorderExercises(detailKey!, exs)}
                 onDragStateChange={dragging => setListScrollEnabled(!dragging)}
                 onRemove={ex => onRemoveExercise(detailKey!, ex.id)}
@@ -1402,6 +1415,12 @@ interface DayCardProps {
 // view). Memoized so editing one day only re-renders that day; every prop is kept
 // referentially stable by the parent (callbacks via useCallback), so untouched
 // days bail out.
+/** Where the line joining a superset's cards runs (components/SupersetLink.tsx):
+ *  through the centre of each card's photo, exRowWrap's 16pt padding plus half
+ *  the 52pt thumbnail. The gap is exerciseCard's bottom margin. */
+const SUPERSET_LINE_X = 42;
+const EXERCISE_CARD_GAP = 14;
+
 const DayCard = memo(function DayCard({
   day, exercises, isDark, collapsingIds, customImageById,
   onOpenPicker, onEditExercise, onUpdateExercise, onUpdateExerciseSets,
@@ -1410,6 +1429,8 @@ const DayCard = memo(function DayCard({
   warmupTip, onWarmupTipDone,
 }: DayCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
+  // Each card's place in its superset, for the line joining them.
+  const supersetPlaceAt = useMemo(() => supersetPlaces(exercises), [exercises]);
 
   // The sticky day header docks a day the moment its HEADING CARD reaches the
   // top (plain onLayout — no measureLayout, which can throw on Fabric). It used
@@ -1457,6 +1478,7 @@ const DayCard = memo(function DayCard({
             </NeuCard>
           )}
           {exercises.map((ex, i) => {
+            const place = supersetPlaceAt[i];
             const card = (
               <NeuCard dark={isDark} radius={16} style={styles.exerciseCard}>
                 <ExerciseRow
@@ -1473,6 +1495,7 @@ const DayCard = memo(function DayCard({
                   customImageById={customImageById}
                   warmupTip={i === 0 ? warmupTip : null}
                   onWarmupTipDone={onWarmupTipDone}
+                  restInRound={place === "first" || place === "middle"}
                 />
               </NeuCard>
             );
@@ -1483,6 +1506,9 @@ const DayCard = memo(function DayCard({
                 onCollapsed={() => onRemoveExercise(day, ex.id)}
               >
                 {card}
+                {place === "first" || place === "middle" ? (
+                  <SupersetLink gap={EXERCISE_CARD_GAP} x={SUPERSET_LINE_X} isDark={isDark} />
+                ) : null}
               </CollapsibleCard>
             );
           })}
@@ -1573,6 +1599,10 @@ export default function NewProgramScreen() {
   const isSharedEditMode = !!sharedId && !editId && !reviewId;
   // A new program: the one mode with the floating Create Program pill.
   const isCreateMode = !isEditMode && !isReviewMode && !isSharedEditMode;
+  // Set as Active's when it starts (components/ProgramStartSheet.tsx): open
+  // with the history it reads (a workout today keeps it from starting today)
+  // and what follows the pick.
+  const [startPick, setStartPick] = useState<{ name: string; history: CompletedWorkout[]; then: (ymd: string) => void } | null>(null);
 
   // ── Units ──────────────────────────────────────────────────────────────────
   // Every weight typed here records the unit it was typed in, and reads in that
@@ -2349,14 +2379,14 @@ export default function NewProgramScreen() {
     if (timer) { clearTimeout(timer); collapseTimers.current.delete(id); }
     setWorkouts(prev => {
       const list = prev[day];
-      if (list?.some(e => e.id === id)) return { ...prev, [day]: list.filter(e => e.id !== id) };
+      if (list?.some(e => e.id === id)) return { ...prev, [day]: cleanSupersets(list.filter(e => e.id !== id)) };
       // The day key can be rewritten between the tap and the removal (a day
       // reorder re-indexes every key), so fall back to whichever day holds the
       // id. Exercise ids are unique across the whole map — dedupeExerciseIds
       // guarantees it — so this stays exact, and a delete can never be lost.
       const owner = Object.keys(prev).find(k => prev[k]?.some(e => e.id === id));
       if (!owner) return prev;
-      return { ...prev, [owner]: prev[owner].filter(e => e.id !== id) };
+      return { ...prev, [owner]: cleanSupersets(prev[owner].filter(e => e.id !== id)) };
     });
     setCollapsingIds(prev => {
       if (!prev.has(id)) return prev;
@@ -2416,6 +2446,35 @@ export default function NewProgramScreen() {
     setReorderDay(null);
     setPickerState(null);
     setOptionsFor({ day, id });
+  }, []);
+
+  // A superset member's rest is the superset's, after each round, so setting
+  // it sets every member's (utils/supersets.ts).
+  const setExerciseRest = useCallback((day: string, id: string, secs: number) => {
+    setWorkouts(prev => {
+      const list = prev[day];
+      const i = list?.findIndex(e => e.id === id) ?? -1;
+      if (!list || i < 0) return prev;
+      const members = new Set(runOf(list, i) ?? [i]);
+      return { ...prev, [day]: list.map((e, k) => (members.has(k) && e.restSeconds !== secs ? { ...e, restSeconds: secs } : e)) };
+    });
+  }, []);
+  // Superset With: the exercise picked comes to just after this one (after
+  // its superset's last) and takes its rest. Remove from Superset takes it out.
+  const joinExerciseSuperset = useCallback((day: string, id: string, pickId: string) => {
+    setWorkouts(prev => {
+      const list = prev[day];
+      const at = list?.findIndex(e => e.id === id) ?? -1;
+      const pick = list?.findIndex(e => e.id === pickId) ?? -1;
+      return !list || at < 0 || pick < 0 ? prev : { ...prev, [day]: joinSuperset(list, at, pick) };
+    });
+  }, []);
+  const leaveExerciseSuperset = useCallback((day: string, id: string) => {
+    setWorkouts(prev => {
+      const list = prev[day];
+      const i = list?.findIndex(e => e.id === id) ?? -1;
+      return !list || i < 0 ? prev : { ...prev, [day]: leaveSuperset(list, i) };
+    });
   }, []);
 
   const reorderExercises = useCallback((day: string, exercises: Exercise[]) => {
@@ -2670,7 +2729,9 @@ export default function NewProgramScreen() {
       workouts: savedWorkouts,
     };
 
-    const save = async (makeActive: boolean) => {
+    // `startYMD`: the day picked for it to start (utils/programStart.ts), when
+    // it's made active.
+    const save = async (makeActive: boolean, startYMD?: string) => {
       try {
         const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
         const existing: SavedProgram[] = raw ? JSON.parse(raw) : [];
@@ -2681,7 +2742,9 @@ export default function NewProgramScreen() {
           // My Programs' Make Active, the one rule for both: the old active
           // demoted by the week it reached (utils/programLifecycle.ts).
           const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
-          ({ programs: updated, finished } = activateProgram(updated, newProgram.id, startDate, Array.isArray(history) ? history : []));
+          ({ programs: updated, finished } = activateProgram(
+            updated, newProgram.id, startDate, Array.isArray(history) ? history : [], startYMD ? storedStart(startYMD) : startDate,
+          ));
         }
         await AsyncStorage.setItem(PROGRAMS_KEY, JSON.stringify(updated));
         // A same-day change-day override belongs to the demoted program — clear
@@ -2710,7 +2773,7 @@ export default function NewProgramScreen() {
     // active it asks again, rather than let a stray tap cost someone their place
     // in a program (user request, 2026-10-13). Keep Current Program saves this
     // one inactive, which is what the first prompt's "has been saved" promised.
-    const confirmMakeActive = async () => {
+    const confirmMakeActive = async (startYMD: string) => {
       let current: SavedProgram | undefined;
       try {
         const raw = await AsyncStorage.getItem(PROGRAMS_KEY);
@@ -2719,28 +2782,37 @@ export default function NewProgramScreen() {
         warnStorage("getItem", PROGRAMS_KEY, e);
       }
       if (!current) {
-        void save(true);
+        void save(true, startYMD);
         return;
       }
-      const week = getCurrentWeek(current);
       Alert.alert(
         "Replace your active program?",
-        week >= current.totalWeeks
-          ? `"${current.name}" has reached its last week, so it will be marked complete and "${programName}" will start today.`
-          : `"${current.name}" is your active program, in week ${week} of ${current.totalWeeks}. "${programName}" will start today in its place, and making "${current.name}" active again later starts it over from week 1. Your logged workouts stay in your Journal.`,
+        replaceMessage(current, programName, startYMD),
         [
-          { text: "Replace", style: "destructive", onPress: () => save(true) },
+          { text: "Replace", style: "destructive", onPress: () => save(true, startYMD) },
           { text: "Keep Current Program", onPress: () => save(false) },
           { text: "Cancel", style: "cancel" },
         ],
       );
     };
 
+    // When it starts first (components/ProgramStartSheet.tsx; user request,
+    // 2026-11-16), then whether it replaces the one running, which can then say
+    // when. The sheet waits for the prompt to go (one at a time).
+    const askStart = async () => {
+      const history = await getJSON<CompletedWorkout[]>(WORKOUT_HISTORY_KEY, []);
+      setTimeout(() => setStartPick({
+        name: programName,
+        history: Array.isArray(history) ? history : [],
+        then: ymd => void confirmMakeActive(ymd),
+      }), ALERT_SETTLE_MS);
+    };
+
     Alert.alert(
       "Program Created!",
       `"${programName}" has been saved. Would you like to set it as your active program?`,
       [
-        { text: "Set as Active", onPress: () => void confirmMakeActive() },
+        { text: "Set as Active", onPress: () => void askStart() },
         { text: "Not Now", onPress: () => save(false) },
         { text: "Cancel", style: "cancel" },
       ]
@@ -2955,6 +3027,9 @@ export default function NewProgramScreen() {
   const optionsEx = optionsIdx >= 0 ? optionsList[optionsIdx] : undefined;
   const optionsSets = optionsEx ? normaliseSets(optionsEx) : [];
   const optionsIsRange = (optionsSets[0]?.repMode ?? "target") === "range";
+  const optionsSupersets = supersetChoicesFor(optionsList, optionsIdx, e => e.id);
+  // Each superset member's line in the reorder sheet.
+  const reorderLines = supersetLines(reorderDay ? (workouts[reorderDay] ?? NO_EXERCISES) : NO_EXERCISES, e => e.id);
   const modalUp = sheetUp || pickerState !== null;
 
   return (
@@ -3284,6 +3359,15 @@ export default function NewProgramScreen() {
         onClose={() => setSummaryOpen(false)}
       />
 
+      {/* Set as Active's when it starts (utils/programStart.ts). */}
+      <ProgramStartSheet
+        visible={startPick !== null}
+        programName={startPick?.name ?? ""}
+        history={startPick?.history ?? NO_HISTORY}
+        onPick={ymd => startPick?.then(ymd)}
+        onClose={() => setStartPick(null)}
+      />
+
       {/* Per-day Reorder sheet. Lives here, not in Step 2, so that all three
           modal surfaces are opened and closed from one place. Its Change runs
           once the sheet has slid away, so the picker never presents over it. */}
@@ -3293,6 +3377,8 @@ export default function NewProgramScreen() {
         items={reorderDay ? (workouts[reorderDay] ?? NO_EXERCISES) : NO_EXERCISES}
         keyOf={ex => ex.id}
         nameOf={ex => ex.name}
+        metaOf={ex => reorderLines.get(ex.id) ?? ""}
+        move={moveKeepingSupersets}
         onReorder={exs => { if (reorderDay) reorderExercises(reorderDay, exs); }}
         onChange={ex => { if (reorderDay) editExerciseInPicker(reorderDay, ex.id); }}
         onRemove={ex => { if (reorderDay) removeExercise(reorderDay, ex.id); }}
@@ -3312,7 +3398,7 @@ export default function NewProgramScreen() {
         restSeconds={optionsEx?.restSeconds ?? 0}
         isHold={!!optionsEx?.isIsometric}
         isRange={optionsIsRange}
-        onSetRest={secs => { if (optionsEx && optionsDay) updateExercise(optionsDay, optionsEx.id, "restSeconds", secs); }}
+        onSetRest={secs => { if (optionsEx && optionsDay) setExerciseRest(optionsDay, optionsEx.id, secs); }}
         onToggleRange={() => {
           if (optionsEx && optionsDay) updateExerciseSets(optionsDay, optionsEx.id, withRepMode(optionsSets, optionsIsRange ? "target" : "range"));
         }}
@@ -3321,6 +3407,10 @@ export default function NewProgramScreen() {
         onMove={() => { if (optionsDay) openReorderForDay(optionsDay); }}
         onChange={() => { if (optionsEx && optionsDay) editExerciseInPicker(optionsDay, optionsEx.id); }}
         onRemove={() => { if (optionsEx && optionsDay) startCollapse(optionsDay, optionsEx.id); }}
+        supersetChoices={optionsSupersets.choices}
+        supersetWith={optionsSupersets.partners}
+        onSuperset={key => { if (optionsEx && optionsDay) joinExerciseSuperset(optionsDay, optionsEx.id, key); }}
+        onLeaveSuperset={() => { if (optionsEx && optionsDay) leaveExerciseSuperset(optionsDay, optionsEx.id); }}
       />
 
       {/* Go to Day, from the pinned day name. Its day is gone to once the
@@ -3525,7 +3615,7 @@ const styles = StyleSheet.create({
   dragHandleArea:       { paddingHorizontal: 4, paddingVertical: 4, justifyContent: "center", alignItems: "center" },
   daySummaryActions:    { flexDirection: "row", alignItems: "center", gap: 14 },
   workoutDayCard:   { borderRadius: 16 },
-  exerciseCard:     { borderRadius: 16, marginBottom: 14 },
+  exerciseCard:     { borderRadius: 16, marginBottom: EXERCISE_CARD_GAP },
   emptyCard:        { borderRadius: 16, marginBottom: 14 },
   emptyHint:        { fontFamily: FontFamily.regular, fontSize: 14, textAlign: "center", paddingVertical: 16 },
   addExBtnWrap:     { alignSelf: "center", borderRadius: 50, backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12, marginTop: 6, marginBottom: 8 },

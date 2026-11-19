@@ -24,18 +24,25 @@ const ymdOf = (stored: string | undefined): string | null => {
 };
 
 /**
- * The run `program` is ending as it's made active again on `todayStr` (stored
- * format), or null when there's nothing to keep: it never ran (not started),
- * it's the active one, or its start can't be read. A finished run ends on the
- * day it was finished; a shelved one, the day before this new run (the day it
- * was shelved isn't recorded, and nothing of it is logged after).
+ * The run `program` is ending as it's made active again, the new run starting
+ * `startStr` (stored format; today, or a day picked ahead, utils/
+ * programStart.ts), or null when there's nothing to keep: it never ran (not
+ * started), it's the active one, or its start can't be read. A finished run
+ * ends on the day it was finished; a shelved one, the day before the new run
+ * (the day it was shelved isn't recorded, and nothing of it is logged after).
+ * The day before the new run, not before today: with the new one starting
+ * later, a workout logged today in the run ending fell in neither. And never
+ * on or after the day the new run starts: finished and started again the same
+ * day, that day was in both runs, a session logged on it counted in each
+ * (found by the solo flows, 2026-11-17).
  */
-export function endingRun(program: SavedProgram, todayStr: string): ProgramRun | null {
+export function endingRun(program: SavedProgram, startStr: string): ProgramRun | null {
   if (program.status !== "completed" && program.status !== "paused") return null;
   const start = runStartYMD(program);
-  const today = ymdOf(todayStr);
-  if (!start || !today) return null;
-  const endDate = (program.status === "completed" ? ymdOf(program.completedDate) : null) ?? addDaysYMD(today, -1);
+  const newStart = ymdOf(startStr);
+  if (!start || !newStart) return null;
+  const finished = program.status === "completed" ? ymdOf(program.completedDate) : null;
+  const endDate = finished && finished < newStart ? finished : addDaysYMD(newStart, -1);
   if (endDate < start) return null;
   return {
     startDate: program.startDate,
@@ -52,6 +59,30 @@ export function endingRun(program: SavedProgram, todayStr: string): ProgramRun |
     status: program.status,
     endDate,
   };
+}
+
+/**
+ * `program`'s kept runs as they stand once a new run starts `startStr`
+ * (stored format): each ending before it, so no day is in two runs. A shelved
+ * run ends the day before the run that followed it (endingRun), and when that
+ * run was let go before it began (utils/programLifecycle.ts unbegun) and the
+ * program was started again sooner, the shelved run's days ran on into the
+ * new one's (found by the solo flows, 2026-11-17). A run left with no days
+ * (from the day it BEGAN, runStartYMD: its startDate is where its last resume
+ * moved it) is dropped.
+ */
+export function runsBefore(program: SavedProgram, startStr: string): ProgramRun[] | undefined {
+  const runs = program.runs;
+  const newStart = ymdOf(startStr);
+  if (!runs?.length || !newStart) return runs ? [...runs] : undefined;
+  const last = addDaysYMD(newStart, -1);
+  const kept = runs
+    .map(r => (r.endDate > last ? { ...r, endDate: last } : r))
+    .filter(r => {
+      const began = runStartYMD(programAsRun(program, r));
+      return !began || began <= r.endDate;
+    });
+  return kept.length > 0 ? kept : undefined;
 }
 
 /** `program` as `run` left it: its timeline, cycle and how it ended, with the

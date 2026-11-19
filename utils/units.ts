@@ -29,6 +29,13 @@ export const KG_PER_LB = 0.45359237;
 /** 1 kg in lb. */
 export const LB_PER_KG = 1 / KG_PER_LB;
 
+/** Two weights this close are the same weight: one typed in pounds is stored
+ *  in kilos a hair off whole, and across a switch of unit 220.5 lbs is 0.017 kg
+ *  off 100 kg. Anything closer would read "▲ 0 lbs" (pounds show to a tenth).
+ *  Exercise History's change line, the AI's best sets and rep PRs
+ *  (utils/repPrs.ts) all go by it. */
+export const SAME_KG = 0.025;
+
 /** Round to at most `maxDecimals` and drop trailing zeros / point. 100 → "100",
  *  100.5 → "100.5", 99.99999 → "100". */
 export function trimNumber(n: number, maxDecimals = 1): string {

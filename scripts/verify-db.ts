@@ -142,11 +142,14 @@ const fullProgram: Required<SavedProgram> = {
       sets: [{ type: "warmup", weightKg: "40", reps: "10" }, { type: "working", weightKg: "80", weightUnit: "lb", repMode: "range", repsMin: "6", repsMax: "8" }],
     }],
     "1:Pull": [
-      { id: "e2", name: "Row", sets: [{ type: "working", weightKg: "60", repMode: "target", reps: "10" }] },
+      // A superset, Row then the twist in rounds (utils/supersets.ts): its id
+      // rides in the workouts jsonb, so the backup must bring it back.
+      { id: "e2", name: "Row", sets: [{ type: "working", weightKg: "60", repMode: "target", reps: "10" }], supersetId: "ss_pull" },
       // A trainer's custom exercise, carried with the program (0038): its
       // details ride in the workouts jsonb, so the backup must bring them back.
       {
         id: "e4", name: "Landmine Twist", sets: [{ type: "working", reps: "12" }],
+        supersetId: "ss_pull",
         customDetails: {
           name: "Landmine Twist",
           muscles: ["Core", "Shoulders"],
@@ -197,6 +200,9 @@ const fullWorkout: Required<CompletedWorkout> = {
     sets: [{ type: "working", weight: "14", reps: "12", done: true }],
     swappedFrom: "Cable Fly",
     programExerciseId: "e3",
+    // Done in a superset with the plank after it (utils/supersets.ts): lost
+    // in a backup, the Journal shows them done one by one.
+    supersetId: "ss_core",
   }, {
     // A timed hold: its reps are seconds, and the flag that says so must
     // survive a backup or a restored plank counts as reps again.
@@ -205,6 +211,7 @@ const fullWorkout: Required<CompletedWorkout> = {
     sets: [{ type: "working", weight: "", reps: "60", done: true }],
     programExerciseId: "e4",
     isIsometric: true,
+    supersetId: "ss_core",
   }],
   sessionNotes: "Good session",
   programId: "program_1",
@@ -1166,6 +1173,11 @@ async function main() {
     return rows.map(r => r.body);
   };
   const sendBackAs = async (uid: string, id: string, comments: string | null) => {
+    // PGlite's now() moves a millisecond at a time and back-to-back statements
+    // mostly share one, so two send-backs here could stamp the same returned_at,
+    // which the push trigger rightly reads as no new send-back (it fired about
+    // one run in three). Real taps are never a millisecond apart: let it move.
+    await new Promise(resolve => setTimeout(resolve, 3));
     await as(uid);
     await db.query(`select public.return_shared_review($1, $2)`, [id, comments]);
   };
@@ -1387,8 +1399,207 @@ async function main() {
 
   await twoPhones(db, as);
   await agreementRecords(db, as);
+  await aiLimits(db, as);
 
   return finish(db);
+}
+
+/**
+ * The AI's limits (0060, 0061): only the Edge Function (service_role) starts
+ * and finishes a call; nothing goes to the model until the account has agreed
+ * to the AI; each account gets so many of each feature a day, so many calls a
+ * minute, and calls costing up to its tier's daily and monthly caps; everyone
+ * together stops at the daily budget; the kill switch and the block list stop
+ * it outright; a failed call is taken back, a finished one can't be changed;
+ * an account reads its own usage and what it has left (and why not), nobody
+ * else's, and writes none of it. It goes with the account.
+ */
+async function aiLimits(db: PGlite, as: (uid: string | null) => Promise<unknown>) {
+  const ME = "95959595-0000-4000-8000-000000000095";
+  const YOU = "94949494-0000-4000-8000-000000000094";
+  const SPENDER = "93939393-0000-4000-8000-000000000093";
+  const NEWBIE = "92929292-0000-4000-8000-000000000092";
+  for (const id of [ME, YOU, SPENDER, NEWBIE]) await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+
+  /** As a role (the app is `authenticated`, the Edge Function `service_role`): the rows, or the error. */
+  const run = async (role: "authenticated" | "service_role", uid: string | null, sql: string, params: unknown[] = []) => {
+    await as(uid);
+    await db.exec(`set role ${role}`);
+    try {
+      const r = await db.query<Record<string, unknown>>(sql, params);
+      return { rows: r.rows, changed: r.affectedRows ?? 0, error: null as string | null };
+    } catch (e) {
+      return { rows: [] as Record<string, unknown>[], changed: 0, error: (e as Error).message };
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  const agree = (uid: string, version = 1) =>
+    run("authenticated", uid, `select public.record_agreement('ai', $1, null)`, [version]).then(r => r.error);
+  const begin = async (user: string, feature: string) => {
+    const r = await run("service_role", null, `select public.ai_begin($1::uuid, $2) as id`, [user, feature]);
+    return r.error ? { id: null, error: r.error } : { id: Number(r.rows[0]?.id), error: null };
+  };
+  const finishCall = (id: number, ok: boolean, cost = 0) =>
+    run("service_role", null, `select public.ai_finish($1, $2, 'claude-sonnet-5-5', 100, 50, $3)`, [id, ok, cost]).then(r => r.error);
+  /** Starts a call and finishes it costing `cost` (micro-USD); the refusal, or null. */
+  const spend = async (user: string, feature: string, cost: number) => {
+    const call = await begin(user, feature);
+    if (call.error) return call.error;
+    return finishCall(call.id!, true, cost);
+  };
+  const usageRows = async (uid: string) => (await db.query<{ feature: string; cost_micros: string; finished_at: string | null }>(
+    `select feature, cost_micros::text as cost_micros, finished_at::text as finished_at from public.ai_usage where user_id = $1 order by id`, [uid])).rows;
+  /** Moves this account's calls back in time, as if made `ago` earlier. */
+  const age = (uid: string, ago: string) => db.query(`update public.ai_usage set started_at = started_at - $2::interval where user_id = $1`, [uid, ago]);
+  type Left = { per_day: number; used: number; remaining: number; status: string | null };
+  const remaining = async (uid: string | null) => {
+    const r = await run("authenticated", uid, `select feature, per_day, used, remaining, status from public.ai_remaining()`);
+    return { error: r.error, by: Object.fromEntries(r.rows.map(x => [x.feature as string, x])) as Record<string, Left> };
+  };
+  const statuses = async (uid: string) => Object.values((await remaining(uid)).by).map(x => x.status);
+  const refusedWith = async (user: string, feature: string, code: string) => new RegExp(code).test((await begin(user, feature)).error ?? "");
+
+  // Only the Edge Function starts or finishes a call.
+  const appBegin = await run("authenticated", ME, `select public.ai_begin($1::uuid, 'chat')`, [ME]);
+  eq(/permission denied/.test(appBegin.error ?? ""), true, "ai: the app can't start a call itself (no free calls, no spending someone else's)");
+  const appFinish = await run("authenticated", ME, `select public.ai_finish(1, true, 'x', 1, 1, 999999999)`);
+  eq(/permission denied/.test(appFinish.error ?? ""), true, "ai: ...nor finish one (no made-up cost setting off everyone's budget)");
+  const appTier = await run("authenticated", ME, `select public.ai_tier_of($1::uuid)`, [ME]);
+  eq(/permission denied/.test(appTier.error ?? ""), true, "ai: ...nor ask anyone's tier");
+
+  // Nothing goes to the model before the account agrees (0061).
+  eq(await refusedWith(NEWBIE, "chat", "ai_consent"), true, "ai: an account that hasn't agreed to the AI is refused");
+  eq(await statuses(NEWBIE), ["ai_consent", "ai_consent", "ai_consent", "ai_consent"], "ai: ...and the app is told why, for every feature");
+  eq(await agree(NEWBIE), null, "ai: it agrees (record_agreement, document 'ai')...");
+  eq((await begin(NEWBIE, "chat")).error, null, "ai: ...and is let through");
+  await db.query(`update public.ai_settings set consent_version = 2`);
+  eq(await refusedWith(NEWBIE, "chat", "ai_consent"), true, "ai: a new version of the agreement is asked for again");
+  eq(await agree(NEWBIE, 2), null, "ai: ...agreed to...");
+  eq((await begin(NEWBIE, "chat")).error, null, "ai: ...and let through");
+  await db.query(`update public.ai_settings set consent_version = 1`);
+  for (const id of [ME, YOU, SPENDER]) eq(await agree(id), null, "ai: the other accounts agree");
+
+  // A call is counted when it starts, and finishing records what it used.
+  const first = await begin(ME, "chat");
+  eq([first.error, Number.isFinite(first.id)], [null, true], "ai: the function starts a call for an account");
+  eq(await finishCall(first.id!, true, 1234), null, "ai: ...and finishes it with what it used");
+  eq((await usageRows(ME)).map(r => [r.feature, r.cost_micros, r.finished_at !== null]), [["chat", "1234", true]], "ai: ...kept with the feature, cost and finish");
+  eq(await finishCall(first.id!, true, 0), null, "ai: finishing it again...");
+  eq((await usageRows(ME))[0]?.cost_micros, "1234", "ai: ...changes nothing");
+  eq(await finishCall(first.id!, false), null, "ai: nor can a finished call be taken back...");
+  eq((await usageRows(ME)).length, 1, "ai: ...it still counts");
+
+  // A failed call is taken back.
+  const failed = await begin(ME, "chat");
+  eq(await finishCall(failed.id!, false), null, "ai: a call that failed on our side...");
+  eq((await usageRows(ME)).length, 1, "ai: ...isn't counted");
+
+  // Calls per feature per day (free: 3 programs).
+  for (let i = 0; i < 3; i++) eq((await begin(ME, "program")).error, null, `ai: program ${i + 1} of 3 today`);
+  eq(await refusedWith(ME, "program", "ai_daily_limit"), true, "ai: a 4th program in 24 hours is refused");
+  eq((await begin(ME, "chat")).error, null, "ai: ...while chat, a feature of its own, still goes");
+  const left = await remaining(ME);
+  eq([left.error, left.by.program?.remaining, left.by.program?.used, left.by.program?.status], [null, 0, 3, "ai_daily_limit"],
+    "ai: the app reads what's left of each feature, and why there's none");
+  eq([left.by.chat?.remaining, left.by.chat?.per_day, left.by.chat?.status], [28, 30, null], "ai: ...and what's left of the others");
+  eq(Object.keys(left.by).sort(), ["chat", "insight", "interview", "program"], "ai: ...for every feature");
+
+  // Questions a minute (10, 0062): chat, interview and insight together; a
+  // program build neither counts nor waits on them. ME has asked 2 questions
+  // this minute (its 3 programs don't count).
+  for (let i = 3; i <= 10; i++) eq((await begin(ME, i % 2 ? "chat" : "insight")).error, null, `ai: question ${i} in a minute goes`);
+  eq(await refusedWith(ME, "interview", "ai_rate_limit"), true, "ai: an 11th question in the same minute is refused, whatever the feature");
+  await age(ME, "2 minutes");
+  eq((await begin(ME, "chat")).error, null, "ai: ...and a minute on it goes");
+  eq(await refusedWith(ME, "program", "ai_daily_limit"), true, "ai: the day's programs are still used up a few minutes on");
+  await age(ME, "24 hours");
+  eq((await begin(ME, "program")).error, null, "ai: ...and come back 24 hours after (a rolling day, nobody's midnight)");
+  eq((await remaining(ME)).by.program?.remaining, 2, "ai: ...as the app is told");
+
+  // Another account has its own limits.
+  eq((await begin(YOU, "program")).error, null, "ai: another account's limits are its own");
+  // The Program Builder answered fast, then Build my program at once (user
+  // report, 2026-11-14: the build was turned away as too many questions).
+  for (let i = 0; i < 10; i++) eq((await begin(YOU, "interview")).error, null, `ai: interview answer ${i + 1} in a minute`);
+  eq(await refusedWith(YOU, "interview", "ai_rate_limit"), true, "ai: answering faster still meets the minute's limit...");
+  eq((await begin(YOU, "program")).error, null, "ai: ...but building the program it led to goes straight away");
+  const pace = (await db.query<{ n: number }>(`select per_minute as n from public.ai_settings`)).rows[0]?.n;
+  eq(pace, 10, "ai: 10 questions a minute (0062)");
+  await age(YOU, "2 minutes");
+
+  // What one account's calls may cost (free: $1 a day, $4 in 30 days; 0061).
+  await age(ME, "31 days");
+  eq(await spend(ME, "chat", 999_999), null, "ai: calls costing just under a dollar today...");
+  eq((await begin(ME, "chat")).error, null, "ai: ...leave the account able to ask");
+  await age(ME, "2 minutes");
+  eq(await spend(ME, "chat", 1), null, "ai: one more cent's worth reaches the dollar...");
+  eq(await refusedWith(ME, "chat", "ai_daily_limit"), true, "ai: ...and the account is refused for the day, though it has questions left");
+  eq(await statuses(ME), ["ai_daily_limit", "ai_daily_limit", "ai_daily_limit", "ai_daily_limit"], "ai: ...every feature, as the app is told");
+  eq((await begin(YOU, "chat")).error, null, "ai: ...nobody else is");
+  for (let day = 2; day <= 4; day++) {
+    await age(ME, "25 hours");
+    eq(await spend(ME, "chat", 1_000_000), null, `ai: a dollar's worth on day ${day} goes (a new day)`);
+  }
+  await age(ME, "25 hours");
+  eq(await refusedWith(ME, "chat", "ai_monthly_limit"), true, "ai: four dollars in 30 days, and the account is refused for the month");
+  eq((await remaining(ME)).by.chat?.status, "ai_monthly_limit", "ai: ...as the app is told");
+  await age(ME, "30 days");
+  eq((await begin(ME, "chat")).error, null, "ai: ...until those calls are 30 days old");
+  const tierCaps = (await db.query<{ daily: string; monthly: string }>(
+    `select daily_cost_micros::text as daily, monthly_cost_micros::text as monthly from public.ai_tiers where tier = 'free'`)).rows[0];
+  await db.query(`delete from public.ai_tiers where tier = 'free'`);
+  await age(ME, "2 minutes");
+  eq(await refusedWith(ME, "chat", "ai_daily_limit"), true, "ai: a tier with no caps gets nothing (fails closed, never unlimited)");
+  await db.query(`insert into public.ai_tiers (tier, daily_cost_micros, monthly_cost_micros) values ('free', $1, $2)`, [tierCaps?.daily, tierCaps?.monthly]);
+
+  // Everyone together stops at the budget ($3 a day while it's tested; 0061).
+  const budget = (await db.query<{ b: string }>(`select daily_budget_micros::text as b from public.ai_settings`)).rows[0]?.b;
+  eq(budget, "3000000", "ai: everyone's daily budget is $3 while it's tested");
+  eq(await spend(SPENDER, "chat", 3_000_000), null, "ai: one account spends the day's budget...");
+  eq(await refusedWith(ME, "chat", "ai_budget"), true, "ai: ...which stops everyone, not only who spent it");
+  eq((await remaining(ME)).by.chat?.status, "ai_budget", "ai: ...as the app is told");
+  await age(SPENDER, "25 hours");
+  eq((await begin(ME, "chat")).error, null, "ai: ...until it's 24 hours old");
+
+  // The block list and the kill switch.
+  await db.query(`insert into public.ai_blocked_users (user_id, reason) values ($1, 'test')`, [ME]);
+  eq(await refusedWith(ME, "chat", "ai_blocked"), true, "ai: a blocked account is refused");
+  eq((await remaining(ME)).by.chat?.status, "ai_blocked", "ai: ...and the app is told it's off for them");
+  eq((await begin(YOU, "chat")).error, null, "ai: ...nobody else is");
+  await db.query(`delete from public.ai_blocked_users where user_id = $1`, [ME]);
+  await db.query(`update public.ai_settings set enabled = false`);
+  eq(await refusedWith(YOU, "chat", "ai_disabled"), true, "ai: the kill switch stops everyone");
+  eq((await remaining(YOU)).by.chat?.status, "ai_disabled", "ai: ...and the app is told");
+  await db.query(`update public.ai_settings set enabled = true`);
+  eq((await begin(YOU, "chat")).error, null, "ai: ...until it's back on");
+  eq(/no such feature/.test((await begin(ME, "essay")).error ?? ""), true, "ai: only the app's features");
+
+  // Through the API: own usage only, and no writes.
+  const mine = await run("authenticated", ME, `select feature from public.ai_usage`);
+  eq([mine.error, mine.rows.length > 0, mine.rows.length === (await usageRows(ME)).length], [null, true, true], "ai: an account reads its own usage");
+  const yours = await run("authenticated", YOU, `select 1 from public.ai_usage where user_id = $1`, [ME]);
+  eq(yours.rows.length, 0, "ai: ...and nobody else's");
+  const forged = await run("authenticated", ME, `insert into public.ai_usage (user_id, feature) values ($1, 'chat')`, [YOU]);
+  eq(/row-level security/.test(forged.error ?? ""), true, "ai: nobody writes usage straight in");
+  const wiped = await run("authenticated", ME, `delete from public.ai_usage where user_id = $1`, [ME]);
+  eq([wiped.error, wiped.changed], [null, 0], "ai: ...nor deletes their own to get their day back");
+  const raised = await run("authenticated", ME, `update public.ai_limits set per_day = 9999`);
+  eq([raised.error, raised.changed], [null, 0], "ai: ...nor raises their limits");
+  const richer = await run("authenticated", ME, `update public.ai_tiers set monthly_cost_micros = 999999999`);
+  eq([richer.error, richer.changed], [null, 0], "ai: ...nor their caps");
+  const unread = await run("authenticated", ME, `select 1 from public.ai_tiers`);
+  eq(unread.rows.length, 0, "ai: ...nor reads them");
+  const switched = await run("authenticated", ME, `update public.ai_settings set daily_budget_micros = 0`);
+  eq([switched.error, switched.changed], [null, 0], "ai: ...nor touches the settings");
+  const unblocked = await run("authenticated", ME, `select 1 from public.ai_blocked_users`);
+  eq(unblocked.rows.length, 0, "ai: ...nor reads the block list");
+  eq(/not authenticated/.test((await remaining(null)).error ?? ""), true, "ai: what's left is never asked signed out");
+
+  await as(null);
+  await db.query(`delete from auth.users where id = $1`, [ME]);
+  eq((await usageRows(ME)).length, 0, "ai: usage goes with the account");
+  eq((await usageRows(YOU)).length > 0, true, "ai: ...and only that account's");
 }
 
 /**
@@ -1440,7 +1651,9 @@ async function agreementRecords(db: PGlite, as: (uid: string | null) => Promise<
   eq(await record(ME, "community", 2, null), null, "agreements: a phone that sends no time...");
   const untimed = (await keptFor(ME)).find(r => r.document === "community" && r.version === 2);
   eq(iso(untimed?.agreed_at), iso(untimed?.recorded_at), "agreements: ...is recorded at the server's");
-  eq(/no such document/.test((await record(ME, "privacy", 1, tapped)) ?? ""), true, "agreements: only the Terms and the guidelines");
+  eq(/no such document/.test((await record(ME, "privacy", 1, tapped)) ?? ""), true, "agreements: only the Terms, the guidelines and the AI");
+  eq(await record(YOU, "ai", 1, tapped), null, "agreements: sharing training with the AI is recorded too (0060)");
+  await db.query(`delete from public.agreements where user_id = $1`, [YOU]);
   eq(/no such version/.test((await record(ME, "terms", 0, tapped)) ?? ""), true, "agreements: only a real version");
   eq(/not authenticated/.test((await record(null, "terms", 1, tapped)) ?? ""), true, "agreements: never signed out");
 

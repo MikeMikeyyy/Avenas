@@ -81,6 +81,7 @@ export const OWN_SCREENS: readonly string[] = [
   "privacy-policy",
   "privacy-security",
   "profile",
+  "program-builder",
   "programs",
   "report-bug",
   "request-feature",

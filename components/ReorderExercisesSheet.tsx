@@ -29,7 +29,7 @@ import SheetPill from "./SheetPill";
 import NumberBadge from "./NumberBadge";
 import DeleteCircleButton, { DELETE_CIRCLE_SIZE } from "./DeleteCircleButton";
 import { GuideBody, GuideDemo, GuideGotIt, GuideOverlay, GuideTitle } from "./GuideCard";
-import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
+import { ACCT, accentTextColor, APP_DARK, APP_LIGHT, FontFamily } from "../constants/theme";
 import { PILL_RADIUS, PILL_SHADOW } from "../constants/buttons";
 import { CARD_META, CARD_TITLE } from "../constants/cards";
 import { REORDER_GUIDE_KEY } from "../constants/programs";
@@ -143,9 +143,13 @@ function ReorderRow({ index, count, name, meta, active, shift, divider, washNumb
             Days (Go to Day's Reorder): a Workout Summary's faded green one. */}
         <NumberBadge n={index + 1} isDark={isDark} wash={washNumber} />
         {meta ? (
+          // A day's (Go to Day, its faded numbers) as a card's title over its
+          // exercises; an exercise's (a superset member's "Superset with …",
+          // utils/supersets.ts) keeps the name as every other row has it, its
+          // line in the green the sheets say it in.
           <View style={styles.nameCol}>
-            <Text style={[styles.metaName, { color: t.tp }]} numberOfLines={1}>{name}</Text>
-            <Text style={[styles.meta, { color: t.ts }]} numberOfLines={1}>{meta}</Text>
+            <Text style={[washNumber ? styles.metaName : styles.lineName, { color: t.tp }]} numberOfLines={1}>{name}</Text>
+            <Text style={[styles.meta, { color: washNumber ? t.ts : accentTextColor(isDark) }]} numberOfLines={1}>{meta}</Text>
           </View>
         ) : (
           <Text style={[styles.name, { color: t.tp }]} numberOfLines={1}>{name}</Text>
@@ -190,6 +194,10 @@ export interface ReorderExerciseListProps<T> {
    *  and sets there. */
   metaOf?: (item: T) => string;
   onReorder: (items: T[]) => void;
+  /** The order after a drop, the row at `from` let go at `to`: the page's
+   *  own rule, where moving one row moves others (a superset stays whole,
+   *  utils/supersets.ts moveKeepingSupersets). Left out, just that row moves. */
+  move?: (items: T[], from: number, to: number) => T[];
   /** Change Exercise for a row: its name or its Change pill. Left out (and
    *  `onRemove`), the rows only move: the builder's Go to Day reorders days
    *  with them (user request, 2026-11-07: "like our move exercises"). */
@@ -206,7 +214,7 @@ export interface ReorderExerciseListProps<T> {
 
 /** The rows on their own, for a sheet of its own (the builder's Workout
  *  Summary, its Go to Day). */
-export function ReorderExerciseList<T>({ items, keyOf, nameOf, metaOf, onReorder, onChange, onRemove, onDragStateChange, washNumbers }: ReorderExerciseListProps<T>) {
+export function ReorderExerciseList<T>({ items, keyOf, nameOf, metaOf, onReorder, move, onChange, onRemove, onDragStateChange, washNumbers }: ReorderExerciseListProps<T>) {
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
   // The same, for the touch handlers, which may run before a redraw has
   // caught up with the last place passed.
@@ -234,9 +242,12 @@ export function ReorderExerciseList<T>({ items, keyOf, nameOf, metaOf, onReorder
     const d = dragNow.current;
     dragNow.current = null;
     if (d && commit && d.over !== d.from) {
-      const next = [...items];
-      const [moved] = next.splice(d.from, 1);
-      next.splice(d.over, 0, moved);
+      let next = [...items];
+      if (move) next = move(items, d.from, d.over);
+      else {
+        const [moved] = next.splice(d.from, 1);
+        next.splice(d.over, 0, moved);
+      }
       onReorder(next);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
@@ -391,6 +402,8 @@ const styles = StyleSheet.create({
   // A name with a line under it (metaOf): a day's, as on Go to Day's rows.
   nameCol:    { flex: 1, minWidth: 0 },
   metaName:   { ...CARD_TITLE },
+  // An exercise's name over its line: the plain row's, without its flex.
+  lineName:   { fontFamily: FontFamily.regular, fontSize: 15 },
   meta:       { ...CARD_META },
   // The guide's picture of a row, moving.
   demoRow:    { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8, paddingLeft: 12, paddingRight: 14, borderRadius: 14 },

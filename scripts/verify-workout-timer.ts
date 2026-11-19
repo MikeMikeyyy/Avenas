@@ -463,13 +463,13 @@ eq(upNextFrom(undefined, ["a"], "kg"), null, "up next: no set left, none");
   tick("row", "working", 0);
   const afterJump = upNext();
   eq(afterJump && [afterJump.exerciseName, afterJump.exerciseNumber, afterJump.setLabel, afterJump.numbers],
-    ["Seated Cable Row", 2, "Set 2 of 2", "65 kg"], "up next: follows the set ticked last; what's typed beats last time");
+    ["Seated Cable Row", 2, "Set 2 of 2", "65 kg × 10"], "up next: follows the set ticked last; a typed weight beats last time's, its empty reps last time's (2026-11-14)");
   sameAsPage("after jumping to the row");
   tick("row", "working", 1);
   const skipped = upNext();
   eq(skipped && [skipped.exerciseName, skipped.setLabel, skipped.dot], ["Barbell Bench Press", "Set 2 of 3", 1], "up next: the skipped sets come round last");
   sameAsPage("with only skipped sets left");
-  eq(log.row.working[1], { id: "r2", weight: "65", reps: "", done: true, doneAt: 4 }, "tick: what was typed stays as typed");
+  eq(log.row.working[1], { id: "r2", weight: "65", reps: "10", done: true, doneAt: 4 }, "tick: what was typed stays, and the empty reps take last time's");
 
   tick("bench", "working", 1);
   tick("bench", "working", 2);

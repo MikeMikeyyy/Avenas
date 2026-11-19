@@ -79,13 +79,15 @@ export const LIFTS: Record<string, Lift> = {
 };
 
 /** A program exercise: warm-ups, then working sets aimed at `reps`. */
-function ex(id: string, name: string, warmups: number, working: number, reps: number): Exercise {
+/** `supersetId`: done in rounds with the ones beside it with the same id
+ *  (utils/supersets.ts), as the builder's Superset With leaves them. */
+function ex(id: string, name: string, warmups: number, working: number, reps: number, supersetId?: string): Exercise {
   if (!LIFTS[name]) throw new Error(`no lift "${name}"`);
   const sets: ProgramSet[] = [
     ...Array.from({ length: warmups }, (): ProgramSet => ({ type: "warmup" })),
     ...Array.from({ length: working }, (): ProgramSet => ({ type: "working", reps: String(reps) })),
   ];
-  return { id, name, sets, ...(LIFTS[name].kind === "hold" ? { isIsometric: true } : {}) };
+  return { id, name, sets, ...(LIFTS[name].kind === "hold" ? { isIsometric: true } : {}), ...(supersetId ? { supersetId } : {}) };
 }
 
 type Day = { label: string; exercises?: Exercise[] };
@@ -117,8 +119,9 @@ export function startingPrograms(): SavedProgram[] {
         ex("ul0a", "Barbell Bench Press", 2, 3, 5),
         ex("ul0b", "Barbell Row", 0, 3, 8),
         ex("ul0c", "Overhead Press", 1, 3, 8),
-        ex("ul0d", "Pull-Up", 0, 3, 8),
-        ex("ul0e", "Barbell Curl", 0, 3, 10),
+        // A superset: pull-ups and curls in rounds.
+        ex("ul0d", "Pull-Up", 0, 3, 8, "ss_ul0"),
+        ex("ul0e", "Barbell Curl", 0, 3, 10, "ss_ul0"),
       ] },
       { label: "Lower", exercises: [
         ex("ul1a", "Barbell Back Squat", 2, 3, 5),
@@ -161,8 +164,8 @@ export function startingPrograms(): SavedProgram[] {
         ex("pp1a", "Deadlift", 1, 3, 5),
         ex("pp1b", "Pull-Up", 0, 3, 8),
         ex("pp1c", "Barbell Row", 0, 3, 8),
-        ex("pp1d", "Face Pull", 0, 3, 15),
-        ex("pp1e", "Hammer Curl", 0, 3, 12),
+        ex("pp1d", "Face Pull", 0, 3, 15, "ss_pp1"),
+        ex("pp1e", "Hammer Curl", 0, 3, 12, "ss_pp1"),
       ] },
       { label: "Legs", exercises: [
         ex("pp2a", "Barbell Back Squat", 2, 3, 5),
@@ -188,9 +191,10 @@ export function startingPrograms(): SavedProgram[] {
       { label: "Legs", exercises: [
         ex("pp5a", "Front Squat", 1, 3, 6),
         ex("pp5b", "Barbell Hip Thrust", 0, 3, 10),
-        ex("pp5c", "Walking Lunge", 0, 3, 12),
-        ex("pp5d", "Seated Leg Curl", 0, 3, 12),
-        ex("pp5e", "Seated Calf Raise", 0, 3, 15),
+        // A giant set: three in rounds.
+        ex("pp5c", "Walking Lunge", 0, 3, 12, "ss_pp5"),
+        ex("pp5d", "Seated Leg Curl", 0, 3, 12, "ss_pp5"),
+        ex("pp5e", "Seated Calf Raise", 0, 3, 15, "ss_pp5"),
       ] },
       REST,
     ]),
@@ -205,8 +209,8 @@ export function startingPrograms(): SavedProgram[] {
       { label: "Full Body B", exercises: [
         ex("fb2a", "Deadlift", 1, 3, 5),
         ex("fb2b", "Overhead Press", 0, 3, 8),
-        ex("fb2c", "Pull-Up", 0, 3, 8),
-        ex("fb2d", "Dumbbell Curl", 0, 3, 12),
+        ex("fb2c", "Pull-Up", 0, 3, 8, "ss_fb2"),
+        ex("fb2d", "Dumbbell Curl", 0, 3, 12, "ss_fb2"),
       ] },
       REST,
     ]),

@@ -497,6 +497,19 @@ export function journalCalendarInk(isDark: boolean): { run: string; runEdge: str
     : { run: washOver(NEU_BG, ACCT, 0.2), runEdge: "rgba(29,236,160,0.45)", missed: "#A7B1BF", halo: "rgba(29,236,160,0.14)" };
 }
 
+// ─── The Journal's Your Training card ─────────────────────────────────────────
+// Its weekly bars (components/journal/JournalTrainingCard.tsx; user pick,
+// 2026-11-19, option E of the Journal Training Card canvas). A trained week is
+// ACCT. A week off is a short stub in a quiet grey, never red: a week off is
+// nothing to be told off for. This week's workouts still to come are the
+// calendar's pale halo with its faint edge, so a week under way never reads as
+// a short one.
+export function trainingStripInk(isDark: boolean): { off: string; ahead: string; aheadEdge: string } {
+  return isDark
+    ? { off: "rgba(255,255,255,0.16)", ahead: "rgba(29,236,160,0.16)", aheadEdge: "rgba(29,236,160,0.28)" }
+    : { off: "rgba(94,107,130,0.22)", ahead: "rgba(29,236,160,0.14)", aheadEdge: "rgba(29,236,160,0.45)" };
+}
+
 // ─── Switch ───────────────────────────────────────────────────────────────────
 // Off-state track for the iOS Switches in LIGHT mode (Settings, the Workout
 // tab's Focus Mode). APP_LIGHT.div (#D8DCE0) is too pale against a white card

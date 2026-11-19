@@ -25,6 +25,7 @@ import type {
   WorkoutMap,
 } from "../constants/programs";
 import { exerciseIdentity } from "./exerciseNames";
+import { cleanSupersets } from "./supersets";
 
 /** Trim + lowercase, the name-matching convention used across the codebase. */
 export function normalizeDayName(name: string): string {
@@ -187,6 +188,10 @@ export function trainingDayKeys(names: string[], isTraining: boolean[]): string[
  * the step-1 → step-2 hop, the three snapshot loads, the draft restore, and the
  * save. They disagreed before, and the one that didn't carry over won whenever
  * the builder was reopened mid-rename.
+ *
+ * It also drops the superset id of any exercise left in no superset
+ * (utils/supersets.ts cleanSupersets), so every load and save path keeps
+ * supersets whole.
  */
 export function canonicalizeWorkouts(
   prev: WorkoutMap,
@@ -201,7 +206,7 @@ export function canonicalizeWorkouts(
   const next: WorkoutMap = {};
   for (const key of trainingDayKeys(names, isTraining)) {
     const parsed = parseDayKey(key);
-    next[key] = prev[key] ?? (parsed ? byIdx.get(parsed.idx) : undefined) ?? [];
+    next[key] = cleanSupersets(prev[key] ?? (parsed ? byIdx.get(parsed.idx) : undefined) ?? []);
   }
   return next;
 }
@@ -420,11 +425,17 @@ export function forkChangedDayIds(
  *  own exercises instead of reading as an empty day (which would look like
  *  every exercise changed). */
 function exercisesAt(workouts: WorkoutMap, index: number, label: string): string[] {
-  const key = workoutKey(index, label.trim() || "Workout");
   // Exercise identities (utils/exerciseNames.ts), so an exercise the catalogue
   // has renamed still counts as the one the program lists, and a custom
   // exercise is the one it is, not another later given its name.
-  return (workouts[key] ?? []).filter(e => !!e.name).map(e => exerciseIdentity(e));
+  return dayExercises(workouts, index, label).map(e => exerciseIdentity(e));
+}
+
+/** The exercises a slot of the cycle programs (named ones only), read the way
+ *  `trainingDayKeys` writes them, so an untrimmed pattern entry still finds its
+ *  own. */
+export function dayExercises(workouts: WorkoutMap, index: number, label: string): Exercise[] {
+  return (workouts[workoutKey(index, label.trim() || "Workout")] ?? []).filter(e => !!e.name);
 }
 
 /** Do two exercise-name lists hold the same names? Order-independent, and

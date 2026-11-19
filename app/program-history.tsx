@@ -26,6 +26,8 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import KeyboardDismissButton from "../components/KeyboardDismissButton";
 import SearchField from "../components/SearchField";
 import ActiveBadge from "../components/ActiveBadge";
+import { Image } from "expo-image";
+import { PROGRAM_DONE_ICON } from "../constants/icons";
 import { APP_LIGHT, APP_DARK, FontFamily, ACCT, PAUSED_ORANGE } from "../constants/theme";
 import {
   PROGRAMS_KEY,
@@ -34,8 +36,9 @@ import {
 } from "../constants/programs";
 import { useTheme } from "../contexts/ThemeContext";
 import { loadCachedClientData } from "../utils/trainerStore";
-import { parseStoredDate } from "../utils/dates";
-import { runStartDate } from "../utils/programHolds";
+import { parseStoredDate, todayYMD } from "../utils/dates";
+import { runStartDate, runStartYMD } from "../utils/programHolds";
+import { startsLabel, startsLater } from "../utils/programStart";
 import BackButton, { BACK_LEFT, BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
 
@@ -228,6 +231,8 @@ export default function ProgramHistoryScreen() {
         {/* Program cards */}
         {sorted.map(prog => {
           const week = getCurrentWeek(prog);
+          // Set to start later (utils/programStart.ts): when, in place of its week.
+          const startsOn = startsLater(prog);
           const sColor = statusColor(prog.status, t.ts);
 
           return (
@@ -252,19 +257,30 @@ export default function ProgramHistoryScreen() {
                           <ActiveBadge />
                         ) : (
                           <View style={[styles.badge, { backgroundColor: isDark ? `${sColor}22` : `${sColor}18` }]}>
+                            {/* A finished one's clipboard, as My Programs' badge
+                                wears it; a trainer reading a client's sees it too. */}
+                            {prog.status === "completed" && (
+                              <Image source={PROGRAM_DONE_ICON} style={styles.badgeDoneIcon} contentFit="contain" />
+                            )}
                             <Text style={[styles.badgeText, { color: sColor }]}>{statusLabel(prog.status)}</Text>
                           </View>
                         )}
                         <Ionicons name="chevron-forward" size={16} color={t.ts} style={{ marginLeft: 6 }} />
                       </View>
                       <Text style={[styles.progSub, { color: t.ts }]}>
-                        Week {week} of {prog.totalWeeks}
+                        {startsOn ? startsLabel(startsOn) : `Week ${week} of ${prog.totalWeeks}`}
                       </Text>
                       <View style={{ gap: 4, marginTop: 4 }}>
-                        <View style={styles.progDatesRow}>
-                          <Ionicons name="calendar-outline" size={13} color={t.ts} />
-                          <Text style={[styles.progDates, { color: t.ts }]}>Started {runStartDate(prog)}</Text>
-                        </View>
+                        {/* Created, not started, for one never begun; none for a day
+                            still to come (one let go before its set start). */}
+                        {prog.status === "created" && (runStartYMD(prog) ?? "") > todayYMD() ? null : (
+                          <View style={styles.progDatesRow}>
+                            <Ionicons name="calendar-outline" size={13} color={t.ts} />
+                            <Text style={[styles.progDates, { color: t.ts }]}>
+                              {prog.status === "created" ? "Created" : startsOn ? "Starts" : "Started"} {runStartDate(prog)}
+                            </Text>
+                          </View>
+                        )}
                         {prog.status === "completed" && prog.completedDate && (
                           <View style={styles.progDatesRow}>
                             <Ionicons name="flag-outline" size={13} color={ACCT} />
@@ -322,8 +338,10 @@ const styles = StyleSheet.create({
   progDatesRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   progDates: { fontFamily: FontFamily.regular, fontSize: 13, color: TS },
 
-  badge: { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
+  badge: { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   badgeText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  // My Programs' Completed badge's clipboard, at its size.
+  badgeDoneIcon: { width: 14, height: 14 },
 
   progressRow: { flexDirection: "row", gap: 4 },
   progressSeg: { flex: 1, height: 6, borderRadius: 3 },

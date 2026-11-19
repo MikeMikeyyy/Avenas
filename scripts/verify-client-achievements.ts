@@ -56,6 +56,7 @@ const ymdStored = (ago: number) => {
 
 const summary = (list: Achievement[]) => list.map(a =>
   a.category === "pr" ? `pr:${a.workoutId}:${a.prs.map(p => `${p.exerciseName}@${p.valueKg}>${p.prevKg}`).join("+")}`
+  : a.category === "reps" ? `reps:${a.workoutId}:${a.repPrs.map(r => `${r.exerciseName}@${r.weightKg}x${r.reps}>${r.prevReps}`).join("+")}`
   : a.category === "workouts" ? `workouts:${a.count}:${a.workoutId}`
   : a.category === "program" ? `program:${a.programName}`
   : `streak:${a.days}`);
@@ -72,6 +73,11 @@ eq(summary(deriveClientAchievements(stored(
   session("a", 20, { Bench: "100" }),
   session("b", 9, { Bench: "105" }),
 ), [], NOW)), [], "a PR older than a week has expired");
+
+eq(summary(deriveClientAchievements(stored(
+  session("a", 20, { Bench: "100" }),
+  { ...session("b", 2), exercises: [{ name: "Bench", sets: [set("100", "6")], notes: "" }] },
+), [], NOW)), ["reps:b:Bench@100x6>5"], "more reps at a weight done before is the rep PR card, as on the client's phone");
 
 eq(summary(deriveClientAchievements(stored(
   session("a", 3, { Bench: "100" }),

@@ -2,8 +2,10 @@
 //
 // What each account has agreed to on this phone: the community guidelines
 // (Apple 1.2; every screen with other people in it waits for them,
-// components/CommunityGate.tsx) and the Terms of Service (sign-up's last step,
-// app/accept-terms.tsx). Each is kept per ACCOUNT, and recorded on the server
+// components/CommunityGate.tsx), the Terms of Service (sign-up's last step,
+// app/accept-terms.tsx) and sharing training with the AI (Apple 5.1.2(i);
+// Insights asks before the first question, app/insights.tsx, and the server
+// checks it before every AI call, 0061). Each is kept per ACCOUNT, and recorded on the server
 // too (record_agreement, migration 0059), so there's a showing that the
 // account agreed, which a flag on the phone never was (user request,
 // 2026-11-12).
@@ -28,6 +30,7 @@
 // read, so a screen that knows opens at once, and every screen waiting hears
 // the moment they're agreed to (hooks/useCommunityTerms.ts).
 
+import { AI_TERMS_BY_ACCOUNT_KEY, AI_TERMS_VERSION } from "../constants/ai";
 import { COMMUNITY_TERMS_BY_ACCOUNT_KEY, COMMUNITY_TERMS_KEY, COMMUNITY_TERMS_VERSION } from "../constants/community";
 import { TERMS_BY_ACCOUNT_KEY, TERMS_VERSION } from "../constants/onboarding";
 import { recordAgreement, type AgreementDocument } from "../lib/agreements";
@@ -44,11 +47,13 @@ export type AgreementRecord = {
 const KEYS: Record<AgreementDocument, string> = {
   community: COMMUNITY_TERMS_BY_ACCOUNT_KEY,
   terms: TERMS_BY_ACCOUNT_KEY,
+  ai: AI_TERMS_BY_ACCOUNT_KEY,
 };
 
 const CURRENT: Record<AgreementDocument, number> = {
   community: COMMUNITY_TERMS_VERSION,
   terms: TERMS_VERSION,
+  ai: AI_TERMS_VERSION,
 };
 
 // Reading, agreeing and marking what the server has each read a map and write
@@ -117,20 +122,41 @@ export async function acceptCommunityTerms(owner: string): Promise<void> {
 // ─── The Terms of Service ─────────────────────────────────────────────────────
 
 /** The account signing up accepts the current Terms (app/accept-terms.tsx). */
-export function acceptTerms(owner: string): Promise<void> {
-  return agree("terms", owner);
+export async function acceptTerms(owner: string): Promise<void> {
+  await agree("terms", owner);
+}
+
+// ─── Sharing training with the AI ─────────────────────────────────────────────
+// Asked before the first question in Insights (app/insights.tsx; Apple
+// 5.1.2(i)). Unlike the others, the server checks this one before every AI
+// call (ai_begin, 0061), so the AI waits until the server has it.
+
+/** True only when this account agreed to the CURRENT AI agreement on this phone. */
+export function hasAcceptedAiTerms(owner: string): Promise<boolean> {
+  return oneAtATime(async () => {
+    const mine = (await loadAll("ai"))[owner];
+    return !!mine && mine.version === AI_TERMS_VERSION;
+  });
+}
+
+/** This account agrees to the AI: kept, then sent. True once the server has
+ *  it; false when it couldn't go (no signal), and syncAgreements sends it. */
+export function acceptAiTerms(owner: string): Promise<boolean> {
+  return agree("ai", owner);
 }
 
 // ─── Keeping and sending ──────────────────────────────────────────────────────
 
-async function agree(document: AgreementDocument, owner: string): Promise<void> {
+/** Keeps the agreement on the phone, then sends it. True once the server has
+ *  it. */
+async function agree(document: AgreementDocument, owner: string): Promise<boolean> {
   const record: AgreementRecord = { version: CURRENT[document], acceptedAtISO: new Date().toISOString() };
   await oneAtATime(async () => {
     const map = await loadAll(document);
     await setJSON<Record<string, AgreementRecord>>(KEYS[document], { ...map, [owner]: record });
   });
   // Signed out there's no account to record it for: it holds on this phone.
-  if (owner) await send(document, owner, record);
+  return owner ? send(document, owner, record) : false;
 }
 
 /** Send one record to the server, and mark it on the phone once it's there.
@@ -158,7 +184,7 @@ async function send(document: AgreementDocument, owner: string, record: Agreemen
  *  (app/_layout.tsx). Never rejects. */
 export async function syncAgreements(owner: string): Promise<void> {
   if (!owner) return;
-  for (const document of ["terms", "community"] as const) {
+  for (const document of ["terms", "community", "ai"] as const) {
     const kept = (await oneAtATime(() => loadAll(document)))[owner];
     if (kept && !kept.onServer) await send(document, owner, kept);
   }

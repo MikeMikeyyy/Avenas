@@ -12,15 +12,18 @@
 // glow and the lock screen on it for the rest of the session, and a lock-screen
 // tick landed on the skipped set instead of the one just done.
 //
+// The session's order is the page's, exercise by exercise, warm-ups first,
+// except a superset's (utils/supersets.ts): its members' warm-ups, then its
+// rounds, set 1 of each in turn, then set 2 of each (user request, 2026-11-15).
 // After the set ticked last, the order is:
-//   1. every unticked set below it on the page: the rest of the exercise you're
-//      on, then the exercises after it (a superset partner included);
+//   1. every unticked set after it in that order: the rest of the exercise (or
+//      the superset's round) you're on, then the exercises after it;
 //   2. then, from the top, exercises you haven't started (you did a later one
 //      first while a machine was taken);
 //   3. then the skipped sets: unticked, above it, in exercises you've started.
-// With nothing ticked it's just the page's order. A set ticked without a time
-// (a draft saved by an older build) counts as older than any timed one, and
-// between two of those the lower on the page is the later.
+// With nothing ticked it's just the session's order. A set ticked without a
+// time (a draft saved by an older build) counts as older than any timed one,
+// and between two of those the later in the session's order is the later.
 //
 // A set unticked since that tick is next (user request, 2026-10-28): you
 // untick a set you haven't done yet, so the session goes back to it, the
@@ -29,6 +32,8 @@
 // again. Only the set ticked last used to go back: any other set unticked
 // waited at the end as skipped, so a double tap on the lock screen undone from
 // the top left every card on the set after the second tick.
+
+import { setsInSessionOrder } from "./supersets";
 
 export type TickableSet = { done: boolean; doneAt?: number; untickedAt?: number };
 
@@ -47,20 +52,24 @@ export type PendingSetRef = {
   skipped: boolean;
 };
 
-/** Every unticked set, in the order the session will get to them. */
-export function pendingSetsInOrder(exerciseIds: readonly string[], log: TickableLog): PendingSetRef[] {
+/** Every unticked set, in the order the session will get to them.
+ *  `supersetIds`: each exercise's supersetId, lined up with `exerciseIds`, so a
+ *  superset's sets come in rounds; left out, none is in one. */
+export function pendingSetsInOrder(
+  exerciseIds: readonly string[],
+  log: TickableLog,
+  supersetIds: readonly (string | undefined)[] = [],
+): PendingSetRef[] {
   type Row = Omit<PendingSetRef, "skipped"> & { set: TickableSet };
   const rows: Row[] = [];
-  exerciseIds.forEach((exId, exIndex) => {
+  const counts = exerciseIds.map(id => ({ warmup: log[id]?.warmup.length ?? 0, working: log[id]?.working.length ?? 0 }));
+  for (const [exIndex, setType, setIdx] of setsInSessionOrder(exerciseIds.map((_, i) => supersetIds[i]), counts)) {
+    const exId = exerciseIds[exIndex];
     const exLog = log[exId];
-    if (!exLog) return;
-    exLog.warmup.forEach((set, setIdx) => {
-      rows.push({ exId, exIndex, setType: "warmup", setIdx, flatIdx: setIdx, set });
-    });
-    exLog.working.forEach((set, setIdx) => {
-      rows.push({ exId, exIndex, setType: "working", setIdx, flatIdx: exLog.warmup.length + setIdx, set });
-    });
-  });
+    const set = exLog?.[setType][setIdx];
+    if (!exLog || !set) continue;
+    rows.push({ exId, exIndex, setType, setIdx, flatIdx: setType === "warmup" ? setIdx : exLog.warmup.length + setIdx, set });
+  }
 
   // The set ticked last. `>=` hands a tie (two untimed ticks) to the lower row.
   let anchor = -1;
@@ -95,6 +104,10 @@ export function pendingSetsInOrder(exerciseIds: readonly string[], log: Tickable
 }
 
 /** The set a session is up to: the head of pendingSetsInOrder, or null once every set is ticked. */
-export function nextSetOf(exerciseIds: readonly string[], log: TickableLog): PendingSetRef | null {
-  return pendingSetsInOrder(exerciseIds, log)[0] ?? null;
+export function nextSetOf(
+  exerciseIds: readonly string[],
+  log: TickableLog,
+  supersetIds: readonly (string | undefined)[] = [],
+): PendingSetRef | null {
+  return pendingSetsInOrder(exerciseIds, log, supersetIds)[0] ?? null;
 }

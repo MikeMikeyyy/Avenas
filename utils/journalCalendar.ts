@@ -8,6 +8,7 @@
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { getWorkoutForDate } from "./workout";
 import { programRunViews } from "./programRuns";
+import { restBeforeStart } from "./programStart";
 
 /** What a day shows. `plain`: gone by with nothing logged and no program
  *  running on it, so there was no plan to miss (every such day used to read as
@@ -71,7 +72,9 @@ function stateOf(
   pastPlan: PastPlan | undefined,
 ): CalendarDayState {
   if (date === todayYMD) return workoutDates.has(date) ? "todayWorkout" : "today";
-  if (date > todayYMD) return "future";
+  // Still to come before the active program's set start: rest, as it will be
+  // once it's gone by (utils/programStart.ts).
+  if (date > todayYMD) return restBeforeStart(program, date, todayYMD) ? "rest" : "future";
   if (workoutDates.has(date)) return "workout";
   // The run that was going on the day, ended since or not (pastPlanFrom).
   const planned = pastPlan?.(date);
@@ -123,6 +126,63 @@ export function calendarWeeks(
     weeks.push({ days, runs });
   }
   return weeks;
+}
+
+/** What a day on Home's calendar (components/ActivityCalendar.tsx) shows; null
+ *  where the month hasn't begun or has ended. */
+export type HomeCellState = "workout" | "todayWorkout" | "rest" | "missed" | "future" | "today" | null;
+
+/**
+ * Home's month, Monday first, a cell a day. As the Journal's month reads it,
+ * but a day gone by that nothing planned (no run covered it, and the active
+ * program, if any, schedules nothing there) is rest: Home has no "plain" day.
+ * It was missed when no program was active, so making one inactive or
+ * finishing one turned every such day from rest to missed (found by a history
+ * probe of the solo flows, 2026-11-16): you can't miss a workout nothing
+ * planned. Days still to come are future, but for the ones before the active
+ * program's set start, which are rest (utils/programStart.ts; user pick,
+ * 2026-11-16: "every upcoming day should be shown as rest unless they
+ * manually do a workout in between").
+ */
+export function homeMonthCells(
+  year: number,
+  month: number,
+  todayStr: string,
+  workoutSet: ReadonlySet<string>,
+  prog: SavedProgram | null,
+  pastPlan: PastPlan,
+): HomeCellState[] {
+  const totalDays = new Date(year, month + 1, 0).getDate();
+  const padBefore = (new Date(year, month, 1).getDay() + 6) % 7;
+  const cells: HomeCellState[] = Array(padBefore).fill(null);
+
+  for (let day = 1; day <= totalDays; day++) {
+    const ds = ymdOf(year, month, day);
+    if (ds === todayStr) {
+      cells.push(workoutSet.has(ds) ? "todayWorkout" : "today");
+    } else if (ds > todayStr) {
+      cells.push(restBeforeStart(prog, ds, todayStr) ? "rest" : "future");
+    } else if (workoutSet.has(ds)) {
+      cells.push("workout");
+    } else {
+      // The run that was going on the day, ended since or not (pastPlanFrom):
+      // a finished program's skipped last workout still reads missed.
+      const planned = pastPlan(ds);
+      if (planned) {
+        cells.push(planned === "workout" ? "missed" : "rest");
+      } else if (prog && getWorkoutForDate(prog, ds) !== null) {
+        // Through the shared resolver, so this agrees with the week strip above
+        // it: days marked off, moved, held, or before the program began
+        // scheduled nothing, so only a day it does schedule can be missed.
+        cells.push("missed");
+      } else {
+        cells.push("rest");
+      }
+    }
+  }
+
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
 }
 
 /** The month's workouts: every session logged in it, so two in a day are two. */

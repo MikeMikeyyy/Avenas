@@ -33,6 +33,7 @@ import CollapsibleCard from "../components/CollapsibleCard";
 import ExercisePicker from "../components/ExercisePicker";
 import NumberBadge from "../components/NumberBadge";
 import ReorderExercisesSheet, { DragHandleIcon } from "../components/ReorderExercisesSheet";
+import SupersetLink from "../components/SupersetLink";
 import FadeScreen from "../components/FadeScreen";
 import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
@@ -67,6 +68,14 @@ import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customE
 import { fromYMD } from "../utils/dates";
 import { displayWorkoutName } from "../utils/programDays";
 import { achievementsForWorkout, prSetsOfWorkout } from "../utils/achievements";
+import { repPrSetsOfWorkout } from "../utils/repPrs";
+import { cleanSupersets, moveKeepingSupersets, supersetLines, supersetPlaces } from "../utils/supersets";
+
+/** Where the line joining a superset's cards runs (components/SupersetLink.tsx):
+ *  through the centre of each card's number circle, the card's 18pt padding
+ *  plus half the 32pt NumberBadge. The gap is the card's 20pt bottom margin. */
+const SUPERSET_LINE_X = 34;
+const EX_CARD_GAP = 20;
 import PrTrophy from "../components/PrTrophy";
 import BackButton, { BACK_TOP, BACK_SIZE } from "../components/BackButton";
 
@@ -340,6 +349,11 @@ export default function WorkoutDetailScreen() {
     () => (workout ? prSetsOfWorkout(workout, history) : null),
     [workout, history],
   );
+  // And which wear the rep PR medal (utils/repPrs.ts), the same way.
+  const repSets = useMemo(
+    () => (workout ? repPrSetsOfWorkout(workout, history) : null),
+    [workout, history],
+  );
 
   useEffect(() => {
     const loadHistory: Promise<CompletedWorkout[]> = clientId
@@ -414,7 +428,7 @@ export default function WorkoutDetailScreen() {
       // working sets, and this edit view has no checkbox (sets added here or
       // via Add Set start done:false and would otherwise never count). A set
       // left empty stays not-done and is ignored by stats.
-      exercises: exToKg(editedExercises).map((ex, i) => {
+      exercises: cleanSupersets(exToKg(editedExercises)).map((ex, i) => {
         // The Hold switch, saved (CompletedExercise.isIsometric): it used to
         // open off and be forgotten on save.
         const { isIsometric: _was, ...rest } = ex;
@@ -583,7 +597,9 @@ export default function WorkoutDetailScreen() {
   // each came from is its identity, not its name (a day can list one exercise
   // twice). Its key and Reps/Hold flag move with it.
   const handleReorder = (reordered: CompletedExercise[]) => {
-    const from = reordered.map(ex => editedExercises.indexOf(ex));
+    // A move that takes one out of its superset (utils/supersets.ts
+    // moveKeepingSupersets) hands it back as a new object, with the same sets.
+    const from = reordered.map(ex => editedExercises.findIndex(e => e === ex || e.sets === ex.sets));
     if (from.some(i => i < 0)) return;
     setEditedExercises(reordered);
     setEditedIsIsometric(from.map(i => editedIsIsometric[i] ?? false));
@@ -619,6 +635,10 @@ export default function WorkoutDetailScreen() {
   }, []);
 
   const exercises = workout ? (isEditing ? editedExercises : exToDisplay(workout.exercises)) : [];
+  // Each card's place in its superset (the line joining them), and each
+  // member's line in the reorder sheet.
+  const supersetPlaceAt = supersetPlaces(exercises);
+  const reorderLines = supersetLines(editedExercises, (_, i) => editedKeys[i] ?? String(i));
   // What the session did with its program day, read against the plan it saved
   // (utils/exerciseChanges.ts): a line under each exercise it moved, swapped or
   // added, and a dashed row where it left one out. Off the list as shown, so an
@@ -799,7 +819,7 @@ export default function WorkoutDetailScreen() {
                     setCollapsingIndices(prev => { const n = new Set(prev); n.delete(ei); return n; });
                   }}
                 >
-                <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: 20 }}>
+                <NeuCard dark={isDark} style={{ borderRadius: 20, marginBottom: EX_CARD_GAP }}>
                   <View style={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: 14 }}>
 
                     {/* Exercise name */}
@@ -895,7 +915,9 @@ export default function WorkoutDetailScreen() {
                                 // edge (components/PrTrophy.tsx).
                                 <View>
                                   <Text style={[styles.setText, { color: isWU ? WARMUP_ORANGE : t.tp }]}>{label}</Text>
-                                  <PrTrophy show={!!prSets?.[ei]?.[j]} />
+                                  <PrTrophy
+                                    mark={prSets?.[ei]?.[j] ? "weight" : repSets?.[ei]?.[j] ? (workout?.exercises[ei]?.isIsometric ? "hold" : "reps") : null}
+                                  />
                                 </View>
                               )}
                             </View>
@@ -1057,6 +1079,9 @@ export default function WorkoutDetailScreen() {
 
                   </View>
                 </NeuCard>
+                {supersetPlaceAt[ei] === "first" || supersetPlaceAt[ei] === "middle" ? (
+                  <SupersetLink gap={EX_CARD_GAP} x={SUPERSET_LINE_X} isDark={isDark} />
+                ) : null}
                 </CollapsibleCard>
                 </Fragment>
               );
@@ -1115,6 +1140,8 @@ export default function WorkoutDetailScreen() {
         items={editedExercises}
         keyOf={(_, i) => editedKeys[i] ?? String(i)}
         nameOf={ex => ex.name}
+        metaOf={ex => reorderLines.get(editedKeys[editedExercises.indexOf(ex)] ?? "") ?? ""}
+        move={moveKeepingSupersets}
         onReorder={handleReorder}
         onChange={changeFromSheet}
         onRemove={removeFromSheet}

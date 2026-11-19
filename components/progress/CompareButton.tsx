@@ -9,6 +9,9 @@
 // The circles sit on a diagonal, green low and periwinkle high, like Lucide's
 // "blend" (user request, 2026-10-22): its spacing (6 apart each way at r 7)
 // scaled to these r 6 circles, centred on the box.
+//
+// On the Progress page the filter dock draws it (components/progress/
+// FilterDock.tsx), and the page holds its place with a `ghost`.
 
 import { StyleSheet } from "react-native";
 import Svg, { Circle } from "react-native-svg";
@@ -23,20 +26,33 @@ export const COMPARE_SIZE = 40;
  *  the circle itself up takes the spare off. */
 export const COMPARE_HIT = 44;
 
-export default function CompareButton({ onPress, size = COMPARE_SIZE }: { onPress: () => void; size?: number }) {
+/** The two circles, the button's face (the filter dock draws it too). */
+export function CompareMark() {
   const { isDark } = useTheme();
+  return (
+    <Svg width={24} height={24} viewBox="0 0 24 24">
+      <Circle cx={9.4} cy={14.6} r={6} fill={ACCT} />
+      <Circle cx={14.6} cy={9.4} r={6} fill="none" stroke={compareBlue(isDark)} strokeWidth={2.2} />
+    </Svg>
+  );
+}
+
+export default function CompareButton({ onPress, size = COMPARE_SIZE, ghost = false }: {
+  onPress: () => void;
+  size?: number;
+  /** Unseen, holding its place for the filter dock to draw over. */
+  ghost?: boolean;
+}) {
   return (
     <GlassButton
       onPress={onPress}
       size={size}
+      ghost={ghost}
       style={styles.hit}
       solidStyle={PILL_SHADOW}
       accessibilityLabel="Compare programs"
     >
-      <Svg width={24} height={24} viewBox="0 0 24 24">
-        <Circle cx={9.4} cy={14.6} r={6} fill={ACCT} />
-        <Circle cx={14.6} cy={9.4} r={6} fill="none" stroke={compareBlue(isDark)} strokeWidth={2.2} />
-      </Svg>
+      <CompareMark />
     </GlassButton>
   );
 }

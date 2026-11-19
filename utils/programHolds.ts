@@ -78,7 +78,9 @@ export function heldOn(program: SavedProgram, ymd: string): boolean {
  * cycleIndexForDate reads every date through it). Each resume moved startDate
  * (and for "Today" cycleOffset) on, which re-labels the days before it;
  * undoing the later ones gives back the day that date actually had. The holds
- * undone leave the copy with it, so reading it again changes nothing.
+ * undone leave the copy with it, so reading it again changes nothing. A Set
+ * Workout Date since is undone the same way (its offset; the moves before it
+ * still count for the days before it, utils/cycleDrift.ts realignedFrom).
  */
 export function programAsOf(program: SavedProgram, ymd: string): SavedProgram {
   const holds = program.holds ?? [];

@@ -76,6 +76,10 @@ type NativeModule = {
   startOrUpdate(payload: LiveActivityPayload): Promise<void>;
   end(): Promise<void>;
   consumeActions(): Promise<LiveActivityConsumeResult>;
+  /** From the build with the lock screen's "Rest complete" (2026-11-14) on;
+   *  absent in builds before it, so called only when there. */
+  setRestAlerts?(on: boolean): void;
+  cancelRestAlert?(): void;
 };
 
 let native: NativeModule | null = null;
@@ -129,5 +133,29 @@ export async function consumeLiveActivityActions(): Promise<LiveActivityConsumeR
   } catch (e) {
     warn("consumeActions", e);
     return { actions: [], restEndMs: 0 };
+  }
+}
+
+/** The app's Rest timer alerts setting (master and category), for the "Rest
+ *  complete" a rest started on the lock screen gets natively (RestAlert in
+ *  WorkoutActivitySupport.swift), where the app's own scheduling can't run. */
+export function setLockScreenRestAlerts(on: boolean): void {
+  if (typeof native?.setRestAlerts !== "function") return;
+  try {
+    native.setRestAlerts(on);
+  } catch (e) {
+    warn("setRestAlerts", e);
+  }
+}
+
+/** Cancels the lock screen's pending "Rest complete": the app is scheduling
+ *  its own, or dismissed the rest (utils/notificationScheduler.ts), so there
+ *  is only ever one rest alert. */
+export function cancelLockScreenRestAlert(): void {
+  if (typeof native?.cancelRestAlert !== "function") return;
+  try {
+    native.cancelRestAlert();
+  } catch (e) {
+    warn("cancelRestAlert", e);
   }
 }

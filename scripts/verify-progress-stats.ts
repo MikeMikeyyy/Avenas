@@ -20,6 +20,8 @@ import {
   computeMuscleGroupStats,
   getRangeOption,
   autoWeekRange,
+  autoRangeFor,
+  isUnderWay,
   rangeWindow,
   previousComparableWindow,
   filterByDateWindow,
@@ -36,6 +38,7 @@ import {
   programIdsWithSessions,
   rangeHoldingLast,
   filterByProgramScope,
+  currentScopeProgram,
   programsInScope,
   scopedProgramDays,
   workoutMatchesDay,
@@ -285,6 +288,21 @@ for (const r of ["lastWeek", "thisMonth", "last3Months", "year"] as const) {
   eq(autoWeekRange(on("2026-05-17", "2026-05-18"), monday), "thisWeek", "auto week: Monday's done -> this week");
   // A session dated ahead (a clock moved back) doesn't make this week.
   eq(autoWeekRange(on("2026-05-16", "2026-05-08"), today), "lastWeek", "auto week: a date after today doesn't count");
+}
+
+// ── autoRangeFor: Current program showing the one finished last ───────────────
+// While Current program stands for a program not under way, the charts open on
+// its last workouts (user pick, 2026-11-19, option A): Last Week when it ended
+// last week, the shortest range holding them when it ended longer ago. Any
+// other time, autoWeekRange's week. today = Fri 15 May 2026.
+{
+  const on = (...dates: string[]) => dates.map(date => ({ date }));
+  eq(autoRangeFor(on("2026-05-08", "2026-05-06"), today, true), "lastWeek", "finished last week: its last week");
+  eq(autoRangeFor(on("2026-04-24", "2026-04-22"), today, true), "thisMonth", "finished three weeks ago: the four weeks holding it");
+  eq(autoRangeFor(on("2026-03-10"), today, true), "last3Months", "finished two months ago: the three months holding it");
+  eq(autoRangeFor(on("2026-04-24"), today, false), "thisWeek", "not reaching back: this week, as ever");
+  eq(autoRangeFor([], today, true), "thisWeek", "nothing logged: this week");
+  eq(autoRangeFor(on("2026-05-13"), today, true), "thisWeek", "trained this week: this week");
 }
 
 // ── rangeHoldingLast: View Progress on a program not running ──────────────────
@@ -633,7 +651,7 @@ function dayRef(partial: Partial<ProgramDayRef> & { label: string }): ProgramDay
   const armsA = workout({ id: "aA", programId: "pA", workoutName: "Arms", exercises: [ex("Barbell Curl", [set("30", "10")])] });
   const armsB = workout({ id: "aB", programId: "pB", workoutName: "Arms", exercises: [ex("Barbell Curl", [set("32", "10")])] });
   const free = workout({ id: "f", programId: "", workoutName: "Arms", exercises: [ex("Barbell Curl", [set("34", "10")])] });
-  const days = scopedProgramDays({ kind: "all" }, [pA, pB], [armsA, armsB, free]);
+  const days = scopedProgramDays({ kind: "all" }, [pA, pB], [armsA, armsB, free], [armsA, armsB, free]);
   const rowA = days.find(d => d.programId === "pA" && d.label === "Arms")!;
   const rowB = days.find(d => d.programId === "pB" && d.label === "Arms")!;
   eq(collectExerciseHistory([armsA, armsB, free], "Barbell Curl", rowA).map(p => p.workoutId), ["aA"],
@@ -682,15 +700,78 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   eq(filterByProgramScope(ws, { kind: "current" }, programs).map(w => w.id), ["a"], "scope current: active program only");
   eq(filterByProgramScope(ws, { kind: "program", programId: "old" }, programs).map(w => w.id), ["o"], "scope program: named program");
   eq(filterByProgramScope(ws, { kind: "program", programId: "ghost" }, programs), [], "scope program: missing -> []");
-  eq(programsInScope({ kind: "current" }, programs).map(p => p.id), ["act"], "programsInScope current");
+  eq(programsInScope({ kind: "current" }, programs, ws).map(p => p.id), ["act"], "programsInScope current");
   // My Programs' View Progress: the programs with a session on them.
   const unused = makeProgram({ id: "new", status: "created", name: "New" });
   eq([...programIdsWithSessions([...programs, unused], ws)].sort(), ["act", "old"], "view progress: programs with a session logged, none for one never trained");
   eq([...programIdsWithSessions(programs, [workout({ id: "f", programId: "", exercises: [] })])], [], "view progress: a free workout puts it on no program");
 }
 {
+  // "Current program" after one is finished: the one finished last stays until
+  // a new one has a workout logged in it (user requests, 2026-11-15 and
+  // 2026-11-19: "I don't want the current program selected until we have a new
+  // program in with a logged session").
+  const TODAY = "2026-11-19";
+  const done = makeProgram({ id: "done", status: "completed", name: "Done", startDate: "01 Sep 2026", completedDate: "10 Nov 2026" });
+  const older = makeProgram({ id: "older", status: "completed", name: "Older", startDate: "01 Jan 2026", completedDate: "01 Jun 2026" });
+  const ws = [
+    workout({ id: "d", programId: "done", date: "2026-11-09", exercises: [] }),
+    workout({ id: "o", programId: "older", date: "2026-05-01", exercises: [] }),
+  ];
+  eq(currentScopeProgram([older, done], ws, TODAY)?.id, "done", "current after finishing: the program finished last");
+  eq(filterByProgramScope(ws, { kind: "current" }, [older, done]).map(w => w.id), ["d"], "current after finishing: its sessions stay on the page");
+  eq(programsInScope({ kind: "current" }, [older, done], ws).map(p => p.id), ["done"], "current after finishing: its days stay too");
+
+  const next = makeProgram({ id: "next", status: "active", name: "Next", startDate: "16 Nov 2026" });
+  eq(currentScopeProgram([older, done, next], ws, TODAY)?.id, "done", "a new program made active, nothing logged in it: still the one finished last");
+  eq(filterByProgramScope(ws, { kind: "current" }, [older, done, next]).map(w => w.id), ["d"], "nothing logged in the new one: the finished one's sessions, not a blank page");
+  eq(isUnderWay(next, ws, TODAY), false, "a program with nothing logged isn't under way");
+  const first = workout({ id: "n1", programId: "next", date: "2026-11-17", exercises: [] });
+  eq(currentScopeProgram([older, done, next], [...ws, first], TODAY)?.id, "next", "its first workout logged: the new program takes over");
+  eq(isUnderWay(next, [...ws, first], TODAY), true, "a workout logged in its run: under way");
+  const fromBefore = workout({ id: "n0", programId: "next", date: "2026-03-02", exercises: [] });
+  eq(currentScopeProgram([older, done, next], [...ws, fromBefore], TODAY)?.id, "done", "a workout from an earlier run of it doesn't count");
+  const later = makeProgram({ id: "later", status: "active", name: "Later", startDate: "23 Nov 2026" });
+  eq(currentScopeProgram([older, done, later], ws, TODAY)?.id, "done", "one set to start later: the finished one until it's trained");
+
+  const shelved = makeProgram({ id: "shelved", status: "paused", name: "Shelved", startDate: "12 Nov 2026" });
+  eq(currentScopeProgram([older, done, shelved], ws, TODAY)?.id, "done", "one started since and made inactive, never trained: changes nothing");
+  const shelvedSession = workout({ id: "s1", programId: "shelved", date: "2026-11-13", exercises: [] });
+  eq(currentScopeProgram([older, done, shelved], [...ws, shelvedSession], TODAY), null, "one started since, trained and made inactive is newer, so none");
+
+  // Run again: the finished program made active once more keeps its last run
+  // on the page until the new run has a workout.
+  const again = makeProgram({
+    id: "done", status: "active", name: "Done", startDate: "16 Nov 2026",
+    runs: [{ startDate: "01 Sep 2026", totalWeeks: 8, cycleDays: 7, cyclePattern: [], currentWeek: 8, status: "completed", endDate: "2026-11-10" }],
+  });
+  eq(currentScopeProgram([older, again], ws, TODAY)?.id, "done", "a finished program run again: still it");
+  eq(filterByProgramScope(ws, { kind: "current" }, [older, again]).map(w => w.id), ["d"], "run again: its last run's sessions until the new run's first");
+
+  const notStarted = makeProgram({ id: "ns", status: "created", name: "Not started" });
+  eq(currentScopeProgram([done, notStarted], ws, TODAY)?.id, "done", "current after finishing: one made but never started changes nothing");
+  eq(currentScopeProgram([next], [], TODAY)?.id, "next", "none finished: the active one, nothing logged or not");
+  eq(currentScopeProgram([makeProgram({ id: "nodate", status: "completed", completedDate: undefined })], ws, TODAY), null, "current after finishing: no readable finish date, none");
+  eq(currentScopeProgram([], [], TODAY), null, "current: no programs, none");
+}
+{
+  // Two finishing at the same moment (a Journal log given a session's
+  // minute): the chart draws the one saved later as the later, whatever order
+  // it's handed them in, as "last time" reads them (2026-11-15).
+  const at = "2027-02-14T05:47:00.000Z";
+  const bench = (weight: string) => [{ name: "Bench Press", notes: "", sets: [{ type: "working" as const, weight, reps: "5", done: true }] }];
+  const first = workout({ id: "workout_1739512000000", date: "2027-02-14", completedAt: at, exercises: bench("80") });
+  const second = workout({ id: "workout_1739512900000", date: "2027-02-14", completedAt: at, exercises: bench("85") });
+  eq(collectExerciseHistory([second, first], "Bench Press").map(p => p.workoutId), [first.id, second.id], "same moment: the one saved later is later (stored newest first)");
+  eq(collectExerciseHistory([first, second], "Bench Press").map(p => p.workoutId), [first.id, second.id], "same moment: and handed oldest first, the same");
+  const imported = [0, 1].map(i => workout({ id: `workout_1739000000000_${i}`, date: "2027-02-14", completedAt: at, exercises: bench("70") }));
+  eq(collectExerciseHistory([imported[1], imported[0]], "Bench Press").map(p => p.workoutId), [imported[0].id, imported[1].id], "same moment: an import's by its number");
+  const odd = workout({ id: "legacy-a", date: "2027-02-14", completedAt: at, exercises: bench("60") });
+  eq(collectExerciseHistory([odd, first], "Bench Press").map(p => p.workoutId), [odd.id, first.id], "same moment: an id that doesn't say keeps the order given");
+}
+{
   const p = makeProgram({ extraWorkouts: ["Conditioning", "conditioning"] }); // dupe case
-  const days = scopedProgramDays({ kind: "all" }, [p]);
+  const days = scopedProgramDays({ kind: "all" }, [p], [], []);
   // Every SLOT, not every distinct name: the cycle runs Push and Pull twice, so
   // those are four separate days. extraWorkouts still dedupe by name (they have
   // no slot to tell them apart).
@@ -780,7 +861,7 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
     // Logged after the edit, against the new day.
     workout({ id: "new1", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", programId: "pA", dayId: "fresh", workoutName: "Upper A", exercises: [ex("Incline Press", [set("60", "10")])] }),
   ];
-  const days = scopedProgramDays({ kind: "all" }, [program], history);
+  const days = scopedProgramDays({ kind: "all" }, [program], history, history);
   eq(days.map(d => d.label), ["Upper A", "Upper"], "edit: the forked-away day appears beside its replacement");
   eq(days.map(d => d.isHistorical), [false, true], "edit: only the day that left the program is marked historical");
   eq(days[1].programName, program.name, "edit: a historical day still names its program");
@@ -796,7 +877,7 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
     workout({ id: "b1", date: "2026-04-06", completedAt: "2026-04-06T10:00:00.000Z", programId: "pB", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] }),
     workout({ id: "b2", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", programId: "pB", dayId: "d0", workoutName: "Upper", exercises: [ex("Incline Press", [set("60", "10")])] }),
   ];
-  const tunedDays = scopedProgramDays({ kind: "all" }, [tuned], tunedHistory);
+  const tunedDays = scopedProgramDays({ kind: "all" }, [tuned], tunedHistory, tunedHistory);
   eq(tunedDays.length, 1, "swap: swapping an exercise does not add a day row");
   const rows = collectLoggedExercisesForDay(tunedHistory, tunedDays[0]);
   eq(rows.map(r => [r.name, r.inProgram]), [["Incline Press", true], ["Bench", false]], "swap: the dropped exercise is still listed, flagged as swapped out");
@@ -805,7 +886,7 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   // A free workout attached to a program has no prescription, so nothing on it
   // may be flagged.
   const withExtra = makeProgram({ id: "pC", cyclePattern: ["Rest"], cycleDays: 1, dayIds: ["d0"], workouts: {}, extraWorkouts: ["Conditioning"] });
-  const extraDay = scopedProgramDays({ kind: "all" }, [withExtra], [])[0];
+  const extraDay = scopedProgramDays({ kind: "all" }, [withExtra], [], [])[0];
   const extraHistory = [workout({ id: "c1", programId: "pC", workoutName: "Conditioning", exercises: [ex("Sled Push", [set("100", "10")])] })];
   check(collectLoggedExercisesForDay(extraHistory, extraDay).every(r => r.inProgram), "extras: a free workout's exercises are never flagged swapped-out");
 
@@ -815,7 +896,7 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
     workout({ id: "r1", date: "2026-04-06", completedAt: "2026-04-06T10:00:00.000Z", programId: "pD", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] }),
     workout({ id: "r2", date: "2026-05-04", completedAt: "2026-05-04T10:00:00.000Z", programId: "pD", dayId: "d0", workoutName: "Upper A", exercises: [ex("Bench", [set("85", "8")])] }),
   ];
-  const renamedDays = scopedProgramDays({ kind: "all" }, [renamed], renamedHistory);
+  const renamedDays = scopedProgramDays({ kind: "all" }, [renamed], renamedHistory, renamedHistory);
   eq(renamedDays.map(d => d.label), ["Upper A"], "rename: one row, showing the new name");
   eq(sessionCountForDay(renamedHistory, renamedDays[0]), 2, "rename: sessions logged under the OLD name stay on the day");
   eq(collectExerciseHistory(renamedHistory, "Bench", renamedDays[0]).map(p => p.topWeight), [80, 85], "rename: one continuous trend across the rename");
@@ -823,14 +904,14 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   // Moved to another cycle slot: nothing about the page changes.
   const moved = makeProgram({ id: "pE", cyclePattern: ["Rest", "Upper"], cycleDays: 2, dayIds: ["d1", "d0"], workouts: { "1:Upper": bench } });
   const movedHistory = [workout({ id: "m1", programId: "pE", dayId: "d0", workoutName: "Upper", exercises: [ex("Bench", [set("80", "8")])] })];
-  const movedDays = scopedProgramDays({ kind: "all" }, [moved], movedHistory);
+  const movedDays = scopedProgramDays({ kind: "all" }, [moved], movedHistory, movedHistory);
   eq(movedDays.map(d => [d.label, d.isHistorical]), [["Upper", false]], "move: shifting a day to another slot leaves one live row");
   eq(sessionCountForDay(movedHistory, movedDays[0]), 1, "move: the day keeps its sessions across the move");
 
   // Sessions whose program is gone don't conjure a program's row: they're
   // Custom workouts (user decision, 2026-10-23), each day of them saying it
   // was a deleted program's.
-  const goneDays = scopedProgramDays({ kind: "all" }, [], history);
+  const goneDays = scopedProgramDays({ kind: "all" }, [], history, history);
   eq(goneDays.filter(d => !d.custom).length, 0, "edit: a deleted program's sessions produce no historical row");
   eq(goneDays.map(d => [d.label, d.custom?.deletedProgram]), [["Upper A", true], ["Upper", true]],
     "edit: ...they're Custom workouts' days, newest first, from a deleted program");
@@ -838,7 +919,7 @@ function makeProgram(partial: Partial<SavedProgram> = {}): SavedProgram {
   const shrunk = makeProgram({ id: "pF", cyclePattern: ["Rest"], cycleDays: 1, dayIds: ["d9"], workouts: {} });
   const shrunkHistory = [workout({ id: "s1", programId: "pF", dayId: "d0", workoutName: "Arms", exercises: [ex("Curl", [set("20", "12")])] })];
   eq(
-    scopedProgramDays({ kind: "all" }, [shrunk], shrunkHistory).map(d => [d.label, d.isHistorical]),
+    scopedProgramDays({ kind: "all" }, [shrunk], shrunkHistory, shrunkHistory).map(d => [d.label, d.isHistorical]),
     [["Arms", true]],
     "delete: a day removed from the cycle survives as a historical row",
   );

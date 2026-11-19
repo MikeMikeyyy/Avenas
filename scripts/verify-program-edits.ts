@@ -565,9 +565,15 @@ function checkUpperB(label: string, after: SavedProgram, slot: number, expectAtt
     return h.length - new Set(h.map(w => `${w.dayId}#${tracks.numberById[w.id]}`)).size;
   };
 
-  // Mid-run, in week 5 of 8 with every workout trained.
-  const mid = run({}, 30);
-  const midHistory = trained(mid, 30, 1);
+  // Mid-run, in week 5 of 8 with every workout trained. Begun on the Monday
+  // four weeks before this one, so it's in week 5 whatever day today is, and
+  // made 5 weeks it finishes this Sunday: its page's week is then the same.
+  // Begun 30 days back, a 5-week finish fell before this week's Sunday on a
+  // Monday or Tuesday, and the days after it read off (rightly), so the check
+  // failed two days a week (found 2026-11-16, a Monday).
+  const midAgo = 28 + (fromYMD(TODAY)!.getDay() + 6) % 7;
+  const mid = run({}, midAgo);
+  const midHistory = trained(mid, midAgo, 1);
   const midPage = buildProgramHistory(mid, midHistory, TODAY);
   for (const weeks of [10, 6, 5]) {
     const edited = lengthen(mid, weeks);
@@ -688,6 +694,24 @@ function checkUpperB(label: string, after: SavedProgram, slot: number, expectAtt
   const kept = { ...session(closing, addDaysYMD(lastDay, 3)), date: addDaysYMD(lastDay, 3), id: "kept" };
   const legacy = carryOnProgram([{ ...ended, totalWeeks: 10 }], ended.id, [...finishedHistory, kept], later).programs[0];
   eq(legacy.holds?.at(-1)?.from, addDaysYMD(lastDay, 4), "M carry on: from the last session logged after it ended");
+
+  // Finished while held, then carried on: back where the hold began, in the
+  // week it was held in, the days held and the days since one hold. Carried on
+  // from the day after it finished, the days held counted as its own, so it
+  // came back a week on and finished early (found by the solo flows,
+  // 2026-11-17).
+  {
+    const heldFrom = addDaysYMD(TODAY, -12);
+    const going = run({}, 20);
+    const heldWeek = getCurrentWeek(going, fromYMD(heldFrom)!);
+    const onHold = { ...going, pausedAt: heldFrom, currentWeek: heldWeek };
+    const doneHeld = completeProgram([onHold], onHold.id, formatStoredDate(fromYMD(addDaysYMD(TODAY, -3))!)).programs[0];
+    const back = carryOnProgram([{ ...doneHeld, totalWeeks: 10 }], doneHeld.id, [], TODAY).programs[0];
+    eq([back.status, getCurrentWeek(back, fromYMD(TODAY)!)], ["active", heldWeek], "M carry on held: back in the week it was held in");
+    eq(getWorkoutForDate(back, TODAY)?.dayId, getWorkoutForDate(going, heldFrom)?.dayId, "M carry on held: ...on the day it was held on");
+    eq(back.holds, [{ from: heldFrom, to: TODAY, shift: 12, offsetShift: 0 }], "M carry on held: the days held and since, one hold");
+    eq(finishOf(back), addDaysYMD(finishOf(going), 12 + 14), "M carry on held: the finish is the two weeks on, past the days held");
+  }
 }
 
 if (failures.length > 0) {

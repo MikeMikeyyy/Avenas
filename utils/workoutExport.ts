@@ -7,16 +7,22 @@
 // or "weight_lbs"). A hold's time goes under `seconds`, not `reps`. A workout
 // with no sets still gets a row, so it isn't missing from the file.
 //
+// An exercise done in a superset (utils/supersets.ts) has the superset's
+// number in the workout under `superset`, 1 for its first, as Hevy's file has
+// its superset_id beside the exercise; blank for one in none (user request,
+// 2026-11-15, so a file exported and imported again keeps them).
+//
 // Pure, so scripts/verify-import.ts covers it.
 
 import { toCsv } from "./csv";
 import { toYMD } from "./dates";
 import { formatWeightForDisplay } from "./units";
+import { supersetRuns } from "./supersets";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 
 export function exportColumns(isKg: boolean): string[] {
   return [
-    "date", "workout", "program", "start_time", "end_time", "exercise", "set", "set_type",
+    "date", "workout", "program", "start_time", "end_time", "exercise", "superset", "set", "set_type",
     isKg ? "weight_kg" : "weight_lbs", "reps", "seconds", "done", "exercise_notes", "workout_notes",
   ];
 }
@@ -48,12 +54,17 @@ export function workoutsToCsv(
       readable ? clock(end) : "",
     ];
     const notes = w.sessionNotes ?? "";
+    // Each exercise's superset by its number in the workout, only where it's
+    // real (two or more side by side).
+    const superset: (number | "")[] = w.exercises.map(() => "");
+    supersetRuns(w.exercises).forEach((run, k) => { for (const i of run) superset[i] = k + 1; });
     let wrote = false;
-    for (const ex of w.exercises) {
+    w.exercises.forEach((ex, e) => {
       ex.sets.forEach((s, i) => {
         rows.push([
           ...head,
           ex.name,
+          superset[e],
           i + 1,
           s.type === "warmup" ? "warmup" : "working",
           formatWeightForDisplay(s.weight ?? "", isKg),
@@ -65,8 +76,8 @@ export function workoutsToCsv(
         ]);
         wrote = true;
       });
-    }
-    if (!wrote) rows.push([...head, "", "", "", "", "", "", "", "", notes]);
+    });
+    if (!wrote) rows.push([...head, "", "", "", "", "", "", "", "", "", notes]);
   }
   return toCsv(rows);
 }

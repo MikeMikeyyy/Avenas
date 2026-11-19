@@ -1,4 +1,4 @@
-import { cycleDrift } from "../utils/cycleDrift";
+import { cycleDrift, realignedFrom } from "../utils/cycleDrift";
 import type { WeightUnit } from "../utils/units";
 import type { CarriedExercise } from "./exercises";
 
@@ -99,6 +99,12 @@ export type CompletedExercise = {
    * it syncs with no column. Absent = a set of reps.
    */
   isIsometric?: true;
+  /** The superset it was done in (Exercise.supersetId, utils/supersets.ts):
+   *  the exercises beside it with the same id were done in rounds with it.
+   *  Saved only on a real superset (two or more side by side), from the
+   *  session or a Hevy import's superset_id. Rides in the exercises jsonb,
+   *  so it syncs with no column. Absent = done on its own. */
+  supersetId?: string;
 };
 
 export type CompletedWorkout = {
@@ -199,6 +205,13 @@ export type Exercise = {
    *  (utils/customExerciseDetails.ts stampCustomDetails); rides in the workouts
    *  jsonb, so it syncs with no column. */
   customDetails?: CarriedExercise;
+  /** Its superset (utils/supersets.ts): two or more exercises next to each
+   *  other in the day with the same id are done in rounds, a set of each in
+   *  turn, resting after each round (user request, 2026-11-15). Every member
+   *  carries the superset's rest. An id on an exercise with no partner beside
+   *  it means nothing, and cleanSupersets drops it. Rides in the workouts
+   *  jsonb, so it syncs with no column, and goes with a program sent. */
+  supersetId?: string;
   // Legacy fields — kept optional for migration only
   warmupSets?: number;
   workingSets?: number;
@@ -221,12 +234,12 @@ export type WorkoutMap = Record<string, Exercise[]>;
 // Date helpers live in utils/dates.ts. Re-exported here to preserve the
 // existing import paths used by older callers; new code should import from
 // utils/dates.ts directly.
-import { parseStoredDate, toYMD } from "../utils/dates";
+import { fromYMD, parseStoredDate, toYMD } from "../utils/dates";
 export { parseStoredDate };
 
 /**
  * Which week of the program `today` falls in, 1-based and clamped to
- * `totalWeeks`.
+ * `totalWeeks`; 0 before an active program's first day.
  *
  * `today` is a parameter so this can be tested and so callers that already know
  * the effective date don't disagree with it; it defaults to now.
@@ -255,6 +268,10 @@ export function getCurrentWeek(program: SavedProgram, today: Date = new Date()):
   // Round, not floor: a span crossing a daylight-saving transition is 23 or 25
   // hours on that day, and flooring the millisecond quotient drops a whole day.
   const daysSince = Math.round((day.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  // Set to start later (utils/programStart.ts): in no week yet. It read week 1,
+  // so a one-week program replaced before its first day was finished, its
+  // achievement and all.
+  if (daysSince < 0) return 0;
   const week = Math.floor((daysSince - cycleDrift(program, toYMD(day))) / 7) + 1;
   return Math.min(Math.max(week, 1), program.totalWeeks);
 }
@@ -267,20 +284,32 @@ export function getCurrentWeek(program: SavedProgram, today: Date = new Date()):
  * pushing a day moves it out, spending a rest day brings it back, and a hold
  * moves it by however long the hold lasts (because resuming shifts `startDate`
  * — see utils/programPause.ts).
+ *
+ * Set Workout Date puts it back on plan: from the day set, only the moves made
+ * since count (utils/cycleDrift.ts realignedFrom). Set on a day only the moves
+ * before had brought into the run (the plan's own last day gone by), the plan
+ * runs to that day: the user just set a workout on it. Counted from the plan's
+ * last day, the moves before it counted below that day and not from it, so no
+ * end date held, and the run ended the day before, the workout just set gone
+ * from the Workout tab (found by the solo flows, 2026-11-17).
  */
 export function programFinishDate(program: SavedProgram): Date | null {
   const start = parseStoredDate(program.startDate);
   if (!start) return null;
   start.setHours(0, 0, 0, 0);
-  const span = program.totalWeeks * 7 - 1;
+  // The plan's last day, counted from: start + its length, or the last Set
+  // Workout Date when that's later.
+  const base = new Date(start);
+  base.setDate(base.getDate() + program.totalWeeks * 7 - 1);
+  const realigned = fromYMD(realignedFrom(program));
+  if (realigned && realigned.getTime() > base.getTime()) base.setTime(realigned.getTime());
 
   // A FIXED POINT, not a formula. The end date is pushed out by the marks that
   // fall before it — but pushing it out can bring further marks inside the
   // window, which push it out again. Iterate until it stops moving. Bounded by
   // the number of marks, so it always terminates; do not "simplify" this into a
   // single expression.
-  let end = new Date(start);
-  end.setDate(end.getDate() + span);
+  let end = new Date(base);
   const bound = (program.pushedDates?.length ?? 0) + (program.pulledDates?.length ?? 0) + 1;
   for (let i = 0; i < bound; i++) {
     // A push ON the end date counts too: that day goes blank and its workout,
@@ -289,8 +318,8 @@ export function programFinishDate(program: SavedProgram): Date | null {
     // own left the moved last workout outside the program.
     const endYMD = toYMD(end);
     const drift = cycleDrift(program, endYMD) + (program.pushedDates?.includes(endYMD) ? 1 : 0);
-    const next = new Date(start);
-    next.setDate(next.getDate() + span + drift);
+    const next = new Date(base);
+    next.setDate(next.getDate() + drift);
     if (next.getTime() === end.getTime()) break;
     end = next;
   }
@@ -300,8 +329,20 @@ export function programFinishDate(program: SavedProgram): Date | null {
 /** One hold a program came back from: held from `from` up to (not including)
  *  `to`, both "YYYY-MM-DD". `shift` is how many days resuming moved startDate
  *  forward, and `offsetShift` how far it moved cycleOffset (the days held for
- *  "Today", 0 for "Carry on"). */
-export type ProgramHold = { from: string; to: string; shift: number; offsetShift: number };
+ *  "Today", 0 for "Carry on").
+ *
+ *  Set Workout Date is kept as one of no days (`from` = `to`, the day set),
+ *  `realign`: `offsetShift` how far it moved cycleOffset, so every day before
+ *  it reads as it did (utils/programHolds.ts programAsOf), and from it on only
+ *  the moves since count (utils/cycleDrift.ts realignedFrom; user priority,
+ *  2026-11-16). `realign` rides in the holds column's JSON. */
+export type ProgramHold = {
+  from: string;
+  to: string;
+  shift: number;
+  offsetShift: number;
+  realign?: true;
+};
 
 /**
  * One earlier run of a program the user has since started again. Making a

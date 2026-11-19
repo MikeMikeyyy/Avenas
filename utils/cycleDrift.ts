@@ -27,7 +27,24 @@
 
 import type { SavedProgram } from "../constants/programs";
 
-type DriftFields = Pick<SavedProgram, "pushedDates" | "pulledDates">;
+type DriftFields = Pick<SavedProgram, "pushedDates" | "pulledDates"> & Partial<Pick<SavedProgram, "holds">>;
+
+/**
+ * The last Set Workout Date on or before `dateYMD` ("YYYY-MM-DD"), or "" for
+ * none: kept as a hold of no days marked `realign` (SavedProgram.holds). From
+ * it on, only the moves made since count: it put the program back where the
+ * user said it was, so the moves before it are settled (user priority,
+ * 2026-11-16: nothing done should change the history, so the moves before it
+ * stay as they were, and so do the days they shifted). Left out, `dateYMD`
+ * is open: the last one at all.
+ */
+export function realignedFrom(program: Partial<Pick<SavedProgram, "holds">>, dateYMD?: string): string {
+  let at = "";
+  for (const h of program.holds ?? []) {
+    if (h.realign && (dateYMD === undefined || h.from <= dateYMD) && h.from > at) at = h.from;
+  }
+  return at;
+}
 
 /**
  * Net days the cycle has been shifted by the time `dateYMD` is resolved.
@@ -41,11 +58,17 @@ type DriftFields = Pick<SavedProgram, "pushedDates" | "pulledDates">;
  *     content, so the shift applies FROM IT INCLUSIVE — `<=`.
  *
  * Use `<` for a pull and tapping the rest day on the 11th would move the 10th.
+ *
+ * From a Set Workout Date on (realignedFrom), only the marks since count: the
+ * user said where they were, so what the moves before had shifted is settled
+ * there. Still a count over the two arrays and independent of the offset, so
+ * the offset solve stays valid.
  */
 export function cycleDrift(program: DriftFields, dateYMD: string): number {
+  const since = realignedFrom(program, dateYMD);
   let drift = 0;
   // Both sides are "YYYY-MM-DD", so a string compare is a date compare.
-  for (const d of program.pushedDates ?? []) if (d < dateYMD) drift += 1;
-  for (const d of program.pulledDates ?? []) if (d <= dateYMD) drift -= 1;
+  for (const d of program.pushedDates ?? []) if (d < dateYMD && d >= since) drift += 1;
+  for (const d of program.pulledDates ?? []) if (d <= dateYMD && d >= since) drift -= 1;
   return drift;
 }

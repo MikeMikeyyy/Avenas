@@ -12,12 +12,13 @@
 // were copies kept in step by a comment), and so scripts/verify-solo-flows.ts
 // plays the app's own logic rather than a copy of it.
 
-import { getCurrentWeek, programFinishDate, type CompletedWorkout, type SavedProgram } from "../constants/programs";
+import { getCurrentWeek, programFinishDate, type CompletedWorkout, type ProgramHold, type SavedProgram } from "../constants/programs";
 import { addDaysYMD, daysBetweenYMD, formatStoredDate, fromYMD, parseStoredDate, toYMD } from "./dates";
-import { clearShifts, marksAfterHold, repairMoves, skipDate } from "./skippedDates";
+import { clearShifts, marksAfterHold, repairMoves } from "./skippedDates";
 import { cycleIndexForDate, getEffectiveToday, getWorkoutForDate, normalizeDriftDates } from "./workout";
 import { runStartYMD } from "./programHolds";
-import { endingRun } from "./programRuns";
+import { startsLater } from "./programStart";
+import { endingRun, runsBefore } from "./programRuns";
 import { workoutBelongsToProgram } from "./progressStats";
 
 /** The program that was active, when making another one active finished it. */
@@ -54,20 +55,59 @@ function shelvedStatus(p: SavedProgram, week: number, history: readonly Complete
  * "inactive" and "on hold" are different states.
  */
 function demoted(p: SavedProgram, todayStr: string, history: readonly CompletedWorkout[]): { program: SavedProgram; finished: FinishedProgram | null } {
-  const week = getCurrentWeek(p);
+  // The week it reached on the day it's let go, the day given.
+  const week = getCurrentWeek(p, parseStoredDate(todayStr) ?? new Date());
   if (week >= p.totalWeeks) {
     return {
-      program: { ...p, status: "completed", currentWeek: p.totalWeeks, completedDate: todayStr, pausedAt: undefined },
+      program: { ...holdKept(p, todayStr), status: "completed", currentWeek: p.totalWeeks, completedDate: todayStr },
       finished: { program: p, week },
     };
   }
-  return { program: { ...p, status: shelvedStatus(p, week, history), currentWeek: week, pausedAt: undefined }, finished: null };
+  return { program: { ...holdKept(unbegun(p, todayStr), todayStr), status: shelvedStatus(p, week, history), currentWeek: week }, finished: null };
 }
 
 /**
- * Make `id` the active program, starting `todayStr` (stored format).
+ * `p` let go (finished, made inactive or replaced) with the hold it's on
+ * ended: kept as a hold it came back from, up to the day it's let go, so its
+ * days still read as held. Cleared, they read as the workouts they'd have
+ * been, missed, on the calendars and its page, and as missed dots (found by a
+ * history probe of the solo flows, 2026-11-16). Nothing moves: no resume, so no
+ * shift. A hold not begun yet (from tomorrow, after today's workout,
+ * utils/programPause.ts holdStartsOn) just goes.
+ */
+function holdKept(p: SavedProgram, todayStr: string): SavedProgram {
+  const today = parseStoredDate(todayStr);
+  if (!p.pausedAt) return p;
+  if (!today || p.pausedAt > toYMD(today)) return { ...p, pausedAt: undefined };
+  const hold = { from: p.pausedAt, to: addDaysYMD(toYMD(today), 1), shift: 0, offsetShift: 0 };
+  // The moves around it settled as a resume settles them (what the hold
+  // swallowed goes): left, a rest day spent inside the hold sat on a day that
+  // now schedules nothing.
+  return marksAfterHold({ ...p, pausedAt: undefined, holds: [...(p.holds ?? []), hold] }, hold.from, hold.to);
+}
+
+/**
+ * `p` let go before the day it was set to start (utils/programStart.ts): never
+ * begun, so it goes back to "created" (its week is 0), anything it had marked
+ * on its days (a move, a rest day) gone with the run that never began, as
+ * activation clears them. Its start stays the day still to come: dated today
+ * instead, a workout logged today in the run before it read as this empty
+ * run's, and its number changed (found by a history probe of the solo flows,
+ * 2026-11-16). Its card shows no "Created" date for a day to come.
+ */
+function unbegun(p: SavedProgram, todayStr: string): SavedProgram {
+  const today = parseStoredDate(todayStr);
+  if (!today || !startsLater(p, toYMD(today))) return p;
+  return { ...p, cycleOffset: undefined, skippedDates: undefined, pushedDates: undefined, pulledDates: undefined };
+}
+
+/**
+ * Make `id` the active program on `todayStr` (stored format), its run starting
+ * `startDate`: today, or a day picked ahead (utils/programStart.ts; user
+ * request, 2026-11-16), the days until then scheduling nothing. The program it
+ * replaces still stops today.
  *
- * A (re-)activation is a fresh run from today: any cycleOffset left from a
+ * A (re-)activation is a fresh run from its start: any cycleOffset left from a
  * previous run's Set Workout Date would shift day 1 arbitrarily, and pausedAt
  * goes for the same reason (a hold belongs to the run it was taken during;
  * carried over, the new run would start paused). The rest/push/pull marks go
@@ -91,16 +131,18 @@ export function activateProgram(
   id: string,
   todayStr: string,
   history: readonly CompletedWorkout[],
+  startDate: string = todayStr,
 ): { programs: SavedProgram[]; finished: FinishedProgram | null } {
   let finished: FinishedProgram | null = null;
   const updated = programs.map((p): SavedProgram => {
     if (p.id === id) {
       const shelvedEarly = p.status === "created" && runHasSessions(p, history);
-      const ending = endingRun(shelvedEarly ? { ...p, status: "paused", currentWeek: Math.max(1, p.currentWeek) } : p, todayStr);
+      const ending = endingRun(shelvedEarly ? { ...p, status: "paused", currentWeek: Math.max(1, p.currentWeek) } : p, startDate);
+      const runs = [...(runsBefore(p, startDate) ?? []), ...(ending ? [ending] : [])];
       return {
         ...p,
         status: "active",
-        startDate: todayStr,
+        startDate,
         currentWeek: 1,
         cycleOffset: undefined,
         completedDate: undefined,
@@ -110,7 +152,7 @@ export function activateProgram(
         skippedDates: undefined,
         pushedDates: undefined,
         pulledDates: undefined,
-        ...(ending ? { runs: [...(p.runs ?? []), ending] } : {}),
+        runs: runs.length > 0 ? runs : undefined,
       };
     }
     if (p.status === "active") {
@@ -129,13 +171,18 @@ export function activateProgram(
  * week: shelvedStatus), so no program is active. Clears any hold, for the same
  * reason activation's demotion does.
  */
-export function deactivateProgram(programs: SavedProgram[], id: string, history: readonly CompletedWorkout[]): SavedProgram[] {
+export function deactivateProgram(
+  programs: SavedProgram[],
+  id: string,
+  history: readonly CompletedWorkout[],
+  todayStr: string = formatStoredDate(new Date()),
+): SavedProgram[] {
   const target = programs.find(p => p.id === id);
   if (!target) return programs;
-  const week = getCurrentWeek(target);
+  const week = getCurrentWeek(target, parseStoredDate(todayStr) ?? new Date());
   const status = shelvedStatus(target, week, history);
   return programs.map((p): SavedProgram =>
-    p.id === id ? { ...p, status, currentWeek: week, pausedAt: undefined } : p,
+    p.id === id ? { ...holdKept(unbegun(p, todayStr), todayStr), status, currentWeek: week } : p,
   );
 }
 
@@ -153,7 +200,7 @@ export function completeProgram(
   const weekReached = target ? getCurrentWeek(target) : 0;
   return {
     programs: programs.map((p): SavedProgram =>
-      p.id === id ? { ...p, status: "completed", currentWeek: weekReached, completedDate: todayStr, pausedAt: undefined } : p,
+      p.id === id ? { ...holdKept(p, todayStr), status: "completed", currentWeek: weekReached, completedDate: todayStr } : p,
     ),
     weekReached,
   };
@@ -164,54 +211,58 @@ export function completeProgram(
  * the Workout tab is on) lands on cycle slot `targetDayIndex`. Null when the
  * start date can't be read.
  *
- * A clean reset first. "Today is Push" is the user saying where they are, so
- * every move that got them here is dropped (clearShifts: past moves become
- * plain skips so the calendar still says rest); left in, they kept counting,
- * and the week looked back on plan while the finish date stayed however many
- * days late. Today's own Make Rest Day goes too: setting today's workout is
- * changing your mind about it, exactly as a Change Workout Day pick is. Left
- * in, "today is Push" landed on a day still marked off and showed Rest. Then
- * the offset is SOLVED against the reset program, asking the shared resolver
- * where today lands with no offset rather than recomputing the days passed
- * here.
+ * A reset from today. "Today is Push" is the user saying where they are: every
+ * move from today on goes (clearShifts), and from today only the moves made
+ * since count (the re-alignment below, utils/cycleDrift.ts realignedFrom), so
+ * the program is back on plan: left counting, the week looked back on plan
+ * while the finish date stayed however many days late. Today's own Make Rest
+ * Day goes too: setting today's workout is changing your mind about it, exactly
+ * as a Change Workout Day pick is. Left in, "today is Push" landed on a day
+ * still marked off and showed Rest. Then the offset is SOLVED against the reset
+ * program, asking the shared resolver where today lands with no offset rather
+ * than recomputing the days passed here.
  *
- * Re-aligning re-labels the days before today too, and between midnight and
- * 3am that can turn yesterday into a workout not logged, which is exactly what
- * holds the app on yesterday (getEffectiveToday): set at 1am, "today is Lower"
- * showed yesterday's Upper. A yesterday that wasn't holding the app before
- * (`todayYMD` is the calendar day) is marked off, so the app stays on the day
- * the user set, and yesterday reads as the rest it was rather than a workout
- * missed. Hence `history` and `now`.
+ * **Every day before today reads as it did** (user priority, 2026-11-16:
+ * nothing done should change the history). The re-alignment is kept as a hold
+ * of no days on today marked `realign` (SavedProgram.holds), which every reader
+ * undoes for an earlier day (utils/programHolds.ts programAsOf: its
+ * `offsetShift`), and the moves before today stay as they were, settled. It
+ * used to re-label the days before too: a past rest day read as a workout
+ * missed, a past workout's number changed (found by a history probe of the
+ * solo flows), and between midnight and 3am yesterday could turn into a
+ * workout not logged, holding the app on it (which marking yesterday off used
+ * to patch). Today is the day set, whatever's logged on it: the user is saying
+ * what today is.
  */
-export function setWorkoutDay(
-  program: SavedProgram,
-  targetDayIndex: number,
-  todayYMD: string,
-  history: readonly Pick<CompletedWorkout, "date">[] = [],
-  now: Date = new Date(),
-): SavedProgram | null {
+export function setWorkoutDay(program: SavedProgram, targetDayIndex: number, todayYMD: string): SavedProgram | null {
   const shiftsCleared = clearShifts(program, todayYMD);
   const skipped = (shiftsCleared.skippedDates ?? []).filter(d => d !== todayYMD);
-  const reset = { ...shiftsCleared, skippedDates: skipped.length > 0 ? skipped : undefined };
+  // A re-alignment from today: the moves before stop counting from it.
+  const realigned = { from: todayYMD, to: todayYMD, shift: 0, offsetShift: 0, realign: true as const };
+  const reset = {
+    ...shiftsCleared,
+    skippedDates: skipped.length > 0 ? skipped : undefined,
+    holds: [...(program.holds ?? []), realigned],
+  };
   const natural = cycleIndexForDate({ ...reset, cycleOffset: 0 }, todayYMD);
   if (natural === null) return null;
   const n = reset.cycleDays;
   const cycleOffset = ((targetDayIndex - natural) % n + n) % n;
-  const realigned = normalizeDriftDates({ ...reset, cycleOffset });
-  const yesterday = addDaysYMD(todayYMD, -1);
-  return getEffectiveToday(realigned, history, now) === yesterday ? skipDate(realigned, yesterday) : realigned;
+  realigned.offsetShift = ((cycleOffset - (program.cycleOffset ?? 0)) % n + n) % n;
+  return normalizeDriftDates({ ...reset, cycleOffset: cycleOffset === 0 ? undefined : cycleOffset });
 }
 
 /**
  * The program list after a session is logged from the Journal on `date`.
  *
  * A free workout added to a program is remembered as one of its extras. And a
- * PROGRAM DAY logged before the program's start moves the start back to it:
- * logging a session you actually did earlier (you "started" today but really
- * began two weeks ago) moves the program's start, and so its current week and
- * progress everywhere. Only ever earlier, and only for a program day: a custom
- * workout isn't evidence the program began then, and moving the start re-dates
- * the whole cycle.
+ * PROGRAM DAY logged before the start of the run under way moves the start
+ * back to it: logging a session you actually did earlier (you "started" today
+ * but really began two weeks ago) moves the program's start, and so its
+ * current week and progress everywhere. Only ever earlier, only for a program
+ * day (a custom workout isn't evidence the program began then, and moving the
+ * start re-dates the whole cycle), and never a run that's over or one set to
+ * start later, nor into days an earlier run of it had (startsBackTo).
  */
 export function programsAfterPastLog(
   programs: SavedProgram[],
@@ -226,6 +277,9 @@ export function programsAfterPastLog(
     date: string;
     workoutName: string;
   },
+  /** The calendar day, "YYYY-MM-DD": a program set to start after it keeps
+   *  its start. */
+  todayYMD: string = toYMD(new Date()),
 ): { programs: SavedProgram[]; changed: boolean } {
   const { owningProgramId, addToProgramId, programId, date, workoutName } = log;
   if (!owningProgramId) return { programs, changed: false };
@@ -242,14 +296,7 @@ export function programsAfterPastLog(
       next = { ...next, extraWorkouts: [...(next.extraWorkouts ?? []), workoutName] };
       changed = true;
     }
-    // Against the day the run BEGAN, not startDate: resuming a hold moves
-    // startDate on by the days held, so a session from before the hold,
-    // logged after it, read as earlier than the start and moved it back,
-    // re-dating the whole running cycle (utils/programHolds.ts).
-    const runStart = runStartYMD(next);
-    const [ry, rm, rd] = (runStart ?? "").split("-").map(Number);
-    const start = runStart ? new Date(ry, rm - 1, rd) : null;
-    if (isProgramDay && loggedDate && (!start || loggedDate.getTime() < start.getTime())) {
+    if (isProgramDay && loggedDate && startsBackTo(next, date, todayYMD)) {
       // Moving the start re-dates every day of the cycle, so the rest day a
       // move spent can now hold a workout (a pull there would take a session
       // out of the plan), or no longer be the one that move would take: pair
@@ -259,11 +306,50 @@ export function programsAfterPastLog(
       const anchor = new Date(loggedDate);
       anchor.setDate(anchor.getDate() + (next.holds ?? []).reduce((n, h) => n + h.shift, 0));
       next = repairMoves({ ...next, startDate: formatStoredDate(anchor) });
+      // On hold, it reads the week it had reached on the day it was held
+      // (pauseProgram froze it there): begun earlier, it had reached a later one
+      // by then. Left as it was, it read the week before, and the builder could
+      // make it shorter than a week it has a session in (minTotalWeeks; found
+      // by the solo flows, 2026-11-15).
+      if (next.status === "active" && next.pausedAt) next = { ...next, currentWeek: weekWhenHeld(next) };
       changed = true;
     }
     return next;
   });
   return { programs: updated, changed };
+}
+
+/**
+ * Whether a program day logged on `dateYMD` moves `program`'s start back to
+ * it. Against the day the run BEGAN, not startDate: resuming a hold moves
+ * startDate on by the days held, so a session from before the hold, logged
+ * after it, read as earlier than the start and moved it back, re-dating the
+ * whole running cycle (utils/programHolds.ts).
+ *
+ * Never a run that's over (found by the solo flows, 2026-11-17; user
+ * priority: nothing logged should change the history): a finished or shelved
+ * program's run moved back had every day of it re-dated, its sessions read
+ * against other days. The active program's run moves once it has begun, and a
+ * program never run moves too (its start only says where a run would begin,
+ * and the sessions are then a run of their own when it's made active,
+ * activateProgram's shelvedEarly). One set to start later
+ * (utils/programStart.ts) keeps the day it was given, as it does for a workout
+ * done before then. And a day an earlier run of it had (SavedProgram.runs) is
+ * that run's: moved back over it, the two runs shared days and a session in
+ * them was numbered in both, so carrying the program on renumbered it.
+ */
+function startsBackTo(program: SavedProgram, dateYMD: string, todayYMD: string): boolean {
+  if (program.status === "completed" || program.status === "paused" || startsLater(program, todayYMD)) return false;
+  const start = runStartYMD(program);
+  if (start && dateYMD >= start) return false;
+  return (program.runs ?? []).every(run => dateYMD > run.endDate);
+}
+
+/** The week a program on hold had reached on the day it was held, on its
+ *  timeline as it stands: what pauseProgram freezes. */
+function weekWhenHeld(program: SavedProgram): number {
+  const held = program.pausedAt ? fromYMD(program.pausedAt) : null;
+  return held ? getCurrentWeek({ ...program, pausedAt: undefined }, held) : program.currentWeek;
 }
 
 // ─── How long a program is ───────────────────────────────────────────────────
@@ -431,7 +517,10 @@ export type ResumeMode =
  * (marksAfterHold). A hold's resume, and a finished run carried on
  * (carryOnProgram). An unreadable startDate just comes off hold.
  */
-export function resumedFrom(program: SavedProgram, fromYMD: string, mode: ResumeMode, onYMD: string): SavedProgram {
+export function resumedFrom(program: SavedProgram, heldFromYMD: string, mode: ResumeMode, onYMD: string): SavedProgram {
+  // Resumed before its hold began (one from tomorrow, after today's workout,
+  // utils/programPause.ts holdStartsOn): a hold of no days, on the day.
+  const fromYMD = heldFromYMD > onYMD ? onYMD : heldFromYMD;
   const held = Math.max(0, daysBetweenYMD(fromYMD, onYMD) ?? 0);
   const start = parseStoredDate(program.startDate);
   if (!start) return { ...program, pausedAt: undefined };
@@ -439,12 +528,30 @@ export function resumedFrom(program: SavedProgram, fromYMD: string, mode: Resume
   const offset = mode === "today"
     ? (((program.cycleOffset ?? 0) + held) % program.cycleDays + program.cycleDays) % program.cycleDays
     : program.cycleOffset;
-  const holds = [...(program.holds ?? []), { from: fromYMD, to: onYMD, shift: held, offsetShift: mode === "today" ? held : 0 }];
+  const holds = [...(holdsEndedOn(program.holds, onYMD) ?? []), { from: fromYMD, to: onYMD, shift: held, offsetShift: mode === "today" ? held : 0 }];
   return marksAfterHold(
     { ...program, pausedAt: undefined, startDate: formatStoredDate(start), cycleOffset: offset, holds },
     fromYMD,
     onYMD,
   );
+}
+
+/**
+ * A program's holds as it comes back on `onYMD`, a day it runs: a hold kept as
+ * it was let go (holdKept, through that day) ends there, and one from that day
+ * on that held nothing goes. Carried on the day it was finished while held,
+ * today stayed held and scheduled nothing (found by the solo flows,
+ * 2026-11-16). A hold of no days, a re-alignment's or a same-day resume's,
+ * stays.
+ */
+function holdsEndedOn(holds: ProgramHold[] | undefined, onYMD: string): ProgramHold[] | undefined {
+  if (!holds?.length) return holds;
+  const out = holds.flatMap((h): ProgramHold[] => {
+    if (h.to <= onYMD || h.from === h.to) return [h];
+    if (h.from < onYMD) return [{ ...h, to: onYMD }];
+    return h.shift === 0 && h.offsetShift === 0 ? [] : [h];
+  });
+  return out.length > 0 ? out : undefined;
 }
 
 /**
@@ -455,8 +562,14 @@ export function resumedFrom(program: SavedProgram, fromYMD: string, mode: Resume
  * keep their numbers, and nothing in between reads as missed. From its last
  * session instead, when one was logged after it finished: the days it was
  * trained on are its own (a program kept going past its end before programs
- * finished by themselves, finished by the update). The program active till
- * then is demoted as making another active demotes it.
+ * finished by themselves, finished by the update). Finished while held
+ * (holdKept, a hold through the day it finished), it left off where the hold
+ * began, so it carries on from there, the days held and the days since one
+ * hold, as resuming it would have been: carried on from the day after it
+ * finished, the days held counted as its own, so paused in week 1 for nine
+ * days it came back in week 2 and finished nine days early (found by the solo
+ * flows, 2026-11-17). The program active till then is demoted as making
+ * another active demotes it.
  */
 export function carryOnProgram(
   programs: SavedProgram[],
@@ -476,8 +589,13 @@ export function carryOnProgram(
   for (const w of history) {
     if (ended && w.date > ended && w.date <= todayYMD && (!runStart || w.date >= runStart) && workoutBelongsToProgram(w, target)) ended = w.date;
   }
-  const from = ended ? addDaysYMD(ended, 1) : todayYMD;
-  const reopened: SavedProgram = { ...target, status: "active", completedDate: undefined, pausedAt: undefined };
+  const heldThrough = ended ? target.holds?.find(h => h.from < h.to && h.from <= ended! && ended! < h.to) : undefined;
+  const from = heldThrough ? heldThrough.from : ended ? addDaysYMD(ended, 1) : todayYMD;
+  const holds = heldThrough ? target.holds!.filter(h => h !== heldThrough) : target.holds;
+  const reopened: SavedProgram = {
+    ...target, status: "active", completedDate: undefined, pausedAt: undefined,
+    holds: holdsEndedOn(holds?.length ? holds : undefined, todayYMD),
+  };
   const carried = from < todayYMD ? resumedFrom(reopened, from, "whereILeftOff", todayYMD) : normalizeDriftDates(reopened);
   const todayStr = formatStoredDate(today);
   let finished: FinishedProgram | null = null;

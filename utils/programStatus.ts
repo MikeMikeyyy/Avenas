@@ -11,11 +11,14 @@ import { ACCT, PAUSED_ORANGE } from "../constants/theme";
  *  its literal types.
  *
  *  A HELD program keeps status "active", so pausedAt has to be checked first or
- *  it would show as Active. */
-export function programStatus(program: SavedProgram, mutedColor: string): { color: string; label: string } {
-  if (program.pausedAt)              return { color: PAUSED_ORANGE, label: "Paused" };
-  if (program.status === "active")    return { color: ACCT,          label: "Active" };
-  if (program.status === "paused")    return { color: PAUSED_ORANGE, label: "Paused" };
-  if (program.status === "completed") return { color: ACCT,          label: "Completed" };
-  return { color: mutedColor, label: "Not Started" };
+ *  it would show as Active.
+ *
+ *  `done`: the badge reads Completed, so it wears the finished program's
+ *  clipboard (PROGRAM_DONE_ICON) before the word (user request, 2026-11-19). */
+export function programStatus(program: SavedProgram, mutedColor: string): { color: string; label: string; done: boolean } {
+  if (program.pausedAt)              return { color: PAUSED_ORANGE, label: "Paused",      done: false };
+  if (program.status === "active")    return { color: ACCT,          label: "Active",      done: false };
+  if (program.status === "paused")    return { color: PAUSED_ORANGE, label: "Paused",      done: false };
+  if (program.status === "completed") return { color: ACCT,          label: "Completed",   done: true };
+  return { color: mutedColor, label: "Not Started", done: false };
 }

@@ -4,16 +4,19 @@
 // one exercise: every session inside the chosen time range that did it, from
 // the programs, days and Custom workouts picked in its filter (opened from the
 // Progress chart, the chart's day), newest first, with the sets that were
-// done, which of them were new PRs, its top set against the session before it,
-// and what was written on it. Also what the filter offers, and how a tap in it
-// changes what's picked. Pure, so scripts/verify-training-months.ts can check
-// the page against the chart it's opened from and against what was lifted.
+// done, which of them were new PRs (and rep PRs), its top set against the
+// session before it, and what was written on it. Also what the filter offers,
+// and how a tap in it changes what's picked. Pure, so
+// scripts/verify-training-months.ts can check the page against the chart it's
+// opened from and against what was lifted.
 
 import type { CompletedSet, CompletedWorkout, SavedProgram } from "../constants/programs";
 import { CUSTOM_WORKOUTS_NAME, workoutBelongsToProgram } from "./progressStats";
 import { exerciseIdentity } from "./exerciseNames";
 import { bestBeforeEach, prTrophySets } from "./achievements";
+import { NO_REP_BESTS, repBestsBeforeEach, repPrSets } from "./repPrs";
 import { customDayKey, displayWorkoutName, indexOfDayId } from "./programDays";
+import { SAME_KG } from "./units";
 
 /** One thing the page can be filtered to. None picked is everything. */
 export type HistoryPick =
@@ -76,6 +79,9 @@ export type ExerciseHistoryRow = {
    *  page shows (utils/achievements.ts prTrophySets: one a session, both
    *  times it was done counted together). */
   prs: boolean[];
+  /** Per set in `sets`: whether it wears the rep PR medal, the one its Journal
+   *  page shows (utils/repPrs.ts repPrSets, likewise one a session). */
+  repPrs: boolean[];
   /** The top set's place in `sets`: the heaviest working set with its reps
    *  in, the most reps at that weight (the chart's Strength dot). -1 when
    *  there's none (only warmups done). */
@@ -103,10 +109,8 @@ function positive(s: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-// Two weights this close are the same weight: one typed in pounds is stored in
-// kilos a hair off whole, and across a switch of unit 220.5 lbs is 0.017 kg off
-// 100 kg. Anything closer would read "▲ 0 lbs" (pounds show to a tenth).
-export const SAME_KG = 0.025;
+// Two weights within SAME_KG (utils/units.ts) are the same weight.
+export { SAME_KG };
 
 function topSetOf(sets: CompletedSet[]): number {
   let at = -1;
@@ -194,8 +198,10 @@ export function exerciseHistoryRows(
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffMs = cutoff.getTime();
 
-  // A PR is against every session of the exercise before it, on any day.
+  // A PR is against every session of the exercise before it, on any day; so
+  // is a rep PR.
   const bestBefore = bestBeforeEach(history, want);
+  const repBestsBefore = repBestsBeforeEach(history, want);
 
   // Every session picked, whatever its date: the oldest one in the range
   // still compares with the session before it.
@@ -226,6 +232,16 @@ export function exerciseHistoryRows(
           [{ identity: want, sets: doneSets.map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) })) }],
           () => best,
         )[0],
+        // Each time it was done kept apart, a hold's seconds being seconds;
+        // in the same order as doneSets.
+        repPrs: repPrSets(
+          mine.map(e => ({
+            identity: want,
+            hold: e.isIsometric === true,
+            sets: e.sets.filter(s => s.done).map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: positive(s.weight) })),
+          })),
+          repBestsBefore.get(w.id) ?? NO_REP_BESTS,
+        ).flat(),
         top: topSetOf(doneSets),
         change: null,
         isHold: mine.some(e => e.isIsometric === true),

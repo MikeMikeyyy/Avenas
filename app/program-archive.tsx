@@ -61,6 +61,8 @@ import { confirmDeleteArchived } from "../utils/archiveChoice";
 import { archivedPrograms, restoreProgram } from "../utils/programArchive";
 import { keepDeletedProgramName } from "../utils/programDelete";
 import { programStatus } from "../utils/programStatus";
+import { Image } from "expo-image";
+import { PROGRAM_DONE_ICON } from "../constants/icons";
 import { peekPTHub } from "../utils/trainerHub";
 import { peekGroupPage } from "../utils/groupPage";
 import {
@@ -410,6 +412,7 @@ export default function ProgramArchiveScreen() {
                 meta={`${archivedOn(p.archivedAt)} · ${weekText(p)}`}
                 pill={
                   <View style={[styles.pill, { backgroundColor: `${status.color}22` }]}>
+                    {status.done && <Image source={PROGRAM_DONE_ICON} style={styles.pillDoneIcon} contentFit="contain" />}
                     <Text style={[styles.pillText, { color: status.color }]}>{status.label}</Text>
                   </View>
                 }
@@ -489,8 +492,11 @@ const styles = StyleSheet.create({
   cardTop:       { ...CARD_TOP },
   cardName:      { ...CARD_TITLE },
   cardMeta:      { ...CARD_META },
-  pill:          { ...CARD_PILL },
+  pill:          { ...CARD_PILL, flexDirection: "row", alignItems: "center", gap: 4 },
   pillText:      { ...CARD_PILL_TEXT },
+  // The finished program's clipboard in a Completed pill, a touch over the
+  // 11pt word (full-colour artwork fills its square).
+  pillDoneIcon:  { width: 13, height: 13 },
   cycleGrid:     { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 12 },
   cycleChip:     { alignItems: "center", paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, minWidth: 56 },
   cycleChipText: { fontFamily: FontFamily.bold, fontSize: 9, textAlign: "center" },

@@ -31,6 +31,10 @@
 //                  the Journal's month calendar (a trainer's view of a client's
 //                  too): which days read trained, the bands joining days trained
 //                  and days missed, and the month's workouts
+//   training-card/ the Journal's Your Training card (a trainer's view of a
+//                  client's too): its workouts, first day, time, programs
+//                  finished and weekly bars, its PRs against the marks the
+//                  sessions wear, and then and now's sets against sets done
 //   compare/       the Progress page comparing the program on the go with a
 //                  finished one: which runs it offers, which it starts from
 //                  with nothing on the go, each run's sessions, its weekly
@@ -41,7 +45,7 @@ import {
   bucketMetricByDay, bucketMetricByMonth, bucketMetricByRollingWeeks, collectExerciseHistory, collectLoggedExercises,
   collectLoggedExercisesForDay, computePRs, computeWorkoutDurationMinutes, computeWorkoutReps,
   computeWorkoutTonnage, filterByProgramScope, getRangeOption, rangeWindow, scopedProgramDays,
-  sessionCountForDay, workoutBelongsToProgram, yearBarCount,
+  sessionCountForDay, workoutBelongsToProgram, yearBarCount, currentScopeProgram,
 } from "../../../utils/progressStats";
 import { groupByMuscle, searchLoggedExercises } from "../../../utils/allExercises";
 import { MUSCLE_GROUPS } from "../../../constants/exercises";
@@ -62,12 +66,16 @@ import { buildSessionTracks, type SessionTracks } from "../../../utils/sessionTr
 import { buildProgramHistory } from "../../../utils/programHistory";
 import { buildWeekSchedule, weekStartFor, weekTotals } from "../../../utils/weekSchedule";
 import { calendarWeeks, monthWorkouts, pastPlanFrom, type CalendarDay } from "../../../utils/journalCalendar";
+import { trainingTotals, type TopSet } from "../../../utils/trainingTotals";
 import { addDaysYMD, toYMD } from "../../../utils/dates";
 import {
   buildPrevNoteLookup, buildPrevSetsLookup, finishedSessionPrevSets, getEffectiveToday, lastSessionOfDay, prevDayScopeFor, prevHintsForRows, resolveWorkoutForDate, type DayOverride,
 } from "../../../utils/workout";
 import { formatPrevHint, formatWeightForDisplay, trimNumber } from "../../../utils/units";
-import { detectWorkoutAchievements } from "../../../utils/achievements";
+import { detectWorkoutAchievements, prSetsOfWorkout } from "../../../utils/achievements";
+import { repPrSetsOfWorkout } from "../../../utils/repPrs";
+import { supersetIdsOf, supersetPlaces } from "../../../utils/supersets";
+import { exerciseIdentity } from "../../../utils/exerciseNames";
 import { EMPTY_ACHIEVEMENTS } from "../../../constants/achievements";
 import {
   aheadAtSamePoint, compareCandidates, compareLifts, glanceStats, greenRunFor, liftSlots, missedDates, runDays, weeklyTotals,
@@ -238,18 +246,56 @@ function progressBars(snap: Snapshot, scope: ProgramScope, range: RangeKey, metr
 }
 
 function scopesFor(snap: Snapshot): { scope: ProgramScope; label: string; programId: string | null }[] {
-  const active = snap.programs.find(p => p.status === "active") ?? null;
+  // What Progress's Current program stands for (currentScopeProgram, held to
+  // the ledger by expectedCurrent): the active one once a workout's logged in
+  // its run; until then, or with none active, the one finished last.
+  const current = currentScopeProgram(snap.programs, snap.history, snap.calendarToday);
   return [
     { scope: { kind: "all" }, label: "All programs", programId: null },
-    ...(active ? [{ scope: { kind: "current" } as ProgramScope, label: `Current (${active.name})`, programId: active.id }] : []),
+    ...(current ? [{ scope: { kind: "current" } as ProgramScope, label: `Current (${current.name})`, programId: current.id }] : []),
     ...snap.programs.map(p => ({ scope: { kind: "program", programId: p.id } as ProgramScope, label: p.name, programId: p.id })),
     // The free workouts: in no program (user request, 2026-10-23).
     { scope: { kind: "custom" }, label: "Custom workouts", programId: "" },
   ];
 }
 
+/**
+ * Which program Progress's Current program should be, from what the lifter
+ * did (user request, 2026-11-19): the program on the go once a session is
+ * logged in its run, and until then the one whose run finished last (its own
+ * program, run again or not). "unchecked" where the ledger alone can't say:
+ * nothing finished yet, two finished the same day, or a run shelved since the
+ * last finish with a session in it.
+ */
+function expectedCurrent(l: Lifter, snap: Snapshot): { id: string | null; why: string } | "unchecked" {
+  const onTheGo = l.runs.find(r => !r.endYMD);
+  if (onTheGo && onTheGo.startYMD <= snap.calendarToday
+    && l.sessions.some(s => s.programId === onTheGo.programId && s.date >= onTheGo.startYMD)) {
+    return { id: onTheGo.programId, why: `${programName(snap, onTheGo.programId)} is on the go with a session logged in it` };
+  }
+  const finished = l.runs.filter(r => r.finished === true && r.endYMD);
+  if (finished.length === 0) return "unchecked";
+  const lastEnd = finished.reduce((m, r) => (r.endYMD! > m ? r.endYMD! : m), "");
+  const last = finished.filter(r => r.endYMD === lastEnd);
+  if (last.length > 1) return "unchecked";
+  const shelvedSince = l.runs.some(r => r.endYMD && r.finished === false && r.startYMD > lastEnd
+    && l.sessions.some(s => s.programId === r.programId && s.date > lastEnd && s.date >= r.startYMD && s.date <= r.endYMD!));
+  if (shelvedSince) return "unchecked";
+  return {
+    id: last[0].programId,
+    why: `${programName(snap, last[0].programId)} finished last, on ${lastEnd}${onTheGo ? `, and nothing's logged yet in ${programName(snap, onTheGo.programId)}'s run` : ""}`,
+  };
+}
+
 export function checkProgressBars(l: Lifter, snap: Snapshot): Problem[] {
   const out: Problem[] = [];
+  const want = expectedCurrent(l, snap);
+  if (want !== "unchecked") {
+    const got = currentScopeProgram(snap.programs, snap.history, snap.calendarToday)?.id ?? null;
+    if (got !== want.id) {
+      out.push({ code: "progress/current", what: `Current program is ${got ? programName(snap, got) : "none"}; ${want.why}` });
+    }
+  }
   for (const { scope, label, programId } of scopesFor(snap)) {
     const mine = l.sessions.filter(s => programId === null || s.programId === programId);
     let earliest: string | null = null;
@@ -317,7 +363,7 @@ export function checkProgressDays(l: Lifter, snap: Snapshot): { problems: Proble
       charts.push(...all.charts);
       continue;
     }
-    const days = scopedProgramDays(scope, snap.programs, scoped);
+    const days = scopedProgramDays(scope, snap.programs, scoped, snap.history);
     const mine = l.sessions.filter(s => programId === null || s.programId === programId);
     for (const day of days) {
       const where = `${label}: ${day.programName} ${day.label} (${day.dayId})`;
@@ -716,6 +762,23 @@ function checkChart(
     if (row.notes !== note) {
       out.push({ code: "progress/history-note", what: `${at} ${s.date}: Exercise History's note reads "${row.notes}"; written was "${note}"` });
       break;
+    }
+    // Its trophies and rep PR medals (utils/repPrs.ts): the ones the session's
+    // Journal page draws, on the exercise's done sets in order. The page works
+    // them out for every session in one pass; the Journal, one session at a
+    // time.
+    const saved = snap.history.find(w => w.id === row.workoutId);
+    if (saved) {
+      const want = exerciseIdentity({ name });
+      const onPage = (marks: boolean[][]) => saved.exercises.flatMap((e, i) =>
+        exerciseIdentity(e) === want ? e.sets.flatMap((x, j) => (x.done ? [marks[i][j]] : [])) : []);
+      const trophies = onPage(prSetsOfWorkout(saved, snap.history));
+      const medals = onPage(repPrSetsOfWorkout(saved, snap.history));
+      if (row.prs.join() !== trophies.join() || row.repPrs.join() !== medals.join()) {
+        const marks = (prs: boolean[], reps: boolean[]) => prs.map((t, i) => (t ? "trophy" : reps[i] ? "medal" : "-")).join(" ");
+        out.push({ code: "progress/history-marks", what: `${at} ${s.date}: Exercise History marks its sets ${marks(row.prs, row.repPrs)}; its Journal page, ${marks(trophies, medals)}` });
+        break;
+      }
     }
   }
   return out;
@@ -1143,6 +1206,102 @@ export function checkJournalCalendar(l: Lifter, snap: Snapshot): Problem[] {
   return out;
 }
 
+// ─── The Journal's Your Training card ────────────────────────────────────────
+
+/** The Monday of a day's week, worked out apart from the app's weekStartFor:
+ *  on the UTC calendar, which no daylight-saving change moves. */
+function mondayOf(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const at = Date.UTC(y, m - 1, d);
+  const back = (new Date(at).getUTCDay() + 6) % 7;
+  return new Date(at - back * 86400000).toISOString().slice(0, 10);
+}
+
+/** The same day three calendar months before, held to the month's end. */
+function threeMonthsBefore(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const back = new Date(Date.UTC(y, m - 4, 1));
+  const lastDay = new Date(Date.UTC(back.getUTCFullYear(), back.getUTCMonth() + 1, 0)).getUTCDate();
+  return `${back.toISOString().slice(0, 8)}${String(Math.min(d, lastDay)).padStart(2, "0")}`;
+}
+
+/** The Journal's Your Training card, drawn from the history as the user's own
+ *  Journal and a trainer's view of a client's both draw it. Its workouts, first
+ *  day, time, programs finished and every week's bar come out of what was
+ *  logged; its PRs are the trophies and medals the sessions wear (the app's
+ *  own marks, which save/ holds to the ledger); and then and now's two sets
+ *  were really done, the "now" one later, in the last six weeks, and better. */
+export function checkTrainingCard(l: Lifter, snap: Snapshot): Problem[] {
+  const out: Problem[] = [];
+  const card = trainingTotals({ history: snap.history, programs: snap.programs, today: snap.today });
+  const sessions = l.sessions;
+
+  if (card.workouts !== sessions.length) {
+    out.push({ code: "training-card/workouts", what: `says ${card.workouts} workouts; ${sessions.length} were logged` });
+  }
+  const first = sessions.reduce<string | null>((m, s) => (m === null || s.date < m ? s.date : m), null);
+  if (card.firstDate !== first) {
+    out.push({ code: "training-card/since", what: `says since ${card.firstDate}; the first was logged on ${first}` });
+  }
+  const secs = sessions.reduce((n, s) => n + s.durationSeconds, 0);
+  if (card.seconds !== secs) {
+    out.push({ code: "training-card/time", what: `says ${card.seconds}s trained; ${secs}s were logged` });
+  }
+  const finished = l.runs.filter(r => r.finished === true).length;
+  if (card.programsFinished !== finished) {
+    out.push({ code: "training-card/programs", what: `says ${card.programsFinished} programs finished; ${finished} runs were` });
+  }
+
+  const thisWeek = mondayOf(snap.today);
+  const lastWeek = card.weeks[card.weeks.length - 1]?.start;
+  if (lastWeek !== thisWeek) {
+    out.push({ code: "training-card/this-week", what: `the bars end on the week of ${lastWeek}; today (${snap.today}) is in the week of ${thisWeek}` });
+  }
+  const firstWeek = first ? mondayOf(first) : null;
+  for (const w of card.weeks) {
+    const want = firstWeek === null || w.start < firstWeek ? null : sessions.filter(s => mondayOf(s.date) === w.start).length;
+    if (w.workouts !== want) {
+      out.push({ code: "training-card/week", what: `the week of ${w.start} reads ${w.workouts ?? "nothing"}; ${want === null ? "it's before the first workout" : `${want} were logged`}` });
+    }
+  }
+
+  const marks = snap.history.reduce((n, w) =>
+    n + prSetsOfWorkout(w, snap.history).flat().filter(Boolean).length
+      + repPrSetsOfWorkout(w, snap.history).flat().filter(Boolean).length, 0);
+  if (card.prs !== marks) {
+    out.push({ code: "training-card/prs", what: `says ${card.prs} PRs; the sessions wear ${marks} trophies and medals` });
+  }
+
+  const m = card.memory;
+  if (m) {
+    const then = sessions.find(s => s.id === m.workoutId);
+    const id = exerciseIdentity({ name: m.exerciseName });
+    const did = (s: LedgerSession, set: TopSet) => s.exercises.some(e =>
+      e.kind === "weighted" && exerciseIdentity({ name: e.name }) === id
+      && workingDone(s, e).some(x => x.kg !== null && x.reps !== null && Math.abs(x.kg - set.kg) < 0.01 && x.reps === set.reps));
+    if (!then) {
+      out.push({ code: "training-card/then", what: `then and now opens ${m.workoutId}, which was never logged` });
+    } else {
+      if (m.first ? then.date !== first : then.date > threeMonthsBefore(snap.today)) {
+        out.push({ code: "training-card/then", what: `then and now is ${then.date}${m.first ? ", called the first workout; the first was " + first : `, under three months before ${snap.today}`}` });
+      }
+      if (!did(then, m.then)) {
+        out.push({ code: "training-card/then", what: `then and now says ${m.exerciseName} ${m.then.kg} kg × ${m.then.reps} on ${then.date}; no such set was done` });
+      }
+      const recentFrom = addDaysYMD(snap.today, -42);
+      const later = sessions.filter(s => s.date >= recentFrom && s.finishedAt > then.finishedAt && did(s, m.now));
+      if (later.length === 0) {
+        out.push({ code: "training-card/now", what: `then and now says ${m.exerciseName} ${m.now.kg} kg × ${m.now.reps} now; no such set was done since ${then.date} in the last six weeks` });
+      }
+      const up = m.now.kg > m.then.kg + 0.025 || (Math.abs(m.now.kg - m.then.kg) < 0.025 && m.now.reps > m.then.reps);
+      if (!up) {
+        out.push({ code: "training-card/now", what: `then and now goes from ${m.then.kg} × ${m.then.reps} to ${m.now.kg} × ${m.now.reps}: not a step up` });
+      }
+    }
+  }
+  return out;
+}
+
 // ─── The Workout tab's "Previous" ────────────────────────────────────────────
 
 /** A ledger set as the "Previous" hint should read it, in the unit on screen. */
@@ -1530,6 +1689,18 @@ export function checkSave(a: AfterSave): Problem[] {
   const out: Problem[] = [];
   const { saved, ledger, prior, lifter } = a;
   const isKg = ledger.unit === "kg";
+  // Its supersets (utils/supersets.ts): saved as they were done, two or more
+  // side by side, and so what the Journal's workout page joins with its line
+  // (supersetPlaces), the program untouched by one made in the session.
+  const savedSupersets = supersetIdsOf(saved.exercises);
+  const doneSupersets = ledger.exercises.map(e => e.superset);
+  if (JSON.stringify(savedSupersets) !== JSON.stringify(doneSupersets)) {
+    out.push({ code: "save/supersets", what: `${ledger.workoutName} ${ledger.date}: saved its supersets as ${JSON.stringify(savedSupersets)}; done as ${JSON.stringify(doneSupersets)}` });
+  }
+  const joined = supersetPlaces(saved.exercises).map(p => p !== null);
+  if (JSON.stringify(joined) !== JSON.stringify(doneSupersets.map(Boolean))) {
+    out.push({ code: "journal/supersets", what: `${ledger.workoutName} ${ledger.date}: the Journal's page joins ${JSON.stringify(joined)}; done in supersets ${JSON.stringify(doneSupersets.map(Boolean))}` });
+  }
   // Saved finishing when it finished, to the minute the wheels hold: a session
   // finished after midnight and counted as the day before was saved a day
   // early, stamped at its end time on the training day.

@@ -98,6 +98,7 @@ export function GlassSurface({ tint, interactive = false, shown, style, solidSty
 
 export default function GlassButton({
   onPress, tint, pill = false, grow = false, size = PILL_H_XS, disabled = false, needsConnection = false,
+  fill = false, ghost = false, shown,
   style, contentStyle, solidStyle, badge, children,
   accessibilityLabel, accessibilityRole = "button", accessibilityState,
 }: {
@@ -115,6 +116,18 @@ export default function GlassButton({
   /** The action needs the server: offline, it fades and a tap says so (as
    *  BounceButton's). */
   needsConnection?: boolean;
+  /** The button takes its parent's size, its ends `size` round: a box whose
+   *  size moves (the Progress page's filter dock, components/progress/
+   *  FilterDock.tsx, where a pill shrinks to a circle as the page scrolls).
+   *  What's on it lays itself out. */
+  fill?: boolean;
+  /** Its place and size alone, unseen and untouchable, for a button drawn
+   *  somewhere else to hold its place in a layout (the filter dock's buttons
+   *  in the Progress page's rows). Plain views, so no glass is faded. */
+  ghost?: boolean;
+  /** Glass that comes and goes (GlassSurface's): false takes it away, iOS
+   *  dissolving it out. Left out, it's always there. */
+  shown?: boolean;
   /** Where the button sits: absolute placement, margins, a flex share. */
   style?: StyleProp<ViewStyle>;
   /** Lays out what's on it: a pill's padding, the row's gap, a minimum width. */
@@ -131,10 +144,22 @@ export default function GlassButton({
 }) {
   const offline = useOffline();
   const blocked = needsConnection && offline;
-  const shape = pill
-    ? (grow ? { minHeight: size, borderRadius: size / 2 } : { height: size, borderRadius: size / 2 })
-    : { width: size, height: size, borderRadius: size / 2 };
-  const content = pill ? (grow ? [styles.pillGrowContent, { minHeight: size }] : styles.pillContent) : styles.circleContent;
+  const shape = fill
+    ? [StyleSheet.absoluteFill, { borderRadius: size / 2 }]
+    : pill
+      ? (grow ? { minHeight: size, borderRadius: size / 2 } : { height: size, borderRadius: size / 2 })
+      : { width: size, height: size, borderRadius: size / 2 };
+  const content = fill ? styles.fillContent : glassContentStyle(pill, grow, size);
+
+  if (ghost) {
+    return (
+      <View style={style} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <View style={[shape, styles.ghost]}>
+          <View style={[content, contentStyle]}>{children}</View>
+        </View>
+      </View>
+    );
+  }
 
   if (!GLASS) {
     return (
@@ -146,7 +171,7 @@ export default function GlassButton({
         accessibilityRole={accessibilityRole}
         accessibilityState={disabled ? { ...accessibilityState, disabled: true } : accessibilityState}
       >
-        <GlassSurface tint={tint} style={shape} solidStyle={[solidStyle, disabled && styles.dim]}>
+        <GlassSurface tint={tint} shown={shown} style={shape} solidStyle={[solidStyle, disabled && styles.dim]}>
           <View style={[content, contentStyle]}>{children}</View>
         </GlassSurface>
         {badge}
@@ -168,7 +193,7 @@ export default function GlassButton({
       accessibilityState={disabled || blocked ? { ...accessibilityState, disabled: true } : accessibilityState}
       accessibilityHint={blocked ? "Needs a connection" : undefined}
     >
-      <GlassSurface tint={tint} interactive={!disabled} style={shape}>
+      <GlassSurface tint={tint} shown={shown} interactive={!disabled} style={shape}>
         <View style={[content, contentStyle, (disabled || blocked) && styles.dim]}>{children}</View>
       </GlassSurface>
       {badge}
@@ -176,8 +201,16 @@ export default function GlassButton({
   );
 }
 
+/** How a button lays out what's on it, for a face drawn the same somewhere
+ *  else (the filter dock's big buttons, the page's own faces). */
+export function glassContentStyle(pill: boolean, grow: boolean, size: number = PILL_H_XS): StyleProp<ViewStyle> {
+  return pill ? (grow ? [styles.pillGrowContent, { minHeight: size }] : styles.pillContent) : styles.circleContent;
+}
+
 const styles = StyleSheet.create({
   circleContent: { flex: 1, alignItems: "center", justifyContent: "center" },
+  fillContent: { flex: 1 },
+  ghost: { opacity: 0 },
   pillContent: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
   // Its height from what's on it, so a second line makes the pill taller.
   pillGrowContent: { flexGrow: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: 16, paddingVertical: 6 },

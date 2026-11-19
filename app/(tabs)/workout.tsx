@@ -28,6 +28,7 @@ import ExercisePicker from "../../components/ExercisePicker";
 import ExerciseSheet from "../../components/ExerciseSheet";
 import NumberBadge from "../../components/NumberBadge";
 import ReorderExercisesSheet from "../../components/ReorderExercisesSheet";
+import SupersetLink from "../../components/SupersetLink";
 import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetSurface } from "../../components/SheetChrome";
 import TrashIcon from "../../components/TrashIcon";
 import ExerciseNotesField, { PrevNoteTag, ReuseNoteChip, prevNotePlaceholder } from "../../components/ExerciseNotesField";
@@ -65,10 +66,16 @@ import { deleteCustomExercise as deleteCustomEverywhere } from "../../utils/cust
 import { resumeWithPrompt } from "../../utils/programPause";
 import { exercisePageParams, exerciseSummaryParams } from "../../utils/customExerciseDetails";
 import { applyRestDay, clearRestDay, isDateSkipped } from "../../utils/restDay";
+import { startDay, startsLabel, startsLater } from "../../utils/programStart";
 import { formatWeightForDisplay, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder, parseWeightToKg } from "../../utils/units";
 import { bestLiftsBefore, prSetsOfWorkout, prTrophySets } from "../../utils/achievements";
+import { repBestsBefore, repPrSets, repPrSetsOfWorkout } from "../../utils/repPrs";
+import {
+  blocksOf, cleanSupersets, joinSuperset, leaveSuperset, moveKeepingSupersets, restAfterSet,
+  supersetChoicesFor, supersetLines, supersetPlaces,
+} from "../../utils/supersets";
 import { exerciseIdentity } from "../../utils/exerciseNames";
-import PrTrophy from "../../components/PrTrophy";
+import PrTrophy, { type PrMark } from "../../components/PrTrophy";
 import { scheduleCloudPush } from "../../lib/syncManager";
 import { noteDeleted } from "../../utils/syncLocal";
 import { useSyncedDataReload } from "../../hooks/useSyncedDataReload";
@@ -120,6 +127,10 @@ const FOCUS_STACK_GAP = 12;
 
 /** The space under each exercise card (styles.exCard). */
 const EX_CARD_GAP = 20;
+/** Where the line joining a superset's cards runs (components/SupersetLink.tsx):
+ *  through the centre of each card's number circle, exCardInner's 16pt padding
+ *  plus half the 32pt NumberBadge. */
+const SUPERSET_LINE_X = 32;
 
 // ─── Log types ─────────────────────────────────────────────────────────────────
 
@@ -732,12 +743,15 @@ interface ExerciseCardProps {
   /** The row (warm-ups first) wearing the PR trophy, worked out across the
    *  session's cards (utils/achievements.ts prTrophySets). Absent: none. */
   prRow?: number;
-  /** On the finished session: which sets are PRs, by row (warm-ups first),
-   *  worked out from the saved kg rather than the numbers as shown. */
-  prFlags?: readonly boolean[];
+  /** The row wearing the rep PR medal, worked out the same way
+   *  (utils/repPrs.ts repPrSets). Absent: none. */
+  repRow?: number;
+  /** On the finished session: each row's PR mark (warm-ups first), worked
+   *  out from the saved kg rather than the numbers as shown. */
+  prMarks?: readonly PrMark[];
 }
 
-function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onUpdateNotes, exNotes, onOpenOptions, isIsometric, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prRow, prFlags }: ExerciseCardProps) {
+function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpdateSet, onToggleDone, onUpdateNotes, exNotes, onOpenOptions, isIsometric, onInputFocus, activeSetFlatIdx, isLocked = false, prevSets, prevNote, hideIndexLabel = false, numberBadge, changeCue, sessionCue, prRow, repRow, prMarks }: ExerciseCardProps) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const { isKg } = useUnit();
   // Taken from the hook rather than passed in: a prop would be a new value on
@@ -860,9 +874,12 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
           const setLabel = set.isWarmup ? "W" : workingCounter.count;
           const rowIsActive = flatIdx === activeSetFlatIdx;
           const isNew = !!drawn.added?.has(set.rowKey) && rowHeight > 0;
-          // The PR trophy: the row the screen worked out across the session's
-          // cards. The finished session's own flags come from what it saved.
-          const isPr = prFlags ? !!prFlags[flatIdx] : flatIdx === prRow;
+          // The PR trophy or rep PR medal: the rows the screen worked out
+          // across the session's cards. The finished session's own marks come
+          // from what it saved.
+          const prMark: PrMark = prMarks
+            ? prMarks[flatIdx] ?? null
+            : flatIdx === prRow ? "weight" : flatIdx === repRow ? (isIsometric ? "hold" : "reps") : null;
 
           return (
             <CollapsibleCard
@@ -885,7 +902,7 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   <Text style={[styles.setText, { color: set.isWarmup ? WARMUP_ORANGE : t.tp }]}>
                     {setLabel}
                   </Text>
-                  <PrTrophy show={isPr} />
+                  <PrTrophy mark={prMark} />
                 </View>
               </View>
 
@@ -966,8 +983,9 @@ function ExerciseCard({ exercise, exIndex, totalExercises, exLog, isDark, onUpda
                   isDark={isDark}
                   isActive={rowIsActive}
                   onToggle={isLocked ? () => {} : () => {
-                    // An empty set takes last time's numbers as it's
-                    // ticked (prevFillFor, the lock screen's rule too).
+                    // Each empty box takes last time's number as it's
+                    // ticked, a typed one stays (prevFillFor, the lock
+                    // screen's rule too).
                     const fill = set.done ? null : prevFillFor(set, prevSets?.[flatIdx]);
                     if (fill) {
                       onUpdateSet(exercise.id, set.type, set.localIdx, "weight", fill.weight);
@@ -1025,7 +1043,7 @@ function cardTargetOf(exercises: Exercise[], exIndex: number): string {
 // (utils/nextSet.ts), or Complete Workout once only skipped sets are left,
 // since its Incomplete Sets warning is what takes you back to those.
 function upToTargetOf(exercises: Exercise[], log: WorkoutLog): string {
-  const next = nextSetOf(exercises.map(e => e.id), log);
+  const next = nextSetOf(exercises.map(e => e.id), log, exercises.map(e => e.supersetId));
   if (!next || next.skipped) return UP_TO_END;
   return cardTargetOf(exercises, next.exIndex);
 }
@@ -1299,6 +1317,7 @@ function WorkoutScreen() {
       id: `locked_${i}`,
       name: ex.name,
       sets: [] as ProgramSet[],
+      ...(ex.supersetId ? { supersetId: ex.supersetId } : {}),
     }));
     const lockedLog: WorkoutLog = {};
     // Stored weights are canonical kg → show them in the user's unit.
@@ -1786,7 +1805,9 @@ function WorkoutScreen() {
       dismissRestTimer();
       return;
     }
-    startRestTimer(workoutInfo?.exercises.find(e => e.id === exId)?.restSeconds ?? 0);
+    // A superset's round rests once, after its last set: none while another
+    // member's set of the round is still to do (utils/supersets.ts).
+    startRestTimer(workoutInfo ? restAfterSet(workoutInfo.exercises, logRef.current, exId, type, idx) : 0);
   }, [wouldCompleteWorkout, dismissRestTimer, startRestTimer, workoutInfo]);
 
   const toggleDone = useCallback((exId: string, type: "warmup" | "working", idx: number) => {
@@ -1893,7 +1914,7 @@ function WorkoutScreen() {
 
   const removeExercise = (exId: string) => {
     markShaped();
-    setWorkoutInfo(prev => prev ? { ...prev, exercises: prev.exercises.filter(e => e.id !== exId) } : prev);
+    setWorkoutInfo(prev => prev ? { ...prev, exercises: cleanSupersets(prev.exercises.filter(e => e.id !== exId)) } : prev);
     setLog(prev => { const next = { ...prev }; delete next[exId]; return next; });
     setCollapsingIds(prev => { const next = new Set(prev); next.delete(exId); return next; });
   };
@@ -1947,6 +1968,36 @@ function WorkoutScreen() {
     const ex = workoutInfo?.exercises.find(e => e.id === sheetExId);
     if (ex) router.navigate({ pathname: "/exercise-history", params: exercisePageParams(ex) });
   }, [workoutInfo, sheetExId, router]);
+  // Supersets made here are today's session's alone, like a swap: the program
+  // keeps its own (utils/supersets.ts; user request, 2026-11-15).
+  const sheetSuperset = useCallback((key: string) => {
+    if (!sheetExId) return;
+    markShaped();
+    setWorkoutInfo(prev => {
+      if (!prev) return prev;
+      const at = prev.exercises.findIndex(e => e.id === sheetExId);
+      const pick = prev.exercises.findIndex(e => e.id === key);
+      return at < 0 || pick < 0 ? prev : { ...prev, exercises: joinSuperset(prev.exercises, at, pick) };
+    });
+  }, [sheetExId, markShaped]);
+  const sheetLeaveSuperset = useCallback(() => {
+    if (!sheetExId) return;
+    markShaped();
+    setWorkoutInfo(prev => {
+      if (!prev) return prev;
+      const i = prev.exercises.findIndex(e => e.id === sheetExId);
+      return i < 0 ? prev : { ...prev, exercises: leaveSuperset(prev.exercises, i) };
+    });
+  }, [sheetExId, markShaped]);
+  const sheetSupersets = useMemo(() => {
+    const list = workoutInfo?.exercises ?? [];
+    return supersetChoicesFor(list, list.findIndex(e => e.id === sheetExId), e => e.id);
+  }, [workoutInfo, sheetExId]);
+  // Each card's place in its superset (the line joining them), and each
+  // member's line in the reorder sheet.
+  const supersetPlaceAt = useMemo(() => supersetPlaces(workoutInfo?.exercises ?? []), [workoutInfo]);
+  const lockedSupersetPlaceAt = useMemo(() => supersetPlaces(lockedData?.exercises ?? []), [lockedData]);
+  const reorderLines = useMemo(() => supersetLines(workoutInfo?.exercises ?? [], e => e.id), [workoutInfo]);
   const sheetExercise = sheetExId ? workoutInfo?.exercises.find(e => e.id === sheetExId) : undefined;
   const sheetLog = sheetExId ? log[sheetExId] : undefined;
   const sheetPosition = sheetExercise && workoutInfo
@@ -2082,7 +2133,7 @@ function WorkoutScreen() {
   // The set that glows: the one the session is up to (utils/nextSet.ts), after
   // the set you ticked last, which is also the set a lock-screen tick marks.
   const nextSet = useMemo(
-    () => (workoutInfo ? nextSetOf(workoutInfo.exercises.map(e => e.id), log) : null),
+    () => (workoutInfo ? nextSetOf(workoutInfo.exercises.map(e => e.id), log, workoutInfo.exercises.map(e => e.supersetId)) : null),
     [workoutInfo, log],
   );
 
@@ -2395,16 +2446,41 @@ function WorkoutScreen() {
     });
     return out;
   }, [workoutInfo, log, bestLifts, isKg]);
-  // Today's FINISHED session's PR sets, from the kg it saved, against the
-  // sessions before it (prSetsOfWorkout, as its Journal page reads them): per
-  // card, in the card's row order, warm-ups first.
-  const lockedPrFlags = useMemo(() => {
+  // The rep PR medal's rows the same way (utils/repPrs.ts; user request,
+  // 2026-11-14): one per exercise, more reps than ever at a weight done
+  // before, a hold's seconds apart from reps.
+  const repBests = useMemo(() => repBestsBefore(prevHistory), [prevHistory]);
+  const repRowById = useMemo(() => {
+    const exercises = workoutInfo?.exercises ?? [];
+    const asSet = (type: "warmup" | "working") => (s: SetLog) =>
+      ({ type, done: s.done, reps: s.reps, weightKg: parseFloat(parseWeightToKg(s.weight, isKg)) || 0 });
+    const worn = repPrSets(
+      exercises.map(ex => ({
+        identity: exerciseIdentity(ex),
+        hold: isometricExIds.has(ex.id),
+        sets: [...(log[ex.id]?.warmup ?? []).map(asSet("warmup")), ...(log[ex.id]?.working ?? []).map(asSet("working"))],
+      })),
+      repBests,
+    );
+    const out: Record<string, number> = {};
+    exercises.forEach((ex, i) => {
+      const row = worn[i].indexOf(true);
+      if (row >= 0) out[ex.id] = row;
+    });
+    return out;
+  }, [workoutInfo, log, repBests, isometricExIds, isKg]);
+  // Today's FINISHED session's PR marks, from the kg it saved, against the
+  // sessions before it (prSetsOfWorkout and repPrSetsOfWorkout, as its Journal
+  // page reads them): per card, in the card's row order, warm-ups first.
+  const lockedPrMarks = useMemo(() => {
     if (!todaysCompletedWorkout) return null;
-    const saved = prSetsOfWorkout(todaysCompletedWorkout, prevHistory);
+    const trophies = prSetsOfWorkout(todaysCompletedWorkout, prevHistory);
+    const medals = repPrSetsOfWorkout(todaysCompletedWorkout, prevHistory);
     return todaysCompletedWorkout.exercises.map((ex, i) => {
-      const flags = saved[i];
-      const warm = ex.sets.flatMap((s, j) => (s.type === "warmup" ? [flags[j]] : []));
-      const work = ex.sets.flatMap((s, j) => (s.type === "working" ? [flags[j]] : []));
+      const markOf = (j: number): PrMark =>
+        trophies[i][j] ? "weight" : medals[i][j] ? (ex.isIsometric ? "hold" : "reps") : null;
+      const warm = ex.sets.flatMap((s, j) => (s.type === "warmup" ? [markOf(j)] : []));
+      const work = ex.sets.flatMap((s, j) => (s.type === "working" ? [markOf(j)] : []));
       return [...warm, ...work];
     });
   }, [todaysCompletedWorkout, prevHistory]);
@@ -2490,7 +2566,7 @@ function WorkoutScreen() {
     return buildLiveActivityPayload({
       workoutName: workoutInfo.name,
       exercises: workoutInfo.exercises.map(e => ({
-        id: e.id, name: e.name, restSeconds: e.restSeconds, isHold: isometricExIds.has(e.id),
+        id: e.id, name: e.name, restSeconds: e.restSeconds, isHold: isometricExIds.has(e.id), supersetId: e.supersetId,
       })),
       log,
       // Exactly the prevSets lookup ExerciseCard feeds its checkboxes.
@@ -2547,8 +2623,8 @@ function WorkoutScreen() {
   }, [timerUpNext, sessionActiveForActivity]);
   useEffect(() => () => publishUpNext(null), []);
 
-  // The timer's tick does what the set's own checkbox does: an empty set takes
-  // last time's numbers at its row (prevFillFor), then it's ticked, which
+  // The timer's tick does what the set's own checkbox does: each empty box takes
+  // last time's number at its row (prevFillFor), then it's ticked, which
   // starts the workout's clock and the exercise's rest (toggleDone).
   const tickUpNext = useCallback(() => {
     if (!timerUpNext) return;
@@ -2697,6 +2773,14 @@ function WorkoutScreen() {
     if (n === 0) { if (focusIndex !== 0) setFocusIndex(0); return; }
     if (focusIndex > n - 1) setFocusIndex(n - 1);
   }, [workoutInfo?.exercises.length, focusIndex]);
+
+  // The step focus mode shows: the block holding the exercise it's on, a
+  // superset whole (utils/supersets.ts blocksOf).
+  const focusBlock = useMemo(() => {
+    const list = workoutInfo?.exercises ?? [];
+    const idx = Math.min(focusIndex, Math.max(0, list.length - 1));
+    return blocksOf(list).find(b => b.includes(idx)) ?? [idx];
+  }, [workoutInfo, focusIndex]);
 
   // Reset the focus index (but not the persisted view mode) when switching workouts.
   useEffect(() => { setFocusIndex(0); }, [workoutInfo?.name]);
@@ -2881,7 +2965,10 @@ function WorkoutScreen() {
           </NeuCard>
           <Text style={[styles.emptyTitle, { color: t.tp }]}>Rest Day</Text>
           <Text style={[styles.emptySub, { color: t.ts }]}>
-            Recovery is where the gains are made. Enjoy the rest.
+            {/* Before the day it's set to start (utils/programStart.ts). */}
+            {activeProgram && startsLater(activeProgram)
+              ? `"${activeProgram.name}" starts ${startDay(startsLater(activeProgram)!)}. Until then, your days are rest days.`
+              : "Recovery is where the gains are made. Enjoy the rest."}
           </Text>
         </View>
 
@@ -3015,7 +3102,9 @@ function WorkoutScreen() {
           </Text>
           {headerProgram && (
             <Text style={[styles.headerSub, { color: t.ts }]}>
-              {headerProgram.name} · Week {getCurrentWeek(headerProgram)} of {headerProgram.totalWeeks}
+              {headerProgram.name} · {startsLater(headerProgram)
+                ? startsLabel(startsLater(headerProgram)!)
+                : `Week ${getCurrentWeek(headerProgram)} of ${headerProgram.totalWeeks}`}
             </Text>
           )}
         </View>
@@ -3030,12 +3119,15 @@ function WorkoutScreen() {
         {/* Focus mode: inline progress under header */}
         {focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
           const total = workoutInfo.exercises.length;
-          const idx = Math.min(focusIndex, total - 1);
-          const pct = ((idx + 1) / total) * 100;
+          // A superset is one step, its exercises together (utils/supersets.ts).
+          const block = focusBlock;
+          const pct = (((block[block.length - 1] ?? 0) + 1) / total) * 100;
           return (
             <View style={{ marginBottom: 16 }}>
               <Text style={{ fontFamily: FontFamily.semibold, fontSize: 13, color: t.tp, marginBottom: 8 }}>
-                Exercise {idx + 1} of {total}
+                {block.length > 1
+                  ? `Superset, exercises ${block[0] + 1} to ${block[block.length - 1] + 1} of ${total}`
+                  : `Exercise ${(block[0] ?? 0) + 1} of ${total}`}
               </Text>
               <AnimatedProgressBar pct={pct} trackColor={t.div} />
             </View>
@@ -3100,6 +3192,8 @@ function WorkoutScreen() {
                 {lockedChanges?.skipped.filter(s => s.before === i).map(s => (
                   <SkippedRow key={s.id} name={s.name} isDark={isDark} style={styles.skippedGap} />
                 ))}
+                {/* In a box with its line under it when it was in a superset. */}
+                <View>
                 <ExerciseCard
                   exercise={exercise as Exercise}
                   exIndex={i}
@@ -3110,13 +3204,17 @@ function WorkoutScreen() {
                   hideIndexLabel
                   numberBadge={i + 1}
                   sessionCue={lockedChanges?.cues[i]}
-                  prFlags={lockedPrFlags?.[i]}
+                  prMarks={lockedPrMarks?.[i]}
                   prevSets={lockedPrevSets?.[i]}
                   onUpdateSet={() => {}} onToggleDone={() => {}}
                   exNotes={lockedData.log[exercise.id]?.notes ?? ""}
                   onUpdateNotes={() => {}} onOpenOptions={() => {}}
                   isIsometric={false} onInputFocus={() => {}} activeSetFlatIdx={null}
                 />
+                {lockedSupersetPlaceAt[i] === "first" || lockedSupersetPlaceAt[i] === "middle" ? (
+                  <SupersetLink gap={EX_CARD_GAP} x={SUPERSET_LINE_X} isDark={isDark} />
+                ) : null}
+                </View>
               </React.Fragment>
             ))}
             {lockedChanges?.skipped.filter(s => s.before === lockedData.exercises.length).map(s => (
@@ -3135,13 +3233,10 @@ function WorkoutScreen() {
           </NeuCard>
         ) : (
           (focusMode
-            ? workoutInfo.exercises.slice(
-                Math.min(focusIndex, workoutInfo.exercises.length - 1),
-                Math.min(focusIndex, workoutInfo.exercises.length - 1) + 1,
-              )
+            ? focusBlock.map(k => workoutInfo.exercises[k]).filter(Boolean)
             : workoutInfo.exercises
           ).map((exercise: Exercise, localI: number) => {
-            const i = focusMode ? Math.min(focusIndex, workoutInfo.exercises.length - 1) : localI;
+            const i = focusMode ? (focusBlock[localI] ?? 0) : localI;
             const exLog = log[exercise.id] ?? { warmup: [], working: [] };
             return (
               <CollapsibleCard
@@ -3171,7 +3266,11 @@ function WorkoutScreen() {
                   changeCue={changeCueById[exercise.id]}
                   sessionCue={sessionCueById[exercise.id]}
                   prRow={prRowById[exercise.id]}
+                  repRow={repRowById[exercise.id]}
                 />
+                {supersetPlaceAt[i] === "first" || supersetPlaceAt[i] === "middle" ? (
+                  <SupersetLink gap={EX_CARD_GAP} x={SUPERSET_LINE_X} isDark={isDark} />
+                ) : null}
               </CollapsibleCard>
             );
           })
@@ -3272,16 +3371,18 @@ function WorkoutScreen() {
           on the rest timer while one runs */}
       {focusMode && !todaysCompletedWorkout && workoutInfo && workoutInfo.exercises.length > 0 && (() => {
         const total = workoutInfo.exercises.length;
-        const idx = Math.min(focusIndex, total - 1);
-        const isFirst = idx === 0;
-        const isLast = idx === total - 1;
+        // A step at a time: a superset's exercises are one.
+        const start = focusBlock[0] ?? 0;
+        const end = focusBlock[focusBlock.length - 1] ?? 0;
+        const isFirst = start === 0;
+        const isLast = end >= total - 1;
         const goPrev = () => {
           if (isFirst) return;
-          setFocusIndex(idx - 1);
+          setFocusIndex(start - 1);
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         };
         const goNext = () => {
-          setFocusIndex(idx + 1);
+          setFocusIndex(end + 1);
           scrollRef.current?.scrollTo({ y: 0, animated: true });
         };
         return (
@@ -3420,6 +3521,10 @@ function WorkoutScreen() {
         onChange={sheetChange}
         onHistory={sheetHistory}
         onRemove={sheetRemove}
+        supersetChoices={sheetSupersets.choices}
+        supersetWith={sheetSupersets.partners}
+        onSuperset={sheetSuperset}
+        onLeaveSuperset={sheetLeaveSuperset}
       />
 
       {/* Exercise picker — change exercise for current session */}
@@ -3480,6 +3585,8 @@ function WorkoutScreen() {
         items={workoutInfo?.exercises ?? []}
         keyOf={ex => ex.id}
         nameOf={ex => ex.name}
+        metaOf={ex => reorderLines.get(ex.id) ?? ""}
+        move={moveKeepingSupersets}
         onReorder={reorderExercises}
         onChange={ex => setChangingExId(ex.id)}
         onRemove={ex => startCollapse(ex.id)}

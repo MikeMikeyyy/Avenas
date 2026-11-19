@@ -194,7 +194,7 @@ eq(
   );
   eq(queue.map(q => q.setLabel), ["Warmup 1", "Set 1 of 2", "Set 2 of 2"], "lock screen: warmups first, labelled as warmups");
   eq([queue[1].weight, queue[1].reps], ["60", "8"], "lock screen: an empty set previews last time's numbers for its row");
-  eq([queue[2].weight, queue[2].reps], ["70", ""], "lock screen: anything typed wins over the hint");
+  eq([queue[2].weight, queue[2].reps], ["70", "8"], "lock screen: a typed weight wins over the hint, and the empty reps show last time's (what a tick logs, 2026-11-14)");
 }
 {
   // The card's dots: the lock screen ticks the queue in order, so each set

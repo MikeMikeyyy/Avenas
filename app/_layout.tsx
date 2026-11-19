@@ -23,6 +23,7 @@ import UnfinishedWorkoutWatcher from "../components/UnfinishedWorkoutWatcher";
 import RestTimerBanner from "../components/RestTimerBanner";
 import ForceUpdateGate from "../components/ForceUpdateGate";
 import CommunityGate from "../components/CommunityGate";
+import { isReturnTrip } from "../utils/progressReturn";
 import { PhotoFramerHost } from "../components/PhotoFramer";
 import { catchUpWithBackup, flushCloudPush, pushOwedBackup } from "../lib/syncManager";
 import { reconcileAccountType, reconcileUnit } from "../lib/cloud";
@@ -229,6 +230,13 @@ function AppShell() {
   // transition (and the window re-measure it triggers) before Home repaints.
   // Giving every screen a themed contentStyle bg removes the white flash.
   const navBg = isDark ? APP_DARK.bg : APP_LIGHT.bg;
+  // A page the Progress tab's back opens again slides in from the left, as
+  // going back does, till it's in (utils/progressReturn.ts).
+  const screenOptions = ({ route }: { route: { params?: object } }) => ({
+    headerShown: false,
+    contentStyle: { backgroundColor: navBg },
+    ...(isReturnTrip(route.params) ? { animation: "slide_from_left" as const } : null),
+  });
 
   return (
     <>
@@ -241,8 +249,9 @@ function AppShell() {
             <ForceUpdateGate>
               <NavThemeProvider value={isDark ? NAV_DARK : NAV_LIGHT}>
                 <View style={{ flex: 1, backgroundColor: navBg }}>
-                  <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: navBg } }} screenLayout={communityScreenLayout}>
+                  <Stack screenOptions={screenOptions} screenLayout={communityScreenLayout}>
                     <Stack.Screen name="insights" options={INSIGHTS_MODAL_OPTIONS} />
+                    <Stack.Screen name="program-builder" options={INSIGHTS_MODAL_OPTIONS} />
                   </Stack>
                   {/* Over every screen: the workout bar, which grows to hold a
                       rest off the Workout page, and the rest pill, which shows

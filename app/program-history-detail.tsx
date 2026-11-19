@@ -27,6 +27,7 @@ import { BlurView } from "expo-blur";
 import MaskedView from "../components/MaskedView";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
+import MedalIcon from "../components/icons/MedalIcon";
 import Svg, { Circle } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scrollEndPadding } from "../constants/floatingBars";
@@ -47,7 +48,6 @@ import {
   ACCT_DEEP,
   APP_DARK,
   APP_LIGHT,
-  AURORA,
   FontFamily,
   GOLD,
   GOLD_DARK,
@@ -56,7 +56,7 @@ import {
   replacedTextColor,
 } from "../constants/theme";
 import { PILL_RADIUS } from "../constants/buttons";
-import { TROPHY_ICON } from "../constants/icons";
+import { PROGRAM_DONE_ICON, TROPHY_ICON } from "../constants/icons";
 import type { Achievement } from "../constants/achievements";
 import {
   PROGRAMS_KEY,
@@ -66,12 +66,13 @@ import {
   type CompletedWorkout,
   type SavedProgram,
 } from "../constants/programs";
-import { fmtDuration, fromYMD, MONTH_NAMES, parseStoredDate } from "../utils/dates";
+import { fmtDuration, fromYMD, MONTH_NAMES, parseStoredDate, todayYMD, toYMD } from "../utils/dates";
 import { displayWorkoutName } from "../utils/programDays";
 import { getJSON } from "../utils/storage";
 import { toDisplayWeight } from "../utils/units";
 import { getEffectiveToday } from "../utils/workout";
 import { runStartDate } from "../utils/programHolds";
+import { startsLabel, startsLater } from "../utils/programStart";
 import { ordinal } from "../utils/workoutSummary";
 import {
   buildProgramHistory,
@@ -132,6 +133,8 @@ function OverviewCard({ program, totals, isDark, isKg }: {
   // the deeper green there (see theme.ts).
   const ink = isDark ? accent : held ? PAUSED_ORANGE : ACCT_DEEP;
   const week = getCurrentWeek(program);
+  // Set to start later (utils/programStart.ts): when, in place of its week.
+  const startsOn = startsLater(program);
 
   const label = held ? "PROGRAM PAUSED"
     : program.status === "active" ? "ACTIVE PROGRAM"
@@ -148,7 +151,8 @@ function OverviewCard({ program, totals, isDark, isKg }: {
     }
     if (program.status === "completed") {
       const done = parseStoredDate(program.completedDate);
-      return done ? { icon: "checkmark-circle" as const, text: `Completed ${shortDate(done)}` } : null;
+      // The finished program's clipboard, as its Completed badge wears it.
+      return done ? { icon: "done" as const, text: `Completed ${shortDate(done)}` } : null;
     }
     if (program.status === "active") {
       const finish = programFinishDate(program);
@@ -156,7 +160,10 @@ function OverviewCard({ program, totals, isDark, isKg }: {
     }
     return null;
   })();
-  const started = parseStoredDate(runStartDate(program));
+  // None for a day still to come on one never begun (let go before its set
+  // start, utils/programLifecycle.ts unbegun).
+  const startedRaw = parseStoredDate(runStartDate(program));
+  const started = program.status === "created" && startedRaw && toYMD(startedRaw) > todayYMD() ? null : startedRaw;
 
   const stats = [
     { value: String(totals.sessions), label: totals.sessions === 1 ? "session" : "sessions" },
@@ -170,10 +177,10 @@ function OverviewCard({ program, totals, isDark, isKg }: {
           <View style={{ flex: 1 }}>
             <Text style={[styles.sectionLabel, { color: labelColor }]}>{label}</Text>
             {started && (
-              <Text style={[styles.overviewStarted, { color: t.ts }]}>Started {shortDate(started)}</Text>
+              <Text style={[styles.overviewStarted, { color: t.ts }]}>{program.status === "created" ? "Created" : startsOn ? "Starts" : "Started"} {shortDate(started)}</Text>
             )}
           </View>
-          <Text style={[styles.overviewWeek, { color: t.ts }]}>Week {week} of {program.totalWeeks}</Text>
+          <Text style={[styles.overviewWeek, { color: t.ts }]}>{startsOn ? startsLabel(startsOn) : `Week ${week} of ${program.totalWeeks}`}</Text>
         </View>
 
         <View style={styles.progressRow}>
@@ -192,7 +199,9 @@ function OverviewCard({ program, totals, isDark, isKg }: {
         {/* At the END of the bar, as the finish line it is (Home's chip). */}
         {chip && (
           <View style={[styles.finishChip, { backgroundColor: `${accent}26` }]}>
-            <Ionicons name={chip.icon} size={11} color={ink} />
+            {chip.icon === "done"
+              ? <Image source={PROGRAM_DONE_ICON} style={styles.finishChipArt} contentFit="contain" />
+              : <Ionicons name={chip.icon} size={11} color={ink} />}
             <Text style={[styles.finishChipText, { color: ink }]}>{chip.text}</Text>
           </View>
         )}
@@ -269,9 +278,12 @@ function DayStrip({ days, todayYMD, isDark }: { days: WeekDay[]; todayYMD: strin
 }
 
 /** A day's dot. Rest is a solid grey circle, a day that's meant to be empty;
- *  missed is the small faded dot, a day that came to nothing (Home's calendar
- *  uses the same pairing). Outside the program there's no dot at all, so the
- *  days before a mid-week start can't be mistaken for missed ones. */
+ *  missed is the small faded dot, a day that came to nothing, told from a day
+ *  to come (a ring, "Planned") by its shape. Home's calendar has no such
+ *  rings, so there a missed day takes rest's dark fill and faded is for days
+ *  to come (user request, 2026-11-19). Outside the program there's no dot at
+ *  all, so the days before a mid-week start can't be mistaken for missed
+ *  ones. */
 function DayDot({ state, isDark }: { state: WeekDay["state"]; isDark: boolean }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   switch (state) {
@@ -337,6 +349,8 @@ function SessionRow({ workout, info, earned, isDark, isKg, onPress }: {
   const stats = sessionStats(workout);
   const sessionNum = info.program?.sessionNum;
   const prs = earned.flatMap(a => (a.category === "pr" ? a.prs : []));
+  // A session with no weight PR can have rep PRs (utils/repPrs.ts).
+  const repPrs = earned.flatMap(a => (a.category === "reps" ? a.repPrs : []));
   const milestone = earned.find(a => a.category === "workouts");
 
   const statsLine = [
@@ -386,6 +400,15 @@ function SessionRow({ workout, info, earned, isDark, isKg, onPress }: {
             <Image source={TROPHY_ICON} style={styles.earnedIcon} contentFit="contain" />
             <Text style={[styles.earnedText, { color: t.tp }]} numberOfLines={1}>
               {`${prs.length} New ${prs.length === 1 ? "PR" : "PRs"}`}
+            </Text>
+          </View>
+        )}
+        {/* Rep PRs the same way, with the medal their sets wear. */}
+        {prs.length === 0 && repPrs.length > 0 && (
+          <View style={[styles.prPill, { backgroundColor: `${gold}2e`, borderColor: `${gold}8c` }]}>
+            <MedalIcon size={14} tight />
+            <Text style={[styles.earnedText, { color: t.tp }]} numberOfLines={1}>
+              {`${repPrs.length} ${repPrs.every(r => r.hold) ? "Hold" : "Rep"} ${repPrs.length === 1 ? "PR" : "PRs"}`}
             </Text>
           </View>
         )}
@@ -477,7 +500,7 @@ function WeekCard({ week, program, todayYMD, isDark, isKg, infoOf, onOpenWorkout
 
       {finished && (
         <View style={[styles.finishedRow, { borderTopColor: t.div }]}>
-          <Ionicons name="ribbon" size={16} color={AURORA.aqua} />
+          <Image source={PROGRAM_DONE_ICON} style={styles.finishedIcon} contentFit="contain" />
           <Text style={[styles.finishedText, { color: t.tp }]}>Finished {program.name}</Text>
         </View>
       )}
@@ -703,6 +726,9 @@ const styles = StyleSheet.create({
   progressSegment: { flex: 1, height: 6, borderRadius: 3 },
   finishChip: { alignSelf: "flex-end", flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: PILL_RADIUS, marginTop: -2 },
   finishChipText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  // A finished one's clipboard (PROGRAM_DONE_ICON) in place of the 11pt glyph:
+  // full-colour artwork fills its square, so a little over it.
+  finishChipArt: { width: 14, height: 14 },
   statGrid: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 14 },
   statGridCell: { flex: 1, flexDirection: "row", alignItems: "center" },
   statGridDivider: { width: 1, height: 28 },
@@ -765,5 +791,8 @@ const styles = StyleSheet.create({
   emptyRowText: { fontFamily: FontFamily.regular, fontSize: 13 },
 
   finishedRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  // The finished program's clipboard (PROGRAM_DONE_ICON), a touch over the
+  // 16pt ribbon it replaced: full-colour artwork fills its square.
+  finishedIcon: { width: 18, height: 18 },
   finishedText: { fontFamily: FontFamily.semibold, fontSize: 13, flexShrink: 1 },
 });

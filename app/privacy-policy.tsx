@@ -42,12 +42,14 @@ const SECTIONS: { heading: string; body: string }[] = [
   },
   {
     heading: "4. Information That Stays on Your Device",
-    body: "Some things never leave your phone: photos and videos you add to custom exercises, your favourite exercises, your display and notification settings, workouts you haven't finished yet, and your streak. The camera is only used to scan connect codes and to take photos for custom exercises.",
+    body: "Some things never leave your phone: photos and videos you add to custom exercises, your favourite exercises, your display and notification settings, workouts you haven't finished yet, and your streak. The camera is only used to scan connect codes and to take photos for custom exercises.\n\n" +
+      "If you use voice typing in a chat, the microphone is only on while the mic button is lit. Your iPhone turns what you say into text with Apple's speech recognition, on the phone itself where it can. The recording is never sent to us or kept; only the text you choose to send is.",
   },
   {
     heading: "5. How We Use Your Information",
     body:
       "We use your information to run your account and back up your training data, so it's there when you sign in on another device. It powers features like your history, previous set values, progress charts and reminders. It lets you connect with trainers, clients and groups, and delivers your messages, shared programs and notifications. We also use it to keep the community safe, including reviewing reports and preventing abuse such as spam connection requests.\n\n" +
+      "If you use Insights, we use your questions and a summary of your training to answer them with AI, once you've agreed to it (see Service Providers).\n\n" +
       "We never sell your information or use it for advertising.",
   },
   {
@@ -61,11 +63,13 @@ const SECTIONS: { heading: string; body: string }[] = [
     heading: "7. Service Providers",
     body:
       "We rely on a small number of providers to run Avenas. Supabase hosts our database, sign in and file storage. Expo delivers push notifications, which pass through Apple to reach your phone. Apple and Google provide sign in if you choose to use them.\n\n" +
+      "Anthropic provides the AI behind Insights. Only after you agree to it, each question you ask Insights is sent to Anthropic with the conversation so far and a summary of your training: your program, the workouts you've logged and the exercises in them. We never send it your name, email, photos, journal or messages.\n\n" +
       "Push notifications for messages include the sender's name and the start of the message. Each provider handles information under its own privacy policy.",
   },
   {
     heading: "8. How Long We Keep It",
-    body: "We keep your information for as long as you have an account. When you delete your account, your profile, profile photo, training data, messages, connections, shared programs, the groups you own and the record of what you agreed to are permanently deleted, along with any reports you've made. A report someone else made about you, including any message it quotes, is kept so we can act on it.",
+    body: "We keep your information for as long as you have an account. When you delete your account, your profile, profile photo, training data, messages, connections, shared programs, the groups you own and the record of what you agreed to are permanently deleted, along with any reports you've made. A report someone else made about you, including any message it quotes, is kept so we can act on it.\n\n" +
+      "Your Insights conversations stay on your phone. We keep a record of each Insights request (when it was made, what kind it was and what it cost, never what you asked) so we can limit how much the AI is used, and it's deleted with your account.",
   },
   {
     heading: "9. Your Choices",

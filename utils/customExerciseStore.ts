@@ -7,11 +7,13 @@
 // Journal's and a workout page's weren't backed up.
 
 import * as FileSystem from "expo-file-system/legacy";
-import { CUSTOM_KEY, FAVOURITE_EXERCISES_KEY, type CustomExercise } from "../constants/exercises";
+import { CUSTOM_KEY, FAVOURITE_EXERCISES_KEY, MAX_CUSTOM, type CustomExercise, type SelectableMuscle } from "../constants/exercises";
 import { NEW_PROGRAM_DRAFT_KEY, PROGRAMS_KEY, type SavedProgram, type WorkoutMap } from "../constants/programs";
 import { scheduleCloudPush } from "../lib/syncManager";
 import { isRemoteUri } from "./customExerciseDetails";
-import { liveIndexOf, tombstoneOf, withRenamedCustom, withoutCustomExercise } from "./customExercises";
+import { customNameTaken, liveCustoms, liveIndexOf, newCustomId, tombstoneOf, withRenamedCustom, withoutCustomExercise } from "./customExercises";
+import { refreshAssisted } from "./assistedStore";
+import { exerciseByName } from "./exerciseLookup";
 import { todayYMD } from "./dates";
 import { normalizeFavourite } from "./exerciseFavourites";
 import { getJSON, setJSON } from "./storage";
@@ -97,4 +99,47 @@ export async function renameCustomExercise(target: CustomExercise, name: string)
     if (!kept.some(f => normalizeFavourite(f) === normalizeFavourite(name))) kept.push(name);
     await setJSON(FAVOURITE_EXERCISES_KEY, kept);
   }
+}
+
+/** A custom exercise to add: what Create Exercise asks for, less a photo. */
+export type NewCustomExercise = { name: string; muscles: SelectableMuscle[]; steps?: string[]; assisted?: boolean };
+
+/**
+ * New custom exercises added to this phone's list by the same rules Create
+ * Exercise adds one by (app/create-custom-exercise.tsx): a new id each, a name
+ * neither the catalogue nor your own live exercises have, at least one muscle,
+ * no more than MAX_CUSTOM live. Then the Assisted switch is read again and the
+ * list goes up with the backup, as it does there. For the AI Program Builder,
+ * once the person says yes (components/ai/AiChatScreen.tsx). The ones added,
+ * and the names that couldn't be.
+ */
+export async function addCustomExercises(defs: readonly NewCustomExercise[]): Promise<{ added: CustomExercise[]; skipped: string[] }> {
+  const stored = await getJSON<CustomExercise[]>(CUSTOM_KEY, []);
+  const list = Array.isArray(stored) ? stored : [];
+  const added: CustomExercise[] = [];
+  const skipped: string[] = [];
+  for (const def of defs) {
+    const name = def.name.trim();
+    const taken = exerciseByName(name);
+    const all = [...list, ...added];
+    if (!name || def.muscles.length === 0 || (taken && !taken.hidden) || customNameTaken(name, all) || liveCustoms(all).length >= MAX_CUSTOM) {
+      skipped.push(def.name);
+      continue;
+    }
+    const steps = (def.steps ?? []).map(step => step.trim()).filter(Boolean);
+    added.push({
+      id: newCustomId(),
+      name,
+      muscles: [...def.muscles],
+      ...(steps.length ? { steps } : {}),
+      ...(def.assisted ? { assisted: true } : {}),
+    });
+  }
+  if (added.length) {
+    await setJSON(CUSTOM_KEY, [...list, ...added]);
+    // Its Assisted switch, for every count from here (utils/assisted.ts).
+    await refreshAssisted();
+    scheduleCloudPush(); // custom exercises are synced
+  }
+  return { added, skipped };
 }

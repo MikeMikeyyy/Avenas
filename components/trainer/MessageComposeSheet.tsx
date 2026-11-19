@@ -6,6 +6,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import MicButton from "../MicButton";
+import { useDictation } from "../../hooks/useDictation";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -37,14 +39,20 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sendToAll, setSendToAll] = useState(false);
   const [text, setText] = useState("");
+  // Voice typing into the message (components/MicButton.tsx).
+  const dictation = useDictation(text, setText);
+  const { cancel: cancelDictation } = dictation;
 
   useEffect(() => {
     if (visible) {
       setSelected(new Set());
       setSendToAll(false);
       setText("");
+    } else {
+      // The sheet stays mounted when it closes: stop listening with it.
+      cancelDictation();
     }
-  }, [visible]);
+  }, [visible, cancelDictation]);
 
   const toggleContact = (id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -78,6 +86,7 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
   const handleSend = () => {
     if (!canSend) return;
     const ids = sendToAll ? contacts.map(c => c.id) : Array.from(selected);
+    cancelDictation();
     onSend(ids, text.trim());
   };
 
@@ -96,11 +105,12 @@ export default function MessageComposeSheet({ visible, contacts, onSend, onClose
               style={[styles.composeInput, { color: t.tp }]}
               value={text}
               onChangeText={setText}
-              placeholder="Write a message…"
+              placeholder={dictation.listening ? "Listening…" : "Write a message…"}
               placeholderTextColor={t.ts}
               multiline
             />
           </View>
+          <MicButton dictation={dictation} size={44} />
           <TouchableOpacity onPress={handleSend} disabled={!canSend} activeOpacity={0.8} accessibilityLabel={ctaLabel} accessibilityRole="button">
             <View style={[styles.sendBtn, { backgroundColor: ACCT, opacity: canSend ? 1 : 0.4 }, darkGlow(styles.sendBtn, isDark)]}>
               <SendIcon size={18} color="#fff" />

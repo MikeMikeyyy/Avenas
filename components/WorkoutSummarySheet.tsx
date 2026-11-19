@@ -25,7 +25,8 @@ import { loadKnownCustomExercises } from "../lib/exerciseMedia";
 import type { MuscleGroupStat } from "../constants/progress";
 import { computeWorkoutTonnage, computeMuscleGroupStats } from "../utils/progressStats";
 import { RADAR_GROUPS } from "../utils/muscleGroups";
-import { computeSessionRecords, ordinal, type SessionRecord } from "../utils/workoutSummary";
+import { computeSessionRecords, isRepRecord, ordinal, type SessionRecord } from "../utils/workoutSummary";
+import { formatRepSet } from "../utils/achievements";
 import { fmtDuration } from "../utils/dates";
 import { toDisplayWeight, trimNumber } from "../utils/units";
 
@@ -39,12 +40,25 @@ import { toDisplayWeight, trimNumber } from "../utils/units";
 // The one-rep max is an estimate worked out from a set, never a lift anyone
 // did, so it says so: "Best One Rep Max" read as a max actually lifted (user
 // request, 2026-10-08). Best Set shows the set it was ("90 kg × 8"), not
-// its weight × reps. The same names as the Progress page's record tiles.
+// its weight × reps. The same names as the Progress page's record tiles. A
+// rep PR (utils/repPrs.ts) says what it beat: "Rep PR, up from 8".
 const RECORD_LABELS: Record<SessionRecord["kind"], string> = {
   heaviest: "Heaviest Weight",
   oneRepMax: "Estimated 1RM",
   bestSetVolume: "Best Set",
+  reps: "Rep PR",
 };
+
+/** A record's kind, under its exercise's name. */
+function recordKind(r: SessionRecord): string {
+  // An assisted exercise's "heaviest" is its least help (utils/assisted.ts).
+  if (r.assisted && r.kind === "heaviest") return "Least Assistance";
+  if (isRepRecord(r)) {
+    const was = trimNumber(r.prevReps, 1);
+    return r.hold ? `Hold PR, up from ${was} s` : `Rep PR, up from ${was}`;
+  }
+  return RECORD_LABELS[r.kind];
+}
 
 const MAX_EXERCISE_ROWS = 8;
 const MAX_RECORD_ROWS = 6;
@@ -160,6 +174,7 @@ export default function WorkoutSummarySheet({
   }, [data]);
 
   const fmtRecordValue = (r: SessionRecord): string => {
+    if (isRepRecord(r)) return formatRepSet({ weightKg: r.valueKg, reps: r.reps, hold: r.hold }, isKg);
     const disp = toDisplayWeight(r.valueKg, isKg);
     if (r.kind === "oneRepMax") return `${Math.round(disp)} ${unit}`;
     if (r.kind === "bestSetVolume") {
@@ -250,11 +265,7 @@ export default function WorkoutSummarySheet({
           <View key={`${r.exerciseName}-${r.kind}-${i}`} style={styles.recordRow}>
             <View style={styles.recordLeft}>
               <Text style={[styles.recordName, { color: t.tp }]} numberOfLines={1}>{r.exerciseName}</Text>
-              <Text style={[styles.recordKind, { color: t.ts }]} numberOfLines={1}>
-                {/* An assisted exercise's "heaviest" is its least help
-                    (utils/assisted.ts). */}
-                {r.assisted && r.kind === "heaviest" ? "Least Assistance" : RECORD_LABELS[r.kind]}
-              </Text>
+              <Text style={[styles.recordKind, { color: t.ts }]} numberOfLines={1}>{recordKind(r)}</Text>
             </View>
             <Text style={styles.recordValue} numberOfLines={1}>{fmtRecordValue(r)}</Text>
           </View>

@@ -21,6 +21,7 @@
 import ActivityKit
 import AppIntents
 import Foundation
+import UserNotifications
 
 // Must match: targets/workout-widget/expo-target.config.js and app.json
 // ios.entitlements (com.apple.security.application-groups).
@@ -30,6 +31,7 @@ enum AvenasSharedKeys {
   static let queue = "avenas.liveactivity.queue"     // JSON [PendingSet]
   static let actions = "avenas.liveactivity.actions" // JSON [QueuedAction]
   static let restEnd = "avenas.liveactivity.restEndMs" // Double; 0 = no rest running
+  static let restAlerts = "avenas.liveactivity.restAlerts" // Bool; the app's Rest timer alerts setting
 }
 
 // ─── Activity attributes ─────────────────────────────────────────────────────
@@ -211,6 +213,9 @@ enum WorkoutActivityController {
     }
 
     await update(activity, state)
+    // Its rest's "Rest complete" (RestAlert); a set that starts no rest takes
+    // any earlier rest's alert away with it.
+    await RestAlert.schedule(endMs: state.restEndMs)
   }
 
   static func skipRest() async {
@@ -220,6 +225,7 @@ enum WorkoutActivityController {
     state.restEndMs = 0
     defaults?.set(0.0, forKey: AvenasSharedKeys.restEnd)
     await update(activity, state)
+    await RestAlert.cancelAll()
   }
 
   /// ±deltaSeconds on the running rest timer. Mirrors adjustRestTimer: shifting
@@ -238,6 +244,71 @@ enum WorkoutActivityController {
     }
     defaults?.set(state.restEndMs, forKey: AvenasSharedKeys.restEnd)
     await update(activity, state)
+    await RestAlert.schedule(endMs: state.restEndMs)
+  }
+}
+
+// ─── "Rest complete" for a rest the lock screen runs ─────────────────────────
+//
+// A rest started, moved or skipped on the lock-screen card runs here, with the
+// app asleep, so the app's own "Rest complete" alert (utils/notificationScheduler.ts
+// scheduleRestTimerAlert) never hears of it. These give it the same alert: the
+// same words, sound and data (category "restTimerAlerts", which the app's
+// handler keeps quiet in the foreground), under the app's Rest timer alerts
+// setting (mirrored here by the app: AvenasSharedKeys.restAlerts) and the
+// phone's notification permission, never asked for from here. One rest alert at
+// a time: scheduling here cancels any other pending (the app's included, by its
+// data's kind "restTimer"), and the app cancels this one when it schedules its
+// own or takes the rest back (consumeActions). Its arrival lights a dark lock
+// screen, which redraws the card in its next-set look (user ask, 2026-11-14:
+// the card otherwise waited for the screen to wake before leaving the rest).
+
+enum RestAlert {
+  static let identifier = "avenas.restalert.lockscreen"
+
+  /// Every pending rest alert: the app's, by its data, and this one.
+  static func cancelAll() async {
+    let center = UNUserNotificationCenter.current()
+    let ids = await center.pendingNotificationRequests()
+      .filter { $0.identifier == identifier || ($0.content.userInfo["kind"] as? String) == "restTimer" }
+      .map { $0.identifier }
+    if !ids.isEmpty {
+      center.removePendingNotificationRequests(withIdentifiers: ids)
+    }
+  }
+
+  /// Only this one: the app has taken the rest back, or scheduled its own.
+  static func cancelOwn() {
+    UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+  }
+
+  /// "Rest complete" at endMs (epoch ms), in place of any pending rest alert.
+  /// None for a rest already over (0 = no rest), with the setting off, or
+  /// without notification permission.
+  static func schedule(endMs: Double) async {
+    await cancelAll()
+    let seconds = endMs / 1000 - Date().timeIntervalSince1970
+    guard seconds > 1 else { return }
+    guard UserDefaults(suiteName: avenasAppGroupId)?.bool(forKey: AvenasSharedKeys.restAlerts) == true else { return }
+    let center = UNUserNotificationCenter.current()
+    let settings = await center.notificationSettings()
+    switch settings.authorizationStatus {
+    case .authorized, .provisional, .ephemeral:
+      break
+    default:
+      return
+    }
+    let content = UNMutableNotificationContent()
+    content.title = "Rest complete"
+    content.body = "Time for your next set."
+    content.sound = .default
+    content.userInfo = ["kind": "restTimer", "category": "restTimerAlerts"]
+    let trigger = UNTimeIntervalNotificationTrigger(timeInterval: seconds, repeats: false)
+    do {
+      try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+    } catch {
+      NSLog("[avenas] rest alert failed: %@", error.localizedDescription)
+    }
   }
 }
 

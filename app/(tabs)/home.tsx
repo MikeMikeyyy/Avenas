@@ -35,6 +35,7 @@ import { sessionTimeRange } from "../../utils/dates";
 import { toDisplayWeight } from "../../utils/units";
 import { resolveWorkoutForDate, getEffectiveToday, type DayOverride } from "../../utils/workout";
 import { buildWeekSchedule, weekStartFor, weekTotals, type WeekDayPlan } from "../../utils/weekSchedule";
+import { startDay, startsLabel, startsLater } from "../../utils/programStart";
 import { applyRestDay, clearRestDay } from "../../utils/restDay";
 import JournalWorkoutCard, { useJournalWorkoutInfo } from "../../components/journal/JournalWorkoutCard";
 import { useDayRollover } from "../../hooks/useDayRollover";
@@ -341,7 +342,7 @@ function HomeScreen() {
 
   // Each card opens where the achievement happened.
   const onAchievementPress = useCallback((a: Achievement) => {
-    if (a.category === "pr" || a.category === "workouts") {
+    if (a.category === "pr" || a.category === "reps" || a.category === "workouts") {
       router.navigate({ pathname: "/workout-detail", params: { id: a.workoutId } });
     } else if (a.category === "program") {
       router.navigate("/programs");
@@ -532,7 +533,15 @@ function HomeScreen() {
                 ) : activeProgram ? (
                   <>
                     <Text style={[styles.workoutName, { color: t.tp }]}>REST DAY</Text>
-                    <Text style={[styles.metaText, { color: t.ts, fontStyle: "italic", marginTop: -8 }]}>{restDayQuote}</Text>
+                    {/* Before the day it's set to start, when that is
+                        (utils/programStart.ts), in place of the quote. */}
+                    {startsLater(activeProgram) ? (
+                      <Text style={[styles.metaText, { color: t.ts, marginTop: -8 }]}>
+                        {`"${activeProgram.name}" starts ${startDay(startsLater(activeProgram)!)}.`}
+                      </Text>
+                    ) : (
+                      <Text style={[styles.metaText, { color: t.ts, fontStyle: "italic", marginTop: -8 }]}>{restDayQuote}</Text>
+                    )}
                   </>
                 ) : (
                   <>
@@ -563,7 +572,10 @@ function HomeScreen() {
           // pausedAt or it stays green and reads as running.
           const paused = !!activeProgram.pausedAt;
           const accent = paused ? PAUSED_ORANGE : ACCT;
+          // 0 before the day it's set to start (utils/programStart.ts): no bar
+          // filled, and when it starts in place of its week.
           const week = getCurrentWeek(activeProgram);
+          const startsOn = startsLater(activeProgram);
           // No finish date on this card (user request, 2026-11-05): the
           // program's card on My Programs shows it.
           return (
@@ -576,7 +588,9 @@ function HomeScreen() {
                   </Text>
                   <Text style={[styles.programName, { color: t.tp }]}>{activeProgram.name.toUpperCase()}</Text>
                 </View>
-                <Text style={[styles.programWeek, { color: t.ts }]}>Week {week} of {activeProgram.totalWeeks}</Text>
+                <Text style={[styles.programWeek, { color: t.ts }]}>
+                  {startsOn ? startsLabel(startsOn) : `Week ${week} of ${activeProgram.totalWeeks}`}
+                </Text>
               </View>
               <View style={styles.progressRow}>
                 {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => (

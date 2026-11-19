@@ -113,7 +113,7 @@ eq(filterByProgramScope(history, { kind: "custom" }, [STRENGTH, OLD_PPL]).some(w
 
 // ─── 2. Their days ───────────────────────────────────────────────────────────
 
-const days = scopedProgramDays({ kind: "custom" }, programs, custom);
+const days = scopedProgramDays({ kind: "custom" }, programs, custom, history);
 const label = (d: (typeof days)[number]) =>
   `${d.label}${d.custom?.programName ? ` from ${d.custom.programName}` : d.custom?.deletedProgram ? " from a deleted program" : ""}`;
 eq(days.map(label), ["Arms", "Legs from PPL Old", "Legs from a deleted program", "Push", "Pull"],
@@ -127,12 +127,12 @@ ok(days.every(d => d.programId === "" && d.dayId.startsWith("custom:") && d.key.
 eq(collectLoggedExercises(filterByProgramScope(history, { kind: "all" }, programs)).map(r => [r.name, r.sessionCount]),
   [["Barbell Curl", 1], ["Bent-Over Row", 3], ["Barbell Bench Press", 3], ["Barbell Back Squat", 3]],
   "All programs: every exercise once, Custom workouts' among them, each with all its sessions");
-eq(scopedProgramDays({ kind: "current" }, programs, filterByProgramScope(history, { kind: "current" }, programs)).some(d => d.custom), false,
+eq(scopedProgramDays({ kind: "current" }, programs, filterByProgramScope(history, { kind: "current" }, programs), history).some(d => d.custom), false,
   "Current program: none of them");
 
 // Every program's days at once (the "all" scope), which is where a session
 // from before program ids could land twice.
-const all = scopedProgramDays({ kind: "all" }, programs, history);
+const all = scopedProgramDays({ kind: "all" }, programs, history, history);
 eq(all.filter(d => d.custom).map(d => d.key), days.map(d => d.key), "the whole scope: the custom days, with the same keys as on their own");
 
 // A session from before program ids goes by its name only inside its
@@ -143,7 +143,7 @@ eq(history.filter(w => workoutMatchesDay(w, strengthPullAll)).map(w => w.id), ["
   "All programs: Strength's Pull has its own and the pre-id one from while it ran, not the one from before");
 eq(all.filter(d => d.custom && d.label === "Pull").map(d => [...d.custom!.sessionIds]), [["w_legacy"]],
   "All programs: the one from before is Custom workouts' Pull");
-const strengthPullOwn = scopedProgramDays({ kind: "current" }, programs, filterByProgramScope(history, { kind: "current" }, programs))
+const strengthPullOwn = scopedProgramDays({ kind: "current" }, programs, filterByProgramScope(history, { kind: "current" }, programs), history)
   .find(d => d.label === "Pull")!;
 eq(filterByProgramScope(history, { kind: "current" }, programs).filter(w => workoutMatchesDay(w, strengthPullOwn)).map(w => w.id),
   ["w_a_pull", "w_legacy_in"], "Current program: Strength's Pull reads the same");
@@ -199,7 +199,7 @@ const restored = history.map(w => {
 });
 eq(restored.filter(w => w.id.startsWith("w_b")).map(w => [w.programId, w.programName]), [["", "PPL Old"], ["", "PPL Old"]],
   "restore: a deleted program's sessions come back in no program, with its name");
-const restoredDays = scopedProgramDays({ kind: "custom" }, programs, filterByProgramScope(restored, { kind: "custom" }, programs));
+const restoredDays = scopedProgramDays({ kind: "custom" }, programs, filterByProgramScope(restored, { kind: "custom" }, programs), restored);
 eq(restoredDays.find(d => d.custom?.programName === "PPL Old")?.key, days.find(d => d.custom?.programName === "PPL Old")?.key,
   "restore: its day keeps its key (a chart picked before still shows)");
 

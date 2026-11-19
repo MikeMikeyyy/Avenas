@@ -77,11 +77,25 @@ export async function completeIfFinished(): Promise<SavedProgram | null> {
 export async function reopenIfUnfinished(deleted: CompletedWorkout): Promise<boolean> {
   try {
     const programs = await readPrograms();
-    const updated = programsAfterDeletedSession(programs, deleted, await readHistory());
-    if (updated === programs) return false;
-    await setJSON(PROGRAMS_KEY, updated);
-    scheduleCloudPush();
-    return true;
+    const history = await readHistory();
+    const updated = programsAfterDeletedSession(programs, deleted, history);
+    const reopened = updated !== programs;
+    if (reopened) {
+      await setJSON(PROGRAMS_KEY, updated);
+      scheduleCloudPush();
+    }
+    // Not picked back up, with no program running and nothing left done today:
+    // today's pick went with the run that ended (completeIfFinished keeps a
+    // done one only for a redo the program comes back for). Left, Home offered
+    // it while the Workout tab said No Active Program (found by the solo flows,
+    // 2026-11-16: a run that ended when a Journal log moved its start back,
+    // then its day's workout deleted).
+    if (!updated.some(p => p.status === "active")) {
+      const today = getEffectiveToday(null, history);
+      const pick = await getJSON<DayOverride | null>(WORKOUT_DAY_OVERRIDE_KEY, null);
+      if (pick?.date === today && !history.some(w => w.date === today)) await removeKey(WORKOUT_DAY_OVERRIDE_KEY);
+    }
+    return reopened;
   } catch (e) {
     if (__DEV__) console.warn("[avenas]", "reopenIfUnfinished", PROGRAMS_KEY, e);
     return false;

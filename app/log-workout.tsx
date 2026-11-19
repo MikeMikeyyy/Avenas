@@ -26,14 +26,20 @@ import AuroraBackdrop from "../components/AuroraBackdrop";
 import TrashIcon from "../components/TrashIcon";
 import ExercisePicker from "../components/ExercisePicker";
 import ReorderExercisesSheet, { DragHandleIcon } from "../components/ReorderExercisesSheet";
+import SupersetLink from "../components/SupersetLink";
+import SupersetSheet from "../components/SupersetSheet";
 import { SHEET_DIM, SHEET_TOP_ROW, SheetCloseButton, SheetGlass, sheetFootGap, sheetSurface } from "../components/SheetChrome";
 import { TimeRow, computeDurationMins, fmtDurationMins, fmtTimeVal, stampSession, type WorkoutTime } from "../components/TimeWheelPicker";
-import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK } from "../constants/theme";
+import { APP_LIGHT, APP_DARK, FontFamily, ACCT, BTN_SLATE, BTN_SLATE_DARK, DANGER_BRIGHT, CARD_SHADE, CARD_SHADE_DARK, accentTextColor } from "../constants/theme";
 import { cardButton, CARD_BUTTON_BORDER, darkGlow, glowOpacity, haloGlow, pillGlow, PILL_H, PILL_RADIUS, PILL_SHADOW, setInputSurface } from "../constants/buttons";
 import {
   PROGRAMS_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, logDraftKey,
-  normaliseSets, type SavedProgram, type CompletedWorkout, type PlannedExercise, type ProgramSet,
+  type SavedProgram, type CompletedWorkout, type PlannedExercise,
 } from "../constants/programs";
+import { logExercisesFor, loggedExercises, makeLogId, type LogExercise, type LogSet } from "../utils/logWorkout";
+import {
+  cleanSupersets, joinSuperset, leaveSuperset, moveKeepingSupersets, supersetChoicesFor, supersetLines, supersetPlaces,
+} from "../utils/supersets";
 import { planForDay } from "../utils/exerciseChanges";
 import { CUSTOM_KEY, type CustomExercise } from "../constants/exercises";
 import { fmtDayDate } from "../utils/dates";
@@ -42,8 +48,9 @@ import { completeIfFinished } from "../utils/programFinish";
 import { buildPrevSetsLookup, buildPrevNoteLookup, buildPrevSessionNote, prevDayScopeFor, prevHintsForRows, swapOrigin, type PrevExerciseKey, type PrevSets } from "../utils/workout";
 import { deleteCustomExercise as deleteCustomEverywhere } from "../utils/customExerciseStore";
 import { indexOfDayId, workoutKey } from "../utils/programDays";
-import { formatWeightForDisplay, parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
+import { parseWeightToKg, formatPrevHint, reinterpretWeightUnit, prescribedPlaceholder } from "../utils/units";
 import { bestLiftsBefore, prTrophySets } from "../utils/achievements";
+import { repBestsBefore, repPrSets } from "../utils/repPrs";
 import { exerciseIdentity } from "../utils/exerciseNames";
 import { exercisePageParams } from "../utils/customExerciseDetails";
 import PrTrophy from "../components/PrTrophy";
@@ -59,31 +66,16 @@ import { useSheetDrag } from "../hooks/useSheetDrag";
 const WARMUP_ORANGE = "#ffbf0f";
 /** The floating +, a size up from the round buttons beside it and at the top. */
 const ADD_SIZE = 44;
+/** Where the line joining a superset's cards runs (components/SupersetLink.tsx):
+ *  through the centre of each card's SET column, the card's 16pt padding, the
+ *  row's 4 and half the 36pt column. The gap is the card's 20pt bottom margin. */
+const SUPERSET_LINE_X = 38;
+const EX_CARD_GAP = 20;
 
-type WorkingSet = { type: "warmup" | "working"; weight: string; reps: string; done: boolean; programSet?: ProgramSet };
-type LogExercise = {
-  id: string;
-  name: string;
-  /** Which custom exercise it is (CompletedExercise.customId). */
-  customId?: string;
-  sets: WorkingSet[];
-  notes: string;
-  programNotes?: string;
-  isIsometric?: boolean;
-  /** What this was swapped in for; saved as CompletedExercise.swappedFrom. */
-  swappedFrom?: string;
-  swappedFromId?: string;
-  /** Which program exercise this is: its id in the day's template. `id` above
-   *  is this screen's own row id, freshly made, so the program's is kept here.
-   *  Absent for one added here. Saved as CompletedExercise.programExerciseId. */
-  programExerciseId?: string;
-};
+// A card's exercise and sets, and what the page loads and saves, are
+// utils/logWorkout.ts's (pure, so the solo flows run them).
 
-function makeId(): string {
-  return `lex_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-}
-
-function defaultSet(type: "warmup" | "working" = "working"): WorkingSet {
+function defaultSet(type: "warmup" | "working" = "working"): LogSet {
   return { type, weight: "", reps: "", done: true };
 }
 
@@ -332,6 +324,10 @@ interface ExerciseCardProps {
   onRemoveExercise: () => void;
   onOpenReorder: () => void;
   onChangeExercise: () => void;
+  /** In a superset (utils/supersets.ts): its chip says Edit Superset, in green. */
+  inSuperset: boolean;
+  /** Superset With (components/SupersetSheet.tsx). */
+  onOpenSuperset: () => void;
   onToggleIsometric: () => void;
   onUpdateNotes: (notes: string) => void;
   onInputFocus: (nextFn: (() => void) | null, prevFn: (() => void) | null) => void;
@@ -343,13 +339,16 @@ interface ExerciseCardProps {
   /** Per set, whether it wears the PR trophy, worked out across the session's
    *  cards (utils/achievements.ts prTrophySets). */
   prSets?: readonly boolean[];
+  /** Per set, whether it wears the rep PR medal, worked out the same way
+   *  (utils/repPrs.ts repPrSets). */
+  repSets?: readonly boolean[];
 }
 
 function ExerciseCard({
   ex, exIndex, totalExercises, isDark,
   onUpdateSet, onToggleDone, onToggleType, onAddSet, onRemoveLastSet,
-  onRemoveExercise, onOpenReorder, onChangeExercise, onToggleIsometric, onUpdateNotes,
-  onInputFocus, prevSets, prevNote, prSets,
+  onRemoveExercise, onOpenReorder, onChangeExercise, inSuperset, onOpenSuperset, onToggleIsometric, onUpdateNotes,
+  onInputFocus, prevSets, prevNote, prSets, repSets,
 }: ExerciseCardProps) {
   const { isKg } = useUnit();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -431,7 +430,7 @@ function ExerciseCard({
             if (!isWU) workingCounter++;
             const setLabel = isWU ? "W" : String(workingCounter);
             const isLast = idx === ex.sets.length - 1;
-            const isPr = !!prSets?.[idx];
+            const prMark = prSets?.[idx] ? "weight" : repSets?.[idx] ? (ex.isIsometric ? "hold" : "reps") : null;
 
             return (
               <CollapsibleCard
@@ -466,7 +465,7 @@ function ExerciseCard({
                           (components/PrTrophy.tsx). */}
                       <View>
                         <Text style={[s.setText, { color: isWU ? WARMUP_ORANGE : t.tp }]}>{setLabel}</Text>
-                        <PrTrophy show={isPr} />
+                        <PrTrophy mark={prMark} />
                       </View>
                     </View>
                   )}
@@ -588,6 +587,27 @@ function ExerciseCard({
               </TouchableOpacity>
             </View>
 
+            {/* Superset With, by Move: both are about where it's done in the
+                workout (user request, 2026-11-15). In one, it opens Add to
+                Superset and Remove from Superset; it leaves edit mode as Move
+                does, so the cards are seen joined. One line in either state:
+                the panel's height is measured once. */}
+            <View style={s.editSupersetRow}>
+              <TouchableOpacity
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setEditing(false); onOpenSuperset(); }}
+                activeOpacity={0.8}
+                style={{ flex: 1 }}
+                accessibilityRole="button"
+              >
+                <View style={[s.editChip, cardButton(t)]}>
+                  <Ionicons name="link-outline" size={13} color={inSuperset ? accentTextColor(isDark) : t.ts} />
+                  <Text style={[s.editChipText, { color: inSuperset ? accentTextColor(isDark) : t.ts }]}>
+                    {inSuperset ? "Edit Superset" : "Superset With"}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
             {/* Three chips */}
             <View style={s.editChipsRow}>
               {[
@@ -701,6 +721,8 @@ export default function LogWorkoutScreen() {
   const [addExVisible, setAddExVisible] = useState(false);
   const [changingExId, setChangingExId] = useState<string | null>(null);
   const [reorderOpen, setReorderOpen] = useState(false);
+  // The card whose Superset With is open (components/SupersetSheet.tsx).
+  const [supersetExId, setSupersetExId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [showNotes, setShowNotes] = useState(false);
   // Mount the full-screen notes overlay only while it's open (kept briefly for the
@@ -742,10 +764,12 @@ export default function LogWorkoutScreen() {
       ? stampSession(date ?? "", workoutTime.start, workoutTime.end).completedAt
       : new Date(`${date}T12:00:00`).toISOString(),
   ), [date, workoutTime]);
-  const bestLifts = useMemo(
-    () => bestLiftsBefore(Number.isFinite(logAt) ? history.filter(w => Date.parse(w.completedAt) < logAt) : []),
+  const historyBefore = useMemo(
+    () => (Number.isFinite(logAt) ? history.filter(w => Date.parse(w.completedAt) < logAt) : []),
     [history, logAt],
   );
+  const bestLifts = useMemo(() => bestLiftsBefore(historyBefore), [historyBefore]);
+  const repBests = useMemo(() => repBestsBefore(historyBefore), [historyBefore]);
   // Which sets wear the trophy: one per exercise, the first at the session's
   // heaviest new weight (prTrophySets), across every card at once since an
   // exercise can be on two, from the weights as they'll be saved.
@@ -758,6 +782,19 @@ export default function LogWorkoutScreen() {
       identity => bestLifts.get(identity),
     ),
     [exercises, bestLifts, isKg],
+  );
+  // And the rep PR medals the same way (utils/repPrs.ts): one per exercise,
+  // more reps than ever at a weight done before, a hold's seconds apart.
+  const repSetsByCard = useMemo(
+    () => repPrSets(
+      exercises.map(ex => ({
+        identity: exerciseIdentity(ex),
+        hold: !!ex.isIsometric,
+        sets: ex.sets.map(s => ({ type: s.type, done: s.done, reps: s.reps, weightKg: parseFloat(parseWeightToKg(s.weight, isKg)) || 0 })),
+      })),
+      repBests,
+    ),
+    [exercises, repBests, isKg],
   );
   const [kbHeight, setKbHeight] = useState(0);
   const [hasNext, setHasNext] = useState(false);
@@ -822,7 +859,8 @@ export default function LogWorkoutScreen() {
             // later toggle converts from here. Legacy drafts (no unitIsKg) leave
             // the ref at its mount value (current unit) — an untoggled user matches.
             if (typeof draft.unitIsKg === "boolean") logUnitRef.current = draft.unitIsKg;
-            setExercises(draft.exercises);
+            // Its supersets as the page left them, only where they're real.
+            setExercises(cleanSupersets(draft.exercises as LogExercise[]));
             setNotes(draft.notes ?? "");
             setWorkoutTime(draft.workoutTime ?? null);
             draftLockedRef.current = true;
@@ -859,21 +897,9 @@ export default function LogWorkoutScreen() {
               key === workoutName || key.endsWith(`:${workoutName}`)
             )?.[1];
       if (!template) return;
-
-      const loaded: LogExercise[] = template.map(ex => {
-        const sets = normaliseSets(ex);
-        return {
-          id: makeId(),
-          name: ex.name,
-          ...(ex.customId ? { customId: ex.customId } : {}),
-          sets: sets.map(ps => ({ type: ps.type, weight: "", reps: "", done: false, programSet: ps })),
-          notes: "",
-          programNotes: ex.programNotes,
-          isIsometric: ex.isIsometric,
-          programExerciseId: ex.id,
-        };
-      });
-      setExercises(loaded);
+      // Each set empty with the program's target as its placeholder, and the
+      // day's supersets with it (utils/logWorkout.ts).
+      setExercises(logExercisesFor(template));
     }).catch(() => {});
   }, [draftRestored, programId, workoutName, dayId]);
 
@@ -1008,12 +1034,30 @@ export default function LogWorkoutScreen() {
     }));
   }, []);
 
+  // A superset it leaves with one in it is none (utils/supersets.ts).
   const removeExercise = useCallback((exId: string) => {
-    setExercises(prev => prev.filter(ex => ex.id !== exId));
+    setExercises(prev => cleanSupersets(prev.filter(ex => ex.id !== exId)));
   }, []);
 
   const addExercise = useCallback((name: string, customId?: string) => {
-    setExercises(prev => [...prev, { id: makeId(), name, ...(customId ? { customId } : {}), sets: [defaultSet("working")], notes: "" }]);
+    setExercises(prev => [...prev, { id: makeLogId(), name, ...(customId ? { customId } : {}), sets: [defaultSet("working")], notes: "" }]);
+  }, []);
+
+  // Superset With and Remove from Superset (utils/supersets.ts), for this log
+  // alone, like a swap: the program keeps its own. The one picked comes to just
+  // after this one's superset (or this one), so the cards are side by side.
+  const joinExerciseSuperset = useCallback((exId: string, pickId: string) => {
+    setExercises(prev => {
+      const at = prev.findIndex(ex => ex.id === exId);
+      const pick = prev.findIndex(ex => ex.id === pickId);
+      return at < 0 || pick < 0 ? prev : joinSuperset(prev, at, pick);
+    });
+  }, []);
+  const leaveExerciseSuperset = useCallback((exId: string) => {
+    setExercises(prev => {
+      const i = prev.findIndex(ex => ex.id === exId);
+      return i < 0 ? prev : leaveSuperset(prev, i);
+    });
   }, []);
 
   // As on the Workout screen: the numbers and the note were written about the
@@ -1049,6 +1093,16 @@ export default function LogWorkoutScreen() {
   const deleteCustomExercise = useCallback((name: string) => {
     deleteCustomEverywhere(name).then(setCustomExercises).catch(() => {});
   }, []);
+
+  // Each card's place in its superset (the line joining them), each member's
+  // line in the reorder sheet, and the open Superset With's choices.
+  const supersetPlaceAt = useMemo(() => supersetPlaces(exercises), [exercises]);
+  const reorderLines = useMemo(() => supersetLines(exercises, ex => ex.id), [exercises]);
+  const supersetEx = supersetExId ? exercises.find(ex => ex.id === supersetExId) : undefined;
+  const supersetSheet = useMemo(
+    () => supersetChoicesFor(exercises, exercises.findIndex(ex => ex.id === supersetExId), ex => ex.id),
+    [exercises, supersetExId],
+  );
 
   // ── Save ──
 
@@ -1103,19 +1157,9 @@ export default function LogWorkoutScreen() {
       ...(plan ? { plan } : {}),
       durationSeconds,
       sessionNotes: notes.trim() || undefined,
-      exercises: exercises.map(ex => ({
-        name: ex.name,
-        // Which custom exercise it was (utils/exerciseNames.ts exerciseIdentity).
-        ...(ex.customId ? { customId: ex.customId } : {}),
-        // Inputs are in the user's display unit → store canonical kg.
-        sets: ex.sets.map(s => ({ type: s.type, weight: parseWeightToKg(s.weight, isKg), reps: s.reps, done: s.done })),
-        notes: ex.notes,
-        ...(ex.swappedFrom ? { swappedFrom: ex.swappedFrom } : {}),
-        ...(ex.swappedFrom && ex.swappedFromId ? { swappedFromId: ex.swappedFromId } : {}),
-        ...(ex.programExerciseId ? { programExerciseId: ex.programExerciseId } : {}),
-        // The Hold switch (CompletedExercise.isIsometric).
-        ...(ex.isIsometric ? { isIsometric: true as const } : {}),
-      })),
+      // Inputs are in the user's display unit, stored as canonical kg; its
+      // supersets only where they're real (utils/logWorkout.ts).
+      exercises: loggedExercises(exercises, isKg),
     };
 
     try {
@@ -1133,14 +1177,12 @@ export default function LogWorkoutScreen() {
       }
 
       // Update the owning program: record a free workout's name as an extra, and
-      // back-date the program's start when this session predates it. Logging a
-      // session you actually did earlier (e.g. you "started" today but really
-      // began two weeks ago) moves the program's start — and therefore its
-      // current week / progress everywhere — back to that date.
-      //
-      // Only a PROGRAM DAY moves the start. A custom workout added to the
-      // program isn't evidence the program began then, and moving the start
-      // re-dates the whole cycle: every scheduled day after it would shift.
+      // back-date the start of the run under way when this session predates it.
+      // Logging a session you actually did earlier (e.g. you "started" today but
+      // really began two weeks ago) moves the program's start — and therefore
+      // its current week / progress everywhere — back to that date. Only a
+      // PROGRAM DAY, never of a run that's over or one set to start later, and
+      // never into days an earlier run of it had (programsAfterPastLog).
       if (owningProgramId) {
         const progsRaw = await AsyncStorage.getItem(PROGRAMS_KEY);
         const progs: SavedProgram[] = progsRaw ? JSON.parse(progsRaw) : [];
@@ -1252,32 +1294,40 @@ export default function LogWorkoutScreen() {
             )}
           </View>
 
-          {/* Exercise cards */}
+          {/* Exercise cards, each in a box with the line joining it to the
+              next under it when they're a superset (components/SupersetLink.tsx). */}
           {exercises.map((ex, idx) => (
-            <ExerciseCard
-              key={ex.id}
-              ex={ex}
-              exIndex={idx}
-              totalExercises={exercises.length}
-              isDark={isDark}
-              onUpdateSet={(setIdx, field, value, cascade) => updateSet(ex.id, setIdx, field, value, cascade)}
-              onToggleDone={setIdx => toggleDone(ex.id, setIdx)}
-              onToggleType={setIdx => toggleType(ex.id, setIdx)}
-              onAddSet={() => addSet(ex.id)}
-              onRemoveLastSet={() => removeLastSet(ex.id)}
-              onRemoveExercise={() => removeExercise(ex.id)}
-              onOpenReorder={() => setReorderOpen(true)}
-              onChangeExercise={() => setChangingExId(ex.id)}
-              onToggleIsometric={() => toggleIsometric(ex.id)}
-              onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
-              onInputFocus={handleListFieldFocus}
-              // Last time's sets lined up with this card's rows by kind
-              // (prevHintsForRows). A set turned into a warm-up here stays
-              // where it is, so a warm-up row can sit between working ones.
-              prevSets={prevHintsForRows(prevSetsOf(ex), ex.sets.map(s => s.type)).map(p => formatPrevHint(p, isKg))}
-              prevNote={prevNoteOf(ex)}
-              prSets={prSetsByCard[idx]}
-            />
+            <View key={ex.id}>
+              <ExerciseCard
+                ex={ex}
+                exIndex={idx}
+                totalExercises={exercises.length}
+                isDark={isDark}
+                onUpdateSet={(setIdx, field, value, cascade) => updateSet(ex.id, setIdx, field, value, cascade)}
+                onToggleDone={setIdx => toggleDone(ex.id, setIdx)}
+                onToggleType={setIdx => toggleType(ex.id, setIdx)}
+                onAddSet={() => addSet(ex.id)}
+                onRemoveLastSet={() => removeLastSet(ex.id)}
+                onRemoveExercise={() => removeExercise(ex.id)}
+                onOpenReorder={() => setReorderOpen(true)}
+                onChangeExercise={() => setChangingExId(ex.id)}
+                inSuperset={supersetPlaceAt[idx] !== null}
+                onOpenSuperset={() => setSupersetExId(ex.id)}
+                onToggleIsometric={() => toggleIsometric(ex.id)}
+                onUpdateNotes={exNotes => updateExNotes(ex.id, exNotes)}
+                onInputFocus={handleListFieldFocus}
+                // Last time's sets lined up with this card's rows by kind
+                // (prevHintsForRows). A set turned into a warm-up here stays
+                // where it is, so a warm-up row can sit between working ones.
+                prevSets={prevHintsForRows(prevSetsOf(ex), ex.sets.map(s => s.type)).map(p => formatPrevHint(p, isKg))}
+                prevNote={prevNoteOf(ex)}
+                prSets={prSetsByCard[idx]}
+                repSets={repSetsByCard[idx]}
+              />
+              {supersetPlaceAt[idx] === "first" || supersetPlaceAt[idx] === "middle" ? (
+                <SupersetLink gap={EX_CARD_GAP} x={SUPERSET_LINE_X} isDark={isDark} />
+              ) : null}
+            </View>
           ))}
 
         </ScrollView>
@@ -1453,10 +1503,25 @@ export default function LogWorkoutScreen() {
         items={exercises}
         keyOf={ex => ex.id}
         nameOf={ex => ex.name}
+        metaOf={ex => reorderLines.get(ex.id) ?? ""}
+        // A superset stays whole: one dragged out leaves it, and one dropped
+        // into the middle of another lands just past it.
+        move={moveKeepingSupersets}
         onReorder={setExercises}
         onChange={ex => setChangingExId(ex.id)}
         onRemove={ex => removeExercise(ex.id)}
         onClose={() => setReorderOpen(false)}
+      />
+
+      {/* Superset With: what's picked happens once it has slid away. */}
+      <SupersetSheet
+        visible={supersetExId !== null}
+        onClose={() => setSupersetExId(null)}
+        name={supersetEx?.name ?? ""}
+        choices={supersetSheet.choices}
+        partners={supersetSheet.partners}
+        onJoin={key => { if (supersetExId) joinExerciseSuperset(supersetExId, key); }}
+        onLeave={() => { if (supersetExId) leaveExerciseSuperset(supersetExId); }}
       />
 
       {/* Time picker */}
@@ -1516,6 +1581,7 @@ const s = StyleSheet.create({
   editMoveLabel:{ fontFamily: FontFamily.regular, fontSize: 12, marginLeft: 2 },
   exReorderBtn: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 36, paddingRight: 14 },
   exReorderIcon:{ width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  editSupersetRow: { flexDirection: "row", marginTop: 10 },
   editChipsRow: { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 6 },
   // A button inside the exercise card (cardButton), a point less padding for
   // its hairline.

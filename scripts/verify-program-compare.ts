@@ -145,6 +145,18 @@ eq(greenRunFor({ kind: "all" }, programs, history)?.ref, { programId: "PPL", run
     const g = compareStartGreen({ kind: "current" }, [again], history);
     eq(r.finished && r.another ? compareCandidates([again], history, g!.ref).length > 0 : "not ready", true,
       "the same program run again: ready, and its earlier run is offered");
+    // No day is in two runs (found by the solo flows, 2026-11-17): finished
+    // and started again the same day, that day is the new run's; and a run
+    // set to start later, let go before it began, leaves the run before it
+    // ending before the day the program does start again.
+    eq(endingRun({ ...PPL, status: "completed", completedDate: "12 Oct 2026" }, "12 Oct 2026")!.endDate, "2026-10-11",
+      "finished and started again the same day: the finished run ends the day before");
+    const shelved = { ...PPL, status: "paused" as const, currentWeek: 2 };
+    const later = activateProgram([shelved], "PPL", "12 Oct 2026", history, "19 Oct 2026").programs[0];
+    eq(later.runs?.at(-1)?.endDate, "2026-10-18", "set to start later: the run before ends the day before it");
+    const letGo = deactivateProgram([later], "PPL", history, "13 Oct 2026")[0];
+    const sooner = activateProgram([letGo], "PPL", "13 Oct 2026", history, "14 Oct 2026").programs[0];
+    eq([sooner.runs?.length, sooner.runs?.at(-1)?.endDate], [1, "2026-10-13"], "let go and started sooner: the run before ends the day before this start");
   }
   // The picked program is the one finished: the current one takes green, so it
   // can go in blue.

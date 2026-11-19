@@ -32,11 +32,15 @@ export const BACK_SIZE = 40;
 export default function BackButton({
   onPress,
   inline = false,
+  ghost = false,
   accessibilityLabel = "Go back",
 }: {
   /** Defaults to router.back(). */
   onPress?: () => void;
   inline?: boolean;
+  /** Unseen, holding its place for the Progress page's filter dock to draw
+   *  over (components/progress/FilterDock.tsx). */
+  ghost?: boolean;
   accessibilityLabel?: string;
 }) {
   const insets = useSafeAreaInsets();
@@ -51,6 +55,7 @@ export default function BackButton({
         else router.back();
       }}
       size={BACK_SIZE}
+      ghost={ghost}
       style={inline ? undefined : [styles.floating, { top: insets.top + BACK_TOP }]}
       accessibilityLabel={accessibilityLabel}
     >

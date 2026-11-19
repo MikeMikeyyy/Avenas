@@ -29,6 +29,9 @@ import type { JournalEntry } from "../../constants/journal";
 import type { Achievement } from "../../constants/achievements";
 import { buildJournalFeed, RECENT_ACTIVITY_DAYS, type JournalFeedItem } from "../../utils/journalFeed";
 import { deriveClientAchievements } from "../../utils/clientAchievements";
+import { plannedThisWeek } from "../../utils/trainingTotals";
+import { getEffectiveToday } from "../../utils/workout";
+import JournalTrainingCard from "./JournalTrainingCard";
 
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_ABBR    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -144,6 +147,14 @@ export default function ClientJournalView({
   const barsReach = useFloatingBarsReach();
   const activeProgram = useMemo(() => programs.find(p => p.status === "active") ?? null, [programs]);
 
+  // The Your Training card's week, as the client's own Journal reads it. A
+  // client's change-day pick stays on their phone, so their plan goes without.
+  const effectiveToday = getEffectiveToday(activeProgram, workoutHistory);
+  const weekPlan = useMemo(
+    () => plannedThisWeek({ program: activeProgram, history: workoutHistory, programs, today: effectiveToday, override: null }),
+    [activeProgram, workoutHistory, programs, effectiveToday],
+  );
+
   const workoutDates = useMemo(
     () => Array.from(new Set(workoutHistory.map(w => w.date))).sort(),
     [workoutHistory],
@@ -187,7 +198,7 @@ export default function ClientJournalView({
   // Each card opens where it happened, like Home's: the workout, or for a
   // finished program the client's programs.
   const onAchievementPress = useCallback((a: Achievement) => {
-    if (a.category === "pr" || a.category === "workouts") onOpenWorkout(a.workoutId);
+    if (a.category === "pr" || a.category === "reps" || a.category === "workouts") onOpenWorkout(a.workoutId);
     else if (a.category === "program") onOpenPrograms();
   }, [onOpenWorkout, onOpenPrograms]);
 
@@ -218,6 +229,17 @@ export default function ClientJournalView({
         activeProgram={activeProgram}
         programs={programs}
         onDayPress={onDayPress}
+      />
+
+      {/* The client's whole history at a glance, the card their own Journal
+          draws; nothing until their first workout */}
+      <JournalTrainingCard
+        history={workoutHistory}
+        programs={programs}
+        today={effectiveToday}
+        plannedThisWeek={weekPlan}
+        isDark={isDark}
+        onOpenWorkout={onOpenWorkout}
       />
 
       {hasActivity && (

@@ -33,6 +33,7 @@ import {
 } from "../utils/workoutImport";
 import { IMPORT_NAME_TARGETS, matchExerciseName } from "../utils/exerciseMatch";
 import { workoutsToCsv } from "../utils/workoutExport";
+import { supersetRuns } from "../utils/supersets";
 import { ImportTooLargeError, loadImports, saveImport, undoImport } from "../utils/importStore";
 import { EXERCISES } from "../constants/exerciseData";
 import { IMPORT_LOG_KEY, WORKOUT_DATES_KEY, WORKOUT_HISTORY_KEY, type CompletedWorkout } from "../constants/programs";
@@ -153,6 +154,25 @@ if (lbs) {
     ["", 83 * 60, "2025-03-28", 'Felt strong, "PR" day', new Date(2025, 2, 28, 18, 52).toISOString()],
     "plan: a free workout, its length, day, notes and real finish");
   ok(new Set(plan.workouts.map(w => w.id)).size === plan.workouts.length, "plan: every session its own id");
+  // Hevy's superset comes over as one (user request, 2026-11-15): the two of
+  // superset_id 0 share an id, side by side; nothing else is in one.
+  const ssIds = pushDay.exercises.map(e => e.supersetId ?? null);
+  eq([ssIds[1] !== null && ssIds[1] === ssIds[2], ssIds[0], ssIds[3], ssIds[4]], [true, null, null, null],
+    "plan: the superset's two exercises share a superset, the rest are in none");
+  eq(supersetRuns(pushDay.exercises), [[1, 2]], "plan: and it's a real superset, side by side");
+  eq(lbs.workouts[0].exercises.map(e => e.superset ?? ""), ["", "0", "0", "", ""], "read: each exercise keeps the file's superset");
+  // A partner with nothing logged isn't there, and the other alone is in none.
+  const empty = (setIndex: number, weight: number, reps: number) =>
+    [`"Triceps Pushdown",0,"",${setIndex},"normal",${weight},${reps}`, `"Triceps Pushdown",0,"",${setIndex},"normal",,`] as const;
+  const [a0, b0] = empty(0, 50, 15);
+  const [a1, b1] = empty(1, 50, 12);
+  const lone = read(HEVY_LBS.replace(a0, b0).replace(a1, b1), "hevy lone");
+  if (lone) {
+    const day = planImport(lone, { weightUnit: "lb", choices: {}, history: [], now: 2 }).workouts.find(w => w.workoutName === "Push, heavy");
+    eq(day?.exercises.slice(0, 3).map(e => [e.name, e.supersetId ?? null]),
+      [["Bench Press (Barbell)", null], ["Lateral Raise (Dumbbell)", null], ["Plank", null]],
+      "plan: a superset partner with nothing logged leaves the other in none");
+  }
 
   const chosen = planImport(lbs, {
     weightUnit: "lb", history: [], now: 1,
@@ -246,10 +266,10 @@ for (const isKg of [true, false]) {
   const unit = isKg ? "kg" : "lbs";
   const csv = workoutsToCsv(OURS, [{ id: "p1", name: "Strength" }], isKg);
   const rows = parseCsv(csv);
-  eq(rows[0][8], isKg ? "weight_kg" : "weight_lbs", `export (${unit}): the header names the unit`);
-  eq(rows[1].slice(0, 11), ["2026-10-20", "Upper", "Strength", "2026-10-20 18:15", "2026-10-20 19:15", "Barbell Bench Press", "1", "warmup",
+  eq(rows[0][9], isKg ? "weight_kg" : "weight_lbs", `export (${unit}): the header names the unit`);
+  eq(rows[1].slice(0, 12), ["2026-10-20", "Upper", "Strength", "2026-10-20 18:15", "2026-10-20 19:15", "Barbell Bench Press", "", "1", "warmup",
     isKg ? "40" : "88.2", "10", ""], `export (${unit}): a set's row`);
-  eq(rows[4].slice(5, 12), ["Plank", "1", "working", "", "", "60", "yes"], `export (${unit}): a hold's time under seconds`);
+  eq(rows[4].slice(5, 13), ["Plank", "", "1", "working", "", "", "60", "yes"], `export (${unit}): a hold's time under seconds`);
   const back = read(csv, `export (${unit}) reads back`);
   if (!back) continue;
   eq(back.source, "avenas", `export (${unit}): known as ours`);
@@ -267,6 +287,68 @@ for (const isKg of [true, false]) {
 }
 eq(parseCsv(workoutsToCsv([{ ...OURS[1], exercises: [] }], [], true))[1].slice(0, 6), ["2026-10-21", "Late one", "", "2026-10-22 00:10", "2026-10-22 00:40", ""],
   "export: a workout with no sets still has its row");
+{
+  const blank = parseCsv(workoutsToCsv([{ ...OURS[1], exercises: [], sessionNotes: "rest day really" }], [], true));
+  eq([blank[1].length, blank[1][blank[1].length - 1]], [blank[0].length, "rest day really"], "export: ...a cell for every column, its notes under workout_notes");
+}
+
+// Supersets out and back (user request, 2026-11-15): each superset's number in
+// the workout under `superset`, beside the exercise, and in again as one. The
+// same exercise twice in a superset stays two; an id on one alone isn't one.
+const SUPERSETS: CompletedWorkout = {
+  id: "w3", date: "2026-10-22", completedAt: new Date(2026, 9, 22, 18, 0).toISOString(), workoutName: "Push",
+  durationSeconds: 3000, programId: "", exercises: [
+    { name: "Barbell Bench Press", notes: "", supersetId: "ss_a", sets: [
+      { type: "warmup", weight: "40", reps: "10", done: true },
+      { type: "working", weight: "80", reps: "8", done: true },
+    ] },
+    { name: "Shoulder Press", notes: "", supersetId: "ss_a", sets: [{ type: "working", weight: "30", reps: "10", done: true }] },
+    { name: "Lateral Raise", notes: "", supersetId: "ss_lone", sets: [{ type: "working", weight: "10", reps: "15", done: true }] },
+    { name: "Biceps Curl", notes: "", supersetId: "ss_b", sets: [{ type: "working", weight: "12", reps: "12", done: true }] },
+    { name: "Biceps Curl", notes: "", supersetId: "ss_b", sets: [{ type: "working", weight: "10", reps: "12", done: true }] },
+    { name: "Biceps Curl", notes: "", sets: [{ type: "working", weight: "8", reps: "12", done: true }] },
+  ],
+};
+{
+  const csv = workoutsToCsv([SUPERSETS], [], true);
+  const rows = parseCsv(csv);
+  eq([rows[0][5], rows[0][6]], ["exercise", "superset"], "export: the superset column is beside the exercise");
+  eq(rows.slice(1).map(r => [r[5], r[6]]), [
+    ["Barbell Bench Press", "1"], ["Barbell Bench Press", "1"], ["Shoulder Press", "1"],
+    ["Lateral Raise", ""], ["Biceps Curl", "2"], ["Biceps Curl", "2"], ["Biceps Curl", ""],
+  ], "export: each superset's number in the workout, none for one on its own");
+  const back = read(csv, "export with supersets reads back");
+  if (back) {
+    eq(back.workouts[0].exercises.map(e => [e.name, e.superset ?? ""]), [
+      ["Barbell Bench Press", "1"], ["Shoulder Press", "1"], ["Lateral Raise", ""],
+      ["Biceps Curl", "2"], ["Biceps Curl", "2"], ["Biceps Curl", ""],
+    ], "read (ours): each exercise keeps its superset, the same one twice in a superset two");
+    const plan = planImport(back, { weightUnit: "kg", choices: {}, history: [] });
+    const w = plan.workouts[0];
+    eq(supersetRuns(w.exercises), [[0, 1], [3, 4]], "export: its supersets come back as supersets");
+    eq(w.exercises.map(e => e.sets.map(s => `${s.type === "warmup" ? "W " : ""}${s.weight}×${s.reps}`)),
+      SUPERSETS.exercises.map(e => e.sets.map(s => `${s.type === "warmup" ? "W " : ""}${s.weight}×${s.reps}`)),
+      "export: ...each with its own sets");
+    eq([w.exercises[2].supersetId, w.exercises[5].supersetId], [undefined, undefined], "export: one in none comes back in none");
+  }
+  // Edited by hand, its set numbers cleared: rows of one name in a different
+  // superset from the row before are another exercise, not more sets of it.
+  const cleared = toCsv(rows.map((r, i) => (i === 0 ? r : r.map((c, k) => (k === 7 ? "" : c)))));
+  const edited = read(cleared, "an export with its set numbers cleared reads");
+  if (edited) {
+    eq(edited.workouts[0].exercises.map(e => [e.name, e.superset ?? "", e.sets.length]), [
+      ["Barbell Bench Press", "1", 2], ["Shoulder Press", "1", 1], ["Lateral Raise", "", 1],
+      ["Biceps Curl", "2", 2], ["Biceps Curl", "", 1],
+    ], "read (ours, set numbers cleared): one name's rows in another superset start another exercise");
+  }
+  // A file exported before the column: read as ever, with no supersets.
+  const before = read(toCsv(rows.map(r => r.filter((_, i) => i !== 6))), "an export from before the superset column reads");
+  if (before) {
+    const plan = planImport(before, { weightUnit: "kg", choices: {}, history: [] });
+    eq([plan.workouts[0].exercises.map(e => e.name), supersetRuns(plan.workouts[0].exercises)],
+      [SUPERSETS.exercises.map(e => e.name), []], "an export from before the superset column: every exercise, none in a superset");
+  }
+}
 
 // ─── 5. Exercise names ───────────────────────────────────────────────────────
 

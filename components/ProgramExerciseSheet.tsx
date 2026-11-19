@@ -3,7 +3,8 @@
 // bin, a rest chip, a move handle and that switch across it). Everything that
 // sets the exercise up rather than its sets' targets: under SETS its rest
 // timer, Rep Range (also the card's Reps header, which stays) and Timed Hold;
-// under EXERCISE Move, Change and Remove. Laid out as the Workout tab's
+// under EXERCISE Move, Change, Superset With (components/SupersetPickStep.tsx,
+// another step; user request, 2026-11-15) and Remove. Laid out as the Workout tab's
 // exercise sheet (components/ExerciseSheet.tsx), so the two read as one.
 //
 // The rest timer is a step of this sheet, its wheel as the card's own picker
@@ -24,7 +25,8 @@ import SimpleSheet from "./trainer/SimpleSheet";
 import SheetPill, { SheetToggle } from "./SheetPill";
 import MaskedView from "./MaskedView";
 import TrashIcon from "./TrashIcon";
-import { APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../constants/theme";
+import SupersetPickStep, { namesList, type SupersetChoice } from "./SupersetPickStep";
+import { accentTextColor, APP_DARK, APP_LIGHT, DANGER_BRIGHT, FontFamily } from "../constants/theme";
 import { useTheme } from "../contexts/ThemeContext";
 
 // ─── Rest timer ───────────────────────────────────────────────────────────────
@@ -143,6 +145,15 @@ interface Props {
   onSetRest: (secs: number) => void;
   onToggleRange: () => void;
   onToggleHold: () => void;
+  /** What it can be put in a superset with (utils/supersets.ts): the day's
+   *  others, in order, but its own superset's members. In one, its rest timer
+   *  is the superset's, after each round (the screen sets every member's). */
+  supersetChoices: readonly SupersetChoice[];
+  /** Its superset's other members, by name; none when it's in none. */
+  supersetWith: readonly string[];
+  /** Joins the one picked to its superset; the sheet closes. */
+  onSuperset: (key: string) => void;
+  onLeaveSuperset: () => void;
   /** These run once the sheet has slid away and closed. */
   onApplyRestToAll: (secs: number) => void;
   onMove: () => void;
@@ -153,11 +164,14 @@ interface Props {
 function ProgramExerciseSheet({
   visible, onClose, name, position, restSeconds, isHold, isRange,
   onSetRest, onToggleRange, onToggleHold, onApplyRestToAll, onMove, onChange, onRemove,
+  supersetChoices, supersetWith, onSuperset, onLeaveSuperset,
 }: Props) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
 
-  const [step, setStep] = useState<"actions" | "rest" | "remove">("actions");
+  const [step, setStep] = useState<"actions" | "rest" | "remove" | "superset">("actions");
+  // In a superset, its rest is the superset's, after each round.
+  const restLabel = supersetWith.length > 0 ? "Rest After Each Round" : "Rest Timer";
   // Each opening starts on its actions.
   const [shownFor, setShownFor] = useState(visible);
   if (visible !== shownFor) {
@@ -183,6 +197,17 @@ function ProgramExerciseSheet({
       {close => {
         const leave = (then: () => void) => { after.current = then; close(); };
 
+        if (step === "superset") {
+          return (
+            <SupersetPickStep
+              name={name}
+              choices={supersetChoices}
+              onPick={key => { onSuperset(key); close(); }}
+              onCancel={() => setStep("actions")}
+            />
+          );
+        }
+
         if (step === "remove") {
           return (
             <Reanimated.View entering={FadeIn.duration(160)} style={styles.body}>
@@ -198,8 +223,10 @@ function ProgramExerciseSheet({
           return (
             <Reanimated.View entering={FadeIn.duration(160)} style={styles.body}>
               <View style={styles.head}>
-                <Text style={[styles.title, { color: t.tp }]}>Rest Timer</Text>
-                <Text style={[styles.subtitle, { color: t.ts }]} numberOfLines={1}>{name}</Text>
+                <Text style={[styles.title, { color: t.tp }]}>{restLabel}</Text>
+                <Text style={[styles.subtitle, { color: t.ts }]} numberOfLines={2}>
+                  {supersetWith.length > 0 ? `${name} and ${namesList(supersetWith)}` : name}
+                </Text>
               </View>
               <RestWheel seconds={restSeconds} onSettle={onSetRest} onOffset={y => { restOffset.current = y; }} />
               <View style={styles.pair}>
@@ -228,18 +255,23 @@ function ProgramExerciseSheet({
             <View style={styles.head}>
               {position ? <Text style={[styles.position, { color: t.ts }]}>{position}</Text> : null}
               <Text style={[styles.title, { color: t.tp }]} numberOfLines={2}>{name}</Text>
+              {supersetWith.length > 0 ? (
+                <Text style={[styles.supersetLine, { color: accentTextColor(isDark) }]} numberOfLines={2}>
+                  {`Superset with ${namesList(supersetWith)}`}
+                </Text>
+              ) : null}
             </View>
 
             <Text style={[styles.section, { color: t.ts }]}>SETS</Text>
             <SheetPill
-              label="Rest Timer"
+              label={restLabel}
               icon={c => <Ionicons name="timer-outline" size={18} color={c} />}
               badge={<Text style={[styles.pillValue, { color: t.ts }]}>{formatRest(restSeconds)}</Text>}
               onPress={() => {
                 restOffset.current = Math.max(0, REST_OPTIONS.indexOf(restSeconds)) * REST_ITEM_H;
                 setStep("rest");
               }}
-              accessibilityLabel={`Rest timer, ${formatRest(restSeconds)}`}
+              accessibilityLabel={`${restLabel}, ${formatRest(restSeconds)}`}
             />
             <SheetToggle
               label="Rep Range"
@@ -267,6 +299,26 @@ function ProgramExerciseSheet({
               icon={c => <Ionicons name="swap-horizontal-outline" size={18} color={c} />}
               onPress={() => leave(onChange)}
             />
+            {supersetWith.length === 0 ? (
+              <SheetPill
+                label="Superset With"
+                icon={c => <Ionicons name="link-outline" size={18} color={c} />}
+                onPress={() => setStep("superset")}
+              />
+            ) : (
+              <>
+                <SheetPill
+                  label="Add to Superset"
+                  icon={c => <Ionicons name="link-outline" size={18} color={c} />}
+                  onPress={() => setStep("superset")}
+                />
+                <SheetPill
+                  label="Remove from Superset"
+                  icon={c => <Ionicons name="unlink-outline" size={18} color={c} />}
+                  onPress={() => { onLeaveSuperset(); close(); }}
+                />
+              </>
+            )}
             <SheetPill
               label="Remove Exercise"
               tint={DANGER_BRIGHT}
@@ -288,6 +340,7 @@ const styles = StyleSheet.create({
   head:         { alignItems: "center", gap: 2, paddingHorizontal: 4, paddingBottom: 4 },
   position:     { fontFamily: FontFamily.semibold, fontSize: 13 },
   title:        { fontFamily: FontFamily.bold, fontSize: 20, textAlign: "center" },
+  supersetLine: { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: "center" },
   subtitle:     { fontFamily: FontFamily.regular, fontSize: 14 },
   message:      { fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21, textAlign: "center", paddingHorizontal: 8, paddingBottom: 4 },
   section:      { fontFamily: FontFamily.semibold, fontSize: 12, letterSpacing: 1, paddingHorizontal: 4, marginBottom: -4 },

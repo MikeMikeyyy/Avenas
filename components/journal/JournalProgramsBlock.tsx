@@ -18,6 +18,7 @@ import { ACCT, APP_DARK, APP_LIGHT, FontFamily } from "../../constants/theme";
 import { PILL_H_CHIP, PILL_SHADOW } from "../../constants/buttons";
 import { getCurrentWeek, type SavedProgram } from "../../constants/programs";
 import { runStartDate } from "../../utils/programHolds";
+import { startsLabel, startsLater } from "../../utils/programStart";
 
 export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProgram, onOpenAllPrograms }: {
   activeProgram: SavedProgram | null;
@@ -27,6 +28,9 @@ export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProg
 }) {
   const t = isDark ? APP_DARK : APP_LIGHT;
   const week = activeProgram ? getCurrentWeek(activeProgram) : 0;
+  // Set to start later (utils/programStart.ts): when, in place of its week.
+  const startsOn = startsLater(activeProgram);
+  const weekText = startsOn ? startsLabel(startsOn) : `Week ${week} of ${activeProgram?.totalWeeks ?? 0}`;
   return (
     <View style={styles.programsBlock}>
       <View style={styles.programsHeadingRow}>
@@ -50,7 +54,7 @@ export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProg
           style={{ marginBottom: 10 }}
           onPress={() => onOpenProgram(activeProgram.id)}
           accessibilityRole="button"
-          accessibilityLabel={`${activeProgram.name}, week ${week} of ${activeProgram.totalWeeks}. Open its history`}
+          accessibilityLabel={`${activeProgram.name}, ${weekText}. Open its history`}
         >
           <NeuCard dark={isDark} style={styles.activeProgramCard}>
             <View style={styles.apCardInner}>
@@ -60,11 +64,11 @@ export default function JournalProgramsBlock({ activeProgram, isDark, onOpenProg
                 <Ionicons name="chevron-forward" size={16} color={t.ts} style={{ marginLeft: 6 }} />
               </View>
               <Text style={[styles.apSub, { color: t.ts }]}>
-                Week {week} of {activeProgram.totalWeeks}
+                {weekText}
               </Text>
               <View style={styles.apDateRow}>
                 <Ionicons name="calendar-outline" size={13} color={t.ts} />
-                <Text style={[styles.apDate, { color: t.ts }]}>Started {runStartDate(activeProgram)}</Text>
+                <Text style={[styles.apDate, { color: t.ts }]}>{startsOn ? "Starts" : "Started"} {runStartDate(activeProgram)}</Text>
               </View>
               <View style={styles.apProgressRow}>
                 {Array.from({ length: activeProgram.totalWeeks }).map((_, i) => {

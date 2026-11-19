@@ -6,14 +6,11 @@ import NeuCard from "./NeuCard";
 import BounceButton from "./BounceButton";
 import type { CompletedWorkout, SavedProgram } from "../constants/programs";
 import { toYMD } from "../utils/dates";
-import { getWorkoutForDate } from "../utils/workout";
-import { pastPlanFrom, type PastPlan } from "../utils/journalCalendar";
+import { homeMonthCells as buildMonthCells, pastPlanFrom, type HomeCellState as CellState } from "../utils/journalCalendar";
 
 const MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTH_NAMES  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_ABBRS    = ["M","T","W","T","F","S","S"];
-
-type CellState = "workout" | "todayWorkout" | "rest" | "missed" | "future" | "today" | null;
 
 interface Props {
   isDark: boolean;
@@ -26,54 +23,8 @@ interface Props {
   workoutHistory: CompletedWorkout[];
 }
 
-function buildMonthCells(
-  year: number,
-  month: number,
-  todayStr: string,
-  workoutSet: Set<string>,
-  prog: SavedProgram | null,
-  pastPlan: PastPlan,
-): CellState[] {
-  const totalDays = new Date(year, month + 1, 0).getDate();
-  const firstDow  = new Date(year, month, 1).getDay(); // 0=Sun
-  const padBefore = (firstDow + 6) % 7; // convert to Monday-first
-
-  const cells: CellState[] = Array(padBefore).fill(null);
-
-  for (let day = 1; day <= totalDays; day++) {
-    const ds   = `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-
-    if (ds === todayStr) {
-      cells.push(workoutSet.has(ds) ? "todayWorkout" : "today");
-    } else if (ds > todayStr) {
-      cells.push("future");
-    } else {
-      // The run that was going on the day, ended since or not (pastPlanFrom):
-      // a finished program's skipped last workout still reads missed.
-      const planned = pastPlan(ds);
-      if (workoutSet.has(ds)) {
-        cells.push("workout");
-      } else if (planned) {
-        cells.push(planned === "workout" ? "missed" : "rest");
-      } else if (prog && getWorkoutForDate(prog, ds) === null) {
-        // Through the shared resolver, so this agrees with the week strip above
-        // it. It used to hand-roll the cycle formula, which meant it knew
-        // nothing about days you marked off, pushed, or held the program on —
-        // and painted "missed" on all of them. Days before the program started
-        // and days inside a hold now read as rest too, which is the honest
-        // answer: you can't miss a workout that was never scheduled.
-        cells.push("rest");
-      } else {
-        cells.push("missed");
-      }
-    }
-  }
-
-  // Pad to complete the last row
-  while (cells.length % 7 !== 0) cells.push(null);
-
-  return cells;
-}
+// Each cell's state is utils/journalCalendar.ts homeMonthCells (pure, so the
+// solo flows check it).
 
 function MonthSection({
   year, month, cells, isDark,
@@ -93,11 +44,14 @@ function MonthSection({
   const cellBg = (state: CellState): object => {
     if (!state) return {};
     if (state === "workout") return { backgroundColor: ACCT, shadowColor: ACCT, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 4, elevation: 3 };
-    // A MISSED day takes the faded fill, the same as a day still to come: it
-    // came and went with nothing in it. Rest and missed used to share the dark
-    // fill, so the two couldn't be told apart.
-    if (state === "future" || state === "missed") return { backgroundColor: lightCell };
-    // rest: the dark fill, a day meant to be empty.
+    // The faded fill is a day still to come, and nothing else.
+    if (state === "future") return { backgroundColor: lightCell };
+    // Every day gone by with nothing logged, missed or rest, takes the dark
+    // fill (user request, 2026-11-19: "If I'm not logging workout days ...
+    // those days missed should show as the dark grey not the faded grey. Faded
+    // grey should be for future days we haven't passed"). A missed day had the
+    // faded fill from 2.10.0 to tell it from rest, which made it read as a day
+    // to come. The Journal's calendar still marks missed days apart (dashed).
     return { backgroundColor: darkCell };
   };
 

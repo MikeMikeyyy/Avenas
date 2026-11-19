@@ -53,6 +53,14 @@ interface Props<T extends string> {
    * Strength card reuses its header's per-metric icons here).
    */
   renderOptionIcon?: (key: T) => ReactNode;
+  /** Its sheet, opened from outside (the Progress page's filter dock draws
+   *  the time range's button, components/progress/FilterDock.tsx). Left out,
+   *  the button opens it. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** The button unseen, holding its place, for the dock to draw over
+   *  (GlassButton's `ghost`). */
+  ghost?: boolean;
 }
 
 /**
@@ -68,11 +76,16 @@ export default function DropdownPicker<T extends string>({
   size = "chip",
   leadingIcon,
   renderOptionIcon,
+  open: openProp,
+  onOpenChange,
+  ghost = false,
 }: Props<T>) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
   const insets = useSafeAreaInsets();
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const open = openProp ?? ownOpen;
+  const setOpen = (next: boolean) => (onOpenChange ? onOpenChange(next) : setOwnOpen(next));
   const [mounted, setMounted] = useState(false);
   const [slideY] = useState(() => new Animated.Value(600));
   const [backdropOpacity] = useState(() => new Animated.Value(0));
@@ -133,6 +146,7 @@ export default function DropdownPicker<T extends string>({
       <GlassButton
         pill={!triggerIcon}
         size={bar && !triggerIcon ? PILL_H_XS : PILL_H_CHIP}
+        ghost={ghost}
         onPress={() => setOpen(true)}
         contentStyle={triggerIcon ? undefined : bar ? styles.btnBar : styles.btn}
         solidStyle={bar ? PILL_SHADOW : cardButton(t)}
@@ -140,13 +154,15 @@ export default function DropdownPicker<T extends string>({
       >
         {triggerIcon ? (
           <Ionicons name={triggerIcon} size={16} color={t.tp} />
+        ) : bar ? (
+          <DropdownBarFace label={current.shortLabel ?? current.label} leadingIcon={leadingIcon} />
         ) : (
           <>
-            {leadingIcon ? <Ionicons name={leadingIcon} size={bar ? 17 : 14} color={t.ts} /> : null}
-            <Text style={[bar ? styles.btnTextBar : styles.btnText, { color: t.tp }]} numberOfLines={1}>
+            {leadingIcon ? <Ionicons name={leadingIcon} size={14} color={t.ts} /> : null}
+            <Text style={[styles.btnText, { color: t.tp }]} numberOfLines={1}>
               {current.shortLabel ?? current.label}
             </Text>
-            <Ionicons name="chevron-down" size={bar ? 15 : 13} color={t.ts} />
+            <Ionicons name="chevron-down" size={13} color={t.ts} />
           </>
         )}
       </GlassButton>
@@ -210,6 +226,24 @@ export default function DropdownPicker<T extends string>({
   );
 }
 
+/**
+ * What's on a "bar" button: its icon, the choice and the chevron. Its own, so
+ * the filter dock (components/progress/FilterDock.tsx) draws the very same
+ * face on the time range's big button, laid out with DROPDOWN_BAR_FACE inside
+ * the pill's content (glassContentStyle).
+ */
+export function DropdownBarFace({ label, leadingIcon }: { label: string; leadingIcon?: keyof typeof Ionicons.glyphMap }) {
+  const { isDark } = useTheme();
+  const t = isDark ? APP_DARK : APP_LIGHT;
+  return (
+    <>
+      {leadingIcon ? <Ionicons name={leadingIcon} size={17} color={t.ts} /> : null}
+      <Text style={[styles.btnTextBar, { color: t.tp }]} numberOfLines={1}>{label}</Text>
+      <Ionicons name="chevron-down" size={15} color={t.ts} />
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
   // What's on the trigger: "chip" is PILL_H_CHIP tall, "bar" PILL_H_XS.
   btn: {
@@ -264,3 +298,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
 });
+
+/** A bar button's face's place inside the pill: its padding and gap. */
+export const DROPDOWN_BAR_FACE = styles.btnBar;

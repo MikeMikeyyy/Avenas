@@ -18,6 +18,7 @@ import type { CustomExercise, SelectableMuscle } from "../constants/exercises";
 import { MONTH_NAMES, toYMD, parseStoredDate } from "./dates";
 import { customDayKey, historicalDays, markDayRefLabels, programDaysWithExtras } from "./programDays";
 import { runStartYMD } from "./programHolds";
+import { startsLater } from "./programStart";
 import { musclesForExercise, RADAR_GROUPS } from "./muscleGroups";
 import { currentExerciseName, exerciseIdentity, type ExerciseRef } from "./exerciseNames";
 import { isAssisted, liftBeats } from "./assisted";
@@ -249,6 +250,20 @@ export function rangeHoldingLast(
   if (holds(picked ?? auto)) return picked;
   const reach = RANGE_OPTIONS.find(o => holds(o.key))?.key ?? "year";
   return reach === auto ? null : reach;
+}
+
+/**
+ * The range the page's charts open on when it hasn't been picked:
+ * autoWeekRange, or, `reachBack` (Current program standing for a program not
+ * under way: the one finished last, while a new one has nothing logged), the
+ * shortest range that holds its last session, as View Progress opens a
+ * program not running (rangeHoldingLast). So Last Week when it ended last
+ * week, the four weeks or more when it ended longer ago (user pick,
+ * 2026-11-19, option A: "If we haven't started a new program we should see
+ * the old one on its last week").
+ */
+export function autoRangeFor(sessions: readonly { date: string }[], today: Date, reachBack: boolean): RangeKey {
+  return (reachBack ? rangeHoldingLast(sessions, null, today) : null) ?? autoWeekRange(sessions, today);
 }
 
 /** Monday (00:00 local) of the ISO-style week containing `d`. Sunday is treated
@@ -717,8 +732,28 @@ export function collectExerciseHistory(
       ...(assisted ? { isAssisted: true as const } : {}),
     });
   }
-  points.sort((a, b) => a.completedAt.localeCompare(b.completedAt));
+  // Two finishing at the same moment (a log given another session's minute):
+  // the one saved later is the later, as "last time" and Exercise History
+  // read them (utils/workout.ts hintSessions). The chart drew it first, so its
+  // dots and its change since ran the other way (the training months harness,
+  // 2026-11-15).
+  points.sort((a, b) => a.completedAt.localeCompare(b.completedAt) || bySaved(a.workoutId, b.workoutId));
   return points;
+}
+
+/** When a session was saved, as its id says (`workout_<ms>`, an import's
+ *  `workout_<ms>_<n>`): [ms, n], or null for an id that doesn't say. */
+function savedOrder(id: string): [number, number] | null {
+  const m = /^workout_(\d+)(?:_(\d+))?/.exec(id);
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : null;
+}
+
+/** Of two sessions, the one saved first first; 0 when an id doesn't say,
+ *  which leaves them as they came. */
+function bySaved(a: string, b: string): number {
+  const x = savedOrder(a);
+  const y = savedOrder(b);
+  return x && y ? x[0] - y[0] || x[1] - y[1] : 0;
 }
 
 // ─── public: PRs ─────────────────────────────────────────────────────────────
@@ -898,9 +933,80 @@ export function programIdsWithSessions(
   return out;
 }
 
+/** A stored date ("05 Oct 2026") as "YYYY-MM-DD", or null when unreadable. */
+function storedYMD(stored: string | undefined): string | null {
+  const d = parseStoredDate(stored);
+  return d ? toYMD(d) : null;
+}
+
+/**
+ * Whether `program` is under way: the active program, begun, with a workout
+ * logged in the run it's on (on or after that run's first day, runStartYMD),
+ * not only in an earlier run of it.
+ */
+export function isUnderWay(
+  program: SavedProgram,
+  history: readonly CompletedWorkout[],
+  today: string = toYMD(new Date()),
+): boolean {
+  if (program.status !== "active" || startsLater(program, today)) return false;
+  const start = runStartYMD(program);
+  return history.some(w => (start === null || w.date >= start) && workoutBelongsToProgram(w, program));
+}
+
+/**
+ * The program the Progress page's "Current program" stands for: the active
+ * one once it's under way (isUnderWay: a workout logged in its run), else the
+ * one finished last (user request, 2026-11-15: finishing a program left the
+ * page saying there was no active program, its progress gone, until a new one
+ * was activated; and 2026-11-19: "I don't want the current program selected
+ * until we have a new program in with a logged session", a new program made
+ * active with nothing logged in it showed a blank page). So a program made
+ * active, today or to start later (utils/programStart.ts), takes over with
+ * its first workout, not its first day.
+ *
+ * Finished last: the latest finish of any run that ended Completed, the
+ * program's own (completedDate) or an earlier run's (SavedProgram.runs), so a
+ * finished program made active again to run once more is still it, its last
+ * run showing, until the new run has a workout. A finished program with no
+ * readable finish date isn't one. One started since it and made inactive with
+ * a workout logged since is newer training, so there's none then (the active
+ * one, if any); one never trained changes nothing. With none finished, the
+ * active one, under way or not, as there's nothing else to show.
+ */
+export function currentScopeProgram(
+  programs: readonly SavedProgram[],
+  history: readonly CompletedWorkout[],
+  today: string = toYMD(new Date()),
+): SavedProgram | null {
+  const active = programs.find(p => p.status === "active") ?? null;
+  if (active && isUnderWay(active, history, today)) return active;
+  let finished: SavedProgram | null = null;
+  let finishedYMD = "";
+  for (const p of programs) {
+    const ends = [
+      ...(p.status === "completed" ? [storedYMD(p.completedDate)] : []),
+      ...(p.runs ?? []).filter(r => r.status === "completed").map(r => r.endDate),
+    ];
+    for (const ymd of ends) {
+      if (ymd && ymd > finishedYMD) {
+        finished = p;
+        finishedYMD = ymd;
+      }
+    }
+  }
+  if (!finished) return active;
+  const startedSince = programs.some(p =>
+    p.status === "paused"
+    && (storedYMD(p.startDate) ?? "") > finishedYMD
+    && history.some(w => w.date > finishedYMD && workoutBelongsToProgram(w, p)));
+  return startedSince ? active : finished;
+}
+
 /**
  * Filter the history list by the user's selected program scope.
- *   - current: workouts belonging to the lone active program; [] if none.
+ *   - current: workouts belonging to currentScopeProgram (the active program,
+ *     else the one finished last); [] if none.
  *   - all: identity.
  *   - program: workouts belonging to the named program; [] if it's gone.
  *   - custom: workouts in no program (isCustomSession).
@@ -914,7 +1020,7 @@ export function filterByProgramScope(
   if (scope.kind === "custom") return history.filter(w => isCustomSession(w, programs));
   let target: SavedProgram | null = null;
   if (scope.kind === "current") {
-    target = programs.find(p => p.status === "active") ?? null;
+    target = currentScopeProgram(programs, history);
   } else {
     target = programs.find(p => p.id === scope.programId) ?? null;
   }
@@ -925,11 +1031,14 @@ export function filterByProgramScope(
 
 // ─── public: programs in scope (for the day drill-down) ──────────────────────
 
-export function programsInScope(scope: ProgramScope, programs: SavedProgram[]): SavedProgram[] {
+/** The programs a scope covers. `history` is every session (not only the
+ *  scope's): what Current program is depends on whether the active program
+ *  has one logged (currentScopeProgram). */
+export function programsInScope(scope: ProgramScope, programs: SavedProgram[], history: readonly CompletedWorkout[]): SavedProgram[] {
   if (scope.kind === "all") return programs;
   if (scope.kind === "custom") return [];
   if (scope.kind === "current") {
-    const p = programs.find(p => p.status === "active");
+    const p = currentScopeProgram(programs, history);
     return p ? [p] : [];
   }
   const p = programs.find(p => p.id === scope.programId);
@@ -950,9 +1059,11 @@ export function programsInScope(scope: ProgramScope, programs: SavedProgram[]): 
 export function scopedProgramDays(
   scope: ProgramScope,
   programs: SavedProgram[],
-  scopedWorkouts: CompletedWorkout[] = [],
+  scopedWorkouts: CompletedWorkout[],
+  /** Every session, for which program Current program is (programsInScope). */
+  history: readonly CompletedWorkout[],
 ): ProgramDayRef[] {
-  const inScope = programsInScope(scope, programs);
+  const inScope = programsInScope(scope, programs, history);
   const refs: ProgramDayRef[] = [];
   // Each with its program's dates, which a session from before program ids is
   // only its inside (workoutMatchesDay), as it's only the program's inside.

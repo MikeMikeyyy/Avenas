@@ -107,11 +107,20 @@ eas build --profile development --platform ios
    the next set; back in the app the set is **ticked with last time's
    numbers filled in**, the same weight × reps the card showed (anything
    typed before locking is kept; a set with no previous numbers stays empty).
+3a. Type only a weight on a set (more than last time), leave its reps empty,
+   lock and tick it → the card showed your weight with last time's reps, and
+   back in the app the set has both (2026-11-14: each empty box fills, a typed
+   one stays). The same with only reps typed: last time's weight goes in.
 4. After a lock-screen tick, the rest takes the card (if that exercise has a
    rest time): countdown, line, −15s +15s Skip, and the next set below, none
    of it cut off. Skip and ±15s work; reopening the app shows the in-app rest
    banner in sync. Left alone, the rest ends and the card goes back to the set
-   by itself.
+   by itself (on a lit lock screen, at the next screen off and on: see the risk
+   below).
+4a. With Rest timer alerts on: tick from the lock screen, put the phone face
+   down. At the rest's end "Rest complete" arrives (sound), the screen lights
+   and the card shows the next set big. Skip cancels it, ±15s moves it, and
+   opening the app mid-rest leaves one alert (the app's), never two.
 5. Finish or discard the workout → card disappears. Toggle OFF in Settings →
    card disappears mid-workout and stays gone.
 5a. Change a card's sets in the app (− the last set, turn a warmup into a
@@ -134,10 +143,25 @@ eas build --profile development --platform ios
   developer.apple.com → Membership).
 - **Card never appears:** confirm iOS 17+, and iPhone Settings → Avenas →
   Live Activities is allowed; then check `isLiveActivityAvailable()` logs.
-- **Rest hits 0:00 and lingers:** it shouldn't any more. A card with a rest
-  running goes stale when the rest ends (`WorkoutActivityController.content`),
-  iOS redraws a card when it goes stale, and the card shows the rest only
-  while it isn't (`showsRest`). If it lingers, that redraw isn't happening.
+- **Rest hits 0:00 and lingers on a lit lock screen:** expected, iOS's doing.
+  A card with a rest running goes stale when the rest ends
+  (`WorkoutActivityController.content`), and the card shows the rest only
+  while it isn't (`showsRest`), but iOS applies the stale redraw lazily on the
+  lock screen: when it next lays the screen out (screen off and on, unlock),
+  not at the second (user report, 2026-11-14; others report the same). No
+  app code can run then. What helps (user pick, 2026-11-14): a rest started,
+  moved or skipped ON the card gets the app's "Rest complete" alert natively
+  (`RestAlert`, in the shared Swift file), whose arrival lights a dark screen
+  and so redraws the card in its next-set look. Under the app's Rest timer
+  alerts setting, which the app mirrors to the app group
+  (`AvenasSharedKeys.restAlerts`, `setLockScreenRestAlerts`, at launch and on
+  every change), and the phone's notification permission (never asked for
+  from the card). One rest alert at a time: the card's cancels any pending
+  (the app's too, by its data's kind "restTimer"), and the app cancels the
+  card's when it schedules its own or takes the rest back (`consumeActions`,
+  `cancelLockScreenRestAlert`). On a screen already lit, the card can still
+  wait for the next layout; the exact fix is a server push timed to the
+  rest's end (ActivityKit push), not built.
 - **New card fields are optional** (`ContentState` / `PendingSet` from
   `isWarmup` on): a card an older build put up must still decode after an
   update, so never add a required field to either.

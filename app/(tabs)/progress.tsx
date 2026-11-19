@@ -4,6 +4,7 @@ import ProgressView from "../../components/progress/ProgressView";
 import { tabScreen } from "../../components/TabScreen";
 import { getJSON } from "../../utils/storage";
 import { useSyncedDataReload } from "../../hooks/useSyncedDataReload";
+import { useProgressReturn } from "../../hooks/useProgressReturn";
 import { allProgressRequest, programProgressRequest } from "../../utils/progressSession";
 import {
   PROGRAMS_KEY,
@@ -36,6 +37,8 @@ function ProgressScreen() {
     () => programProgressRequest({ programProgress, programProgressAt }),
     [programProgress, programProgressAt],
   );
+  // Back to where either was tapped, for this visit (utils/progressReturn.ts).
+  const onBack = useProgressReturn([allProgressAt, programProgressAt]);
   // Only once what's held was read after the tap: the tab keeps the last
   // visit's programs until this focus's read lands, and a program made active
   // on My Programs just before would still read as not running there.
@@ -74,6 +77,7 @@ function ProgressScreen() {
       loaded={loaded}
       show={show}
       showProgram={showProgram}
+      onBack={onBack ?? undefined}
     />
   );
 }

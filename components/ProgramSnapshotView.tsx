@@ -21,10 +21,11 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 
 import NeuCard from "./NeuCard";
-import { APP_DARK, APP_LIGHT, FontFamily, ACCT, WARMUP_ORANGE } from "../constants/theme";
+import { accentTextColor, APP_DARK, APP_LIGHT, FontFamily, ACCT, WARMUP_ORANGE } from "../constants/theme";
 import { useUnit } from "../contexts/UnitContext";
 import { prescribedWeight, unitLabel } from "../utils/units";
 import { workoutKey } from "../utils/programDays";
+import { supersetPlaces } from "../utils/supersets";
 import { normaliseSets, type Exercise, type ProgramSet, type SavedProgram } from "../constants/programs";
 import { exerciseSummaryParams } from "../utils/customExerciseDetails";
 
@@ -171,7 +172,12 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
                     No exercises added.
                   </Text>
                 ) : (
-                  exercises.map((ex, ei) => {
+                  exercises.map((ex, ei, all) => {
+                    // A superset (utils/supersets.ts): its rows tagged and
+                    // kept together, no line between them, and its rest after
+                    // the round, on its last.
+                    const place = supersetPlaces(all)[ei];
+                    const restShown = !!ex.restSeconds && (place === null || place === "last");
                     const noteKey = `${idx}|${ei}`;
                     const noteExpanded = expandedNotes.has(noteKey);
                     const note = ex.programNotes?.trim();
@@ -200,7 +206,7 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
                       <Animated.View
                         key={ex.id ?? `${ei}-${ex.name}`}
                         layout={LinearTransition.duration(220)}
-                        style={[styles.exerciseRow, ei > 0 && { borderTopWidth: 1, borderTopColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)" }]}
+                        style={[styles.exerciseRow, ei > 0 && place !== "middle" && place !== "last" && { borderTopWidth: 1, borderTopColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)" }]}
                       >
                         <View style={styles.exerciseTop}>
                           {/* The name opens the exercise's page, as on the
@@ -224,14 +230,21 @@ export default function ProgramSnapshotView({ snapshot, isDark, afterCycle }: {
                               <Text style={[styles.tagText, { color: ACCT }]}>HOLD</Text>
                             </View>
                           )}
+                          {place ? (
+                            <View style={[styles.tag, { backgroundColor: `${ACCT}22` }]}>
+                              <Text style={[styles.tagText, { color: accentTextColor(isDark) }]}>SUPERSET</Text>
+                            </View>
+                          ) : null}
                         </View>
                         <View style={styles.exerciseBody}>
                           <View style={styles.metaPills}>
                             <SetCountPill warmups={warmupCount} working={sets.length - warmupCount} fill={t.field} ink={t.ts} />
-                            {ex.restSeconds ? (
+                            {restShown && ex.restSeconds ? (
                               <View style={[styles.metaPill, { backgroundColor: t.field }]}>
                                 <Ionicons name="time-outline" size={11} color={t.ts} />
-                                <Text style={[styles.metaPillText, { color: t.ts }]}>{fmtRest(ex.restSeconds)} rest</Text>
+                                <Text style={[styles.metaPillText, { color: t.ts }]}>
+                                  {fmtRest(ex.restSeconds)} rest{place === "last" ? " after round" : ""}
+                                </Text>
                               </View>
                             ) : null}
                           </View>

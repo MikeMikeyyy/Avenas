@@ -23,16 +23,18 @@ import type {
 } from "../modules/avenas-live-activity";
 import { pendingSetsInOrder } from "./nextSet";
 import { flatIndexOf, prevFillFor } from "./setRows";
+import { runOf } from "./supersets";
 
 type LiveSet = { weight: string; reps: string; done: boolean; doneAt?: number; untickedAt?: number };
 type LiveExerciseLog = { warmup: LiveSet[]; working: LiveSet[] };
-export type LiveActivityExercise = { id: string; name: string; restSeconds?: number; isHold?: boolean };
+export type LiveActivityExercise = { id: string; name: string; restSeconds?: number; isHold?: boolean; supersetId?: string };
 
 // App-group defaults hold the whole queue; cap it so a monster session can't
 // bloat the shared store. Ticking past the cap just re-syncs on next foreground.
 const MAX_QUEUE = 50;
 
-/** The card's weight×reps for one set: typed values, else what a tick will fill in. */
+/** The card's weight×reps for one set: what a tick will log, each box typed
+ *  or else last time's (prevFillFor). */
 function previewValues(set: LiveSet, prevHint: string | undefined): { weight: string; reps: string } {
   return prevFillFor(set, prevHint) ?? { weight: set.weight, reps: set.reps };
 }
@@ -71,7 +73,12 @@ export function buildLiveActivityQueue(
     warmupsDone.set(ex.id, exLog.warmup.map(s => s.done));
   }
 
-  const queue: LiveActivityPendingSet[] = pendingSetsInOrder(exercises.map(e => e.id), log).flatMap(p => {
+  // A superset's sets come in rounds, and only a round's last set rests
+  // (utils/supersets.ts): the card's tick walks the queue in order, so a set's
+  // round partners still undone, with everything ahead of it ticked, mean no
+  // rest after it (a set the card queues with no rest starts none).
+  const supersetIds = exercises.map(e => e.supersetId);
+  const queue: LiveActivityPendingSet[] = pendingSetsInOrder(exercises.map(e => e.id), log, supersetIds).flatMap(p => {
     const ex = exercises[p.exIndex];
     const exLog = log[p.exId];
     const set = exLog?.[p.setType][p.setIdx];
@@ -83,6 +90,8 @@ export function buildLiveActivityQueue(
     const warmupDone = [...warmed];
     if (p.setType === "working") done[p.setIdx] = true;
     else warmed[p.setIdx] = true;
+    const partnerWaiting = p.setType === "working" && (runOf(exercises, p.exIndex) ?? [])
+      .some(k => k !== p.exIndex && workingDone.get(exercises[k].id)?.[p.setIdx] === false);
     return [{
       exId: p.exId,
       setType: p.setType,
@@ -94,7 +103,7 @@ export function buildLiveActivityQueue(
           : `Set ${p.setIdx + 1} of ${exLog.working.length}`,
       weight,
       reps,
-      restSeconds: ex.restSeconds ?? 0,
+      restSeconds: partnerWaiting ? 0 : ex.restSeconds ?? 0,
       isFinal: false, // patched below once the full queue is known
       isHold: !!ex.isHold,
       setDone,

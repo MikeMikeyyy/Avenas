@@ -39,6 +39,8 @@ import { sentGradient, type ChatTone } from "../../constants/chat";
 import { useTheme } from "../../contexts/ThemeContext";
 import GlassButton from "../GlassButton";
 import SendIcon from "../icons/SendIcon";
+import MicButton from "../MicButton";
+import { useDictation } from "../../hooks/useDictation";
 import { toYMD, relativeDayLabel } from "../../utils/dates";
 
 /** How far apart two messages from one person can be and still sit together
@@ -115,6 +117,8 @@ export default function ChatThreadView<T extends ThreadMessage>({
   const insets = useSafeAreaInsets();
 
   const [input, setInput] = useState("");
+  // Voice typing into the box (components/MicButton.tsx).
+  const dictation = useDictation(input, setInput);
   // Jump-to-latest: on the INVERTED list, offset 0 is the newest message, so
   // "scrolled up into history" is simply a large contentOffset.y. The ref
   // mirrors the state so the scroll handler only re-renders on show/hide flips.
@@ -126,6 +130,8 @@ export default function ChatThreadView<T extends ThreadMessage>({
     const text = input.trim();
     if (!text) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Nothing still being heard is typed into the cleared box.
+    dictation.cancel();
     setInput("");
     try {
       await onSend(text);
@@ -138,7 +144,7 @@ export default function ChatThreadView<T extends ThreadMessage>({
       setInput(text);
       Alert.alert("Message not sent", "Check your connection and try again.");
     }
-  }, [input, onSend]);
+  }, [dictation, input, onSend]);
 
   const canSend = input.trim().length > 0;
   const grad = sentGradient(tone);
@@ -260,11 +266,12 @@ export default function ChatThreadView<T extends ThreadMessage>({
               style={[styles.input, { color: t.tp }]}
               value={input}
               onChangeText={setInput}
-              placeholder={placeholder}
+              placeholder={dictation.listening ? "Listening…" : placeholder}
               placeholderTextColor={t.ts}
               multiline
             />
           </View>
+          <MicButton dictation={dictation} size={FIELD_H} />
           <TouchableOpacity onPress={send} disabled={!canSend} activeOpacity={0.8} accessibilityLabel="Send message" accessibilityRole="button">
             <View style={[styles.sendGlow, pillGlow(grad[1], 0.4, isDark), { opacity: canSend ? 1 : 0.4 }]}>
               <LinearGradient colors={grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.sendBtn}>

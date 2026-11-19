@@ -71,6 +71,7 @@ import { isAssisted } from "../utils/assisted";
 import { exerciseIdByName } from "../utils/exerciseLookup";
 import { carriedExercises, customToShow, exercisePageParams, knownCustomExercises } from "../utils/customExerciseDetails";
 import { allProgressParams } from "../utils/progressSession";
+import { useHoldProgressReturn } from "../hooks/useProgressReturn";
 import BackButton, { BACK_TOP } from "../components/BackButton";
 
 // Day-of-week strings — local format, not from a library to avoid extra deps.
@@ -123,6 +124,7 @@ type SummaryTile = {
 
 export default function ExerciseHistoryScreen() {
   const router = useRouter();
+  const holdProgressReturn = useHoldProgressReturn();
   // `dayName` / `dayId` / `programId` (optional): the workout day the page
   // opens filtered to — progress is tracked per (day, exercise) pair, and the
   // progression chart forwards its day so this page opens on the same slice
@@ -308,12 +310,18 @@ export default function ExerciseHistoryScreen() {
   // charted across every program, the Progress page under All programs; on a
   // trainer's view of a client, that client's Progress tab. This page sits over
   // the tabs (or the client's page), so dismissTo goes back to them rather than
-  // push a second copy, as the workout bar does.
+  // push a second copy, as the workout bar does. To the Progress tab, the way
+  // back is held first, so the tab has a back button to here (utils/
+  // progressReturn.ts); a client's page has its own back.
   const goToAllProgress = () => {
     if (!exerciseName) return;
     const params = allProgressParams({ name: exerciseName, customId });
-    if (clientId) router.dismissTo({ pathname: "/trainer/client/[id]", params: { id: clientId, ...params } });
-    else router.dismissTo({ pathname: "/(tabs)/progress", params });
+    if (clientId) {
+      router.dismissTo({ pathname: "/trainer/client/[id]", params: { id: clientId, ...params } });
+      return;
+    }
+    holdProgressReturn(params.allProgressAt);
+    router.dismissTo({ pathname: "/(tabs)/progress", params });
   };
 
   // The picture and name open the exercise's screen (user request,
@@ -592,14 +600,17 @@ function SessionCard({
             return (
               <View key={i} style={styles.setRow}>
                 <View style={styles.setLabelCol}>
-                  {/* The trophy hangs off the number's own left edge
-                      (components/PrTrophy.tsx). Mounted only on a PR: a
-                      logged set never gains or loses one here. */}
+                  {/* The trophy (or a rep PR's medal) hangs off the
+                      number's own left edge (components/PrTrophy.tsx).
+                      Mounted only on a PR: a logged set never gains or
+                      loses one here. */}
                   <View>
                     <Text style={[styles.setLabel, { color: warm ? WARMUP_ORANGE : t.tp }]}>
                       {labels[i]}
                     </Text>
-                    {row.prs[i] ? <PrTrophy show /> : null}
+                    {row.prs[i] ? <PrTrophy mark="weight" />
+                      : row.repPrs[i] ? <PrTrophy mark={row.isHold ? "hold" : "reps"} />
+                      : null}
                   </View>
                 </View>
                 {weighted ? (

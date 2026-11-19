@@ -25,8 +25,11 @@
 // each set as a warm-up or working set with its weight (stored in kg) and reps.
 // An exercise done for time with no reps (a plank) comes in as a hold, its
 // seconds as its reps. A distance goes into the exercise's notes, since a set
-// has no place for one. RPE, supersets and the drop and failure labels don't
-// come over. Every imported session is a free workout: no program.
+// has no place for one. A Hevy superset comes over as one (its superset_id;
+// user request, 2026-11-15: utils/supersets.ts), its exercises side by side as
+// Hevy has them, and so does one in an Avenas file (its `superset` column, the
+// same day). RPE and the drop and failure labels don't come over. Every
+// imported session is a free workout: no program.
 //
 // A day that already has a workout in Avenas is left out whole (user
 // decision, 2026-10-23), which also makes importing a file twice add nothing.
@@ -37,6 +40,7 @@ import { parseCsv } from "./csv";
 import { MONTH_FULL, MONTH_NAMES, toYMD } from "./dates";
 import { parseWeightToKg, trimNumber, type WeightUnit } from "./units";
 import type { CompletedExercise, CompletedSet, CompletedWorkout } from "../constants/programs";
+import { cleanSupersets } from "./supersets";
 
 export type ImportSource = "hevy" | "strong" | "avenas";
 
@@ -52,7 +56,14 @@ export type ImportedSet = {
   done: boolean;
 };
 
-export type ImportedExercise = { name: string; notes: string; sets: ImportedSet[] };
+export type ImportedExercise = {
+  name: string;
+  notes: string;
+  sets: ImportedSet[];
+  /** The file's superset it was in (Hevy's superset_id, an Avenas file's
+   *  superset), when it was. */
+  superset?: string;
+};
 
 export type ImportedWorkout = {
   title: string;
@@ -198,6 +209,10 @@ type Row = {
   /** Rows with the same group belong to one exercise however they're spread
    *  out (a Hevy superset). Empty: the exercise is the run of rows in a row. */
   group: string;
+  /** The superset its exercise was in, when the file says: Hevy's is its
+   *  group; an Avenas file's `superset` column joins no rows (its exercises
+   *  are runs of rows, so one done twice in a superset stays two). */
+  superset: string;
   /** The set's number within the exercise, when the file numbers them. */
   order: number | null;
   exerciseNotes: string;
@@ -222,6 +237,7 @@ function hevyRows(header: string[], body: string[][]): { rows: Row[]; weightUnit
     workoutNotes: description(r) ?? "",
     exercise: (exercise(r) ?? "").trim(),
     group: (superset(r) ?? "").trim(),
+    superset: (superset(r) ?? "").trim(),
     order: num(index(r)),
     exerciseNotes: notes(r) ?? "",
     set: {
@@ -271,6 +287,7 @@ function strongRows(header: string[], body: string[][]): { rows: Row[]; weightUn
       workoutNotes: workoutNotes(r) ?? "",
       exercise: (exercise(r) ?? "").trim(),
       group: "",
+      superset: "",
       order: /^\d+$/.test(setOrder) ? Number(setOrder) : null,
       exerciseNotes: notes(r) ?? "",
       set: isSet
@@ -293,6 +310,8 @@ function avenasRows(header: string[], body: string[][]): { rows: Row[]; weightUn
   const date = col("date"), workout = col("workout"), start = col("start_time"), end = col("end_time");
   const exercise = col("exercise"), set = col("set"), type = col("set_type"), reps = col("reps"), seconds = col("seconds");
   const done = col("done"), notes = col("exercise_notes"), workoutNotes = col("workout_notes");
+  // A file from before it had one has none: no supersets.
+  const superset = col("superset");
   const kg = header.some(h => h.trim().toLowerCase() === "weight_kg");
   const weight = col("weight_kg", "weight_lbs");
   const rows = body.map((r): Row => ({
@@ -305,6 +324,7 @@ function avenasRows(header: string[], body: string[][]): { rows: Row[]; weightUn
     workoutNotes: workoutNotes(r) ?? "",
     exercise: (exercise(r) ?? "").trim(),
     group: "",
+    superset: (superset(r) ?? "").trim(),
     order: num(set(r)),
     exerciseNotes: notes(r) ?? "",
     set: {
@@ -332,13 +352,14 @@ const positive = (n: number | null): n is number => n !== null && n > 0;
 const hasAnything = (s: ImportedSet) =>
   positive(s.weight) || positive(s.reps) || positive(s.seconds) || positive(s.distance);
 
-/** A workout as its rows come in: each exercise's superset and the notes
- *  its rows have had (both parallel to `exercises`), and the last row's
+/** A workout as its rows come in: each exercise's group, its superset and the
+ *  notes its rows have had (all parallel to `exercises`), and the last row's
  *  exercise. */
 type Building = ImportedWorkout & {
   groups: string[];
+  supersets: string[];
   notes_: string[][];
-  last?: { name: string; group: string; order: number | null };
+  last?: { name: string; group: string; superset: string; order: number | null };
 };
 
 /**
@@ -372,25 +393,28 @@ export function readWorkoutCsv(text: string, now: Date = new Date()): ReadResult
         notes: row.workoutNotes.trim(),
         exercises: [],
         groups: [],
+        supersets: [],
         notes_: [],
       };
       workouts.set(row.workoutKey, w);
     }
     if (!w.notes && row.workoutNotes.trim()) w.notes = row.workoutNotes.trim();
-    // A superset's exercise is one exercise wherever its rows are; otherwise an
-    // exercise is the run of rows naming it, and a set numbered no higher than
-    // the one before starts it again (the same exercise done twice).
+    // A Hevy superset's exercise is one exercise wherever its rows are;
+    // otherwise an exercise is the run of rows naming it, in the same superset
+    // (an Avenas file's), and a set numbered no higher than the one before
+    // starts it again (the same exercise done twice).
     const { last, groups } = w;
     let at = -1;
     if (row.group) {
       at = w.exercises.findIndex((e, i) => groups[i] === row.group && e.name === row.exercise);
-    } else if (last && last.name === row.exercise && !last.group
+    } else if (last && last.name === row.exercise && !last.group && last.superset === row.superset
       && !(row.order !== null && last.order !== null && row.order <= last.order)) {
       at = w.exercises.length - 1;
     }
     if (at < 0) {
       at = w.exercises.push({ name: row.exercise, notes: "", sets: [] }) - 1;
       groups.push(row.group);
+      w.supersets.push(row.superset);
       w.notes_.push([]);
     }
     // Hevy repeats an exercise's note on each of its rows; Strong's are each
@@ -398,7 +422,7 @@ export function readWorkoutCsv(text: string, now: Date = new Date()): ReadResult
     const note = row.exerciseNotes.trim();
     if (note && !w.notes_[at].includes(note)) w.notes_[at].push(note);
     w.exercises[at].sets.push(row.set);
-    w.last = { name: row.exercise, group: row.group, order: row.order };
+    w.last = { name: row.exercise, group: row.group, superset: row.superset, order: row.order };
   }
 
   if (read.rows.length > 0 && dated === 0) return { ok: false, error: DATES_UNREADABLE };
@@ -406,7 +430,11 @@ export function readWorkoutCsv(text: string, now: Date = new Date()): ReadResult
   const kept: ImportedWorkout[] = [];
   for (const w of workouts.values()) {
     if (w.date > today) { futureWorkouts++; continue; }
-    const exercises = w.exercises.map((e, i) => ({ ...e, notes: w.notes_[i].join("\n") }));
+    const exercises = w.exercises.map((e, i) => ({
+      ...e,
+      notes: w.notes_[i].join("\n"),
+      ...(w.supersets[i] ? { superset: w.supersets[i] } : {}),
+    }));
     kept.push({ title: w.title, date: w.date, start: w.start, end: w.end, notes: w.notes, exercises });
   }
   if (kept.length === 0) return { ok: false, error: NOTHING_TO_IMPORT };
@@ -490,6 +518,8 @@ export function planImport(
         sets: out,
         notes,
         ...(timed ? { isIsometric: true as const } : {}),
+        // Its superset in the file, the same id for its partners there.
+        ...(e.superset ? { supersetId: `import_${e.superset}` } : {}),
       });
       sets += out.length;
     }
@@ -501,7 +531,9 @@ export function planImport(
       workoutName: w.title || "Workout",
       programId: "",
       durationSeconds: Math.max(0, Math.round((w.end.getTime() - w.start.getTime()) / 1000)),
-      exercises,
+      // A superset only where its exercises are still side by side, two or
+      // more (one with no sets left out leaves its partner alone).
+      exercises: cleanSupersets(exercises),
       ...(w.notes ? { sessionNotes: w.notes } : {}),
     });
   });

@@ -21,7 +21,12 @@ import {
   pickHeadline,
   visibleAchievements,
   withMilestoneCardMoved,
+  formatRepGain,
+  formatRepPRLine,
+  formatRepSet,
 } from "../utils/achievements";
+import { NO_REP_BESTS, repBestsBefore, repBestsBeforeEach, repPrSets, repPrSetsOfWorkout, type RepSetInput } from "../utils/repPrs";
+import { computeSessionRecords } from "../utils/workoutSummary";
 import { exerciseIdentity } from "../utils/exerciseNames";
 import { isAssisted, isAssistedIdentity, noteAssistedCustoms } from "../utils/assisted";
 
@@ -51,8 +56,8 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
     "PR: logging an exercise for the first time is not a PR");
   eq(categories(detectWorkoutAchievements(workout([ex("Bench Press", [set("100", "5")])]), prior, EMPTY_ACHIEVEMENTS, NOW)), [],
     "PR: matching your best is not a PR");
-  eq(categories(detectWorkoutAchievements(workout([ex("Bench Press", [set("100", "8")])]), prior, EMPTY_ACHIEVEMENTS, NOW)), [],
-    "PR: more reps at the same weight (a higher estimated 1RM) is not a PR");
+  eq(categories(detectWorkoutAchievements(workout([ex("Bench Press", [set("100", "8")])]), prior, EMPTY_ACHIEVEMENTS, NOW)), ["reps"],
+    "PR: more reps at the same weight (a higher estimated 1RM) is not a PR, but a rep PR (utils/repPrs.ts)");
   eq(categories(detectWorkoutAchievements(workout([ex("Bench Press", [set("102.5", "3", false)])]), prior, EMPTY_ACHIEVEMENTS, NOW)), [],
     "PR: an unticked set doesn't count");
 
@@ -381,6 +386,151 @@ const categories = (list: Achievement[]) => list.map(a => a.category);
   noteAssistedCustoms("carried", []);
   // Back to normal for the bench press: nothing above changed its direction.
   eq(isPrSet(lift(110), 100), true, "normal: heavier is still a PR");
+}
+
+// ─── Rep PRs (utils/repPrs.ts; user request, 2026-11-14) ────────────────────
+{
+  const day = (d: number) => `2026-10-${String(d).padStart(2, "0")}`;
+  const sess = (id: string, d: number, exercises: CompletedWorkout["exercises"]): CompletedWorkout =>
+    ({ id, date: day(d), completedAt: `${day(d)}T10:00:00.000Z`, workoutName: "Push", durationSeconds: 0, exercises });
+  const warmSet = (weight: string, reps: string): CompletedSet => ({ type: "warmup", weight, reps, done: true });
+  const hold = (name: string, sets: CompletedSet[]) => ({ ...ex(name, sets), isIsometric: true as const });
+  const bench = (...sets: CompletedSet[]) => ex("Bench Press", sets);
+  const lift = (weightKg: number, reps: string, extra: Partial<RepSetInput> = {}): RepSetInput =>
+    ({ type: "working", done: true, reps, weightKg, ...extra });
+  const bp = exerciseIdentity({ name: "Bench Press" });
+  const prior = [sess("r1", 1, [bench(set("80", "8"), set("85", "6"), set("100", "3"))])];
+  const bests = repBestsBefore(prior);
+  const medal = (sets: RepSetInput[]) => repPrSets([{ identity: bp, hold: false, sets }], bests)[0];
+
+  // The rule.
+  eq(medal([lift(80, "9")]), [true], "rep PR: more reps at a weight done before");
+  eq(medal([lift(85, "7")]), [true], "rep PR: 85 × 7 beats 85 × 6");
+  eq(medal([lift(80, "8")]), [false], "rep PR: the same reps is a tie, no record");
+  eq(medal([lift(80, "6")]), [false], "rep PR: fewer reps isn't one");
+  const twelve = repBestsBefore([sess("r2", 1, [bench(set("80", "12"), set("60", "10"))])]);
+  eq(repPrSets([{ identity: bp, hold: false, sets: [lift(60, "12")] }], twelve), [[false]],
+    "rep PR: 60 × 12 isn't, after 80 × 12 (as many reps with more on the bar)");
+  eq(repPrSets([{ identity: bp, hold: false, sets: [lift(60, "13")] }], twelve), [[true]],
+    "rep PR: 60 × 13 is, after 80 × 12 and 60 × 10");
+  eq(medal([lift(90, "5")]), [false], "rep PR: a weight never done (90, under the best) is neither");
+  eq(medal([lift(102.5, "5")]), [false], "rep PR: heavier than ever is the trophy's, never the medal's");
+  eq(medal([lift(80, "9", { type: "warmup" })]), [false], "rep PR: never a warm-up");
+  eq(medal([lift(80, "9", { done: false })]), [false], "rep PR: only once it's ticked");
+  eq(medal([lift(80, "")]), [false], "rep PR: not without reps");
+  eq(medal([lift(80.014, "9")]), [true], "rep PR: 176.4 lbs (80.014 kg) is the same weight as 80 kg");
+  eq(medal([lift(80.05, "9")]), [false], "rep PR: 80.05 kg is another weight, never done");
+
+  // One per exercise, the records the session leaves.
+  eq(medal([lift(80, "9"), lift(80, "10")]), [false, true], "rep PR one each: the most reps at the weight");
+  eq(medal([lift(80, "10"), lift(80, "9")]), [true, false], "rep PR one each: fewer after it doesn't take it");
+  eq(medal([lift(80, "9"), lift(80, "9")]), [true, false], "rep PR one each: the first of two the same");
+  eq(medal([lift(80, "12"), lift(85, "7")]), [false, true], "rep PR one each: the heavier, though the lighter beat its best by more");
+  eq(medal([lift(80, "9"), lift(85, "9")]), [false, true], "rep PR: 85 × 9 later beats 80 × 9, and is one itself");
+  eq(medal([lift(80, "9"), lift(102.5, "9")]), [false, false],
+    "rep PR: a weight PR with as many reps leaves 80 × 9 no record (only the trophy)");
+  eq(medal([lift(80, "9"), lift(102.5, "3")]), [true, false], "rep PR: a weight PR with fewer reps leaves it its own");
+  eq(repPrSets([{ identity: bp, hold: false, sets: [lift(80, "9")] }, { identity: bp, hold: false, sets: [lift(80, "10")] }], bests),
+    [[false], [true]], "rep PR: an exercise on two cards is one");
+  eq(repPrSets([{ identity: "", hold: false, sets: [lift(80, "20")] }], bests), [[false]], "rep PR: no exercise, none");
+
+  // Bodyweight is a weight like any other.
+  const pu = exerciseIdentity({ name: "Push-Up" });
+  const pushPrior = [sess("b1", 1, [ex("Push-Up", [set("", "20"), set("", "22")])])];
+  const pushBests = repBestsBefore(pushPrior);
+  eq(repPrSets([{ identity: pu, hold: false, sets: [lift(0, "25")] }], pushBests), [[true]], "rep PR bodyweight: 25 push-ups after 22");
+  eq(repPrSets([{ identity: pu, hold: false, sets: [lift(0, "22")] }], pushBests), [[false]], "rep PR bodyweight: 22 again isn't");
+  const pl = exerciseIdentity({ name: "Pull-Up" });
+  const pullBests = repBestsBefore([sess("p1", 1, [ex("Pull-Up", [set("", "10"), set("5", "12")])])]);
+  eq(repPrSets([{ identity: pl, hold: false, sets: [lift(0, "11")] }], pullBests), [[false]],
+    "rep PR bodyweight: 11 isn't, after 12 with 5 kg on");
+  eq(repPrSets([{ identity: pl, hold: false, sets: [lift(0, "13")] }], pullBests), [[true]], "rep PR bodyweight: 13 is");
+
+  // A hold's seconds, kept apart from reps.
+  const pk = exerciseIdentity({ name: "Plank" });
+  const plankPrior = [sess("h1", 1, [hold("Plank", [set("", "45")])])];
+  const plankBests = repBestsBefore(plankPrior);
+  eq(repPrSets([{ identity: pk, hold: true, sets: [lift(0, "60")] }], plankBests), [[true]], "hold PR: a longer hold at the same weight");
+  eq(repPrSets([{ identity: pk, hold: false, sets: [lift(0, "60")] }], plankBests), [[false]], "hold PR: seconds held aren't reps");
+
+  // Assisted: more reps at the same help, beating every set at that help or less.
+  const ap = exerciseIdentity({ name: "Assisted Pull-Up" });
+  eq(isAssistedIdentity(ap), true, "assisted rep PR: (the catalogue's assisted pull-up)");
+  const assistedBests = repBestsBefore([sess("a1", 1, [ex("Assisted Pull-Up", [set("30", "8"), set("20", "6"), set("40", "10")])])]);
+  const am = (sets: RepSetInput[]) => repPrSets([{ identity: ap, hold: false, sets }], assistedBests)[0];
+  eq(am([lift(30, "9")]), [true], "assisted rep PR: more reps at the same help");
+  eq(am([lift(40, "10")]), [false], "assisted rep PR: 40 × 10 again is a tie");
+  eq(am([lift(40, "11")]), [true], "assisted rep PR: 40 × 11, more than any set at that help or less");
+  eq(am([lift(30, "8")]), [false], "assisted rep PR: 30 × 8 again is a tie");
+  eq(am([lift(0, "12")]), [false], "assisted rep PR: no help typed counts for nothing");
+  eq(am([lift(30, "9"), lift(20, "9")]), [false, true], "assisted rep PR: 20 × 9 (less help) beats 30 × 9, and is one");
+
+  // Saved workouts (the Journal page), and Exercise History agreeing with them.
+  const s1 = sess("x1", 1, [bench(set("80", "8"))]);
+  const s2 = sess("x2", 8, [bench(warmSet("60", "12"), set("80", "9"), set("80", "9"))]);
+  const s3 = sess("x3", 15, [bench(set("80", "10"))]);
+  const t1 = sess("t1", 20, [bench(set("80", "11"))]);
+  const t2 = sess("t2", 20, [bench(set("80", "12"))]);
+  const all = [t2, s3, s1, t1, s2];
+  eq(repPrSetsOfWorkout(s2, all), [[false, true, false]], "rep saved: against the sessions before it, the first of the two");
+  eq(repPrSetsOfWorkout(s3, all), [[true]], "rep saved: the next session's 10 beats it, and a later one never takes it away");
+  eq(repPrSetsOfWorkout(s1, all), [[false]], "rep saved: the first session has nothing to beat");
+  eq(repPrSetsOfWorkout(t2, all), [[true]], "rep saved: a session at the same moment isn't before it");
+  eq(repPrSetsOfWorkout({ ...s3, completedAt: "not a date" }, all), [[false]], "rep saved: no readable time, nothing before it");
+  const eachBefore = repBestsBeforeEach(all, bp);
+  for (const s of all) {
+    const sets = s.exercises[0].sets.map(x => ({ type: x.type, done: x.done, reps: x.reps, weightKg: parseFloat(x.weight) || 0 }));
+    eq(repPrSets([{ identity: bp, hold: false, sets }], eachBefore.get(s.id) ?? NO_REP_BESTS), repPrSetsOfWorkout(s, all),
+      `rep each: Exercise History's medals are the Journal page's on ${s.id}`);
+  }
+
+  // The summary's records.
+  const c1 = sess("c1", 8, [bench(set("80", "9"))]);
+  const c1Records = computeSessionRecords(c1, prior).filter(r => r.kind === "reps");
+  eq(c1Records, [{ exerciseName: "Bench Press", kind: "reps", valueKg: 80, prevKg: 80, reps: 9, prevReps: 8 }],
+    "summary: a rep PR is a record, at its weight, with what it beat");
+  const c2 = sess("c2", 8, [bench(set("80", "9"), set("102.5", "2"))]);
+  eq(computeSessionRecords(c2, prior).filter(r => r.kind === "heaviest" || r.kind === "reps").map(r => r.kind), ["heaviest", "reps"],
+    "summary: a weight PR and a rep PR in one session are both records, the weight's first");
+  eq(computeSessionRecords(sess("c3", 8, [ex("Push-Up", [set("", "25")])]), pushPrior).map(r => r.kind), ["reps"],
+    "summary: a bodyweight rep PR is a record, where there's no weight to have one");
+  const holdRecord = computeSessionRecords(sess("c4", 8, [hold("Plank", [set("", "60")])]), plankPrior);
+  eq(holdRecord.map(r => [r.kind, r.hold, r.reps, r.prevReps]), [["reps", true, 60, 45]], "summary: a hold PR, in seconds");
+
+  // Home's card: rep PRs only when the session set no weight PR, and quietly.
+  const card = detectWorkoutAchievements(c1, prior, EMPTY_ACHIEVEMENTS, NOW);
+  eq(categories(card), ["reps"], "rep card: a session of rep PRs alone earns the rep card");
+  if (card[0]?.category === "reps") {
+    eq(card[0].repPrs, [{ exerciseName: "Bench Press", weightKg: 80, reps: 9, prevReps: 8 }], "rep card: the set and what it beat");
+    eq(describeAchievement(card[0], true).title, "New rep PR on Bench Press", "rep card: its title");
+    eq(describeAchievement(card[0], true).detail, "9 reps at 80 kg, up from 8", "rep card: its line");
+    eq(describeAchievement(card[0], false).detail, "9 reps at 176.4 lbs, up from 8", "rep card: in pounds");
+  }
+  eq(categories(detectWorkoutAchievements(c2, prior, EMPTY_ACHIEVEMENTS, NOW)), ["pr"],
+    "rep card: a session with a weight PR is the weight PR's card alone");
+  const many = detectWorkoutAchievements(sess("c5", 8, [bench(set("85", "7")), hold("Plank", [set("", "60")])]), [...prior, ...plankPrior], EMPTY_ACHIEVEMENTS, NOW);
+  eq(categories(many), ["reps"], "rep card: several rep PRs are one card");
+  if (many[0]?.category === "reps") {
+    const copy = describeAchievement(many[0], true);
+    eq([copy.title, copy.detail], ["2 new rep PRs", "Bench Press, Plank"], "rep card: counted and named");
+    eq(formatRepPRLine(many[0].repPrs[1], true), "60 s, up from 45 s", "rep card: a hold's line");
+  }
+  eq(pickHeadline(many), null, "rep card: never a notification");
+  const fillers = Array.from({ length: 8 }, (_, i) => sess(`f${i}`, 2 + i, [ex("Row", [set("50", "10")])]));
+  const tenth = detectWorkoutAchievements(sess("c6", 12, [bench(set("80", "9"))]), [...prior, ...fillers], EMPTY_ACHIEVEMENTS, NOW);
+  eq([categories(tenth), pickHeadline(tenth)?.category], [["reps", "workouts"], "workouts"], "rep card: beside a milestone, the milestone is the notification");
+  const withPr = applyAchievements(EMPTY_ACHIEVEMENTS, detectWorkoutAchievements(sess("c7", 3, [bench(set("102.5", "1"))]), prior, EMPTY_ACHIEVEMENTS, NOW), NOW);
+  const thenReps = applyAchievements(withPr, card, NOW);
+  eq(thenReps.cards.map(c => c.category).sort(), ["pr", "reps"], "rep card: a card of its own, never in place of a weight PR's");
+
+  // The words.
+  eq(formatRepPRLine({ weightKg: 30, reps: 9, prevReps: 8, assisted: true }, true), "9 reps with 30 kg assistance, up from 8", "rep line: assisted");
+  eq(formatRepPRLine({ weightKg: 0, reps: 25, prevReps: 22 }, true), "25 reps, up from 22", "rep line: bodyweight");
+  eq(formatRepPRLine({ weightKg: 20, reps: 60, prevReps: 45, hold: true }, true), "60 s at 20 kg, up from 45 s", "rep line: a weighted hold");
+  eq([formatRepSet({ weightKg: 80, reps: 9 }, true), formatRepSet({ weightKg: 0, reps: 25 }, true), formatRepSet({ weightKg: 0, reps: 60, hold: true }, true), formatRepSet({ weightKg: 20, reps: 60, hold: true }, true)],
+    ["80 kg × 9", "25 reps", "60 s", "20 kg, 60 s"], "rep set: short, beside its record");
+  eq([formatRepGain({ reps: 9, prevReps: 8 }), formatRepGain({ reps: 12, prevReps: 10 }), formatRepGain({ reps: 60, prevReps: 45, hold: true })],
+    ["1 rep", "2 reps", "15 s"], "rep gain: by how much");
 }
 
 if (failures.length > 0) {
