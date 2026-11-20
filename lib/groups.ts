@@ -79,7 +79,23 @@ export async function fetchGroupMembers(groupId: string): Promise<GroupMember[]>
     role: r.is_owner ? "owner" : r.role === "trainer" ? "trainer" : "member",
     // Absent on a roster read that predates 0027; those rows are all accepted.
     accepted: r.accepted !== false,
+    // Absent from a database without 0063: nothing is offered on them then.
+    ...(r.account_type ? { accountType: r.account_type === "pt" ? "pt" as const : "gym_user" as const } : {}),
+    ...(r.connection ? { connection: r.connection } : {}),
   }));
+}
+
+/** What request_group_connection answers (migration 0063). "requested" also
+ *  covers a request of mine they declined: nothing is sent again. */
+export type GroupConnectResult = "requested" | "connected" | "already" | "not_member" | "not_allowed" | "self";
+
+/** Ask someone in a group we're both in to connect, from their sheet. Who may
+ *  ask whom is the server's to decide (utils/groupConnect.ts mirrors it);
+ *  throws only when it couldn't be asked. */
+export async function requestGroupConnection(groupId: string, userId: string): Promise<GroupConnectResult> {
+  const { data, error } = await supabase.rpc("request_group_connection", { p_group: groupId, p_user: userId });
+  if (error) throw new Error(`request group connection: ${error.message}`);
+  return data as GroupConnectResult;
 }
 
 /** What I may see of a fellow member on the group's page (0051): the program
@@ -141,6 +157,12 @@ export const isGroupLimitError = (e: unknown): boolean =>
  *  invites included (createGroup, setGroupMembers; migration 0042). */
 export const isGroupFullError = (e: unknown): boolean =>
   e instanceof Error && e.message.includes("group_full");
+
+/** The database's refusal to make a gym user a trainer of a group: only a
+ *  trainer account can be one (setGroupMemberRole; migration 0063). The group
+ *  page says so rather than the raw message. */
+export const isNotTrainerAccountError = (e: unknown): boolean =>
+  e instanceof Error && e.message.includes("not_a_trainer_account");
 
 /** Join a group I was invited to. Idempotent in the RPC, so a double tap on a
  *  slow connection is not an error. */

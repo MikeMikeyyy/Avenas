@@ -80,7 +80,11 @@ import { useFloatingBarsReach } from "../../../../hooks/useFloatingBars";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { useAccountType } from "../../../../contexts/AccountTypeContext";
 import { useAuth } from "../../../../contexts/AuthContext";
-import { fetchGroupMemberStatus, fetchGroupMembers, leaveGroup, setGroupMemberRole, setGroupMembers, subscribeToGroup } from "../../../../lib/groups";
+import {
+  fetchGroupMemberStatus, fetchGroupMembers, isNotTrainerAccountError, leaveGroup, setGroupMemberRole, setGroupMembers, subscribeToGroup,
+} from "../../../../lib/groups";
+import { connectFromGroup } from "../../../../utils/connectFromGroup";
+import { connectionAfter, groupAddAction, NOT_TRAINER_ACCOUNT_TITLE, notTrainerAccountMessage } from "../../../../utils/groupConnect";
 import { isActiveNow, presenceLabel, PRESENCE_REFRESH_MS } from "../../../../utils/presence";
 import { getMyUid } from "../../../../lib/chat";
 import { groupMemberOrder, loadFavouriteMemberIds, loadGroupUnread, toggleFavouriteGroup, toggleFavouriteMember } from "../../../../utils/groupStore";
@@ -193,10 +197,13 @@ export default function GroupPageScreen() {
 
   /** My own standing in this group. Owner or trainer here: the same test the
    *  database enforces for sending to it (can_coach_in_group). The ROLE
-   *  decides, not the account type: a gym user the owner makes a trainer sends
-   *  exactly like a trainer account does. */
+   *  decides; only a trainer account can hold it (0063), so a trainer account
+   *  that's a plain member here sends for review like everyone else. */
   const myRole: GroupRole = members.find(m => m.id === myUid)?.role ?? "member";
   const iCoachGroup = canCoachGroup(myRole);
+  /** My account type as the roster has it, the server's, which is what
+   *  decides who I may ask from here; this phone's until it's loaded. */
+  const myAccountType = members.find(m => m.id === myUid)?.accountType ?? accountType;
 
   // The Programs tile's line, read off the sections its page lists
   // (utils/groupPrograms.ts), so the two never disagree.
@@ -415,9 +422,16 @@ export default function GroupPageScreen() {
 
   // Promote to trainer, or demote back. Owner-only, and the RPC enforces that
   // server-side too rather than trusting this screen. The member's sheet has
-  // closed by now, as it does before every action.
+  // closed by now, as it does before every action. Only a trainer account can
+  // be one (user decision, 2026-11-20): a gym user gets the prompt, from the
+  // roster here, or from the database (0063) when the roster can't tell (a
+  // copy saved before it) or their account has changed since.
   const toggleRole = useCallback(async (m: GroupMember) => {
     const next = m.role === "trainer" ? "member" : "trainer";
+    if (next === "trainer" && m.accountType === "gym_user") {
+      Alert.alert(NOT_TRAINER_ACCOUNT_TITLE, notTrainerAccountMessage(m.name));
+      return;
+    }
     try {
       await setGroupMemberRole(groupId, m.id, next);
       setPage(p => p && { ...p, members: p.members.map(x => (x.id === m.id ? { ...x, role: next } : x)) });
@@ -428,9 +442,27 @@ export default function GroupPageScreen() {
           : `${m.name} can no longer send programs to this group.`,
       );
     } catch (e) {
+      if (isNotTrainerAccountError(e)) {
+        Alert.alert(NOT_TRAINER_ACCOUNT_TITLE, notTrainerAccountMessage(m.name));
+        setPage(p => p && { ...p, members: p.members.map(x => (x.id === m.id ? { ...x, accountType: "gym_user" } : x)) });
+        return;
+      }
       Alert.alert("Couldn't change role", alertMessage(e, "Check your connection and try again."));
     }
   }, [groupId]);
+
+  // Ask them to connect from here, or take up their request (the sheet's
+  // add, utils/groupConnect.ts). The answer goes on their row at once. A new
+  // connection reads the page again, so a new client's "Open client page" is
+  // on their sheet; so does an answer that says the roster is out of date
+  // (they've left, or an account changed).
+  const connectMember = useCallback(async (m: GroupMember) => {
+    const result = await connectFromGroup(groupId, myAccountType, m);
+    if (!result) return;
+    const next = connectionAfter(result);
+    if (next) setPage(p => p && { ...p, members: p.members.map(x => (x.id === m.id ? { ...x, connection: next } : x)) });
+    if (next !== "requested") void loadGroupPage(owner, groupId).then(applyLoad);
+  }, [groupId, myAccountType, owner, applyLoad]);
 
   // Take someone out of the group, or withdraw their invite. Owner-only, and
   // set_group_members refuses anyone else. That RPC replaces the roster
@@ -462,6 +494,14 @@ export default function GroupPageScreen() {
   // Everyone in the group except me. A trainer never sends a program to
   // themselves, and only real connections can receive one.
   const recipientIds = useMemo(() => members.filter(m => m.id !== myUid).map(m => m.id), [members, myUid]);
+
+  /** The member whose sheet is open, as the roster has them now: a load that
+   *  lands while it's open (they've answered my request) shows on it. */
+  const menuMember = memberMenu ? members.find(m => m.id === memberMenu.id) ?? memberMenu : null;
+  /** What their sheet offers for connecting with them (utils/groupConnect.ts). */
+  const menuAdd = menuMember
+    ? groupAddAction(myAccountType, menuMember, { isMe: menuMember.id === myUid, blocked: blockedMembers.has(menuMember.id) })
+    : null;
 
   // Filters the list only: the count and a program send stay whole-group.
   // The owner at the top, then trainers, then everyone else, each starred
@@ -793,16 +833,18 @@ export default function GroupPageScreen() {
         </View>
       </SimpleSheet>
 
-      {/* Per-member sheet, open to anyone: favouriting and Report are there,
-          so it can't be owner-only. The client page is a coaching surface, for
-          my own clients; the role and removal are the owner's. */}
+      {/* Per-member sheet, open to anyone: favouriting, adding them and
+          Report are there, so it can't be owner-only. The client page is a
+          coaching surface, for my own clients; the role and removal are the
+          owner's. */}
       <GroupMemberSheet
-        member={memberMenu}
+        member={menuMember}
         onClose={() => setMemberMenu(null)}
-        starred={!!memberMenu && favouriteMembers.has(memberMenu.id)}
+        starred={!!menuMember && favouriteMembers.has(menuMember.id)}
         onToggleFavourite={m => void onToggleMemberFavourite(m.id)}
+        connect={menuAdd ? { action: menuAdd, onPress: m => void connectMember(m) } : undefined}
         onOpenClientPage={
-          iCoachGroup && accountType === "pt" && !!memberMenu && clients.some(c => c.id === memberMenu.id)
+          iCoachGroup && accountType === "pt" && !!menuMember && clients.some(c => c.id === menuMember.id)
             ? openClientPage
             : undefined
         }

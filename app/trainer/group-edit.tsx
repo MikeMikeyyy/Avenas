@@ -19,9 +19,10 @@
 // something unsaved asks whether to save it or discard it.
 //
 // Anyone you're CONNECTED to can be a member — a client or a fellow trainer.
-// Migration 0016's insert policy asks for an accepted connection and nothing
-// else (it's role-blind, and 0027 kept it that way), so the picker is both
-// buckets of the resolved roster merged, with local/mock entries filtered out.
+// set_group_members asks for an accepted connection and nothing else (it's
+// role-blind, and 0027 kept it that way; since 0063 it's the only way in), so
+// the picker is both buckets of the resolved roster merged, with local/mock
+// entries filtered out.
 // It was built from `clients` alone, which meant a trainer had to be taken on
 // as a client before they could be put in a group, and a gym that ran on
 // trainer-to-trainer groups couldn't make one at all.
@@ -63,6 +64,8 @@ import { resolveTrainerRoster } from "../../utils/roster";
 import { loadBlockedIds } from "../../utils/moderation";
 import { groupMemberOrder, loadFavouriteMemberIds, toggleFavouriteMember } from "../../utils/groupStore";
 import { dropGroupPage, peekGroupPage } from "../../utils/groupPage";
+import { connectFromGroup } from "../../utils/connectFromGroup";
+import { connectionAfter, groupAddAction } from "../../utils/groupConnect";
 import type { Client } from "../../utils/trainerStore";
 import { GROUP_FULL_MESSAGE, GROUP_FULL_TITLE, GROUP_LIMIT_TITLE, MAX_GROUP_MEMBERS, ROLE_LABEL, canCoachGroup, groupLimitMessage, type GroupMember } from "../../constants/groups";
 import { alertMessage } from "../../utils/errors";
@@ -116,6 +119,8 @@ export default function GroupEditScreen() {
    *  member's sheet shows, as on the group page. */
   const [favourites, setFavourites] = useState<Set<string>>(new Set());
   const [clientIds, setClientIds] = useState<Set<string>>(new Set());
+  /** People I've blocked: their sheet never offers to connect with them. */
+  const [blockedIds, setBlockedIds] = useState<Set<string>>(new Set());
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   /** The group's saved photo, as loaded. `photoChange` is what the owner has
@@ -155,6 +160,7 @@ export default function GroupEditScreen() {
         setMyUid(uid);
         setFavourites(favs);
         setClientIds(new Set(clients.map(c => c.id)));
+        setBlockedIds(blocked);
 
         let roster: GroupMember[] = [];
         if (groupId && uid) {
@@ -317,8 +323,40 @@ export default function GroupEditScreen() {
   }, [router]);
 
   /** Owner or trainer here: the group page's test for "Open client page". The
-   *  role decides, not the account type. */
+   *  role decides (only a trainer account holds it, 0063). */
   const iCoachGroup = canCoachGroup(members.find(m => m.id === myUid)?.role ?? "member");
+  /** My account type as the roster has it (the server's, which decides who I
+   *  may ask from the group), this phone's until it's loaded. */
+  const myAccountType = members.find(m => m.id === myUid)?.accountType ?? accountType;
+
+  // Ask them to connect, or take up their request: the group page's add, the
+  // answer on their row at once. A new client of mine opens their client page
+  // from their sheet from now on, as on the group page. An answer that says
+  // the list is out of date (they've left, an account changed) reads it again.
+  const connectMember = useCallback(async (m: GroupMember) => {
+    const result = await connectFromGroup(groupId, myAccountType, m);
+    if (!result) return;
+    const next = connectionAfter(result);
+    if (next) {
+      setMembers(prev => prev.map(x => (x.id === m.id ? { ...x, connection: next } : x)));
+      if (next === "connected" && myAccountType === "pt" && m.accountType === "gym_user") {
+        setClientIds(prev => new Set(prev).add(m.id));
+      }
+      return;
+    }
+    try {
+      setMembers(await fetchGroupMembers(groupId));
+    } catch (err) {
+      if (__DEV__) console.warn("[avenas] reload group members", err);
+    }
+  }, [groupId, myAccountType]);
+
+  /** The member whose sheet is open, as the list has them now, and what it
+   *  offers for connecting with them (utils/groupConnect.ts). */
+  const menuMember = memberMenu ? members.find(m => m.id === memberMenu.id) ?? memberMenu : null;
+  const menuAdd = menuMember
+    ? groupAddAction(myAccountType, menuMember, { isMe: menuMember.id === myUid, blocked: blockedIds.has(menuMember.id) })
+    : null;
 
   // A member's tag, the group page's: my own says it's me, an unanswered invite
   // says so, anyone else shows their role in the group.
@@ -755,12 +793,13 @@ export default function GroupEditScreen() {
       {/* The group page's member sheet: the same actions, Report as a step of
           it. Only a member's view opens it, so it never offers the owner's. */}
       <GroupMemberSheet
-        member={memberMenu}
+        member={menuMember}
         onClose={() => setMemberMenu(null)}
-        starred={!!memberMenu && favourites.has(memberMenu.id)}
+        starred={!!menuMember && favourites.has(menuMember.id)}
         onToggleFavourite={m => void toggleMemberFavourite(m)}
+        connect={menuAdd ? { action: menuAdd, onPress: m => void connectMember(m) } : undefined}
         onOpenClientPage={
-          iCoachGroup && accountType === "pt" && !!memberMenu && clientIds.has(memberMenu.id)
+          iCoachGroup && accountType === "pt" && !!menuMember && clientIds.has(menuMember.id)
             ? openClientPage
             : undefined
         }

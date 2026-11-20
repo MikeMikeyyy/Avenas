@@ -6,8 +6,15 @@
 //
 // What it offers is gated by what I may do:
 //   Add to favourites   always: starring is mine alone
+//   Add as client /     asking them to connect from the group (0063), by
+//   Add as trainer /    account type: a trainer anyone, a gym user trainers
+//   Connect             only; "Accept request" when they've asked me, and
+//                       "Request sent", greyed, once I have (a decline reads
+//                       the same). utils/groupConnect.ts decides; nothing
+//                       once we're connected
 //   Open client page    only for someone who IS my client (the page decides)
-//   Make a trainer      the owner's
+//   Make a trainer      the owner's; a gym user gets a prompt instead, since
+//                       only a trainer account can be one (the page's)
 //   Report              anyone but me, whatever my standing: group members see
 //                       each other's names and photos without being
 //                       connected (Apple Guideline 1.2)
@@ -27,9 +34,11 @@ import SheetPill from "../SheetPill";
 import FavouriteStar, { useFavouriteGold } from "../FavouriteStar";
 import FlagIcon from "../icons/FlagIcon";
 import UserRoundMinusIcon from "../icons/UserRoundMinusIcon";
-import { APP_DARK, APP_LIGHT, FontFamily, ROLE_TRAINER } from "../../constants/theme";
+import UserRoundPlusIcon from "../icons/UserRoundPlusIcon";
+import { accentTextColor, APP_DARK, APP_LIGHT, FontFamily, ROLE_TRAINER } from "../../constants/theme";
 import { useTheme } from "../../contexts/ThemeContext";
 import { reportPerson } from "../../utils/moderation";
+import type { GroupAddAction } from "../../utils/groupConnect";
 import type { GroupMember } from "../../constants/groups";
 import type { ReportReason } from "../../constants/chat";
 
@@ -41,6 +50,9 @@ interface Props {
   starred: boolean;
   // Each action closes the sheet first, then runs.
   onToggleFavourite: (m: GroupMember) => void;
+  /** Asking them to connect from the group: what to offer (groupAddAction)
+   *  and what a tap does. Absent when there's nothing to offer. */
+  connect?: { action: GroupAddAction; onPress: (m: GroupMember) => void };
   /** Only for someone who is my client: the client page opens a person from my
    *  own roster, so for anyone else it said "Client not found". */
   onOpenClientPage?: (m: GroupMember) => void;
@@ -60,7 +72,7 @@ export default function GroupMemberSheet({ member, onClose, ...actions }: Props)
   );
 }
 
-function MemberActions({ member, onClose, starred, onToggleFavourite, onOpenClientPage, onToggleRole, onRemove }:
+function MemberActions({ member, onClose, starred, onToggleFavourite, connect, onOpenClientPage, onToggleRole, onRemove }:
   Omit<Props, "member"> & { member: GroupMember }) {
   const { isDark } = useTheme();
   const t = isDark ? APP_DARK : APP_LIGHT;
@@ -100,6 +112,25 @@ function MemberActions({ member, onClose, starred, onToggleFavourite, onOpenClie
           onPress={run(onToggleFavourite)}
           accessibilityState={{ selected: starred }}
         />
+        {connect && (
+          connect.action.kind === "sent" ? (
+            <SheetPill
+              label={connect.action.label}
+              icon={c => <Ionicons name="time-outline" size={18} color={c} />}
+              disabled
+            />
+          ) : (
+            <SheetPill
+              label={connect.action.label}
+              tint={accentTextColor(isDark)}
+              icon={c => (connect.action.kind === "accept"
+                ? <Ionicons name="checkmark-circle-outline" size={18} color={c} />
+                : <UserRoundPlusIcon size={18} color={c} />)}
+              onPress={run(connect.onPress)}
+              needsConnection
+            />
+          )
+        )}
         {onOpenClientPage && (
           <SheetPill
             label="Open client page"
@@ -113,6 +144,7 @@ function MemberActions({ member, onClose, starred, onToggleFavourite, onOpenClie
             tint={isTrainer ? undefined : ROLE_TRAINER}
             icon={c => <Ionicons name={isTrainer ? "arrow-down-circle-outline" : "shield-checkmark-outline"} size={18} color={c} />}
             onPress={run(onToggleRole)}
+            needsConnection
           />
         )}
         <SheetPill label="Report" icon={c => <FlagIcon size={18} color={c} />} onPress={() => setReporting(true)} />
@@ -122,6 +154,7 @@ function MemberActions({ member, onClose, starred, onToggleFavourite, onOpenClie
             variant="danger"
             icon={c => <UserRoundMinusIcon size={18} color={c} />}
             onPress={run(onRemove)}
+            needsConnection
           />
         )}
       </View>

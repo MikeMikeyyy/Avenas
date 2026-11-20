@@ -20,6 +20,10 @@ const MEMBER_STACK_MAX = 4;
  *  faces stay separated. */
 const RING = 2;
 
+/** "+N"'s fill, over the surface behind the stack. */
+const OVERFLOW_FILL_LIGHT = "rgba(0,0,0,0.06)";
+const OVERFLOW_FILL_DARK = "rgba(255,255,255,0.12)";
+
 export default function MemberStack({ members, size, overlap, isDark, ringColor, countColor }: {
   members: MemberFace[];
   /** Each face's diameter, inside its ring. */
@@ -34,7 +38,12 @@ export default function MemberStack({ members, size, overlap, isDark, ringColor,
 }) {
   const shown = members.slice(0, MEMBER_STACK_MAX);
   const overflow = Math.max(0, members.length - MEMBER_STACK_MAX);
-  const ring = { borderRadius: size / 2 + RING, borderWidth: RING, borderColor: ringColor };
+  // Filled as well as ringed in the surface's colour. A face without a photo
+  // is a see-through tint of the person's colour (Avatar), and so is "+N", so
+  // without a solid backing the face each one tucks over showed through it: a
+  // photo seemed to lie on top of the pastel face beside it, from both sides.
+  // Over the surface it was drawn on, the tint looks as it always has.
+  const ring = { borderRadius: size / 2 + RING, borderWidth: RING, borderColor: ringColor, backgroundColor: ringColor };
   // The banner's sizes (13 and 12 on a 38pt face), scaled, and never so small
   // that initials stop being letters.
   const initialsSize = Math.max(9, Math.round(size * 0.34));
@@ -55,21 +64,18 @@ export default function MemberStack({ members, size, overlap, isDark, ringColor,
         </View>
       ))}
       {overflow > 0 && (
-        <View
-          style={[
-            ring,
-            styles.overflow,
-            {
-              // The face's own size, ring included: a touch smaller than the
-              // faces, as the banner has always drawn it.
-              width: size,
-              height: size,
-              marginLeft: -overlap,
-              backgroundColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)",
-            },
-          ]}
-        >
-          <Text style={[styles.count, { fontSize: countSize, color: countColor }]}>+{overflow}</Text>
+        // The face's own size, ring included: a touch smaller than the faces,
+        // as the banner has always drawn it. Its fill sits inside the ring,
+        // on the ring's solid backing, like a face's.
+        <View style={[ring, { width: size, height: size, marginLeft: -overlap }]}>
+          <View
+            style={[
+              styles.overflow,
+              { borderRadius: size / 2 - RING, backgroundColor: isDark ? OVERFLOW_FILL_DARK : OVERFLOW_FILL_LIGHT },
+            ]}
+          >
+            <Text style={[styles.count, { fontSize: countSize, color: countColor }]}>+{overflow}</Text>
+          </View>
         </View>
       )}
     </View>
@@ -79,6 +85,6 @@ export default function MemberStack({ members, size, overlap, isDark, ringColor,
 const styles = StyleSheet.create({
   stack:    { flexDirection: "row", alignItems: "center" },
   initials: { fontFamily: FontFamily.bold },
-  overflow: { alignItems: "center", justifyContent: "center" },
+  overflow: { flex: 1, alignItems: "center", justifyContent: "center" },
   count:    { fontFamily: FontFamily.bold },
 });

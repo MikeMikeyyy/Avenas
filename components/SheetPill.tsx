@@ -42,6 +42,9 @@ interface Props {
   selected?: boolean;
   /** Dimmed and inert (a confirm with nothing to confirm yet). */
   disabled?: boolean;
+  /** The action needs the server: dims while offline, and a tap says so
+   *  (BounceButton's). */
+  needsConnection?: boolean;
   /** Shorter pill, smaller label: a list of them inside a card (the Progress
    *  page's exercises) rather than a sheet's stack of actions, drawn as the
    *  card's button (cardButton) when it's a default one. */
@@ -56,7 +59,7 @@ interface Props {
 }
 
 export default function SheetPill({
-  label, onPress, variant = "default", icon, sub, tint, selected, disabled, compact, badge, style,
+  label, onPress, variant = "default", icon, sub, tint, selected, disabled, needsConnection, compact, badge, style,
   accessibilityLabel, accessibilityRole = "button", accessibilityState,
 }: Props) {
   const { isDark } = useTheme();
@@ -76,6 +79,7 @@ export default function SheetPill({
   return (
     <BounceButton
       style={style}
+      needsConnection={needsConnection}
       onPress={disabled ? undefined : onPress}
       accessibilityLabel={accessibilityLabel ?? (sub ? `${label}, ${sub}` : label)}
       accessibilityRole={accessibilityRole}

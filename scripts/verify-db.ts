@@ -1397,6 +1397,221 @@ async function main() {
   eq(Object.keys(await statusSeenBy(S_INVITEE)).length, 0, "group status: nor does someone only invited");
   await as(null);
 
+  // ─── 13. Adding someone from a group (0063) ───────────────────────────────
+  // From a group, a trainer account asks anyone in it to connect and a gym
+  // user asks trainer accounts only: the ACCOUNT TYPE, never the group role.
+  // Both must have joined. It's the request a code sends: it notifies, it's
+  // answered on the Connect screen, and asking back accepts theirs. A declined
+  // request isn't sent again from a group; the person who declined can ask,
+  // which clears it, and then the turn passes back. Connections and
+  // memberships are written only through the functions, and only a trainer
+  // account can be a trainer of a group.
+  const J_OWNER = "ffffffff-0000-4000-8000-000000000040";     // trainer: owns the group, connected to everyone in it
+  const J_COACH = "ffffffff-0000-4000-8000-000000000041";     // trainer account, a trainer of the group
+  const J_GYM_A = "ffffffff-0000-4000-8000-000000000042";     // gym user, joined
+  const J_GYM_B = "ffffffff-0000-4000-8000-000000000043";     // gym user, joined
+  const J_PT_MEMBER = "ffffffff-0000-4000-8000-000000000044"; // trainer account, a plain member of it
+  const J_INVITEE = "ffffffff-0000-4000-8000-000000000045";   // trainer account, invited, not yet in
+  const J_OUTSIDER = "ffffffff-0000-4000-8000-000000000046";  // trainer account, in no group
+  for (const [id, type] of [
+    [J_OWNER, "pt"], [J_COACH, "pt"], [J_GYM_A, "user"], [J_GYM_B, "user"], [J_PT_MEMBER, "pt"], [J_INVITEE, "pt"], [J_OUTSIDER, "pt"],
+  ] as const) {
+    await db.query(`insert into auth.users (id, email) values ($1::uuid, $2)`, [id, `${id}@example.com`]);
+    await db.query(`update public.profiles set account_type = $2, name = $3 where id = $1`, [id, type, `J ${id.slice(-2)}`]);
+    await db.query(`insert into public.push_tokens (user_id, token) values ($1, $2)`, [id, `tok-${id}`]);
+  }
+  for (const other of [J_COACH, J_GYM_A, J_GYM_B, J_PT_MEMBER, J_INVITEE]) await connect(J_OWNER, other);
+  const gJoin = (await db.query<{ id: string }>(
+    `insert into public.groups (owner_id, name) values ($1, 'Join') returning id`, [J_OWNER])).rows[0].id;
+  for (const [uid, role, accepted] of [
+    [J_OWNER, "member", true], [J_COACH, "trainer", true], [J_GYM_A, "member", true], [J_GYM_B, "member", true],
+    [J_PT_MEMBER, "member", true], [J_INVITEE, "member", false],
+  ] as const) {
+    await db.query(
+      `insert into public.group_members (group_id, user_id, role, accepted_at) values ($1, $2, $3, ${accepted ? "now()" : "null"})`,
+      [gJoin, uid, role]);
+  }
+  /** A read through the API as `uid`: the first row's `v`, or the refusal. */
+  const apiValue = async <T>(uid: string | null, sql: string, params: unknown[] = []): Promise<T | string> => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      return (await db.query<{ v: T }>(sql, params)).rows[0]?.v as T;
+    } catch (e) {
+      return `refused: ${(e as Error).message}`;
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  /** The member's sheet's add, as the app calls it. */
+  const askFrom = (from: string | null, to: string) =>
+    apiValue<string>(from, `select public.request_group_connection($1, $2) as v`, [gJoin, to]);
+  /** What's between two people as `a` sees it: out (a asked) or in, and how it stands. */
+  const between = async (a: string, b: string) => (await db.query<{ s: string }>(
+    `select case when requester_id = $1 then 'out' else 'in' end || ':' || status as s from public.connections
+      where (requester_id = $1 and addressee_id = $2) or (requester_id = $2 and addressee_id = $1) order by 1`,
+    [a, b])).rows.map(r => r.s);
+  /** `uid`'s roster of the group: each member's account type and where `uid` stands with them. */
+  const rosterOf = async (uid: string) => {
+    await as(uid);
+    await db.exec("set role authenticated");
+    try {
+      const { rows } = await db.query<{ user_id: string; account_type: string; connection: string | null }>(
+        `select user_id, account_type, connection from public.get_group_members($1)`, [gJoin]);
+      return Object.fromEntries(rows.map(r => [r.user_id, `${r.account_type}:${r.connection ?? "-"}`]));
+    } finally {
+      await db.exec("reset role");
+    }
+  };
+  /** The Connect screen's Accept / Decline on `from`'s request. */
+  const respondTo = (uid: string, from: string, accept: boolean) => apiValue<string>(uid,
+    `select public.respond_connection((select id from public.connections where requester_id = $1 and addressee_id = auth.uid()), $2) as v`,
+    [from, accept]);
+  /** How many rows a write through the API as `uid` touched. */
+  const countFrom = (uid: string, sql: string, params: unknown[]) =>
+    apiValue<number>(uid, `with w as (${sql} returning 1) select count(*)::int as v from w`, params);
+  const roleIn = async (uid: string) => (await db.query<{ role: string }>(
+    `select role from public.group_members where group_id = $1 and user_id = $2`, [gJoin, uid])).rows[0]?.role ?? null;
+  const connectCodeOf = async (uid: string) => (await db.query<{ c: string }>(
+    `select connect_code as c from public.profiles where id = $1`, [uid])).rows[0].c;
+  await pushedSince();
+
+  // The roster tells each member's sheet what to offer.
+  const coachSees = await rosterOf(J_COACH);
+  eq([coachSees[J_OWNER], coachSees[J_GYM_A], coachSees[J_PT_MEMBER], coachSees[J_COACH]], ["pt:connected", "user:-", "pt:-", "pt:-"],
+    "group connect: the roster gives each member's account type, and whether I'm connected with them (never with me)");
+
+  // Who may ask whom: by account type.
+  eq(await askFrom(J_GYM_A, J_GYM_B), "not_allowed", "group connect: a gym user can't add a gym user");
+  eq(await between(J_GYM_A, J_GYM_B), [], "group connect: ...and nothing is sent");
+  eq(await askFrom(J_COACH, J_GYM_A), "requested", "group connect: a trainer adds a gym user in the group");
+  eq(await between(J_COACH, J_GYM_A), ["out:pending"], "group connect: ...as a request, the same as a code sends");
+  eq([...await pushedSince()], [J_GYM_A], "group connect: ...which tells them");
+  eq(await askFrom(J_COACH, J_GYM_A), "requested", "group connect: asking again while it waits is harmless");
+  eq([await between(J_COACH, J_GYM_A), [...await pushedSince()]], [["out:pending"], []],
+    "group connect: ...one request, and no second notification");
+  eq([(await rosterOf(J_GYM_A))[J_COACH], (await rosterOf(J_COACH))[J_GYM_A]], ["pt:incoming", "user:requested"],
+    "group connect: their roster shows it waiting on them, mine shows it sent");
+  eq(await askFrom(J_GYM_A, J_COACH), "connected", "group connect: asking back accepts their request");
+  eq([await between(J_COACH, J_GYM_A), [...await pushedSince()]], [["out:accepted"], [J_COACH]],
+    "group connect: ...they're connected, and the one who asked is told");
+  eq(await apiValue<boolean>(J_COACH, `select public.can_view_training($1) as v`, [J_GYM_A]), true,
+    "group connect: the trainer reads their new client's training");
+  eq(await askFrom(J_GYM_A, J_COACH), "already", "group connect: connected already");
+  eq((await rosterOf(J_GYM_A))[J_COACH], "pt:connected", "group connect: ...and the roster says so");
+  eq(await askFrom(J_GYM_B, J_PT_MEMBER), "requested",
+    "group connect: a gym user adds a trainer account, though it's only a member of the group");
+  eq(await askFrom(J_PT_MEMBER, J_COACH), "requested", "group connect: a trainer adds a trainer");
+  eq(await askFrom(J_GYM_A, J_INVITEE), "not_member", "group connect: not someone only invited");
+  eq(await askFrom(J_INVITEE, J_COACH), "not_member", "group connect: ...nor can they ask anyone yet");
+  eq(await askFrom(J_OUTSIDER, J_COACH), "not_member", "group connect: not through a group you aren't in");
+  eq(await askFrom(J_COACH, J_COACH), "self", "group connect: not yourself");
+  eq(/not authenticated/.test(await askFrom(null, J_COACH)), true, "group connect: not signed out");
+  await pushedSince();
+
+  // A decline stands: whoever was declined can't ask again from the group.
+  // The person who declined can, which clears it, and the turn passes back.
+  eq(await respondTo(J_PT_MEMBER, J_GYM_B, false), "declined", "group connect: a request is declined");
+  eq((await rosterOf(J_GYM_B))[J_PT_MEMBER], "pt:requested", "group connect: ...which reads as still sent, to the one declined");
+  eq(await askFrom(J_GYM_B, J_PT_MEMBER), "requested", "group connect: asking again answers as sent...");
+  eq([await between(J_GYM_B, J_PT_MEMBER), [...await pushedSince()]], [["out:declined"], []],
+    "group connect: ...but nothing is sent, and nobody is told");
+  eq(await countFrom(J_GYM_B, `delete from public.connections where requester_id = auth.uid() and addressee_id = $1`, [J_PT_MEMBER]), 0,
+    "group connect: nor can it be deleted, to ask afresh");
+  eq((await rosterOf(J_PT_MEMBER))[J_GYM_B], "user:-", "group connect: the one who declined can ask");
+  eq(await askFrom(J_PT_MEMBER, J_GYM_B), "requested", "group connect: ...and does");
+  eq([await between(J_GYM_B, J_PT_MEMBER), [...await pushedSince()]], [["in:pending"], [J_GYM_B]],
+    "group connect: ...which clears their decline, and tells the other");
+  eq(await respondTo(J_GYM_B, J_PT_MEMBER, false), "declined", "group connect: declined back");
+  eq(await askFrom(J_PT_MEMBER, J_GYM_B), "requested", "group connect: now it's them who can't ask again...");
+  eq(await between(J_GYM_B, J_PT_MEMBER), ["in:declined"], "group connect: ...it stays declined");
+  eq(await askFrom(J_GYM_B, J_PT_MEMBER), "requested", "group connect: the turn is the first person's again");
+  eq(await between(J_GYM_B, J_PT_MEMBER), ["out:pending"], "group connect: ...one request between them, waiting");
+  eq(await respondTo(J_PT_MEMBER, J_GYM_B, false), "declined", "group connect: declined once more");
+  eq(await apiValue<string>(J_PT_MEMBER, `select public.request_connection($1) as v`, [await connectCodeOf(J_GYM_B)]), "requested",
+    "group connect: the one who declined asks by code instead");
+  eq(await between(J_GYM_B, J_PT_MEMBER), ["in:pending"], "group connect: ...which clears the decline the same way");
+  await pushedSince();
+
+  // A code's limit (0050), in the same count: refused asks included.
+  await db.query(`delete from public.connection_request_attempts`);
+  for (let i = 0; i < 9; i++) await askFrom(J_OUTSIDER, J_COACH);
+  await apiValue(J_OUTSIDER, `select public.request_connection('NOCODE00') as v`);
+  eq(/rate limit/.test(await askFrom(J_OUTSIDER, J_COACH)), true,
+    "group connect: an eleventh request in a minute is refused, a code's counted in");
+  await db.query(`delete from public.connection_request_attempts`);
+
+  // Connections are written only through the functions.
+  eq(/row-level security/.test(await apiValue<string>(J_OUTSIDER,
+    `insert into public.connections (requester_id, addressee_id, status) values (auth.uid(), $1, 'accepted') returning 'in' as v`, [J_GYM_A])),
+    true, "connections: nobody writes one straight in, accepted or otherwise");
+  eq(await apiValue<boolean>(J_OUTSIDER, `select public.can_view_training($1) as v`, [J_GYM_A]), false,
+    "connections: ...so a trainer can't make themselves a stranger's, and read their training");
+  eq(await countFrom(J_COACH,
+    `update public.connections set requester_id = $1, status = 'accepted' where requester_id = $2 and addressee_id = auth.uid()`,
+    [J_OUTSIDER, J_PT_MEMBER]), 0, "connections: a request can't be re-pointed at someone else, or accepted, by writing it");
+  eq(await between(J_COACH, J_OUTSIDER), [], "connections: ...nobody is connected by it");
+  eq(await respondTo(J_COACH, J_PT_MEMBER, true), "accepted", "connections: accepting goes through respond_connection, as the app does");
+  eq(await countFrom(J_GYM_B, `delete from public.connections where requester_id = $1 and addressee_id = auth.uid()`, [J_PT_MEMBER]), 1,
+    "connections: a request is still cancelled or turned away by deleting it");
+  eq(await countFrom(J_GYM_A, `delete from public.connections where requester_id = $1 and addressee_id = auth.uid()`, [J_COACH]), 1,
+    "connections: ...and a connection removed, from either side");
+
+  // A connection's filings go with it, and only with it.
+  eq(await fileAs(J_COACH, J_PT_MEMBER, "client"), null, "roles: a trainer files a trainer they connected with from a group");
+  await db.query(`insert into public.connections (requester_id, addressee_id, status) values ($1, $2, 'declined')`, [J_COACH, J_PT_MEMBER]);
+  await db.query(`delete from public.connections where requester_id = $1 and addressee_id = $2`, [J_COACH, J_PT_MEMBER]);
+  eq([await between(J_COACH, J_PT_MEMBER), await roleOf(J_COACH, J_PT_MEMBER)], [["in:accepted"], "client"],
+    "roles: a declined request cleared away beside a connection leaves its filings");
+
+  // Run again over rows from before it: answered declines go (the older of
+  // two, one the other person has since asked past, one beside a
+  // connection), filings stay, and a gym account that's a trainer of a group
+  // (its type moved by the launch-time repair, which changes nothing else)
+  // is a member of it.
+  await db.query(`insert into public.connections (requester_id, addressee_id, status, responded_at) values
+    ($1, $2, 'declined', now() - interval '1 hour'), ($2, $1, 'declined', now())`, [J_GYM_A, J_OUTSIDER]);
+  await db.query(`insert into public.connections (requester_id, addressee_id, status) values ($1, $2, 'declined')`, [J_COACH, J_PT_MEMBER]);
+  // The request first: a decline after it is one the trigger never saw.
+  await db.query(`insert into public.connections (requester_id, addressee_id, status) values ($1, $2, 'pending')`, [J_COACH, J_GYM_B]);
+  await db.query(`insert into public.connections (requester_id, addressee_id, status) values ($1, $2, 'declined')`, [J_GYM_B, J_COACH]);
+  eq(await asApi(J_OWNER, `select public.set_group_member_role($1, $2, 'trainer')`, [gJoin, J_PT_MEMBER]), null,
+    "group trainers: a trainer account is made a trainer, though a plain member");
+  await db.query(`update public.profiles set account_type = 'user' where id = $1`, [J_PT_MEMBER]);
+  await db.exec(readMigration(migrationFiles().find(f => f.startsWith("0063_"))!));
+  eq([await between(J_GYM_A, J_OUTSIDER), await between(J_GYM_B, J_COACH), await between(J_COACH, J_PT_MEMBER)],
+    [["in:declined"], ["in:pending"], ["in:accepted"]], "0063 again: only the declines nobody has answered stay");
+  eq(await roleOf(J_COACH, J_PT_MEMBER), "client", "0063 again: ...and the filings of the connection beside one");
+  eq(await roleIn(J_PT_MEMBER), "member", "0063 again: a gym account that's a trainer of a group is a member of it");
+  await db.query(`update public.profiles set account_type = 'pt' where id = $1`, [J_PT_MEMBER]);
+
+  // Only a trainer account can be a trainer of a group.
+  eq(await asApi(J_OWNER, `select public.set_group_member_role($1, $2, 'trainer')`, [gJoin, J_GYM_A]), "not_a_trainer_account",
+    "group trainers: a gym user can't be made one");
+  eq(await roleIn(J_GYM_A), "member", "group trainers: ...they stay a member");
+  eq(await refusal(() => db.query(`update public.group_members set role = 'trainer' where group_id = $1 and user_id = $2`, [gJoin, J_GYM_B])),
+    "not_a_trainer_account", "group trainers: refused whatever asks, the database's own writes included");
+  eq(await asApi(J_OWNER, `select public.set_group_member_role($1, $2, 'trainer')`, [gJoin, J_PT_MEMBER]), null,
+    "group trainers: a trainer account can be");
+  eq(await countFrom(J_OWNER, `update public.group_members set role = 'member' where group_id = $1 and user_id = $2`, [gJoin, J_PT_MEMBER]), 0,
+    "group members: a role changes only through set_group_member_role");
+  eq(await roleIn(J_PT_MEMBER), "trainer", "group members: ...it's still a trainer");
+  eq(await switchTo(J_PT_MEMBER, "user"), null, "group trainers: a trainer of a group switches to a gym account");
+  eq(await roleIn(J_PT_MEMBER), "member", "group trainers: ...and is a member of it now");
+
+  // Memberships are written only through the functions; leaving still deletes.
+  await connect(J_OWNER, J_OUTSIDER);
+  eq(await countFrom(J_OWNER, `update public.group_members set accepted_at = now() where group_id = $1 and user_id = $2`, [gJoin, J_INVITEE]), 0,
+    "group members: an owner can't accept an invite on someone's behalf");
+  eq(await isPending(gJoin, J_INVITEE), true, "group members: ...it's still theirs to answer");
+  eq(/row-level security/.test(await asApi(J_OWNER,
+    `insert into public.group_members (group_id, user_id, accepted_at) values ($1, $2, now())`, [gJoin, J_OUTSIDER]) ?? ""), true,
+    "group members: nor put a connection straight in, joined");
+  eq(await countFrom(J_GYM_B, `delete from public.group_members where group_id = $1 and user_id = auth.uid()`, [gJoin]), 1,
+    "group members: leaving goes straight through");
+  eq(await askFrom(J_COACH, J_GYM_B), "not_member", "group connect: not someone who's left");
+  await as(null);
+
   await twoPhones(db, as);
   await agreementRecords(db, as);
   await aiLimits(db, as);

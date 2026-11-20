@@ -129,6 +129,14 @@ export type GroupMemberWithProfile = {
    *  still listed: the owner needs to see who hasn't answered, and a group
    *  program send reads this roster — it goes to everyone invited. */
   accepted: boolean;
+  /** Their account type (migration 0063): who may ask them to connect from
+   *  the group, and whether they can be made one of its trainers. Absent from
+   *  a database without 0063. */
+  account_type?: "user" | "pt";
+  /** Where the caller stands with them (0063). 'requested' includes a request
+   *  of the caller's they declined, which reads the same to the caller. Null
+   *  for nothing, and for the caller. Absent from a database without 0063. */
+  connection?: "connected" | "requested" | "incoming" | null;
 };
 
 /** Row shape returned by get_my_group_invites() — the ONLY thing a pending

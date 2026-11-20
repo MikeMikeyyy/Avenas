@@ -9,6 +9,8 @@
 // trainerStore keep one for the demo roster: a group has no meaning without the
 // other accounts in it, so signed-out or offline simply means "no groups".
 
+import type { AccountType } from "../contexts/AccountTypeContext";
+
 /** A group as the screens consume it. */
 export type Group = {
   id: string;
@@ -52,7 +54,21 @@ export type GroupMember = {
    *  anyway — an unanswered invite is something the owner needs to see, and a
    *  group program send goes to everyone invited. */
   accepted: boolean;
+  /** Their account type (migration 0063): whether I may ask them to connect
+   *  from the group, and whether they can be made one of its trainers. Absent
+   *  on a copy saved before it, and from a database without it: nothing is
+   *  offered on it then, and the server still decides. */
+  accountType?: AccountType;
+  /** Where I stand with them (0063). Absent for nothing yet, and for me. */
+  connection?: MemberConnection;
 };
+
+/**
+ * Where I stand with someone in a group I'm in (get_group_members, 0063):
+ * connected, asked by me (or asked and declined, which reads the same to me,
+ * since asking again from the group sends nothing), or asking me.
+ */
+export type MemberConnection = "connected" | "requested" | "incoming";
 
 /** One face in a group's member stack (components/trainer/MemberStack.tsx): as
  *  much of a GroupMember as a face draws, so the Trainer tab's saved copy keeps

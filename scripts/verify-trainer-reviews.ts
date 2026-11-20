@@ -16,8 +16,9 @@
 //      card, until he clears it.
 //   4. A trainer asks a group he's a plain member of: on his own Programs page
 //      as well as the group's; back, and taken.
-//   5. A gym user the group's owner made a trainer reviews a member's request
-//      and sends it back; the member takes it.
+//   5. A trainer of the group who isn't its owner reviews a member's request
+//      and sends it back; the member takes it. Only a trainer account can be
+//      one (0063): Cody, a gym user, can't be made one.
 //   6. Saved as a new program (user request, 2026-11-06): Cole takes Tara's
 //      changes as a new program, his own left as it was, and its View opens
 //      the new one; taken again when its accept never reached the server, it's
@@ -197,17 +198,19 @@ async function main() {
   eq(await programsOf(COLE), ["Cole Plan (7w)"], "4: taken");
   await db.query(`update public.group_members set role = 'trainer' where group_id = $1 and user_id = $2`, [GROUP, COLE.uid]);
 
-  // ── 5. A gym user the owner made a trainer reviews a member's request ──
-  await db.query(`update public.group_members set role = 'trainer' where group_id = $1 and user_id = $2`, [GROUP, CODY.uid]);
+  // ── 5. A trainer of the group who isn't its owner reviews a member's request ──
+  const makeCodyTrainer = await db.query(`update public.group_members set role = 'trainer' where group_id = $1 and user_id = $2`, [GROUP, CODY.uid])
+    .then(() => "made a trainer", (e: Error) => e.message);
+  eq(makeCodyTrainer, "not_a_trainer_account", "5: Cody, a gym user, can't be made a trainer of the group");
   CARA.programs = [CARA_P]; COLE.programs = [];
   await resetWorld();
   await ask(CARA, CARA_P, T1, TARA.uid, GROUP);
-  eq(await on(CODY, async () => stages(await CODY.app.loadMyGroupReviews())), ["Cara Plan@09:00:awaiting"], "5: Cody has it to review");
-  await reviewAndReturn(CODY, T1, GROUP);
-  eq(await gymReviews(CARA), { waiting: ["Cara Plan:back"], sentForReview: [] }, "5: back with Cody's changes, on Cara's Programs page");
+  eq(await on(CODY, async () => stages(await CODY.app.loadMyGroupReviews())), [], "5: so it's never Cody's to review");
+  eq(await on(COLE, async () => stages(await COLE.app.loadMyGroupReviews())), ["Cara Plan@09:00:awaiting"], "5: Cole has it to review");
+  await reviewAndReturn(COLE, T1, GROUP);
+  eq(await gymReviews(CARA), { waiting: ["Cara Plan:back"], sentForReview: [] }, "5: back with Cole's changes, on Cara's Programs page");
   await on(CARA, async () => CARA.app.applyReturnedProgram((await reviewOf(CARA, T1, GROUP)).id, "update"));
   eq(await programsOf(CARA), ["Cara Plan (7w)"], "5: taken");
-  await db.query(`update public.group_members set role = 'member' where group_id = $1 and user_id = $2`, [GROUP, CODY.uid]);
 
   // ── 6. A trainer's own request, saved as a new program ──
   CARA.programs = []; COLE.programs = [COLE_P];
